@@ -1,0 +1,33 @@
+kind: partition_strategy
+metadata:
+  name: gb10-dual-model
+  description: "GB10 上同时运行 2 个模型的资源划分方案"
+target:
+  hardware_profile: nvidia-gb10-arm64
+  workload_pattern: dual_model
+slots:
+  - name: primary
+    gpu:
+      memory_mib: 10240
+      cores_percent: 60
+    cpu:
+      cores: 8
+    ram:
+      mib: 65536
+  - name: secondary
+    gpu:
+      memory_mib: 4096
+      cores_percent: 30
+    cpu:
+      cores: 4
+    ram:
+      mib: 32768
+  - name: system_reserved
+    gpu:
+      memory_mib: 1024
+      cores_percent: 10
+    cpu:
+      cores: 2
+    ram:
+      mib: 16384
+    note: "系统 + AIMA + Agent 保留"

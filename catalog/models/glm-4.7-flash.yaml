@@ -1,0 +1,59 @@
+kind: model_asset
+metadata:
+  name: glm-4.7-flash
+  type: llm
+  family: glm
+  parameter_count: "9B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: THUDM/GLM-4.7-Flash
+    - type: modelscope
+      repo: ZhipuAI/GLM-4.7-Flash
+    - type: local_path
+      path: ""
+variants:
+  - name: glm-4.7-flash-blackwell-vllm
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 6144
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.50
+      max_model_len: 8192
+      dtype: bfloat16
+    expected_performance:
+      tokens_per_second: [18, 25]
+      latency_first_token_ms: [30, 80]
+
+  - name: glm-4.7-flash-blackwell-llamacpp
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 4096
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 33
+      ctx_size: 8192
+    expected_performance:
+      tokens_per_second: [12, 18]
+      latency_first_token_ms: [50, 150]
+
+  - name: glm-4.7-flash-ada-vllm
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 8192
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.40
+      max_model_len: 4096
+      dtype: float16
+    expected_performance:
+      tokens_per_second: [20, 30]
+      latency_first_token_ms: [25, 60]

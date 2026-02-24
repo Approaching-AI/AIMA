@@ -1,0 +1,57 @@
+kind: model_asset
+metadata:
+  name: qwen3-8b
+  type: llm
+  family: qwen
+  parameter_count: "8B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-8B
+    - type: modelscope
+      repo: Qwen/Qwen3-8B
+    - type: local_path
+      path: ""
+variants:
+  - name: qwen3-8b-blackwell-vllm
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 6144
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.50
+      max_model_len: 8192
+      dtype: bfloat16
+    expected_performance:
+      tokens_per_second: [15, 22]
+      latency_first_token_ms: [30, 80]
+
+  - name: qwen3-8b-ada-vllm
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 8192
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.40
+      max_model_len: 4096
+      dtype: float16
+    expected_performance:
+      tokens_per_second: [18, 28]
+      latency_first_token_ms: [25, 60]
+
+  - name: qwen3-8b-universal-llamacpp
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [8, 15]
+      latency_first_token_ms: [50, 200]

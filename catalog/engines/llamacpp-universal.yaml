@@ -1,0 +1,45 @@
+kind: engine_asset
+metadata:
+  name: llamacpp-universal
+  type: llamacpp
+  version: "latest"
+image:
+  name: ghcr.io/ggerganov/llama.cpp
+  tag: "server"
+  size_approx_mb: 500
+  platforms: [linux/amd64, linux/arm64]
+  registries:
+    - ghcr.io/ggerganov/llama.cpp
+    - registry.cn-hangzhou.aliyuncs.com/aima/llama-cpp-server
+hardware:
+  gpu_arch: "*"
+  vram_min_mib: 0
+startup:
+  command: ["llama-server", "--model", "{{.ModelPath}}", "--host", "0.0.0.0"]
+  default_args:
+    port: 8080
+    n_gpu_layers: 999
+    ctx_size: 4096
+  health_check:
+    path: /health
+    timeout_s: 60
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - flash_attention
+    - quantization_gguf
+  performance_gain: "fast startup, low memory"
+  resource_expansion:
+    cpu_offload: true
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 0
+  recommended_gpu_cores_percent: 30
+time_constraints:
+  cold_start_s: [3, 10]
+  model_switch_s: [3, 10]
+power_constraints:
+  typical_draw_watts: [20, 60]

@@ -1,0 +1,25 @@
+kind: hardware_profile
+metadata:
+  name: nvidia-gb10-arm64
+  description: "NVIDIA DGX Spark GB10, ARM64, 128GB unified memory"
+hardware:
+  gpu:
+    arch: Blackwell
+    vram_mib: 15360
+    compute_capability: "10.0"
+    cuda_cores: 2048
+  cpu:
+    arch: arm64
+    cores: 12
+    freq_ghz: 3.0
+  ram:
+    total_mib: 131072
+    bandwidth_gbps: 200
+  unified_memory: true
+constraints:
+  tdp_watts: 100
+  power_modes: [15, 30, 60, 100]
+  cooling: passive
+partition:
+  gpu_tools: [hami, engine_params]
+  cpu_tools: [k3s_cgroups]

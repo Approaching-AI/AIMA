@@ -1,0 +1,25 @@
+kind: hardware_profile
+metadata:
+  name: nvidia-rtx4090-x86
+  description: "NVIDIA RTX 4090, x86_64, 24GB VRAM"
+hardware:
+  gpu:
+    arch: Ada
+    vram_mib: 24576
+    compute_capability: "8.9"
+    cuda_cores: 16384
+  cpu:
+    arch: x86_64
+    cores: 16
+    freq_ghz: 3.5
+  ram:
+    total_mib: 65536
+    bandwidth_gbps: 50
+  unified_memory: false
+constraints:
+  tdp_watts: 450
+  power_modes: [450]
+  cooling: active
+partition:
+  gpu_tools: [hami, engine_params, mps]
+  cpu_tools: [k3s_cgroups]

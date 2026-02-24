@@ -1,0 +1,25 @@
+kind: partition_strategy
+metadata:
+  name: single-model-default
+  description: "单模型默认策略，使用 90% GPU 资源"
+target:
+  hardware_profile: "*"
+  workload_pattern: single_model
+slots:
+  - name: primary
+    gpu:
+      memory_mib: 0
+      cores_percent: 90
+    cpu:
+      cores: 0
+    ram:
+      mib: 0
+  - name: system_reserved
+    gpu:
+      memory_mib: 0
+      cores_percent: 10
+    cpu:
+      cores: 2
+    ram:
+      mib: 4096
+    note: "系统 + AIMA 保留。memory_mib=0 表示按比例自动计算"

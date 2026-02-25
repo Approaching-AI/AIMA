@@ -60,6 +60,37 @@ profiles:
         source: "hypothesis"
         verified: false
 
+registries:
+  mirrors:
+    docker.io:
+      endpoint:
+        - "https://registry.cn-hangzhou.aliyuncs.com"
+    ghcr.io:
+      endpoint:
+        - "https://ghcr.nju.edu.cn"
+
+system_images:
+  - name: rancher/mirrored-pause
+    tag: "3.6"
+    required: true
+    mirrors:
+      - registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.6
+  - name: rancher/mirrored-coredns-coredns
+    tag: "1.12.0"
+    required: true
+    mirrors:
+      - registry.cn-hangzhou.aliyuncs.com/rancher/mirrored-coredns-coredns:1.12.0
+  - name: rancher/local-path-provisioner
+    tag: "v0.0.30"
+    required: true
+    mirrors:
+      - registry.cn-hangzhou.aliyuncs.com/rancher/local-path-provisioner:v0.0.30
+  - name: rancher/klipper-helm
+    tag: "v0.9.3-build20241008"
+    required: true
+    mirrors:
+      - registry.cn-hangzhou.aliyuncs.com/rancher/klipper-helm:v0.9.3-build20241008
+
 open_questions:
   - question: "What kubelet reserved values work best for GB10 unified memory?"
     hypothesis: "cpu=500m,memory=512Mi"

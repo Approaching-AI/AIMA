@@ -204,7 +204,16 @@ type StackComponent struct {
 	Install       StackInstall         `yaml:"install"`
 	Verify        StackVerify          `yaml:"verify"`
 	Profiles      map[string]StackProfile `yaml:"profiles,omitempty"`
+	Registries    map[string]any       `yaml:"registries,omitempty"`   // container registry mirror config (written as-is to registries.yaml)
+	SystemImages  []StackSystemImage   `yaml:"system_images,omitempty"` // images to pre-import from mirrors
 	OpenQuestions []StackQuestion      `yaml:"open_questions,omitempty"`
+}
+
+type StackSystemImage struct {
+	Name     string   `yaml:"name"`     // e.g. "rancher/mirrored-pause"
+	Tag      string   `yaml:"tag"`      // e.g. "3.6"
+	Required bool     `yaml:"required"`
+	Mirrors  []string `yaml:"mirrors"`  // full mirror image refs, e.g. "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.6"
 }
 
 type StackMetadata struct {

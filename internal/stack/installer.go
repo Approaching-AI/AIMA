@@ -2,6 +2,7 @@ package stack
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -282,6 +283,13 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		return existing, nil
 	}
 
+	// Pre-install: write container registry mirrors if configured
+	if comp.Registries != nil {
+		if err := inst.writeRegistries(comp); err != nil {
+			slog.Warn("failed to write registries config", "error", err)
+		}
+	}
+
 	// Install based on method
 	slog.Info("installing stack component", "name", comp.Metadata.Name, "method", comp.Install.Method)
 
@@ -304,6 +312,11 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 	if err := inst.verify(ctx, comp); err != nil {
 		status.Message = fmt.Sprintf("installed but verification failed: %v", err)
 		return status, nil
+	}
+
+	// Post-verify: pre-import system images from mirrors
+	if len(comp.SystemImages) > 0 {
+		inst.importSystemImages(ctx, comp)
 	}
 
 	status.Ready = true
@@ -375,7 +388,8 @@ func (inst *Installer) installHelm(ctx context.Context, comp knowledge.StackComp
 
 	helmCfg := comp.Install.Helm
 	chartPath := filepath.Join(inst.distDir, helmCfg.Chart)
-	if _, err := os.Stat(chartPath); err != nil {
+	chartData, err := os.ReadFile(chartPath)
+	if err != nil {
 		return fmt.Errorf("%s not found: place chart at %s", helmCfg.Chart, chartPath)
 	}
 
@@ -385,15 +399,8 @@ func (inst *Installer) installHelm(ctx context.Context, comp knowledge.StackComp
 		return fmt.Errorf("k3s not found: install K3S first (aima init installs k3s before hami)")
 	}
 
-	// Copy chart to K3S static charts dir so helm-controller can access it
-	staticDir := "/var/lib/rancher/k3s/server/static/charts"
-	if err := os.MkdirAll(staticDir, 0o755); err != nil {
-		return fmt.Errorf("create static charts dir: %w", err)
-	}
-	destChart := filepath.Join(staticDir, filepath.Base(chartPath))
-	if err := copyFile(chartPath, destChart); err != nil {
-		return fmt.Errorf("copy chart to %s: %w", destChart, err)
-	}
+	// Base64-encode chart for inline embedding in HelmChart CRD
+	chartB64 := base64.StdEncoding.EncodeToString(chartData)
 
 	// Serialize values to YAML
 	valuesYAML, err := yaml.Marshal(helmCfg.Values)
@@ -401,19 +408,20 @@ func (inst *Installer) installHelm(ctx context.Context, comp knowledge.StackComp
 		return fmt.Errorf("marshal helm values: %w", err)
 	}
 
-	// Build HelmChart CRD manifest
+	// Build HelmChart CRD manifest with chartContent (not chart path)
+	// chartContent embeds the chart inline so klipper-helm pod doesn't need host filesystem access
 	manifest := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
   name: %s
   namespace: kube-system
 spec:
-  chart: %s
+  chartContent: %s
   targetNamespace: %s
   createNamespace: true
   valuesContent: |
     %s
-`, comp.Metadata.Name, destChart, helmCfg.Namespace,
+`, comp.Metadata.Name, chartB64, helmCfg.Namespace,
 		strings.ReplaceAll(strings.TrimSpace(string(valuesYAML)), "\n", "\n    "))
 
 	tmpFile := filepath.Join(os.TempDir(), comp.Metadata.Name+"-helmchart.yaml")
@@ -422,7 +430,7 @@ spec:
 	}
 	defer os.Remove(tmpFile)
 
-	slog.Info("applying HelmChart CRD via k3s kubectl", "name", comp.Metadata.Name, "chart", destChart)
+	slog.Info("applying HelmChart CRD via k3s kubectl", "name", comp.Metadata.Name)
 	out, err := inst.runner.Run(ctx, k3sBin, "kubectl", "apply", "-f", tmpFile)
 	if err != nil {
 		return fmt.Errorf("apply HelmChart CRD: %s: %w", string(out), err)
@@ -440,21 +448,6 @@ func (inst *Installer) findK3sBinary() string {
 		return p
 	}
 	return ""
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
 }
 
 func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent) error {
@@ -563,6 +556,65 @@ func collectArgs(comp knowledge.StackComponent, hwProfile string) []string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// writeRegistries writes the component's container registry mirror config to /etc/rancher/k3s/registries.yaml.
+// This must happen before K3S starts so containerd picks up the mirrors on first boot.
+func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
+	dir := "/etc/rancher/k3s"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create registries dir: %w", err)
+	}
+
+	data, err := yaml.Marshal(comp.Registries)
+	if err != nil {
+		return fmt.Errorf("marshal registries config: %w", err)
+	}
+
+	path := filepath.Join(dir, "registries.yaml")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	slog.Info("wrote containerd registries config", "path", path)
+	return nil
+}
+
+// importSystemImages pre-imports K3S system images from Chinese mirrors.
+// This runs after K3S is verified ready, ensuring containerd is available.
+func (inst *Installer) importSystemImages(ctx context.Context, comp knowledge.StackComponent) {
+	k3sBin := inst.findK3sBinary()
+	if k3sBin == "" {
+		return
+	}
+
+	for _, img := range comp.SystemImages {
+		fullName := "docker.io/" + img.Name + ":" + img.Tag
+
+		// Check if image already exists
+		out, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "ls", "-q")
+		if err == nil && strings.Contains(string(out), fullName) {
+			slog.Info("system image already present", "image", fullName)
+			continue
+		}
+
+		// Try pulling from mirrors
+		imported := false
+		for _, mirror := range img.Mirrors {
+			slog.Info("importing system image from mirror", "image", fullName, "mirror", mirror)
+			if _, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "pull", mirror); err != nil {
+				slog.Warn("mirror pull failed", "mirror", mirror, "error", err)
+				continue
+			}
+			if _, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "tag", mirror, fullName); err != nil {
+				slog.Warn("image tag failed", "from", mirror, "to", fullName, "error", err)
+			}
+			imported = true
+			break
+		}
+		if !imported && img.Required {
+			slog.Warn("failed to import required system image", "image", fullName)
+		}
+	}
 }
 
 // collectEnv gathers environment variables from base config + hardware profile.

@@ -44,6 +44,7 @@ type LogOptions struct {
 type Client struct {
 	kubeconfigPath string
 	kubectl        string
+	k3sMode        bool // when true, prepend "kubectl" subcommand (for k3s binary)
 	runner         CommandRunner
 }
 
@@ -56,6 +57,17 @@ func WithKubeconfig(path string) Option {
 
 func WithKubectl(path string) Option {
 	return func(c *Client) { c.kubectl = path }
+}
+
+// WithK3SBinary configures the client to use a k3s binary directly.
+// K3S is a multi-call binary; when used this way, "kubectl" is prepended
+// as a subcommand (e.g., "k3s kubectl get pods"). K3S auto-detects its
+// kubeconfig at /etc/rancher/k3s/k3s.yaml in this mode.
+func WithK3SBinary(path string) Option {
+	return func(c *Client) {
+		c.kubectl = path
+		c.k3sMode = true
+	}
 }
 
 func WithRunner(r CommandRunner) Option {
@@ -74,11 +86,16 @@ func NewClient(opts ...Option) *Client {
 }
 
 // baseArgs returns common kubectl flags (e.g., --kubeconfig).
+// In k3sMode, "kubectl" is prepended so the k3s binary runs its built-in kubectl.
 func (c *Client) baseArgs() []string {
-	if c.kubeconfigPath != "" {
-		return []string{"--kubeconfig", c.kubeconfigPath}
+	var args []string
+	if c.k3sMode {
+		args = append(args, "kubectl")
 	}
-	return nil
+	if c.kubeconfigPath != "" {
+		args = append(args, "--kubeconfig", c.kubeconfigPath)
+	}
+	return args
 }
 
 // Apply submits a Pod YAML to K3S via stdin.

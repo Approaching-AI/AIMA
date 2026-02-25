@@ -8,19 +8,19 @@ compatibility:
   aima_min: "0.1.0"
 
 source:
-  chart: "hami-chart.tgz"
+  chart: "hami-2.4.1.tgz"
   platforms: [linux/amd64, linux/arm64]
   download:
-    linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
-    linux/arm64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+    linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+    linux/arm64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
   mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
-    linux/arm64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+    linux/amd64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+    linux/arm64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
 
 install:
   method: helm
   helm:
-    chart: "hami-chart.tgz"
+    chart: "hami-2.4.1.tgz"
     namespace: "hami-system"
     values:
       scheduler:

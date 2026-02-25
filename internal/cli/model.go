@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jguan/aima/internal/model"
+	"github.com/jguan/aima/internal/model" // still needed for model.Import, model.ScanOptions
 )
 
 func newModelCmd(app *App) *cobra.Command {
@@ -35,13 +35,12 @@ func newModelScanCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			models, err := model.Scan(ctx, model.ScanOptions{})
+			data, err := app.ToolDeps.ScanModels(ctx)
 			if err != nil {
 				return fmt.Errorf("scan models: %w", err)
 			}
 
-			out, _ := json.MarshalIndent(models, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

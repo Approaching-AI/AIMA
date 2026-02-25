@@ -294,6 +294,11 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		return existing, nil
 	}
 
+	// Pre-install: import system images so pods can start after helm install
+	if len(comp.SystemImages) > 0 {
+		inst.importSystemImages(ctx, comp)
+	}
+
 	// Install based on method
 	slog.Info("installing stack component", "name", comp.Metadata.Name, "method", comp.Install.Method)
 
@@ -316,11 +321,6 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 	if err := inst.verify(ctx, comp); err != nil {
 		status.Message = fmt.Sprintf("installed but verification failed: %v", err)
 		return status, nil
-	}
-
-	// Post-verify: pre-import system images from mirrors
-	if len(comp.SystemImages) > 0 {
-		inst.importSystemImages(ctx, comp)
 	}
 
 	status.Ready = true

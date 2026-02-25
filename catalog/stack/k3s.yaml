@@ -38,6 +38,10 @@ install:
       rationale: "Edge single-node doesn't need default 110 pods limit"
       source: "community"
       verified: false
+    - flag: "--node-label=gpu=on"
+      rationale: "HAMi device-plugin DaemonSet requires gpu=on selector"
+      source: "hami-chart"
+      verified: true
   env:
     INSTALL_K3S_SKIP_DOWNLOAD: "true"
 

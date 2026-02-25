@@ -33,6 +33,19 @@ install:
           enabled: false
       devicePlugin:
         deviceMemoryScaling: 1.0
+        runtimeClassName: nvidia
+
+system_images:
+  - name: projecthami/hami
+    tag: "v2.4.1"
+    required: true
+    mirrors:
+      - docker.m.daocloud.io/projecthami/hami:v2.4.1
+  - name: liangjw/kube-webhook-certgen
+    tag: "v1.1.1"
+    required: true
+    mirrors:
+      - docker.m.daocloud.io/liangjw/kube-webhook-certgen:v1.1.1
 
 verify:
   command: "k3s kubectl get pods -n hami-system"

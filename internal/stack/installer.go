@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jguan/aima/internal/knowledge"
+	"gopkg.in/yaml.v3"
 )
 
 // platformSupported checks if the current OS/arch is in the component's platform list.
@@ -352,33 +353,88 @@ func (inst *Installer) installHelm(ctx context.Context, comp knowledge.StackComp
 		return fmt.Errorf("helm config missing for %s", comp.Metadata.Name)
 	}
 
-	helm := comp.Install.Helm
-	chartPath := filepath.Join(inst.distDir, helm.Chart)
-
-	// Check local chart exists
+	helmCfg := comp.Install.Helm
+	chartPath := filepath.Join(inst.distDir, helmCfg.Chart)
 	if _, err := os.Stat(chartPath); err != nil {
-		return fmt.Errorf("%s not found: place chart at %s", helm.Chart, chartPath)
+		return fmt.Errorf("%s not found: place chart at %s", helmCfg.Chart, chartPath)
 	}
 
-	// Build helm install command
-	args := []string{
-		"install", comp.Metadata.Name,
-		chartPath,
-		"--namespace", helm.Namespace,
-		"--create-namespace",
+	// Find k3s binary (K3S has a built-in helm-controller that handles HelmChart CRDs)
+	k3sBin := inst.findK3sBinary()
+	if k3sBin == "" {
+		return fmt.Errorf("k3s not found: install K3S first (aima init installs k3s before hami)")
 	}
 
-	// Add values as --set flags
-	for k, v := range helm.Values {
-		args = append(args, "--set", fmt.Sprintf("%s=%v", k, v))
+	// Copy chart to K3S static charts dir so helm-controller can access it
+	staticDir := "/var/lib/rancher/k3s/server/static/charts"
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		return fmt.Errorf("create static charts dir: %w", err)
+	}
+	destChart := filepath.Join(staticDir, filepath.Base(chartPath))
+	if err := copyFile(chartPath, destChart); err != nil {
+		return fmt.Errorf("copy chart to %s: %w", destChart, err)
 	}
 
-	out, err := inst.runner.Run(ctx, "helm", args...)
+	// Serialize values to YAML
+	valuesYAML, err := yaml.Marshal(helmCfg.Values)
 	if err != nil {
-		return fmt.Errorf("helm install: %s: %w", string(out), err)
+		return fmt.Errorf("marshal helm values: %w", err)
 	}
 
+	// Build HelmChart CRD manifest
+	manifest := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: %s
+  namespace: kube-system
+spec:
+  chart: %s
+  targetNamespace: %s
+  createNamespace: true
+  valuesContent: |
+    %s
+`, comp.Metadata.Name, destChart, helmCfg.Namespace,
+		strings.ReplaceAll(strings.TrimSpace(string(valuesYAML)), "\n", "\n    "))
+
+	tmpFile := filepath.Join(os.TempDir(), comp.Metadata.Name+"-helmchart.yaml")
+	if err := os.WriteFile(tmpFile, []byte(manifest), 0o644); err != nil {
+		return fmt.Errorf("write HelmChart manifest: %w", err)
+	}
+	defer os.Remove(tmpFile)
+
+	slog.Info("applying HelmChart CRD via k3s kubectl", "name", comp.Metadata.Name, "chart", destChart)
+	out, err := inst.runner.Run(ctx, k3sBin, "kubectl", "apply", "-f", tmpFile)
+	if err != nil {
+		return fmt.Errorf("apply HelmChart CRD: %s: %w", string(out), err)
+	}
 	return nil
+}
+
+// findK3sBinary locates the k3s binary: dist dir first, then PATH.
+func (inst *Installer) findK3sBinary() string {
+	local := filepath.Join(inst.distDir, "k3s")
+	if _, err := os.Stat(local); err == nil {
+		return local
+	}
+	if p, err := exec.LookPath("k3s"); err == nil {
+		return p
+	}
+	return ""
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent) error {

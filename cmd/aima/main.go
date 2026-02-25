@@ -273,7 +273,26 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
 				}
 			}
-			return model.DownloadFromSource(ctx, sources, destPath)
+			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+				return err
+			}
+			// Register model in DB after successful download
+			var sizeBytes int64
+			filepath.Walk(destPath, func(_ string, info os.FileInfo, _ error) error {
+				if info != nil && !info.IsDir() {
+					sizeBytes += info.Size()
+				}
+				return nil
+			})
+			return db.InsertModel(ctx, &state.Model{
+				ID:     ma.Metadata.Name,
+				Name:   ma.Metadata.Name,
+				Type:   ma.Metadata.Type,
+				Path:   destPath,
+				Format: strings.Join(ma.Storage.Formats, ","),
+				SizeBytes: sizeBytes,
+				Status: "ready",
+			})
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")

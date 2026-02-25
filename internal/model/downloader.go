@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -178,21 +180,89 @@ func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
 		return cmd.Run()
 	}
 
-	// Fallback: download via HTTP.
-	// Try endpoints in order: user-set HF_ENDPOINT, hf-mirror.com, huggingface.co
+	// Fallback: list files via API, then download each one.
 	endpoints := hfEndpoints()
-	var lastErr error
 	for _, ep := range endpoints {
-		url := fmt.Sprintf("%s/%s/resolve/main/config.json", ep, repo)
 		slog.Info("downloading via HuggingFace HTTP", "repo", repo, "endpoint", ep)
-		if err := Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")}); err != nil {
+		if err := downloadHFRepo(ctx, ep, repo, destPath); err != nil {
 			slog.Warn("HF endpoint failed", "endpoint", ep, "error", err)
-			lastErr = err
 			continue
 		}
 		return nil
 	}
-	return lastErr
+	return fmt.Errorf("all HuggingFace endpoints failed for %s", repo)
+}
+
+// hfRepoFile represents a file entry from the HuggingFace tree API.
+type hfRepoFile struct {
+	Type string `json:"type"` // "file" or "directory"
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// downloadHFRepo lists all files in a HuggingFace repo and downloads them.
+func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string) error {
+	// GET /api/models/{repo}/tree/main to list files
+	apiURL := fmt.Sprintf("%s/api/models/%s/tree/main", endpoint, repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("create API request: %w", err)
+	}
+	resp, err := downloadClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("list repo files: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("list repo files: HTTP %d", resp.StatusCode)
+	}
+
+	var files []hfRepoFile
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+		return fmt.Errorf("parse file list: %w", err)
+	}
+
+	// Filter to downloadable files (skip directories, .gitattributes, etc.)
+	var toDownload []hfRepoFile
+	var totalSize int64
+	for _, f := range files {
+		if f.Type != "file" {
+			continue
+		}
+		if strings.HasPrefix(f.Path, ".") {
+			continue
+		}
+		toDownload = append(toDownload, f)
+		totalSize += f.Size
+	}
+
+	slog.Info("repo file list retrieved",
+		"files", len(toDownload),
+		"total_size_mb", totalSize/(1024*1024),
+	)
+
+	// Download each file, skipping already completed ones
+	for i, f := range toDownload {
+		fileDest := filepath.Join(destPath, f.Path)
+		// Skip if file already exists with correct size
+		if info, err := os.Stat(fileDest); err == nil && info.Size() == f.Size {
+			slog.Info("skipping already downloaded",
+				"progress", fmt.Sprintf("[%d/%d]", i+1, len(toDownload)),
+				"file", f.Path,
+			)
+			continue
+		}
+		fileURL := fmt.Sprintf("%s/%s/resolve/main/%s", endpoint, repo, f.Path)
+		slog.Info("downloading file",
+			"progress", fmt.Sprintf("[%d/%d]", i+1, len(toDownload)),
+			"file", f.Path,
+			"size_mb", f.Size/(1024*1024),
+		)
+		if err := Download(ctx, DownloadOptions{URL: fileURL, DestPath: fileDest}); err != nil {
+			return fmt.Errorf("download %s: %w", f.Path, err)
+		}
+	}
+	return nil
 }
 
 // hfEndpoints returns HuggingFace endpoints to try in order.
@@ -218,9 +288,67 @@ func downloadModelScope(ctx context.Context, repo, destPath string) error {
 		return cmd.Run()
 	}
 
-	// Fallback: direct HTTP download
-	url := fmt.Sprintf("https://modelscope.cn/models/%s/resolve/master/config.json", repo)
-	slog.Info("downloading via ModelScope HTTP", "repo", repo, "url", url)
-	return Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")})
+	// Fallback: list files via ModelScope API, download each
+	apiURL := fmt.Sprintf("https://modelscope.cn/api/v1/models/%s/repo/tree?Revision=master&Root=&Recursive=true", repo)
+	slog.Info("downloading via ModelScope HTTP", "repo", repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("create API request: %w", err)
+	}
+	resp, err := downloadClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("list ModelScope repo: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("list ModelScope repo: HTTP %d", resp.StatusCode)
+	}
+
+	var msResp struct {
+		Data struct {
+			Files []struct {
+				Name string `json:"Name"`
+				Size int64  `json:"Size"`
+				Type string `json:"Type"` // "file" or "tree"
+			} `json:"Files"`
+		} `json:"Data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&msResp); err != nil {
+		return fmt.Errorf("parse ModelScope file list: %w", err)
+	}
+
+	var total int
+	for _, f := range msResp.Data.Files {
+		if f.Type != "file" || strings.HasPrefix(f.Name, ".") {
+			continue
+		}
+		total++
+	}
+
+	idx := 0
+	for _, f := range msResp.Data.Files {
+		if f.Type != "file" || strings.HasPrefix(f.Name, ".") {
+			continue
+		}
+		idx++
+		fileDest := filepath.Join(destPath, f.Name)
+		if info, err := os.Stat(fileDest); err == nil && info.Size() == f.Size {
+			slog.Info("skipping already downloaded",
+				"progress", fmt.Sprintf("[%d/%d]", idx, total),
+				"file", f.Name,
+			)
+			continue
+		}
+		fileURL := fmt.Sprintf("https://modelscope.cn/models/%s/resolve/master/%s", repo, f.Name)
+		slog.Info("downloading file",
+			"progress", fmt.Sprintf("[%d/%d]", idx, total),
+			"file", f.Name,
+			"size_mb", f.Size/(1024*1024),
+		)
+		if err := Download(ctx, DownloadOptions{URL: fileURL, DestPath: fileDest}); err != nil {
+			return fmt.Errorf("download %s: %w", f.Name, err)
+		}
+	}
+	return nil
 }
 

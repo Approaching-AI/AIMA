@@ -1,0 +1,64 @@
+kind: stack_component
+metadata:
+  name: k3s
+  version: "1.31.4+k3s1"
+  description: "K3S with AIMA-optimized defaults for edge AI inference"
+
+compatibility:
+  aima_min: "0.1.0"
+
+source:
+  binary: "k3s"
+  platforms: [linux/amd64, linux/arm64]
+  download:
+    linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+    linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+
+install:
+  method: binary
+  args:
+    - flag: "--disable=traefik"
+      rationale: "Edge devices don't need Ingress Controller"
+      source: "k3s-docs"
+      verified: true
+    - flag: "--disable=servicelb"
+      rationale: "No LoadBalancer needed for single-node edge"
+      source: "k3s-docs"
+      verified: true
+    - flag: "--disable=metrics-server"
+      rationale: "AIMA collects GPU metrics via nvidia-smi directly"
+      source: "hypothesis"
+      verified: false
+    - flag: "--kubelet-arg=max-pods=20"
+      rationale: "Edge single-node doesn't need default 110 pods limit"
+      source: "community"
+      verified: false
+  env:
+    INSTALL_K3S_SKIP_DOWNLOAD: "true"
+
+verify:
+  command: "k3s kubectl get nodes"
+  ready_condition: "Ready"
+  timeout_s: 60
+
+profiles:
+  nvidia-gb10-arm64:
+    extra_args:
+      - flag: "--kubelet-arg=kube-reserved=cpu=500m,memory=512Mi"
+        rationale: "Reserve resources for system to avoid squeezing inference VRAM"
+        source: "hypothesis"
+        verified: false
+  nvidia-rtx4090-x86:
+    extra_args:
+      - flag: "--kubelet-arg=kube-reserved=cpu=1000m,memory=1Gi"
+        rationale: "x86 servers have more CPU/RAM headroom"
+        source: "hypothesis"
+        verified: false
+
+open_questions:
+  - question: "What kubelet reserved values work best for GB10 unified memory?"
+    hypothesis: "cpu=500m,memory=512Mi"
+    test_method: "Deploy then observe kubectl top node and inference VRAM headroom"
+  - question: "Does disabling metrics-server affect HAMi device plugin reporting?"
+    hypothesis: "No impact — HAMi uses independent gRPC registration"
+    test_method: "Disable then deploy multi-model partition, observe GPU allocation"

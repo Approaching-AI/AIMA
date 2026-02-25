@@ -1,8 +1,29 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/jguan/aima/catalog"
+	"github.com/jguan/aima/internal/agent"
+	"github.com/jguan/aima/internal/cli"
+	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/hal"
+	"github.com/jguan/aima/internal/k3s"
+	"github.com/jguan/aima/internal/knowledge"
+	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/model"
+	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/stack"
+	"github.com/jguan/aima/internal/zeroclaw"
+
+	state "github.com/jguan/aima/internal"
 )
 
 func main() {
@@ -13,7 +34,479 @@ func main() {
 }
 
 func run() error {
-	// Will be wired up with Cobra CLI in Phase 3
-	fmt.Println("AIMA — AI-Inference-Managed-by-AI")
-	return nil
+	ctx := context.Background()
+
+	// 1. Determine data directory
+	dataDir := os.Getenv("AIMA_DATA_DIR")
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		dataDir = filepath.Join(home, ".aima")
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+
+	// 2. Open state database
+	db, err := state.Open(ctx, filepath.Join(dataDir, "aima.db"))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	// 3. Load knowledge catalog (YAML → in-memory structs)
+	cat, err := knowledge.LoadCatalog(catalog.FS)
+	if err != nil {
+		return fmt.Errorf("load catalog: %w", err)
+	}
+
+	// 4. Load static knowledge into SQLite relational tables
+	if err := knowledge.LoadToSQLite(ctx, db.RawDB(), cat); err != nil {
+		return fmt.Errorf("load knowledge to sqlite: %w", err)
+	}
+	if err := db.Analyze(ctx); err != nil {
+		slog.Warn("analyze failed", "error", err)
+	}
+
+	// 5. Create knowledge query store (backed by SQLite)
+	knowledgeStore := knowledge.NewStore(db.RawDB())
+
+	// 6. Create infrastructure components
+	k3sClient := k3s.NewClient()
+	proxyServer := proxy.NewServer(proxy.WithAddr(":8080"))
+	zeroClawMgr := zeroclaw.NewManager(
+		zeroclaw.WithDataDir(dataDir),
+	)
+
+	// 7. Create MCP server with tool deps wired
+	mcpServer := mcp.NewServer()
+	deps := buildToolDeps(cat, db, knowledgeStore, k3sClient, proxyServer, dataDir)
+	mcp.RegisterAllTools(mcpServer, deps)
+
+	// 8. Create agent (L3a Go Agent)
+	// Agent needs an LLM client — nil means agent is not available until a model is deployed.
+	toolAdapter := &mcpToolAdapter{server: mcpServer}
+	goAgent := agent.NewAgent(nil, toolAdapter)
+	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
+
+	// 9. Build App and run CLI
+	app := &cli.App{
+		DB:         db,
+		Catalog:    cat,
+		K3S:        k3sClient,
+		Proxy:      proxyServer,
+		MCP:        mcpServer,
+		Dispatcher: dispatcher,
+		ZeroClaw:   zeroClawMgr,
+		DataDir:    dataDir,
+		ToolDeps:   deps,
+	}
+
+	rootCmd := cli.NewRootCmd(app)
+	return rootCmd.ExecuteContext(ctx)
 }
+
+// mcpToolAdapter bridges mcp.Server to agent.ToolExecutor interface.
+type mcpToolAdapter struct {
+	server *mcp.Server
+}
+
+func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
+	result, err := a.server.ExecuteTool(ctx, name, arguments)
+	if err != nil {
+		return nil, err
+	}
+	// Convert mcp.ToolResult to agent.ToolResult
+	var text string
+	for _, c := range result.Content {
+		text += c.Text
+	}
+	return &agent.ToolResult{
+		Content: text,
+		IsError: result.IsError,
+	}, nil
+}
+
+func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
+	mcpDefs := a.server.ListTools()
+	defs := make([]agent.ToolDefinition, len(mcpDefs))
+	for i, d := range mcpDefs {
+		defs[i] = agent.ToolDefinition{
+			Name:        d.Name,
+			Description: d.Description,
+			InputSchema: d.InputSchema,
+		}
+	}
+	return defs
+}
+
+// execRunner implements engine.CommandRunner using real exec.
+type execRunner struct{}
+
+func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// buildToolDeps wires all ToolDeps fields to real implementations.
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, k3sClient *k3s.Client, proxyServer *proxy.Server, dataDir string) *mcp.ToolDeps {
+	return &mcp.ToolDeps{
+		// Hardware
+		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
+			hw, err := hal.Detect(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(hw)
+		},
+		CollectMetrics: func(ctx context.Context) (json.RawMessage, error) {
+			m, err := hal.CollectMetrics(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(m)
+		},
+
+		// Model management
+		ScanModels: func(ctx context.Context) (json.RawMessage, error) {
+			models, err := model.Scan(ctx, model.ScanOptions{})
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(models)
+		},
+		ListModels: func(ctx context.Context) (json.RawMessage, error) {
+			models, err := db.ListModels(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(models)
+		},
+		PullModel: func(ctx context.Context, name string) error {
+			// Look up model in catalog for download source
+			for _, ma := range cat.ModelAssets {
+				if ma.Metadata.Name == name && len(ma.Storage.Sources) > 0 {
+					src := ma.Storage.Sources[0]
+					destPath := filepath.Join(dataDir, "models", name)
+					return model.Download(ctx, model.DownloadOptions{
+						URL:      src.Repo,
+						DestPath: destPath,
+					})
+				}
+			}
+			return fmt.Errorf("model %q not found in catalog", name)
+		},
+		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
+			destDir := filepath.Join(dataDir, "models")
+			info, err := model.Import(ctx, path, destDir)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(info)
+		},
+		GetModelInfo: func(ctx context.Context, name string) (json.RawMessage, error) {
+			m, err := db.GetModel(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(m)
+		},
+
+		// Engine management
+		ScanEngines: func(ctx context.Context) (json.RawMessage, error) {
+			engineAssets := make(map[string][]string)
+			for _, ea := range cat.EngineAssets {
+				engineAssets[ea.Metadata.Type] = append(engineAssets[ea.Metadata.Type], ea.Image.Name)
+			}
+			images, err := engine.Scan(ctx, engine.ScanOptions{EngineAssets: engineAssets})
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(images)
+		},
+		ListEngines: func(ctx context.Context) (json.RawMessage, error) {
+			engines, err := db.ListEngines(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(engines)
+		},
+		PullEngine: func(ctx context.Context, name string) error {
+			for _, ea := range cat.EngineAssets {
+				if ea.Metadata.Type == name || ea.Image.Name == name {
+					return engine.Pull(ctx, engine.PullOptions{
+						Image:      ea.Image.Name,
+						Tag:        ea.Image.Tag,
+						Registries: ea.Image.Registries,
+					})
+				}
+			}
+			return fmt.Errorf("engine %q not found in catalog", name)
+		},
+		ImportEngine: func(ctx context.Context, path string) error {
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return fmt.Errorf("resolve path %s: %w", path, err)
+			}
+			return engine.Import(ctx, absPath, &execRunner{})
+		},
+
+		// Deployment
+		DeployApply: func(ctx context.Context, engineType, modelName, slot string) (json.RawMessage, error) {
+			hw, err := hal.Detect(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("detect hardware: %w", err)
+			}
+			gpuArch := ""
+			if hw.GPU != nil {
+				gpuArch = hw.GPU.Arch
+			}
+			overrides := map[string]any{}
+			if slot != "" {
+				overrides["slot"] = slot
+			}
+			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
+			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			if err != nil {
+				return nil, fmt.Errorf("resolve config: %w", err)
+			}
+			podYAML, err := knowledge.GeneratePod(resolved)
+			if err != nil {
+				return nil, fmt.Errorf("generate pod: %w", err)
+			}
+			if err := k3sClient.Apply(ctx, podYAML); err != nil {
+				return nil, fmt.Errorf("apply pod: %w", err)
+			}
+			proxyServer.RegisterBackend(modelName, &proxy.Backend{
+				ModelName:  modelName,
+				EngineType: resolved.Engine,
+				Ready:      false,
+			})
+			result := map[string]any{
+				"model": modelName, "engine": resolved.Engine,
+				"slot": resolved.Slot, "status": "deploying",
+			}
+			return json.Marshal(result)
+		},
+		DeployDelete: func(ctx context.Context, name string) error {
+			if err := k3sClient.Delete(ctx, name); err != nil {
+				return err
+			}
+			proxyServer.RemoveBackend(name)
+			return nil
+		},
+		DeployStatus: func(ctx context.Context, name string) (json.RawMessage, error) {
+			pod, err := k3sClient.GetPod(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(pod)
+		},
+		DeployList: func(ctx context.Context) (json.RawMessage, error) {
+			pods, err := k3sClient.ListPods(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(pods)
+		},
+
+		// Knowledge
+		ResolveConfig: func(ctx context.Context, modelName, engineType string, overrides map[string]any) (json.RawMessage, error) {
+			hw, err := hal.Detect(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("detect hardware: %w", err)
+			}
+			gpuArch := ""
+			if hw.GPU != nil {
+				gpuArch = hw.GPU.Arch
+			}
+			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
+			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(resolved)
+		},
+		SearchKnowledge: func(ctx context.Context, filter map[string]string) (json.RawMessage, error) {
+			nf := state.NoteFilter{
+				HardwareProfile: filter["hardware"],
+				Model:           filter["model"],
+				Engine:          filter["engine"],
+			}
+			notes, err := db.SearchNotes(ctx, nf)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(notes)
+		},
+		SaveKnowledge: func(ctx context.Context, note json.RawMessage) error {
+			var n state.KnowledgeNote
+			if err := json.Unmarshal(note, &n); err != nil {
+				return fmt.Errorf("parse knowledge note: %w", err)
+			}
+			return db.InsertNote(ctx, &n)
+		},
+		GeneratePod: func(ctx context.Context, modelName, engineType, slot string) (json.RawMessage, error) {
+			hw, err := hal.Detect(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("detect hardware: %w", err)
+			}
+			gpuArch := ""
+			if hw.GPU != nil {
+				gpuArch = hw.GPU.Arch
+			}
+			overrides := map[string]any{}
+			if slot != "" {
+				overrides["slot"] = slot
+			}
+			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
+			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			if err != nil {
+				return nil, err
+			}
+			podYAML, err := knowledge.GeneratePod(resolved)
+			if err != nil {
+				return nil, err
+			}
+			return json.RawMessage(podYAML), nil
+		},
+		ListProfiles: func(ctx context.Context) (json.RawMessage, error) {
+			profiles, err := kStore.ListHardwareProfiles(ctx)
+			if err != nil {
+				return json.Marshal(cat.HardwareProfiles) // fallback to in-memory
+			}
+			return json.Marshal(profiles)
+		},
+		ListEngineAssets: func(ctx context.Context) (json.RawMessage, error) {
+			assets, err := kStore.ListEngineAssets(ctx)
+			if err != nil {
+				return json.Marshal(cat.EngineAssets) // fallback to in-memory
+			}
+			return json.Marshal(assets)
+		},
+
+		// Knowledge query (enhanced — SQLite relational queries)
+		SearchConfigs: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p knowledge.SearchParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse search params: %w", err)
+			}
+			result, err := kStore.Search(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		CompareConfigs: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p knowledge.CompareParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse compare params: %w", err)
+			}
+			result, err := kStore.Compare(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		SimilarConfigs: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p knowledge.SimilarParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse similar params: %w", err)
+			}
+			result, err := kStore.Similar(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		LineageConfigs: func(ctx context.Context, configID string) (json.RawMessage, error) {
+			result, err := kStore.Lineage(ctx, configID)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		GapsKnowledge: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p knowledge.GapsParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse gaps params: %w", err)
+			}
+			result, err := kStore.Gaps(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		AggregateKnowledge: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p knowledge.AggregateParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse aggregate params: %w", err)
+			}
+			result, err := kStore.Aggregate(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+
+		// Stack management
+		StackPreflight: func(ctx context.Context) (json.RawMessage, error) {
+			installer := stack.NewInstaller(&execRunner{}, dataDir)
+			items := installer.Preflight(cat.StackComponents)
+			return json.Marshal(items)
+		},
+		StackInit: func(ctx context.Context, allowDownload bool) (json.RawMessage, error) {
+			installer := stack.NewInstaller(&execRunner{}, dataDir)
+			if allowDownload {
+				missing := installer.Preflight(cat.StackComponents)
+				if err := stack.DownloadItems(ctx, missing); err != nil {
+					return nil, fmt.Errorf("download: %w", err)
+				}
+			}
+			// Detect hardware to pick the right profile
+			hwProfile := ""
+			if hw, err := hal.Detect(ctx); err == nil {
+				if hw.GPU != nil {
+					hwProfile = hw.GPU.Arch + "-" + hw.CPU.Arch
+				}
+			}
+			result, err := installer.Init(ctx, cat.StackComponents, hwProfile)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+		StackStatus: func(ctx context.Context) (json.RawMessage, error) {
+			installer := stack.NewInstaller(&execRunner{}, dataDir)
+			result, err := installer.Status(ctx, cat.StackComponents)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		},
+
+		// System
+		ExecShell: func(ctx context.Context, command string) (json.RawMessage, error) {
+			parts := strings.Fields(command)
+			if len(parts) == 0 {
+				return nil, fmt.Errorf("empty command")
+			}
+			out, err := exec.CommandContext(ctx, parts[0], parts[1:]...).CombinedOutput()
+			if err != nil {
+				return json.Marshal(map[string]string{
+					"output": string(out),
+					"error":  err.Error(),
+				})
+			}
+			return json.Marshal(map[string]string{"output": string(out)})
+		},
+		GetConfig: func(ctx context.Context, key string) (string, error) {
+			return db.GetConfig(ctx, key)
+		},
+		SetConfig: func(ctx context.Context, key, value string) error {
+			return db.SetConfig(ctx, key, value)
+		},
+	}
+}
+

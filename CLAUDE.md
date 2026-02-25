@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes ~20 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes ~32 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -39,11 +39,13 @@ internal/
   hal/                        # Hardware detection (nvidia-smi, /proc)
   k3s/                        # K3S client (kubectl wrapper)
   proxy/                      # HTTP inference proxy (OpenAI-compatible)
-  knowledge/                  # go:embed YAML loader + L0-L3 resolver + Pod YAML generator
-  state/                      # SQLite (modernc.org/sqlite, zero CGO)
+  knowledge/                  # go:embed YAML + SQLite relational loader + L0-L3 resolver
+                              #   + query engine (query.go) + vector similarity (similarity.go)
+                              #   + Pod YAML generator
+  state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import
-  mcp/                        # MCP server + ~20 tool implementations
+  mcp/                        # MCP server + ~32 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
@@ -157,6 +159,10 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 | Hardware Profile | YAML describing a device's GPU/CPU/RAM capability vector |
 | Partition Strategy | YAML describing how to split resources across multiple workloads |
 | Knowledge Note | Structured record of Agent exploration results (trials + recommendation) |
+| Configuration | A tested Hardware×Engine×Model×Config instance with derivation chain |
+| BenchmarkResult | Multi-dimensional performance data for a Configuration under specific load |
+| PerfVector | 6-dimensional normalized performance vector for similarity search |
 | L0/L1/L2/L3a/L3b | Progressive intelligence levels: defaults → human CLI → knowledge → Go Agent → ZeroClaw |
 | ConfigResolver | Merges L0-L3 configs, higher layer overrides lower |
+| Store | Knowledge query engine wrapping *sql.DB (Search/Compare/Gaps/Similar/Lineage/Aggregate) |
 | MCP Tool | JSON-RPC function exposed to Agents (deploy.apply, model.scan, etc) |

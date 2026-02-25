@@ -113,6 +113,7 @@ AIMA 假设硬件已确定，在约束内做最优分配。但 AIMA 积累的知
 
 ```
 1. curl -sSL install.sh | bash          # 安装单二进制 (< 50MB)     [L0: 默认配置]
+   aima init                             # 安装+配置 K3S/HAMi (离线包预置)
 2. aima up qwen3-8b                      # 一条命令部署模型
    → 硬件检测: GB10, 128GB unified       # [L0: 自动检测]
    → 知识匹配: Recipe "gb10-qwen3-8b"    # [L2: 知识库匹配]
@@ -503,42 +504,61 @@ Perceive → Reason → Act → Feedback → Learn → Perceive...
 知识系统的价值在于提供准确的 cost()、effective_R()、startup_time()、power_draw() 函数——
 让优化模型的 5 个约束都有据可依，而不是靠猜测。
 
-### 5 种知识资产
+### 知识的双形态
+
+知识以两种形态存在：**YAML（编写/分发）** 和 **SQLite 关系表（查询/推理）**。
+
+YAML 是人类和社区的接口——可读、可 diff、可版本管理。
+SQLite 是 Agent 和 MCP 工具的接口——可 JOIN、可聚合、可约束过滤。
+启动时 go:embed YAML 自动加载到 SQLite 关系表，Agent 动态产出的知识直接写入 SQLite。
+
+### 静态知识资产（YAML → SQLite）
 
 | 资产 | 内容 | 索引键 | 来源 | 对应层级 |
 |------|------|--------|------|---------|
-| Engine Asset | 引擎在不同硬件的默认配置 + 性能放大系数 | engine_type × gpu_arch | 内嵌 YAML | L2a |
-| Model Asset | 模型在不同硬件的变体配置 (含 offload 策略) | model_name × hw_variant | 内嵌 YAML | L2b |
-| Recipe | 完整的 硬件+引擎+模型+配置 组合 + 实测性能 | HardwareFingerprint SHA256 | 社区/本地 | L2 |
-| Skill | Agent 的知识片段 (运维经验) | category × keywords | 本地/社区 | L3 辅助 |
-| App Template | 价值载体的需求声明模板 (含时间约束) | category × inference_needs | 社区/内嵌 | Demand |
+| Hardware Profile | 硬件能力向量 + 约束 | gpu_arch × cpu_arch | 内嵌 YAML | Supply |
+| Engine Asset | 引擎定义 + 三重角色 + 硬件兼容性 | engine_type × gpu_arch | 内嵌 YAML | L2a |
+| Model Asset | 模型定义 + 硬件变体配置 | model_name × hw_variant | 内嵌 YAML | L2b |
+| Partition Strategy | 资源划分方案 | hardware × workload_pattern | 内嵌 YAML | Supply |
+| Stack Component | 基础设施依赖配置 | component × platform | 内嵌 YAML | Infra |
+
+### 动态知识资产（Agent 探索 → SQLite）
+
+| 资产 | 内容 | 索引键 | 来源 | 对应层级 |
+|------|------|--------|------|---------|
+| Configuration | 4D 配置实例 (HW×Engine×Model×Config) + 演化链 | hardware × engine × model | Agent/社区 | L2c |
+| BenchmarkResult | 多维性能数据 (延迟/吞吐/资源/功耗) | config × concurrency × load | Agent | Feedback |
+| PerfVector | 归一化性能向量 (6 维, 用于相似度检索) | config_id | 聚合生成 | Feedback |
+| Knowledge Note | 对 Configuration 的补充叙事 (探索过程+洞察) | hardware × model × engine | Agent/社区 | L3 辅助 |
 
 ### 知识流转
 
 ```
-  ┌─────────────┐    export     ┌──────────────────┐
-  │ 设备调优      │ ──────────→ │ 社区仓库           │
-  │ tuning.start │    PR/share  │ GitHub catalog/   │
-  │ → 最优配置    │             │ Engine/Model/Recipe│
-  │ → 性能数据    │             │ + 性能/功耗数据     │
-  └─────────────┘             └────────┬───────────┘
-                                        │ sync
-                               ┌────────▼───────────┐
-                               │ 其他设备             │
-                               │ ConfigResolver L2   │
-                               │ → 自动匹配并应用     │
-                               └─────────────────────┘
+边缘设备                                        中心端 (v1.0)
+┌─────────────────────┐                    ┌──────────────────────┐
+│ Agent 探索 (L3a/L3b)│                    │ 知识聚合服务 (REST)   │
+│  → Configuration    │    push            │  POST /api/v1/ingest │
+│  → BenchmarkResult  │ ──────────────→   │  GET  /api/v1/query  │
+│  → Knowledge Note   │                    │  GET  /api/v1/sync   │
+│                     │    pull            │                      │
+│ SQLite (aima.db)    │ ←──────────────   │  PostgreSQL + JSONB  │
+│  知识查询引擎        │                    │  所有设备聚合知识     │
+└─────────────────────┘                    └──────────────────────┘
+         │
+         └── 离线传递: export → JSON → USB → import
 ```
 
-一个设备的调优经验 → 编码为 Recipe (含性能数据、功耗数据、启动时间) →
-贡献到社区 → 所有同硬件设备受益。这是知识的飞轮效应。
+一个设备的调优经验 → 编码为 Configuration + BenchmarkResult →
+上报到中心端 → 所有同硬件设备通过 pull 获得。
+Configuration 的 `derived_from` 链记录完整的演化历史——
+设备 B 从设备 A 的最优配置出发微调，产出更优配置，反哺全网。
 
 ### 三阶段知识同步
 
 | 阶段 | 机制 | 特点 |
 |------|------|------|
 | MVP | go:embed 内嵌 YAML | 编译时打包，离线可用，更新需要重新发版 |
-| v1.0 | `aima catalog sync` | 从 GitHub 拉取增量，按需更新 |
+| v1.0 | 中心端 REST API (push/pull) + 离线 JSON 导入/导出 | 增量同步，config_hash 去重 |
 | v2.0 | P2P 知识交换 | Fleet 内设备间直接同步，无需中心仓库 |
 
 ---
@@ -576,9 +596,11 @@ Perceive → Reason → Act → Feedback → Learn → Perceive...
 | K2 | 硬件指纹匹配 → 自动选择最优 Recipe | P0 | MVP |
 | K3 | 5 层配置解析 (L0→L2c) 渐进 override | P0 | MVP |
 | K4 | Recipe 包含性能数据 (tokens/s, 启动时间, 功耗) | P1 | v1.0 |
-| K5 | 调优结果自动反哺知识库 (L2c) | P1 | v1.0 |
-| K6 | `aima catalog sync` 从社区拉取新知识 | P1 | v1.0 |
-| K7 | `aima recipe export/share` 贡献到社区 | P2 | v1.0 |
+| K5 | 调优结果自动反哺知识库 — Configuration + BenchmarkResult 持久化 | P1 | v1.0 |
+| K6 | 中心端知识同步 (`aima knowledge sync --push/--pull`) | P1 | v1.0 |
+| K7 | 离线知识导入导出 (`aima knowledge export/import`) | P1 | v1.0 |
+| K8 | 知识查询引擎 — 多维搜索/对比/相似度/演化链/空白发现 | P1 | v1.0 |
+| K9 | 中心端知识聚合服务 (PostgreSQL + REST API) | P2 | v1.0 |
 
 ### 智能调度 (Control / Solver)
 
@@ -603,6 +625,17 @@ Perceive → Reason → Act → Feedback → Learn → Perceive...
 | F5 | 知识有效性验证 (Recipe 应用后是否达预期) | P2 | v1.0 |
 | F6 | 仪表盘 (TUI + Web) 可视化状态与指标 | P1 | v1.0 |
 
+### 基础设施栈 (Infrastructure)
+
+| ID | 需求 | 优先级 | 版本 |
+|----|------|--------|------|
+| I1 | `aima init` 一键安装+配置 K3S/HAMi (离线可完成) | P0 | MVP |
+| I2 | Stack Component YAML 描述依赖版本、兼容性、安装参数 | P0 | MVP |
+| I3 | 离线安装包 (`dist/`) 支持完全无网络部署 | P0 | MVP |
+| I4 | 配置值标注来源 (source) 和验证状态 (verified) | P1 | MVP |
+| I5 | 不同硬件画像的配置变体 (profiles) | P1 | v1.0 |
+| I6 | Agent 自动处理 open_questions，真机验证配置假设 | P2 | v1.0 |
+
 ---
 
 ## 8. 发布规划
@@ -613,6 +646,7 @@ Perceive → Reason → Act → Feedback → Learn → Perceive...
 
 | 交付项 | 对应需求 |
 |--------|---------|
+| `aima init` 一键基础设施安装 (K3S/HAMi, 离线可完成) | I1, I2, I3 |
 | 硬件检测 + 能力向量 (含基础功耗检测) | S1, S2, S3 |
 | `aima up` 单命令部署 | D1, D2 |
 | 5 层配置解析 (L0-L2c) | K1, K2, K3 |
@@ -634,7 +668,9 @@ Perceive → Reason → Act → Feedback → Learn → Perceive...
 | Agent 主动巡检 + 自动调优 | A2, A3, A4 |
 | 引擎切换成本评估 | A5, D5 |
 | Benchmark + 知识反哺 (含功耗数据) | F3, F4, F5, K4, K5 |
-| 知识同步 (`catalog sync`) | K6, K7 |
+| 知识查询引擎 + 多维 MCP 工具 | K8 |
+| 知识同步 (中心端 push/pull + 离线导入/导出) | K6, K7 |
+| 中心端知识聚合服务 | K9 |
 | Tunnel 远程访问 | — |
 | 仪表盘 (TUI + Web) | F6 |
 

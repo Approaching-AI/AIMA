@@ -1,0 +1,48 @@
+kind: stack_component
+metadata:
+  name: hami
+  version: "2.4.1"
+  description: "HAMi GPU virtualization middleware for fine-grained GPU sharing"
+
+compatibility:
+  aima_min: "0.1.0"
+
+source:
+  chart: "hami-chart.tgz"
+  platforms: [linux/amd64, linux/arm64]
+  download:
+    linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+    linux/arm64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+
+install:
+  method: helm
+  helm:
+    chart: "hami-chart.tgz"
+    namespace: "hami-system"
+    values:
+      scheduler:
+        defaultMem: 0
+        defaultCores: 0
+      devicePlugin:
+        deviceMemoryScaling: 1.0
+
+verify:
+  command: "k3s kubectl get pods -n hami-system"
+  ready_condition: "Running"
+  timeout_s: 120
+
+profiles:
+  nvidia-gb10-arm64:
+    extra_env:
+      HAMI_DEVICE_MEMORY_SCALING: "1.0"
+  nvidia-rtx4090-x86:
+    extra_env:
+      HAMI_DEVICE_MEMORY_SCALING: "1.0"
+
+open_questions:
+  - question: "What deviceMemoryScaling works best for vLLM on GB10?"
+    hypothesis: "1.0 (no overcommit) since inference is memory-bound"
+    test_method: "Deploy two models with gpu_memory_utilization=0.5 each, check OOM"
+  - question: "Does HAMi work correctly with K3S containerd?"
+    hypothesis: "Yes, HAMi supports containerd as runtime"
+    test_method: "Install HAMi on K3S, deploy GPU workload, verify nvidia-smi in container"

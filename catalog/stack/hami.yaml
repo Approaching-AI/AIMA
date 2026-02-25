@@ -51,9 +51,13 @@ verify:
   command: "k3s kubectl get pods -n hami-system"
   ready_condition: "Running"
   timeout_s: 120
+  pods:
+    - namespace: hami-system
+      label: "app=hami-device-plugin"
+      min_ready: 1
 
 profiles:
-  nvidia-gb10-arm64:
+  Blackwell-arm64:
     extra_env:
       HAMI_DEVICE_MEMORY_SCALING: "1.0"
   nvidia-rtx4090-x86:
@@ -67,3 +71,9 @@ open_questions:
   - question: "Does HAMi work correctly with K3S containerd?"
     hypothesis: "Yes, HAMi supports containerd as runtime"
     test_method: "Install HAMi on K3S, deploy GPU workload, verify nvidia-smi in container"
+  - question: "GB10 UMA: NVML nvmlDeviceGetMemoryInfo returns NVML_ERROR_NOT_SUPPORTED (code 3)"
+    hypothesis: "HAMi PR #1637 (merged 2026-02-04) adds PreConfiguredDeviceMemory fallback, but not in any release yet (v2.8.0 is pre-PR). Even with fix, HAMi memory isolation effectiveness on UMA is uncertain."
+    test_method: "Wait for HAMi release with PR #1637, install on GB10, verify device-plugin starts and GPU allocation works"
+  - question: "Is engine-layer memory management sufficient for GB10 without HAMi?"
+    hypothesis: "Yes — llama.cpp --ctx-size and vLLM gpu_memory_utilization work on UMA. 128GB unified memory bottleneck is bandwidth/compute, not capacity."
+    test_method: "Deploy multi-model on GB10 with engine-level limits only, observe stability and throughput"

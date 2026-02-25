@@ -88,7 +88,7 @@ func run() error {
 
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
-	deps := buildToolDeps(cat, db, knowledgeStore, rt, proxyServer, dataDir)
+	deps := buildToolDeps(cat, db, knowledgeStore, rt, proxyServer, k3sClient, dataDir)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 9. Create agent (L3a Go Agent)
@@ -204,6 +204,37 @@ func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// podQuerierAdapter bridges k3s.Client to stack.PodQuerier interface.
+type podQuerierAdapter struct {
+	client *k3s.Client
+}
+
+func (a *podQuerierAdapter) ListPodsByLabel(ctx context.Context, namespace, label string) ([]stack.PodDetail, error) {
+	pods, err := a.client.ListPodsByLabel(ctx, namespace, label)
+	if err != nil {
+		return nil, err
+	}
+	details := make([]stack.PodDetail, len(pods))
+	for i, p := range pods {
+		details[i] = stack.PodDetail{
+			Name:    p.Name,
+			Phase:   p.Phase,
+			Ready:   p.Ready,
+			Message: p.Message,
+		}
+	}
+	return details, nil
+}
+
+// detectHWProfile returns the hardware profile string (e.g. "Blackwell-arm64") or "" if detection fails.
+func detectHWProfile(ctx context.Context) string {
+	hw, err := hal.Detect(ctx)
+	if err != nil || hw.GPU == nil {
+		return ""
+	}
+	return hw.GPU.Arch + "-" + hw.CPU.Arch
+}
+
 // selectRuntime picks the best runtime: K3S on Linux if available, else native.
 func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) runtime.Runtime {
 	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
@@ -233,7 +264,7 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 }
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
-func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, dataDir string) *mcp.ToolDeps {
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
 	return &mcp.ToolDeps{
 		// Hardware
 		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
@@ -606,20 +637,15 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(items)
 		},
 		StackInit: func(ctx context.Context, allowDownload bool) (json.RawMessage, error) {
-			installer := stack.NewInstaller(&execRunner{}, dataDir)
+			installer := stack.NewInstaller(&execRunner{}, dataDir).
+				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
 			if allowDownload {
 				missing := installer.Preflight(cat.StackComponents)
 				if err := stack.DownloadItems(ctx, missing); err != nil {
 					return nil, fmt.Errorf("download: %w", err)
 				}
 			}
-			// Detect hardware to pick the right profile
-			hwProfile := ""
-			if hw, err := hal.Detect(ctx); err == nil {
-				if hw.GPU != nil {
-					hwProfile = hw.GPU.Arch + "-" + hw.CPU.Arch
-				}
-			}
+			hwProfile := detectHWProfile(ctx)
 			result, err := installer.Init(ctx, cat.StackComponents, hwProfile)
 			if err != nil {
 				return nil, err
@@ -627,8 +653,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(result)
 		},
 		StackStatus: func(ctx context.Context) (json.RawMessage, error) {
-			installer := stack.NewInstaller(&execRunner{}, dataDir)
-			result, err := installer.Status(ctx, cat.StackComponents)
+			installer := stack.NewInstaller(&execRunner{}, dataDir).
+				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
+			hwProfile := detectHWProfile(ctx)
+			result, err := installer.Status(ctx, cat.StackComponents, hwProfile)
 			if err != nil {
 				return nil, err
 			}

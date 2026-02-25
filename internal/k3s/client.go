@@ -216,6 +216,12 @@ type kubePod struct {
 		Message           string `json:"message"`
 		ContainerStatuses []struct {
 			Ready bool `json:"ready"`
+			State struct {
+				Waiting *struct {
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"waiting"`
+			} `json:"state"`
 		} `json:"containerStatuses"`
 	} `json:"status"`
 }
@@ -227,8 +233,17 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 	}
 
 	ready := false
+	msg := kp.Status.Message
 	if len(kp.Status.ContainerStatuses) > 0 {
-		ready = kp.Status.ContainerStatuses[0].Ready
+		cs := kp.Status.ContainerStatuses[0]
+		ready = cs.Ready
+		// Use container waiting reason as message when pod-level message is empty
+		if msg == "" && cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			msg = cs.State.Waiting.Reason
+			if cs.State.Waiting.Message != "" {
+				msg += ": " + cs.State.Waiting.Message
+			}
+		}
 	}
 
 	return &PodStatus{
@@ -238,6 +253,33 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 		IP:        kp.Status.PodIP,
 		Labels:    kp.Metadata.Labels,
 		StartTime: kp.Status.StartTime,
-		Message:   kp.Status.Message,
+		Message:   msg,
 	}, nil
+}
+
+// ListPodsByLabel lists pods matching a label selector in a given namespace.
+func (c *Client) ListPodsByLabel(ctx context.Context, namespace, label string) ([]*PodStatus, error) {
+	args := append(c.baseArgs(), "get", "pods", "-n", namespace, "-l", label, "-o", "json")
+	out, err := c.runner.Run(ctx, c.kubectl, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list pods -n %s -l %s: %w", namespace, label, err)
+	}
+
+	var list struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("parse pod list: %w", err)
+	}
+
+	pods := make([]*PodStatus, 0, len(list.Items))
+	for _, item := range list.Items {
+		p, err := parsePodJSON(item)
+		if err != nil {
+			slog.Warn("skip unparseable pod", "error", err)
+			continue
+		}
+		pods = append(pods, p)
+	}
+	return pods, nil
 }

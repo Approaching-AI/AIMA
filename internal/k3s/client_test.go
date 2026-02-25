@@ -449,3 +449,98 @@ func TestGetPod_FailedMessage(t *testing.T) {
 		t.Errorf("Message = %q, want %q", pod.Message, "OOMKilled")
 	}
 }
+
+func TestListPodsByLabel(t *testing.T) {
+	podList := map[string]interface{}{
+		"items": []json.RawMessage{
+			json.RawMessage(runningPodJSON),
+		},
+	}
+	data, _ := json.Marshal(podList)
+
+	tests := []struct {
+		name      string
+		output    []byte
+		runnerErr error
+		wantErr   bool
+		wantCount int
+	}{
+		{"one pod", data, nil, false, 1},
+		{"empty list", []byte(`{"items":[]}`), nil, false, 0},
+		{"kubectl error", nil, fmt.Errorf("cluster unreachable"), true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &mockRunner{output: tt.output, err: tt.runnerErr}
+			c := NewClient(WithRunner(r))
+			pods, err := c.ListPodsByLabel(context.Background(), "kube-system", "k8s-app=kube-dns")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ListPodsByLabel() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && len(pods) != tt.wantCount {
+				t.Errorf("got %d pods, want %d", len(pods), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestListPodsByLabel_VerifyArgs(t *testing.T) {
+	r := &mockRunner{output: []byte(`{"items":[]}`)}
+	c := NewClient(WithRunner(r))
+	_, _ = c.ListPodsByLabel(context.Background(), "hami-system", "app=hami-device-plugin")
+
+	// Verify namespace and label selector
+	args := r.lastArgs
+	foundNS, foundLabel := false, false
+	for i, arg := range args {
+		if arg == "-n" && i+1 < len(args) && args[i+1] == "hami-system" {
+			foundNS = true
+		}
+		if arg == "-l" && i+1 < len(args) && args[i+1] == "app=hami-device-plugin" {
+			foundLabel = true
+		}
+	}
+	if !foundNS {
+		t.Errorf("expected -n hami-system in args: %v", args)
+	}
+	if !foundLabel {
+		t.Errorf("expected -l app=hami-device-plugin in args: %v", args)
+	}
+}
+
+const crashLoopPodJSON = `{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "hami-device-plugin-abc",
+    "labels": {}
+  },
+  "status": {
+    "phase": "Running",
+    "containerStatuses": [
+      {
+        "ready": false,
+        "state": {
+          "waiting": {
+            "reason": "CrashLoopBackOff",
+            "message": "back-off 5m0s restarting"
+          }
+        }
+      }
+    ]
+  }
+}`
+
+func TestParsePodJSON_WaitingReason(t *testing.T) {
+	pod, err := parsePodJSON([]byte(crashLoopPodJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod.Message != "CrashLoopBackOff: back-off 5m0s restarting" {
+		t.Errorf("Message = %q, want CrashLoopBackOff message", pod.Message)
+	}
+	if pod.Ready {
+		t.Error("expected Ready=false for CrashLoopBackOff pod")
+	}
+}

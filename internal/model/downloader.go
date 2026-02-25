@@ -138,18 +138,29 @@ type Source struct {
 	Repo string
 }
 
-// DownloadFromSource downloads a model from a catalog source.
-func DownloadFromSource(ctx context.Context, src Source, destPath string) error {
-	switch src.Type {
-	case "huggingface":
-		return downloadHuggingFace(ctx, src.Repo, destPath)
-	case "modelscope":
-		return downloadModelScope(ctx, src.Repo, destPath)
-	case "local_path":
-		return fmt.Errorf("local_path source: use 'aima model import' instead")
-	default:
-		return Download(ctx, DownloadOptions{URL: src.Repo, DestPath: destPath})
+// DownloadFromSource tries each source in order until one succeeds.
+func DownloadFromSource(ctx context.Context, sources []Source, destPath string) error {
+	if len(sources) == 0 {
+		return fmt.Errorf("no download sources available")
 	}
+	var lastErr error
+	for _, src := range sources {
+		var err error
+		switch src.Type {
+		case "huggingface":
+			err = downloadHuggingFace(ctx, src.Repo, destPath)
+		case "modelscope":
+			err = downloadModelScope(ctx, src.Repo, destPath)
+		default:
+			err = Download(ctx, DownloadOptions{URL: src.Repo, DestPath: destPath})
+		}
+		if err == nil {
+			return nil
+		}
+		slog.Warn("source failed, trying next", "type", src.Type, "repo", src.Repo, "error", err)
+		lastErr = err
+	}
+	return fmt.Errorf("all sources failed: %w", lastErr)
 }
 
 func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
@@ -157,7 +168,8 @@ func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
 		return fmt.Errorf("create dest dir %s: %w", destPath, err)
 	}
 
-	// Prefer huggingface-cli if available (handles auth, multi-file, resume)
+	// Prefer huggingface-cli if available (handles auth, multi-file, resume).
+	// Users in China can set HF_ENDPOINT=https://hf-mirror.com for the CLI too.
 	if hfCLI, err := exec.LookPath("huggingface-cli"); err == nil {
 		slog.Info("downloading via huggingface-cli", "repo", repo, "dest", destPath)
 		cmd := exec.CommandContext(ctx, hfCLI, "download", repo, "--local-dir", destPath)
@@ -166,14 +178,30 @@ func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
 		return cmd.Run()
 	}
 
-	// Fallback: download via HuggingFace HTTP API
-	endpoint := os.Getenv("HF_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "https://huggingface.co"
+	// Fallback: download via HTTP.
+	// Try endpoints in order: user-set HF_ENDPOINT, hf-mirror.com, huggingface.co
+	endpoints := hfEndpoints()
+	var lastErr error
+	for _, ep := range endpoints {
+		url := fmt.Sprintf("%s/%s/resolve/main/config.json", ep, repo)
+		slog.Info("downloading via HuggingFace HTTP", "repo", repo, "endpoint", ep)
+		if err := Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")}); err != nil {
+			slog.Warn("HF endpoint failed", "endpoint", ep, "error", err)
+			lastErr = err
+			continue
+		}
+		return nil
 	}
-	url := fmt.Sprintf("%s/%s/resolve/main/config.json", endpoint, repo)
-	slog.Info("downloading via HuggingFace HTTP", "repo", repo, "url", url)
-	return Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")})
+	return lastErr
+}
+
+// hfEndpoints returns HuggingFace endpoints to try in order.
+func hfEndpoints() []string {
+	if ep := os.Getenv("HF_ENDPOINT"); ep != "" {
+		return []string{ep}
+	}
+	// hf-mirror.com first (works in China), then official
+	return []string{"https://hf-mirror.com", "https://huggingface.co"}
 }
 
 func downloadModelScope(ctx context.Context, repo, destPath string) error {

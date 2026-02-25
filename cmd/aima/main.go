@@ -262,12 +262,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			ma, src := findModelAsset(cat, name)
+			ma, _ := findModelAsset(cat, name)
 			if ma == nil {
 				return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
 			}
 			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
-			return model.DownloadFromSource(ctx, model.Source{Type: src.Type, Repo: src.Repo}, destPath)
+			var sources []model.Source
+			for _, s := range ma.Storage.Sources {
+				if s.Type != "local_path" {
+					sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
+				}
+			}
+			return model.DownloadFromSource(ctx, sources, destPath)
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")

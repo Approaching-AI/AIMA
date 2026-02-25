@@ -43,3 +43,6 @@ time_constraints:
   model_switch_s: [3, 10]
 power_constraints:
   typical_draw_watts: [20, 60]
+source:
+  binary: "llama-server"
+  platforms: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]

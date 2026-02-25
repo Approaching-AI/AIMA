@@ -9,6 +9,8 @@ type HardwareInfo struct {
 	GPUArch         string
 	CPUArch         string
 	HardwareProfile string // Name of a matching HardwareProfile, if known
+	Platform        string // "linux/amd64", "darwin/arm64", etc.
+	RuntimeType     string // "k3s" or "native"
 }
 
 // PartitionSlot holds the resource allocation for a single deployment slot.
@@ -37,7 +39,7 @@ type ResolvedConfig struct {
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
 // L2 (knowledge notes from DB) is not applied here; it is merged by the caller when available.
 func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any) (*ResolvedConfig, error) {
-	engine, err := c.findEngine(engineType, hw.GPUArch)
+	engine, err := c.findEngine(engineType, hw)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +95,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	return resolved, nil
 }
 
-func (c *Catalog) findEngine(engineType, gpuArch string) (*EngineAsset, error) {
+func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, error) {
 	// Prefer exact gpu_arch match, then wildcard
 	var wildcard *EngineAsset
 	for i := range c.EngineAssets {
@@ -101,7 +103,18 @@ func (c *Catalog) findEngine(engineType, gpuArch string) (*EngineAsset, error) {
 		if ea.Metadata.Type != engineType {
 			continue
 		}
-		if ea.Hardware.GPUArch == gpuArch {
+
+		// Native runtime: engine must have source and platform must match
+		if hw.RuntimeType == "native" {
+			if ea.Source == nil {
+				continue
+			}
+			if !platformInList(hw.Platform, ea.Source.Platforms) {
+				continue
+			}
+		}
+
+		if ea.Hardware.GPUArch == hw.GPUArch {
 			return ea, nil
 		}
 		if ea.Hardware.GPUArch == "*" {
@@ -111,7 +124,19 @@ func (c *Catalog) findEngine(engineType, gpuArch string) (*EngineAsset, error) {
 	if wildcard != nil {
 		return wildcard, nil
 	}
-	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, gpuArch)
+	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
+}
+
+func platformInList(platform string, platforms []string) bool {
+	if len(platforms) == 0 {
+		return true
+	}
+	for _, p := range platforms {
+		if p == platform {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) findModelVariant(modelName, engineType, gpuArch string) (*ModelAsset, *ModelVariant, error) {

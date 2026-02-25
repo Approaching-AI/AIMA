@@ -27,11 +27,12 @@ type ToolDeps struct {
 	PullEngine   func(ctx context.Context, name string) error
 	ImportEngine func(ctx context.Context, path string) error
 
-	// Deployment (k3s package)
+	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
+	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
 
 	// Knowledge
 	ResolveConfig    func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
@@ -432,6 +433,39 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return nil, fmt.Errorf("deploy list: %w", err)
 			}
 			return TextResult(string(data)), nil
+		},
+	})
+
+	// deploy.logs
+	s.RegisterTool(&Tool{
+		Name:        "deploy.logs",
+		Description: "Get logs from a deployed inference service",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"Deployment name"},`+
+				`"tail":{"type":"integer","description":"Number of log lines to return (default 100)"}`,
+			"name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DeployLogs == nil {
+				return ErrorResult("deploy.logs not implemented"), nil
+			}
+			var p struct {
+				Name string `json:"name"`
+				Tail int    `json:"tail"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			if p.Tail <= 0 {
+				p.Tail = 100
+			}
+			logs, err := deps.DeployLogs(ctx, p.Name, p.Tail)
+			if err != nil {
+				return nil, fmt.Errorf("deploy logs %s: %w", p.Name, err)
+			}
+			return TextResult(logs), nil
 		},
 	})
 

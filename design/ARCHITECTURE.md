@@ -202,7 +202,39 @@ Feedback (反馈)     →   Infrastructure Layer (metrics 采集)
 
 ---
 
-## 3. 编排层 — K3S + HAMi
+## 3. 编排层 — Multi-Runtime 抽象
+
+### 3.0 Runtime 抽象
+
+AIMA 通过 `runtime.Runtime` 接口抽象部署执行，使知识层和 MCP 工具层无需关心底层运行时：
+
+```
+知识层 (YAML)     → 描述"跑什么"（引擎、参数、模型）    → 不知道 runtime 的存在
+Resolver          → 选"怎么跑最优"（hardware × engine）  → 按平台过滤引擎
+Runtime 接口      → 执行"实际部署"（K3S Pod 或 exec）    → 由 main.go 选择
+MCP ToolDeps      → 签名不变，runtime 在闭包内隐藏       → CLI/Agent 无感知
+```
+
+**两种 Runtime：**
+
+| Runtime | 适用场景 | 部署方式 | GPU 切分 | 平台 |
+|---------|---------|---------|---------|------|
+| **K3S** | Linux + K3S 已安装 | Pod YAML + kubectl apply | HAMi 细粒度切分 | Linux |
+| **Native** | 跨平台 fallback | 直接 exec 引擎二进制 | 不支持（单进程独占） | 全平台 |
+
+**选择逻辑（`selectRuntime()`）：**
+- Linux + K3S 可用 → K3S Runtime（完整体验：GPU 切分、多模型并行、声明式健康检查）
+- 否则 → Native Runtime（跨平台 fallback：单模型、进程管理）
+
+**渐进降级（与 L0→L3 同构）：**
+```
+K3S + HAMi  → 多模型并行 + GPU 细粒度切分 + 声明式生命周期
+     ↓ K3S 不可用
+Native      → 单模型 + 直接 exec + 极简进程管理（start/stop/logs）
+```
+
+知识资产不增加 runtime 维度。Engine Asset 可选地声明 `source` 字段描述二进制来源，
+有 `source` 的引擎可在 native runtime 运行（如 llama.cpp），没有的只能容器运行（如 vLLM）。
 
 ### 3.1 为什么选 K3S
 
@@ -2112,8 +2144,9 @@ K3S 的 1.6 GB 峰值内存可能在极端边缘场景下需要优化
 
 **INV-2: 不为模型类型写代码。** 模型元数据在 YAML。模型类型是知识，不是代码分支。
 
-**INV-3: 不管容器生命周期。** K3S 管 Pod 的创建、监控、重启、销毁。
-AIMA 只做 apply / get / delete / logs。
+**INV-3: 最小化运行时管理。** K3S 管 Pod 的创建、监控、重启、销毁。
+Native runtime 只做极简进程管理（start/stop/logs），不实现重启、健康恢复等容器级特性。
+AIMA 通过 `runtime.Runtime` 接口统一抽象，上层代码（MCP 工具、CLI）不直接依赖 K3S 或进程管理。
 
 **INV-4: 职责分离的状态存储。** AIMA 系统状态（模型注册、引擎注册、知识笔记、配置）
 在 `aima.db` 单文件中。ZeroClaw Agent 记忆在独立的 `zeroclaw.db` 中。

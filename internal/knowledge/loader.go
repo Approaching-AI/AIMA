@@ -73,6 +73,13 @@ type HardwarePartition struct {
 
 // --- Engine Asset ---
 
+// EngineSource describes how to obtain an engine binary for native runtime.
+type EngineSource struct {
+	Binary    string   `yaml:"binary,omitempty"`
+	Platforms []string `yaml:"platforms,omitempty"`
+	Download  map[string]string `yaml:"download,omitempty"`
+}
+
 type EngineAsset struct {
 	Kind     string         `yaml:"kind"`
 	Metadata EngineMetadata `yaml:"metadata"`
@@ -84,6 +91,7 @@ type EngineAsset struct {
 	PartitionHints PartitionHints   `yaml:"partition_hints"`
 	TimeConstraints TimeConstraints `yaml:"time_constraints"`
 	PowerConstraints PowerConstraints `yaml:"power_constraints"`
+	Source   *EngineSource  `yaml:"source,omitempty"` // native runtime: binary source info
 }
 
 type EngineMetadata struct {
@@ -212,6 +220,7 @@ type StackSource struct {
 	Chart     string            `yaml:"chart,omitempty"`
 	Platforms []string          `yaml:"platforms"`
 	Download  map[string]string `yaml:"download,omitempty"` // platform → URL
+	Mirror    map[string]string `yaml:"mirror,omitempty"`   // platform → fallback URL
 }
 
 type StackInstall struct {

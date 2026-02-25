@@ -13,6 +13,9 @@ source:
   download:
     linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
     linux/arm64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+  mirror:
+    linux/amd64: "https://ghproxy.com/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
+    linux/arm64: "https://ghproxy.com/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-charts-v2.4.1.tgz"
 
 install:
   method: helm

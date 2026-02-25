@@ -77,6 +77,7 @@ func (inst *Installer) WithDistDir(dir string) *Installer {
 func (inst *Installer) Init(ctx context.Context, components []knowledge.StackComponent, hwProfile string) (*InitResult, error) {
 	result := &InitResult{AllReady: true}
 
+	hasReady := false
 	for _, comp := range components {
 		status, err := inst.initComponent(ctx, comp, hwProfile)
 		if err != nil {
@@ -89,7 +90,14 @@ func (inst *Installer) Init(ctx context.Context, components []knowledge.StackCom
 		if !status.Ready && !status.Skipped {
 			result.AllReady = false
 		}
+		if status.Ready {
+			hasReady = true
+		}
 		result.Components = append(result.Components, status)
+	}
+
+	if !hasReady {
+		result.AllReady = false
 	}
 
 	return result, nil
@@ -97,11 +105,12 @@ func (inst *Installer) Init(ctx context.Context, components []knowledge.StackCom
 
 // DownloadItem describes a file that needs to be downloaded.
 type DownloadItem struct {
-	Name       string `json:"name"`      // component name
-	FileName   string `json:"file_name"` // e.g. "k3s" or "hami-chart.tgz"
-	FilePath   string `json:"file_path"` // full local path in dist/
-	URL        string `json:"url"`       // download URL
-	Executable bool   `json:"executable,omitempty"` // chmod +x after download
+	Name       string `json:"name"`                  // component name
+	FileName   string `json:"file_name"`             // e.g. "k3s" or "hami-chart.tgz"
+	FilePath   string `json:"file_path"`             // full local path in dist/
+	URL        string `json:"url"`                   // download URL
+	MirrorURL  string `json:"mirror_url,omitempty"`  // fallback URL (e.g. ghproxy mirror)
+	Executable bool   `json:"executable,omitempty"`  // chmod +x after download
 }
 
 // Preflight checks which components need files downloaded.
@@ -142,6 +151,7 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 			FileName:   fileName,
 			FilePath:   localPath,
 			URL:        url,
+			MirrorURL:  comp.Source.Mirror[platform],
 			Executable: comp.Source.Binary != "",
 		})
 	}
@@ -150,10 +160,16 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 }
 
 // DownloadItems downloads all items in the list, creating directories as needed.
+// If a primary URL fails and a mirror URL is configured, it retries with the mirror.
 func DownloadItems(ctx context.Context, items []DownloadItem) error {
 	for _, item := range items {
 		slog.Info("downloading", "name", item.Name, "url", item.URL)
-		if err := downloadFile(ctx, item.URL, item.FilePath); err != nil {
+		err := downloadFile(ctx, item.URL, item.FilePath)
+		if err != nil && item.MirrorURL != "" {
+			slog.Warn("primary download failed, trying mirror", "name", item.Name, "error", err, "mirror", item.MirrorURL)
+			err = downloadFile(ctx, item.MirrorURL, item.FilePath)
+		}
+		if err != nil {
 			return fmt.Errorf("download %s: %w", item.Name, err)
 		}
 		if item.Executable {
@@ -176,7 +192,8 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}
@@ -214,12 +231,20 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 func (inst *Installer) Status(ctx context.Context, components []knowledge.StackComponent) (*InitResult, error) {
 	result := &InitResult{AllReady: true}
 
+	hasReady := false
 	for _, comp := range components {
 		status := inst.checkComponent(ctx, comp)
 		if !status.Ready && !status.Skipped {
 			result.AllReady = false
 		}
+		if status.Ready {
+			hasReady = true
+		}
 		result.Components = append(result.Components, status)
+	}
+
+	if !hasReady {
+		result.AllReady = false
 	}
 
 	return result, nil

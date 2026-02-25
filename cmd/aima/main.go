@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/jguan/aima/catalog"
@@ -20,6 +21,7 @@ import (
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/model"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/runtime"
 	"github.com/jguan/aima/internal/stack"
 	"github.com/jguan/aima/internal/zeroclaw"
 
@@ -80,22 +82,25 @@ func run() error {
 		zeroclaw.WithDataDir(dataDir),
 	)
 
-	// 7. Create MCP server with tool deps wired
+	// 7. Select runtime: K3S if available (Linux), else native process
+	rt := selectRuntime(ctx, k3sClient, dataDir)
+	slog.Info("runtime selected", "runtime", rt.Name())
+
+	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
-	deps := buildToolDeps(cat, db, knowledgeStore, k3sClient, proxyServer, dataDir)
+	deps := buildToolDeps(cat, db, knowledgeStore, rt, proxyServer, dataDir)
 	mcp.RegisterAllTools(mcpServer, deps)
 
-	// 8. Create agent (L3a Go Agent)
+	// 9. Create agent (L3a Go Agent)
 	// Agent needs an LLM client — nil means agent is not available until a model is deployed.
 	toolAdapter := &mcpToolAdapter{server: mcpServer}
 	goAgent := agent.NewAgent(nil, toolAdapter)
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
 
-	// 9. Build App and run CLI
+	// 10. Build App and run CLI
 	app := &cli.App{
 		DB:         db,
 		Catalog:    cat,
-		K3S:        k3sClient,
 		Proxy:      proxyServer,
 		MCP:        mcpServer,
 		Dispatcher: dispatcher,
@@ -149,8 +154,31 @@ func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// selectRuntime picks the best runtime: K3S on Linux if available, else native.
+func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) runtime.Runtime {
+	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
+		return runtime.NewK3SRuntime(k3sClient)
+	}
+	return runtime.NewNativeRuntime(filepath.Join(dataDir, "logs"))
+}
+
+// buildHardwareInfo creates a HardwareInfo with platform and runtime awareness.
+func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInfo {
+	hwInfo := knowledge.HardwareInfo{
+		Platform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		RuntimeType: rtName,
+	}
+	if hw, err := hal.Detect(ctx); err == nil {
+		if hw.GPU != nil {
+			hwInfo.GPUArch = hw.GPU.Arch
+		}
+		hwInfo.CPUArch = hw.CPU.Arch
+	}
+	return hwInfo
+}
+
 // buildToolDeps wires all ToolDeps fields to real implementations.
-func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, k3sClient *k3s.Client, proxyServer *proxy.Server, dataDir string) *mcp.ToolDeps {
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, dataDir string) *mcp.ToolDeps {
 	return &mcp.ToolDeps{
 		// Hardware
 		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
@@ -184,7 +212,6 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			// Look up model in catalog for download source
 			for _, ma := range cat.ModelAssets {
 				if ma.Metadata.Name == name && len(ma.Storage.Sources) > 0 {
 					src := ma.Storage.Sources[0]
@@ -252,31 +279,64 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return engine.Import(ctx, absPath, &execRunner{})
 		},
 
-		// Deployment
+		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string) (json.RawMessage, error) {
-			hw, err := hal.Detect(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("detect hardware: %w", err)
-			}
-			gpuArch := ""
-			if hw.GPU != nil {
-				gpuArch = hw.GPU.Arch
-			}
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			overrides := map[string]any{}
 			if slot != "" {
 				overrides["slot"] = slot
 			}
-			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
 			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
 			if err != nil {
 				return nil, fmt.Errorf("resolve config: %w", err)
 			}
-			podYAML, err := knowledge.GeneratePod(resolved)
-			if err != nil {
-				return nil, fmt.Errorf("generate pod: %w", err)
+
+			port := 8000
+			if p, ok := resolved.Config["port"]; ok {
+				switch v := p.(type) {
+				case int:
+					port = v
+				case float64:
+					port = int(v)
+				}
 			}
-			if err := k3sClient.Apply(ctx, podYAML); err != nil {
-				return nil, fmt.Errorf("apply pod: %w", err)
+
+			modelPath := resolved.ModelPath
+			if modelPath == "" {
+				modelPath = filepath.Join(dataDir, "models", modelName)
+			}
+
+			req := &runtime.DeployRequest{
+				Name:      modelName,
+				Engine:    resolved.Engine,
+				Image:     resolved.EngineImage,
+				Command:   resolved.Command,
+				ModelPath: modelPath,
+				Port:      port,
+				Config:    resolved.Config,
+				Labels: map[string]string{
+					"aima.dev/engine": resolved.Engine,
+					"aima.dev/model":  modelName,
+					"aima.dev/slot":   resolved.Slot,
+				},
+			}
+			if resolved.Partition != nil {
+				req.Partition = &runtime.PartitionRequest{
+					GPUMemoryMiB:    resolved.Partition.GPUMemoryMiB,
+					GPUCoresPercent: resolved.Partition.GPUCoresPercent,
+					CPUCores:        resolved.Partition.CPUCores,
+					RAMMiB:          resolved.Partition.RAMMiB,
+				}
+			}
+			if resolved.HealthCheck != nil {
+				req.HealthCheck = &runtime.HealthCheckConfig{
+					Path:     resolved.HealthCheck.Path,
+					TimeoutS: resolved.HealthCheck.TimeoutS,
+				}
+			}
+
+			if err := rt.Deploy(ctx, req); err != nil {
+				return nil, fmt.Errorf("deploy: %w", err)
 			}
 			proxyServer.RegisterBackend(modelName, &proxy.Backend{
 				ModelName:  modelName,
@@ -286,42 +346,38 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			result := map[string]any{
 				"model": modelName, "engine": resolved.Engine,
 				"slot": resolved.Slot, "status": "deploying",
+				"runtime": rt.Name(),
 			}
 			return json.Marshal(result)
 		},
 		DeployDelete: func(ctx context.Context, name string) error {
-			if err := k3sClient.Delete(ctx, name); err != nil {
+			if err := rt.Delete(ctx, name); err != nil {
 				return err
 			}
 			proxyServer.RemoveBackend(name)
 			return nil
 		},
 		DeployStatus: func(ctx context.Context, name string) (json.RawMessage, error) {
-			pod, err := k3sClient.GetPod(ctx, name)
+			s, err := rt.Status(ctx, name)
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(pod)
+			return json.Marshal(s)
 		},
 		DeployList: func(ctx context.Context) (json.RawMessage, error) {
-			pods, err := k3sClient.ListPods(ctx)
+			statuses, err := rt.List(ctx)
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(pods)
+			return json.Marshal(statuses)
+		},
+		DeployLogs: func(ctx context.Context, name string, tailLines int) (string, error) {
+			return rt.Logs(ctx, name, tailLines)
 		},
 
 		// Knowledge
 		ResolveConfig: func(ctx context.Context, modelName, engineType string, overrides map[string]any) (json.RawMessage, error) {
-			hw, err := hal.Detect(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("detect hardware: %w", err)
-			}
-			gpuArch := ""
-			if hw.GPU != nil {
-				gpuArch = hw.GPU.Arch
-			}
-			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
 			if err != nil {
 				return nil, err
@@ -348,19 +404,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return db.InsertNote(ctx, &n)
 		},
 		GeneratePod: func(ctx context.Context, modelName, engineType, slot string) (json.RawMessage, error) {
-			hw, err := hal.Detect(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("detect hardware: %w", err)
-			}
-			gpuArch := ""
-			if hw.GPU != nil {
-				gpuArch = hw.GPU.Arch
-			}
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			overrides := map[string]any{}
 			if slot != "" {
 				overrides["slot"] = slot
 			}
-			hwInfo := knowledge.HardwareInfo{GPUArch: gpuArch, CPUArch: hw.CPU.Arch}
 			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
 			if err != nil {
 				return nil, err

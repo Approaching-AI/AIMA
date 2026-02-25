@@ -3,6 +3,8 @@ package stack
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -365,6 +367,163 @@ func TestPreflightSkipsNoDownloadURL(t *testing.T) {
 	items := inst.Preflight(components)
 	if len(items) != 0 {
 		t.Errorf("expected 0 items without download URL, got %d", len(items))
+	}
+}
+
+func TestAllSkippedNotReady(t *testing.T) {
+	runner := &mockRunner{results: map[string]runResult{}}
+	inst := NewInstaller(runner, t.TempDir())
+
+	// All components have platforms that don't match current OS
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "linux-only-a", Version: "1.0"},
+			Source:   knowledge.StackSource{Binary: "a", Platforms: []string{"fakeos/fakearch"}},
+			Install:  knowledge.StackInstall{Method: "binary"},
+			Verify:   knowledge.StackVerify{Command: "a status", ReadyCondition: "Ready"},
+		},
+		{
+			Metadata: knowledge.StackMetadata{Name: "linux-only-b", Version: "2.0"},
+			Source:   knowledge.StackSource{Binary: "b", Platforms: []string{"fakeos/fakearch"}},
+			Install:  knowledge.StackInstall{Method: "binary"},
+			Verify:   knowledge.StackVerify{Command: "b status", ReadyCondition: "Ready"},
+		},
+	}
+
+	// Init: all skipped → AllReady must be false
+	result, err := inst.Init(context.Background(), components, "")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if result.AllReady {
+		t.Error("Init: expected AllReady=false when all components are skipped")
+	}
+	for _, c := range result.Components {
+		if !c.Skipped {
+			t.Errorf("Init: expected component %q to be skipped", c.Name)
+		}
+	}
+
+	// Status: all skipped → AllReady must be false
+	result, err = inst.Status(context.Background(), components)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if result.AllReady {
+		t.Error("Status: expected AllReady=false when all components are skipped")
+	}
+}
+
+func TestMixedSkipAndReady(t *testing.T) {
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"b status": {output: []byte("Ready")},
+		},
+	}
+	inst := NewInstaller(runner, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "skipped", Version: "1.0"},
+			Source:   knowledge.StackSource{Platforms: []string{"fakeos/fakearch"}},
+			Verify:   knowledge.StackVerify{Command: "a status", ReadyCondition: "Ready"},
+		},
+		{
+			Metadata: knowledge.StackMetadata{Name: "ready", Version: "1.0"},
+			Source:   knowledge.StackSource{Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH}},
+			Verify:   knowledge.StackVerify{Command: "b status", ReadyCondition: "Ready"},
+		},
+	}
+
+	result, err := inst.Status(context.Background(), components)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !result.AllReady {
+		t.Error("expected AllReady=true when one skip + one ready")
+	}
+	if !result.Components[0].Skipped {
+		t.Error("expected first component to be skipped")
+	}
+	if !result.Components[1].Ready {
+		t.Error("expected second component to be ready")
+	}
+}
+
+func TestPreflightPopulatesMirrorURL(t *testing.T) {
+	inst := NewInstaller(&mockRunner{}, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "test", Version: "1.0"},
+			Source: knowledge.StackSource{
+				Binary:    "test-bin",
+				Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH},
+				Download: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/bin",
+				},
+				Mirror: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://mirror.example.com/bin",
+				},
+			},
+		},
+	}
+
+	items := inst.Preflight(components)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].MirrorURL != "https://mirror.example.com/bin" {
+		t.Errorf("MirrorURL = %q, want %q", items[0].MirrorURL, "https://mirror.example.com/bin")
+	}
+}
+
+func TestDownloadItemsFallbackToMirror(t *testing.T) {
+	// Set up an HTTP server that serves a file at /mirror path but fails at /primary
+	dir := t.TempDir()
+	destPath := filepath.Join(dir, "downloaded")
+
+	// Start a test HTTP server
+	handler := http.NewServeMux()
+	handler.HandleFunc("/primary", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "timeout", http.StatusGatewayTimeout)
+	})
+	handler.HandleFunc("/mirror", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("mirror-content"))
+	})
+
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: handler}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go server.Serve(ln)
+	defer server.Close()
+
+	base := "http://" + ln.Addr().String()
+
+	items := []DownloadItem{
+		{
+			Name:      "test",
+			FileName:  "downloaded",
+			FilePath:  destPath,
+			URL:       base + "/primary",
+			MirrorURL: base + "/mirror",
+		},
+	}
+
+	if err := DownloadItems(context.Background(), items); err != nil {
+		t.Fatalf("DownloadItems: %v", err)
+	}
+
+	data, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(data) != "mirror-content" {
+		t.Errorf("content = %q, want %q", string(data), "mirror-content")
 	}
 }
 

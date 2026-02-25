@@ -91,7 +91,18 @@ func newInitCmd(app *App) *cobra.Command {
 			if result.AllReady {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nAll components ready. Run 'aima serve' to begin.")
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "\nSome components failed. Check messages above.")
+				allSkipped := true
+				for _, c := range result.Components {
+					if !c.Ready && !c.Skipped {
+						allSkipped = false
+						break
+					}
+				}
+				if allSkipped {
+					fmt.Fprintln(cmd.OutOrStdout(), "\nNo supported components on this platform.")
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "\nSome components failed. Check messages above.")
+				}
 			}
 
 			return nil

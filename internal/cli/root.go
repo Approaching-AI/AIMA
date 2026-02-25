@@ -5,7 +5,6 @@ import (
 
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/agent"
-	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
@@ -16,7 +15,6 @@ import (
 type App struct {
 	DB         *state.DB
 	Catalog    *knowledge.Catalog
-	K3S        *k3s.Client
 	Proxy      *proxy.Server
 	MCP        *mcp.Server
 	Dispatcher *agent.Dispatcher

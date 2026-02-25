@@ -9,7 +9,6 @@ import (
 
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/agent"
-	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
@@ -30,7 +29,6 @@ func testApp(t *testing.T) *App {
 	t.Cleanup(func() { db.Close() })
 
 	cat := &knowledge.Catalog{}
-	k3sClient := k3s.NewClient()
 	proxyServer := proxy.NewServer()
 	mcpServer := mcp.NewServer()
 	zcMgr := zeroclaw.NewManager()
@@ -40,7 +38,6 @@ func testApp(t *testing.T) *App {
 	return &App{
 		DB:         db,
 		Catalog:    cat,
-		K3S:        k3sClient,
 		Proxy:      proxyServer,
 		MCP:        mcpServer,
 		Dispatcher: dispatcher,

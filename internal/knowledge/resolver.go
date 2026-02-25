@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"fmt"
+	"strings"
 )
 
 // HardwareInfo describes the detected hardware for config resolution.
@@ -267,4 +268,52 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 	}
 
 	return &PartitionSlot{Name: "default"}
+}
+
+// formatEngineMap maps model file formats to the preferred engine type.
+var formatEngineMap = map[string]string{
+	"safetensors": "vllm",
+	"gguf":        "llamacpp",
+}
+
+// BuildSyntheticModelAsset creates a ModelAsset from scan-detected metadata
+// for models that have no YAML catalog entry. Uses wildcard gpu_arch="*"
+// so it matches any hardware, and relies on engine L0 defaults for config.
+func BuildSyntheticModelAsset(name, modelType, family, paramCount, format string) ModelAsset {
+	if modelType == "" {
+		modelType = "llm"
+	}
+	engineType := "llamacpp" // most permissive fallback
+	if et, ok := formatEngineMap[strings.ToLower(format)]; ok {
+		engineType = et
+	}
+	return ModelAsset{
+		Kind: "model_asset",
+		Metadata: ModelMetadata{
+			Name:           name,
+			Type:           modelType,
+			Family:         family,
+			ParameterCount: paramCount,
+		},
+		Storage: ModelStorage{
+			Formats: []string{format},
+		},
+		Variants: []ModelVariant{{
+			Name:     name + "-auto",
+			Hardware: ModelVariantHardware{GPUArch: "*"},
+			Engine:   engineType,
+			Format:   format,
+		}},
+	}
+}
+
+// RegisterModel appends a ModelAsset to the catalog if no asset with the
+// same name already exists.
+func (c *Catalog) RegisterModel(ma ModelAsset) {
+	for _, existing := range c.ModelAssets {
+		if existing.Metadata.Name == ma.Metadata.Name {
+			return
+		}
+	}
+	c.ModelAssets = append(c.ModelAssets, ma)
 }

@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -198,4 +199,90 @@ func TestResolveAutoEngine(t *testing.T) {
 			t.Errorf("Engine = %q, want universal", resolved.Engine)
 		}
 	})
+}
+
+func TestBuildSyntheticModelAsset(t *testing.T) {
+	tests := []struct {
+		name       string
+		format     string
+		modelType  string
+		wantEngine string
+		wantType   string
+	}{
+		{"safetensors→vllm", "safetensors", "llm", "vllm", "llm"},
+		{"gguf→llamacpp", "gguf", "llm", "llamacpp", "llm"},
+		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm"},
+		{"unknown format→llamacpp", "awq", "llm", "llamacpp", "llm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ma := BuildSyntheticModelAsset("test-model", tt.modelType, "testfam", "8B", tt.format)
+			if ma.Metadata.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", ma.Metadata.Type, tt.wantType)
+			}
+			if len(ma.Variants) != 1 {
+				t.Fatalf("Variants count = %d, want 1", len(ma.Variants))
+			}
+			v := ma.Variants[0]
+			if v.Engine != tt.wantEngine {
+				t.Errorf("Engine = %q, want %q", v.Engine, tt.wantEngine)
+			}
+			if v.Hardware.GPUArch != "*" {
+				t.Errorf("GPUArch = %q, want *", v.Hardware.GPUArch)
+			}
+			if !strings.HasSuffix(v.Name, "-auto") {
+				t.Errorf("variant Name = %q, want suffix -auto", v.Name)
+			}
+		})
+	}
+}
+
+func TestRegisterModelDedup(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	before := len(cat.ModelAssets)
+
+	// Register a model that already exists
+	cat.RegisterModel(ModelAsset{Metadata: ModelMetadata{Name: "test-model-8b"}})
+	if len(cat.ModelAssets) != before {
+		t.Errorf("ModelAssets count = %d after dup register, want %d", len(cat.ModelAssets), before)
+	}
+
+	// Register a new model
+	cat.RegisterModel(ModelAsset{Metadata: ModelMetadata{Name: "new-model"}})
+	if len(cat.ModelAssets) != before+1 {
+		t.Errorf("ModelAssets count = %d after new register, want %d", len(cat.ModelAssets), before+1)
+	}
+}
+
+func TestResolveSyntheticModel(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// Register a synthetic model using "universal" engine (available in test catalog with gpu_arch="*")
+	synth := ModelAsset{
+		Kind:     "model_asset",
+		Metadata: ModelMetadata{Name: "synth-model-7b", Type: "llm"},
+		Variants: []ModelVariant{{
+			Name:     "synth-model-7b-auto",
+			Hardware: ModelVariantHardware{GPUArch: "*"},
+			Engine:   "universal",
+			Format:   "gguf",
+		}},
+	}
+	cat.RegisterModel(synth)
+
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64"}
+	resolved, err := cat.Resolve(hw, "synth-model-7b", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve synthetic: %v", err)
+	}
+	if resolved.Engine != "universal" {
+		t.Errorf("Engine = %q, want universal", resolved.Engine)
+	}
+	// Should inherit engine L0 defaults from universal engine
+	if resolved.Config["port"] != 8080 {
+		t.Errorf("Config[port] = %v, want 8080 (universal engine default)", resolved.Config["port"])
+	}
+	if resolved.Config["ctx_size"] != 4096 {
+		t.Errorf("Config[ctx_size] = %v, want 4096 (universal engine default)", resolved.Config["ctx_size"])
+	}
 }

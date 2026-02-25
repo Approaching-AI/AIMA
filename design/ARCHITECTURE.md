@@ -942,6 +942,27 @@ L3b: ZeroClaw 实时决策 (持久记忆+跨会话)       (复杂动态优化)
 合并逻辑: 简单的 `map[string]any` 合并，高层覆盖低层同名 key。
 ResolvedConfig 记录每个 key 的来源层级，支持审计追踪。
 
+**Auto-Resolve 兜底**: 当模型不在 YAML catalog 中时，`resolveWithFallback` 自动从 `models` 表
+（`model scan` 写入的扫描记录）构建"合成 ModelAsset"：
+
+```
+cat.Resolve(model) → "not found in catalog"
+  │
+  ├── db.FindModelByName(model)  → 优先级: 精确名 → 不区分大小写 → 子串匹配
+  │     └── 未找到 → 报错: "not found in catalog (also not found in scan database)"
+  │     └── 无 format → 报错: "found on disk but has no format info"
+  │
+  ├── BuildSyntheticModelAsset(name, type, arch, params, format)
+  │     └── format → engine 映射: safetensors→vllm, gguf→llamacpp, 未知→llamacpp
+  │     └── 生成 gpu_arch="*" 通配变体，空 DefaultConfig（依赖引擎 L0 默认值）
+  │
+  ├── cat.RegisterModel(synth)  → 注册到内存 catalog（去重）
+  ├── overrides["model_path"] = dbModel.Path  → 使用实际磁盘路径
+  └── cat.Resolve(dbModel.Name) → 正常 L0 合并流程
+```
+
+这保证了 `model scan` 发现的任何模型都能"零 YAML"部署，同时保留完整的 L0→L1 合并链路。
+
 ### 4.10 YAML → SQLite 加载流程
 
 每次 `aima start` 执行以下流程，确保 SQLite 与 go:embed YAML 一致：
@@ -1059,7 +1080,8 @@ VALUES ('sha256:...', 'GLM-4.7-Flash', 'llm', '/mnt/data/models/GLM-4.7-Flash',
 **与 Knowledge Layer 的关联**:
 - 扫描发现模型后，自动在 Model Asset 中查找匹配项
 - 匹配成功 → 该模型拥有完整的引擎推荐、硬件变体配置、性能预期
-- 匹配失败 → 记录为"未知模型"，L0 默认配置仍可部署 (保守参数)
+- 匹配失败 → **Auto-Resolve 兜底**：从扫描记录的 format 字段自动推断引擎
+  (safetensors→vllm, gguf→llamacpp)，构建合成 ModelAsset，使用引擎 L0 默认配置部署
 
 ### 5.2 模型获取：下载与预加载
 
@@ -1923,8 +1945,10 @@ CLI: 解析参数，调用内部 MCP 工具链
   │   └── 不存在? → 自动尝试拉取 (有网) / 提示离线导入 (无网)
   │
   ▼
-knowledge.resolve(engine=vllm, model=glm-4.7-flash, hw=detect())
-  │  合并: L0 (Engine Asset 默认) → L1 (--engine vllm) → L2 (Knowledge Note)
+resolveWithFallback(engine=vllm, model=glm-4.7-flash, hw=detect())
+  │  ├── 尝试 catalog.Resolve() → 成功则直接合并 L0→L1→L2
+  │  └── catalog 未匹配? → db.FindModelByName() → BuildSyntheticModelAsset()
+  │       → format→engine 映射 → 注册合成 ModelAsset → 重试 Resolve
   ▼
 knowledge.generate_pod(resolved_config, partition_strategy)
   │  模板渲染: Engine Asset 镜像/命令 + 配置参数 + Slot 资源限制 → Pod YAML
@@ -2090,6 +2114,10 @@ K3S 的 1.6 GB 峰值内存可能在极端边缘场景下需要优化
 
 1. 写 Model Asset YAML: 硬件变体、引擎映射、默认配置、下载源列表
 2. 放入 `catalog/models/` 目录
+
+> **快速部署 (零 YAML)**: 如果模型已通过 `model scan` 发现且有 format 信息，
+> `aima deploy <model>` 会自动构建合成 ModelAsset（format→engine 映射 + 引擎 L0 默认值），
+> 无需手动写 YAML 即可部署。写 YAML 仍推荐用于生产优化（精确配置、性能预期、多硬件变体）。
 
 ### 新硬件
 

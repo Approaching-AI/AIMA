@@ -263,6 +263,45 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 	return hwInfo
 }
 
+// resolveWithFallback tries catalog resolution first; on "not found in catalog",
+// falls back to building a synthetic ModelAsset from the model's DB scan record.
+func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string) (*knowledge.ResolvedConfig, string, error) {
+	resolved, err := cat.Resolve(hw, modelName, engineType, overrides)
+	if err == nil {
+		return resolved, modelName, nil
+	}
+	if !strings.Contains(err.Error(), "not found in catalog") {
+		return nil, "", fmt.Errorf("resolve config: %w", err)
+	}
+
+	// Catalog miss — try the scan database
+	dbModel, dbErr := db.FindModelByName(ctx, modelName)
+	if dbErr != nil {
+		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (also not found in scan database)", modelName)
+	}
+	if dbModel.Format == "" {
+		return nil, "", fmt.Errorf("model %q found on disk but has no format info; cannot auto-detect engine", dbModel.Name)
+	}
+
+	slog.Info("model not in catalog, using auto-detected config",
+		"model", dbModel.Name, "format", dbModel.Format, "path", dbModel.Path)
+
+	synth := knowledge.BuildSyntheticModelAsset(
+		dbModel.Name, dbModel.Type, dbModel.DetectedArch, dbModel.DetectedParams, dbModel.Format)
+	cat.RegisterModel(synth)
+
+	if overrides == nil {
+		overrides = map[string]any{}
+	}
+	overrides["model_path"] = dbModel.Path
+
+	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve auto-detected config for %s: %w", dbModel.Name, err)
+	}
+	return resolved, dbModel.Name, nil
+}
+
 // buildToolDeps wires all ToolDeps fields to real implementations.
 func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
 	return &mcp.ToolDeps{
@@ -441,10 +480,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if slot != "" {
 				overrides["slot"] = slot
 			}
-			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
 			if err != nil {
-				return nil, fmt.Errorf("resolve config: %w", err)
+				return nil, err
 			}
+			modelName = canonicalName
 
 			port := 8000
 			if p, ok := resolved.Config["port"]; ok {
@@ -533,7 +573,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Knowledge
 		ResolveConfig: func(ctx context.Context, modelName, engineType string, overrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
@@ -564,7 +604,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if slot != "" {
 				overrides["slot"] = slot
 			}
-			resolved, err := cat.Resolve(hwInfo, modelName, engineType, overrides)
+			resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
 			if err != nil {
 				return nil, err
 			}

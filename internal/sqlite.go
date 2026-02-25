@@ -523,6 +523,39 @@ func (d *DB) UpdateModelStatus(ctx context.Context, id, status string) error {
 	return nil
 }
 
+// FindModelByName searches for a model by name with prioritized matching:
+// 1. Exact name  2. Case-insensitive  3. Substring match
+func (d *DB) FindModelByName(ctx context.Context, name string) (*Model, error) {
+	queries := []string{
+		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
+		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
+		 FROM models WHERE name = ?`,
+		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
+		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
+		 FROM models WHERE LOWER(name) = LOWER(?)`,
+		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
+		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
+		 FROM models WHERE LOWER(name) LIKE '%' || LOWER(?) || '%'`,
+	}
+	for _, q := range queries {
+		m := &Model{}
+		err := d.db.QueryRowContext(ctx, q, name).Scan(
+			&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
+			&m.DetectedArch, &m.DetectedParams, &m.Status, &m.DownloadProgress, &m.CreatedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("find model by name %q: %w", name, err)
+		}
+		return m, nil
+	}
+	return nil, fmt.Errorf("model %q not found", name)
+}
+
 func (d *DB) DeleteModel(ctx context.Context, id string) error {
 	res, err := d.db.ExecContext(ctx, `DELETE FROM models WHERE id = ?`, id)
 	if err != nil {

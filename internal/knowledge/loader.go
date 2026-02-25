@@ -224,10 +224,12 @@ type StackSource struct {
 }
 
 type StackInstall struct {
-	Method string          `yaml:"method"`
-	Args   []StackArg      `yaml:"args,omitempty"`
-	Env    map[string]string `yaml:"env,omitempty"`
-	Helm   *StackHelm      `yaml:"helm,omitempty"`
+	Method   string            `yaml:"method"`
+	Daemon   bool              `yaml:"daemon,omitempty"`
+	Priority int               `yaml:"priority,omitempty"` // lower = installed first (default 0)
+	Args     []StackArg        `yaml:"args,omitempty"`
+	Env      map[string]string `yaml:"env,omitempty"`
+	Helm     *StackHelm        `yaml:"helm,omitempty"`
 }
 
 type StackArg struct {

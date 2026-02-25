@@ -173,3 +173,29 @@ func TestResolveWithSlotOverride(t *testing.T) {
 		t.Errorf("Config[slot] = %v, want secondary", resolved.Config["slot"])
 	}
 }
+
+func TestResolveAutoEngine(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	t.Run("exact gpu_arch picks testengine", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64"}
+		resolved, err := cat.Resolve(hw, "test-model-8b", "", nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if resolved.Engine != "testengine" {
+			t.Errorf("Engine = %q, want testengine", resolved.Engine)
+		}
+	})
+
+	t.Run("unknown arch falls back to universal", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "UnknownArch", CPUArch: "arm64"}
+		resolved, err := cat.Resolve(hw, "test-model-8b", "", nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if resolved.Engine != "universal" {
+			t.Errorf("Engine = %q, want universal", resolved.Engine)
+		}
+	})
+}

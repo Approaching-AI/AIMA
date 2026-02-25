@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,8 +79,15 @@ func (inst *Installer) WithDistDir(dir string) *Installer {
 func (inst *Installer) Init(ctx context.Context, components []knowledge.StackComponent, hwProfile string) (*InitResult, error) {
 	result := &InitResult{AllReady: true}
 
+	// Sort by install priority (lower = first) to respect dependencies
+	sorted := make([]knowledge.StackComponent, len(components))
+	copy(sorted, components)
+	slices.SortStableFunc(sorted, func(a, b knowledge.StackComponent) int {
+		return a.Install.Priority - b.Install.Priority
+	})
+
 	hasReady := false
-	for _, comp := range components {
+	for _, comp := range sorted {
 		status, err := inst.initComponent(ctx, comp, hwProfile)
 		if err != nil {
 			status = ComponentStatus{
@@ -340,6 +348,18 @@ func (inst *Installer) installBinary(ctx context.Context, comp knowledge.StackCo
 
 	// Execute: component binary server <args>
 	cmdArgs := append([]string{"server"}, args...)
+
+	if comp.Install.Daemon {
+		// Daemon mode: start in background, verify step will poll for readiness
+		cmd := exec.CommandContext(ctx, binary, cmdArgs...)
+		cmd.Env = os.Environ()
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("start %s: %w", comp.Source.Binary, err)
+		}
+		slog.Info("daemon started", "name", comp.Metadata.Name, "pid", cmd.Process.Pid)
+		return nil
+	}
+
 	out, err := inst.runner.Run(ctx, binary, cmdArgs...)
 	if err != nil {
 		return fmt.Errorf("run %s: %s: %w", comp.Source.Binary, string(out), err)
@@ -453,8 +473,14 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 		return fmt.Errorf("empty verify command for %s", comp.Metadata.Name)
 	}
 
+	// Resolve binary from dist/ if not in PATH
+	binary := parts[0]
+	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
+		binary = localPath
+	}
+
 	for time.Now().Before(deadline) {
-		out, err := inst.runner.Run(ctx, parts[0], parts[1:]...)
+		out, err := inst.runner.Run(ctx, binary, parts[1:]...)
 		if err == nil && strings.Contains(string(out), comp.Verify.ReadyCondition) {
 			slog.Info("stack component verified", "name", comp.Metadata.Name)
 			return nil
@@ -493,7 +519,13 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 		return status
 	}
 
-	out, err := inst.runner.Run(ctx, parts[0], parts[1:]...)
+	// Resolve binary from dist/ if not in PATH
+	binary := parts[0]
+	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
+		binary = localPath
+	}
+
+	out, err := inst.runner.Run(ctx, binary, parts[1:]...)
 	if err != nil {
 		status.Message = fmt.Sprintf("not installed or not running: %v", err)
 		return status
@@ -526,6 +558,11 @@ func collectArgs(comp knowledge.StackComponent, hwProfile string) []string {
 	}
 
 	return args
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // collectEnv gathers environment variables from base config + hardware profile.

@@ -19,6 +19,7 @@ source:
 
 install:
   method: helm
+  priority: 20
   helm:
     chart: "hami-2.4.1.tgz"
     namespace: "hami-system"

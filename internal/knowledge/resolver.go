@@ -39,6 +39,15 @@ type ResolvedConfig struct {
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
 // L2 (knowledge notes from DB) is not applied here; it is merged by the caller when available.
 func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any) (*ResolvedConfig, error) {
+	// Auto-detect engine from model variants when not specified
+	if engineType == "" {
+		inferred, err := c.inferEngineType(modelName, hw)
+		if err != nil {
+			return nil, err
+		}
+		engineType = inferred
+	}
+
 	engine, err := c.findEngine(engineType, hw)
 	if err != nil {
 		return nil, err
@@ -125,6 +134,34 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 		return wildcard, nil
 	}
 	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
+}
+
+// inferEngineType picks the best engine for a model on the given hardware.
+// Priority: exact gpu_arch match first, then wildcard.
+func (c *Catalog) inferEngineType(modelName string, hw HardwareInfo) (string, error) {
+	for _, ma := range c.ModelAssets {
+		if ma.Metadata.Name != modelName {
+			continue
+		}
+		// First pass: exact gpu_arch match
+		for _, v := range ma.Variants {
+			if v.Hardware.GPUArch == hw.GPUArch {
+				if _, err := c.findEngine(v.Engine, hw); err == nil {
+					return v.Engine, nil
+				}
+			}
+		}
+		// Second pass: wildcard variant
+		for _, v := range ma.Variants {
+			if v.Hardware.GPUArch == "*" {
+				if _, err := c.findEngine(v.Engine, hw); err == nil {
+					return v.Engine, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q", modelName, hw.GPUArch)
+	}
+	return "", fmt.Errorf("model %q not found in catalog", modelName)
 }
 
 func platformInList(platform string, platforms []string) bool {

@@ -19,6 +19,8 @@ source:
 
 install:
   method: binary
+  daemon: true
+  priority: 10
   args:
     - flag: "--disable=traefik"
       rationale: "Edge devices don't need Ingress Controller"

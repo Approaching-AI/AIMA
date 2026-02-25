@@ -333,6 +333,13 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		}
 	}
 
+	// Ensure kubectl symlink exists for K3S binary components on Linux.
+	// This must run regardless of whether K3S is already running or being freshly installed,
+	// because other tools (k3s.Client, aima deploy) need "kubectl" in PATH.
+	if comp.Source.Binary != "" && runtime.GOOS == "linux" {
+		inst.ensureKubectlLink(comp.Source.Binary)
+	}
+
 	// Check if already installed and ready
 	existing := inst.checkComponent(ctx, comp, hwProfile)
 	if existing.Ready {
@@ -510,19 +517,6 @@ WantedBy=multi-user.target
 	}
 
 	slog.Info("daemon installed as systemd service", "name", name, "unit", unitPath)
-
-	// Create kubectl symlink so "kubectl" resolves in PATH.
-	// K3S is a multi-call binary: when invoked as "kubectl", it auto-detects
-	// /etc/rancher/k3s/k3s.yaml and acts as a standard kubectl.
-	kubectlLink := "/usr/local/bin/kubectl"
-	if _, err := os.Lstat(kubectlLink); os.IsNotExist(err) {
-		if err := os.Symlink(absBinary, kubectlLink); err != nil {
-			slog.Warn("failed to create kubectl symlink", "target", absBinary, "link", kubectlLink, "error", err)
-		} else {
-			slog.Info("created kubectl symlink", "link", kubectlLink, "target", absBinary)
-		}
-	}
-
 	return nil
 }
 
@@ -734,6 +728,36 @@ func collectArgs(comp knowledge.StackComponent, hwProfile string) []string {
 	}
 
 	return args
+}
+
+// ensureKubectlLink creates a /usr/local/bin/kubectl symlink pointing to the
+// component binary (e.g. k3s). K3S is a multi-call binary: when invoked as
+// "kubectl" it auto-detects /etc/rancher/k3s/k3s.yaml and acts as standard kubectl.
+func (inst *Installer) ensureKubectlLink(binaryName string) {
+	kubectlLink := "/usr/local/bin/kubectl"
+	if _, err := os.Lstat(kubectlLink); err == nil {
+		return // already exists (symlink, real binary, anything)
+	}
+
+	// Resolve binary: dist/ first, then PATH
+	binary := filepath.Join(inst.distDir, binaryName)
+	if !fileExists(binary) {
+		if p, err := exec.LookPath(binaryName); err == nil {
+			binary = p
+		} else {
+			return
+		}
+	}
+	absBinary, err := filepath.Abs(binary)
+	if err != nil {
+		return
+	}
+
+	if err := os.Symlink(absBinary, kubectlLink); err != nil {
+		slog.Warn("failed to create kubectl symlink", "target", absBinary, "link", kubectlLink, "error", err)
+	} else {
+		slog.Info("created kubectl symlink", "link", kubectlLink, "target", absBinary)
+	}
 }
 
 func fileExists(path string) bool {

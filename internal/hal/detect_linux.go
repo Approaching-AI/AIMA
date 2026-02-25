@@ -67,7 +67,46 @@ func detectCPU(ctx context.Context, runner CommandRunner) CPUInfo {
 		info.Threads = runtime.NumCPU()
 	}
 
+	// ARM fallback: /proc/cpuinfo lacks model name and frequency
+	if info.Model == "" || info.FreqGHz == 0 {
+		if out, err := runner.Run(ctx, "lscpu"); err == nil {
+			parseLscpu(string(out), &info)
+		}
+	}
+
 	return info
+}
+
+func parseLscpu(output string, info *CPUInfo) {
+	for _, line := range strings.Split(output, "\n") {
+		key, val, ok := cutLscpuLine(line)
+		if !ok {
+			continue
+		}
+
+		switch key {
+		case "Model name", "型号名称":
+			if info.Model == "" {
+				info.Model = val
+			}
+		case "CPU max MHz", "CPU 最大 MHz":
+			if info.FreqGHz == 0 {
+				if mhz, err := strconv.ParseFloat(val, 64); err == nil {
+					info.FreqGHz = mhz / 1000.0
+				}
+			}
+		}
+	}
+}
+
+func cutLscpuLine(line string) (string, string, bool) {
+	// Try ASCII colon first, then fullwidth colon (Chinese locale)
+	for _, sep := range []string{":", "："} {
+		if idx := strings.Index(line, sep); idx >= 0 {
+			return strings.TrimSpace(line[:idx]), strings.TrimSpace(line[idx+len(sep):]), true
+		}
+	}
+	return "", "", false
 }
 
 func parseProcLine(line string) (string, string, bool) {

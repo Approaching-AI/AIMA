@@ -27,6 +27,10 @@ install:
       scheduler:
         defaultMem: 0
         defaultCores: 0
+        kubeScheduler:
+          # Disable: K3S version tag "v1.31.4+k3s1" has invalid "+" for OCI image refs.
+          # Single-GPU edge devices only need HAMi device plugin, not custom scheduler.
+          enabled: false
       devicePlugin:
         deviceMemoryScaling: 1.0
 

@@ -276,18 +276,22 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		return status, nil
 	}
 
-	// Check if already installed and ready
-	existing := inst.checkComponent(ctx, comp)
-	if existing.Ready {
-		slog.Info("stack component already ready", "name", comp.Metadata.Name)
-		return existing, nil
-	}
-
-	// Pre-install: write container registry mirrors if configured
+	// Always write registries config if configured (K3S hot-reloads registries.yaml)
 	if comp.Registries != nil {
 		if err := inst.writeRegistries(comp); err != nil {
 			slog.Warn("failed to write registries config", "error", err)
 		}
+	}
+
+	// Check if already installed and ready
+	existing := inst.checkComponent(ctx, comp)
+	if existing.Ready {
+		slog.Info("stack component already ready", "name", comp.Metadata.Name)
+		// Still import system images for already-running instances (they may be missing)
+		if len(comp.SystemImages) > 0 {
+			inst.importSystemImages(ctx, comp)
+		}
+		return existing, nil
 	}
 
 	// Install based on method

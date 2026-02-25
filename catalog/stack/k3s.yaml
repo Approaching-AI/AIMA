@@ -64,7 +64,7 @@ registries:
   mirrors:
     docker.io:
       endpoint:
-        - "https://registry.cn-hangzhou.aliyuncs.com"
+        - "https://docker.m.daocloud.io"
     ghcr.io:
       endpoint:
         - "https://ghcr.nju.edu.cn"

@@ -417,13 +417,16 @@ func (inst *Installer) installBinary(ctx context.Context, comp knowledge.StackCo
 	cmdArgs := append([]string{"server"}, args...)
 
 	if comp.Install.Daemon {
-		// Daemon mode: start in background, verify step will poll for readiness
+		if runtime.GOOS == "linux" {
+			return inst.installDaemonSystemd(ctx, comp, binary, hwProfile)
+		}
+		// Non-Linux fallback: start in background, verify step will poll for readiness
 		cmd := exec.CommandContext(ctx, binary, cmdArgs...)
 		cmd.Env = os.Environ()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("start %s: %w", comp.Source.Binary, err)
 		}
-		slog.Info("daemon started", "name", comp.Metadata.Name, "pid", cmd.Process.Pid)
+		slog.Info("daemon started (no systemd)", "name", comp.Metadata.Name, "pid", cmd.Process.Pid)
 		return nil
 	}
 
@@ -432,6 +435,81 @@ func (inst *Installer) installBinary(ctx context.Context, comp knowledge.StackCo
 		return fmt.Errorf("run %s: %s: %w", comp.Source.Binary, string(out), err)
 	}
 
+	return nil
+}
+
+// installDaemonSystemd installs a daemon component as a systemd service on Linux.
+// It writes an env file + unit file, then runs daemon-reload → enable → start.
+func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.StackComponent, binary string, hwProfile string) error {
+	name := comp.Metadata.Name
+
+	// Build args and env from stack YAML (reuse existing logic)
+	args := collectArgs(comp, hwProfile)
+	env := collectEnv(comp, hwProfile)
+
+	// Resolve absolute binary path
+	absBinary, err := filepath.Abs(binary)
+	if err != nil {
+		absBinary = binary
+	}
+
+	// Write env file: /etc/rancher/k3s/k3s.env
+	envDir := "/etc/rancher/k3s"
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		return fmt.Errorf("create env dir %s: %w", envDir, err)
+	}
+	var envLines []string
+	for k, v := range env {
+		envLines = append(envLines, k+"="+v)
+	}
+	envFile := filepath.Join(envDir, name+".env")
+	if err := os.WriteFile(envFile, []byte(strings.Join(envLines, "\n")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write env file %s: %w", envFile, err)
+	}
+
+	// Build ExecStart line: binary server <args>
+	execParts := []string{absBinary, "server"}
+	execParts = append(execParts, args...)
+	execStart := strings.Join(execParts, " ")
+
+	// Generate systemd unit file
+	unit := fmt.Sprintf(`[Unit]
+Description=AIMA managed %s (%s)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+EnvironmentFile=%s
+ExecStart=%s
+Restart=always
+RestartSec=5s
+KillMode=process
+LimitNOFILE=1048576
+LimitNPROC=infinity
+
+[Install]
+WantedBy=multi-user.target
+`, name, comp.Metadata.Version, envFile, execStart)
+
+	unitPath := "/etc/systemd/system/" + name + ".service"
+	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
+		return fmt.Errorf("write unit file %s: %w", unitPath, err)
+	}
+	slog.Info("wrote systemd unit", "path", unitPath)
+
+	// daemon-reload → enable → start
+	if out, err := inst.runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %s: %w", string(out), err)
+	}
+	if out, err := inst.runner.Run(ctx, "systemctl", "enable", name); err != nil {
+		return fmt.Errorf("systemctl enable %s: %s: %w", name, string(out), err)
+	}
+	if out, err := inst.runner.Run(ctx, "systemctl", "start", name); err != nil {
+		return fmt.Errorf("systemctl start %s: %s: %w", name, string(out), err)
+	}
+
+	slog.Info("daemon installed as systemd service", "name", name, "unit", unitPath)
 	return nil
 }
 
@@ -570,6 +648,15 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 	if len(parts) == 0 {
 		status.Message = "empty verify command"
 		return status
+	}
+
+	// Early systemd check for daemon components on Linux — gives actionable guidance
+	if comp.Install.Daemon && runtime.GOOS == "linux" {
+		out, err := inst.runner.Run(ctx, "systemctl", "is-active", comp.Metadata.Name)
+		if err != nil || strings.TrimSpace(string(out)) != "active" {
+			status.Message = fmt.Sprintf("service not running; try: sudo systemctl start %s", comp.Metadata.Name)
+			return status
+		}
 	}
 
 	// Resolve binary from dist/ if not in PATH

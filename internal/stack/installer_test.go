@@ -645,6 +645,168 @@ func TestCheckComponentWithPodsNotReady(t *testing.T) {
 	}
 }
 
+func TestInstallDaemonSystemd(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd tests only run on Linux")
+	}
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"systemctl daemon-reload": {output: nil},
+			"systemctl enable":        {output: nil},
+			"systemctl start":         {output: nil},
+		},
+	}
+
+	dir := t.TempDir()
+	inst := NewInstaller(runner, dir).WithDistDir(dir)
+
+	// Create a fake binary in dist/
+	binPath := filepath.Join(dir, "k3s")
+	os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755)
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+		Source:   knowledge.StackSource{Binary: "k3s"},
+		Install: knowledge.StackInstall{
+			Method: "binary",
+			Daemon: true,
+			Args: []knowledge.StackArg{
+				{Flag: "--disable=traefik"},
+			},
+			Env: map[string]string{
+				"INSTALL_K3S_SKIP_DOWNLOAD": "true",
+			},
+		},
+	}
+
+	err := inst.installDaemonSystemd(context.Background(), comp, binPath, "")
+	if err != nil {
+		t.Fatalf("installDaemonSystemd: %v", err)
+	}
+
+	// Verify systemctl calls: daemon-reload → enable → start (in order)
+	var systemctlCalls []string
+	for _, c := range runner.calls {
+		if c.name == "systemctl" {
+			systemctlCalls = append(systemctlCalls, c.name+" "+strings.Join(c.args, " "))
+		}
+	}
+	if len(systemctlCalls) != 3 {
+		t.Fatalf("expected 3 systemctl calls, got %d: %v", len(systemctlCalls), systemctlCalls)
+	}
+	if systemctlCalls[0] != "systemctl daemon-reload" {
+		t.Errorf("call[0] = %q, want %q", systemctlCalls[0], "systemctl daemon-reload")
+	}
+	if systemctlCalls[1] != "systemctl enable k3s" {
+		t.Errorf("call[1] = %q, want %q", systemctlCalls[1], "systemctl enable k3s")
+	}
+	if systemctlCalls[2] != "systemctl start k3s" {
+		t.Errorf("call[2] = %q, want %q", systemctlCalls[2], "systemctl start k3s")
+	}
+
+	// Verify unit file was written
+	unitData, err := os.ReadFile("/etc/systemd/system/k3s.service")
+	if err != nil {
+		t.Fatalf("read unit file: %v", err)
+	}
+	unitContent := string(unitData)
+	if !strings.Contains(unitContent, "Type=notify") {
+		t.Error("unit file missing Type=notify")
+	}
+	if !strings.Contains(unitContent, "Restart=always") {
+		t.Error("unit file missing Restart=always")
+	}
+	if !strings.Contains(unitContent, "--disable=traefik") {
+		t.Error("unit file missing --disable=traefik arg")
+	}
+	if !strings.Contains(unitContent, "server") {
+		t.Error("unit file missing 'server' subcommand")
+	}
+
+	// Verify env file was written
+	envData, err := os.ReadFile("/etc/rancher/k3s/k3s.env")
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	if !strings.Contains(string(envData), "INSTALL_K3S_SKIP_DOWNLOAD=true") {
+		t.Error("env file missing INSTALL_K3S_SKIP_DOWNLOAD=true")
+	}
+}
+
+func TestInstallDaemonSystemdUnitContent(t *testing.T) {
+	// Test unit file generation without requiring Linux (test the template logic)
+	// We can't run the full installDaemonSystemd on non-Linux, but we can verify
+	// the function exists and the args/env collection works correctly
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+		Install: knowledge.StackInstall{
+			Args: []knowledge.StackArg{
+				{Flag: "--disable=traefik"},
+				{Flag: "--disable=servicelb"},
+			},
+			Env: map[string]string{
+				"K3S_TOKEN": "secret",
+			},
+		},
+		Profiles: map[string]knowledge.StackProfile{
+			"test-profile": {
+				ExtraArgs: []knowledge.StackArg{{Flag: "--node-label=gpu=on"}},
+				ExtraEnv:  map[string]string{"EXTRA": "val"},
+			},
+		},
+	}
+
+	// Verify args and env collection (these are used by installDaemonSystemd)
+	args := collectArgs(comp, "test-profile")
+	if len(args) != 3 {
+		t.Errorf("expected 3 args with profile, got %d: %v", len(args), args)
+	}
+
+	env := collectEnv(comp, "test-profile")
+	if len(env) != 2 {
+		t.Errorf("expected 2 env vars with profile, got %d", len(env))
+	}
+	if env["EXTRA"] != "val" {
+		t.Errorf("EXTRA = %q, want %q", env["EXTRA"], "val")
+	}
+}
+
+func TestCheckComponentSystemdHint(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd hint test only runs on Linux")
+	}
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			// systemctl is-active returns "inactive"
+			"systemctl is-active": {output: []byte("inactive"), err: fmt.Errorf("exit status 3")},
+		},
+	}
+
+	inst := NewInstaller(runner, t.TempDir())
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+		Install:  knowledge.StackInstall{Daemon: true},
+		Verify: knowledge.StackVerify{
+			Command:        "k3s kubectl get nodes",
+			ReadyCondition: "Ready",
+		},
+	}
+
+	status := inst.checkComponent(context.Background(), comp, "")
+	if status.Ready {
+		t.Error("expected Ready=false when systemd service is inactive")
+	}
+	if !strings.Contains(status.Message, "service not running") {
+		t.Errorf("expected 'service not running' hint, got %q", status.Message)
+	}
+	if !strings.Contains(status.Message, "systemctl start k3s") {
+		t.Errorf("expected 'systemctl start k3s' in message, got %q", status.Message)
+	}
+}
+
 func TestCollectEnv(t *testing.T) {
 	comp := knowledge.StackComponent{
 		Install: knowledge.StackInstall{

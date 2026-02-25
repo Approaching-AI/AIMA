@@ -39,14 +39,28 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
+// PodQuerier queries pod status from K3S. Defined at consumer (stack) per project convention.
+type PodQuerier interface {
+	ListPodsByLabel(ctx context.Context, namespace, label string) ([]PodDetail, error)
+}
+
+// PodDetail describes a single pod's status within a stack component.
+type PodDetail struct {
+	Name    string `json:"name"`
+	Phase   string `json:"phase"`
+	Ready   bool   `json:"ready"`
+	Message string `json:"message,omitempty"`
+}
+
 // ComponentStatus describes the install state of a single stack component.
 type ComponentStatus struct {
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	Installed bool   `json:"installed"`
-	Ready     bool   `json:"ready"`
-	Skipped   bool   `json:"skipped,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Name      string      `json:"name"`
+	Version   string      `json:"version"`
+	Installed bool        `json:"installed"`
+	Ready     bool        `json:"ready"`
+	Skipped   bool        `json:"skipped,omitempty"`
+	Message   string      `json:"message,omitempty"`
+	Pods      []PodDetail `json:"pods,omitempty"`
 }
 
 // InitResult is the aggregate result of aima init.
@@ -57,8 +71,9 @@ type InitResult struct {
 
 // Installer installs and verifies stack components.
 type Installer struct {
-	runner  CommandRunner
-	distDir string // path to dist/{platform}/
+	runner     CommandRunner
+	distDir    string // path to dist/{platform}/
+	podQuerier PodQuerier
 }
 
 // NewInstaller creates a stack installer.
@@ -74,6 +89,33 @@ func NewInstaller(runner CommandRunner, dataDir string) *Installer {
 func (inst *Installer) WithDistDir(dir string) *Installer {
 	inst.distDir = dir
 	return inst
+}
+
+// WithPodQuerier sets a PodQuerier for pod-level status checks.
+func (inst *Installer) WithPodQuerier(pq PodQuerier) *Installer {
+	inst.podQuerier = pq
+	return inst
+}
+
+// shouldSkip checks if a component should be skipped based on conditions and hwProfile.
+func shouldSkip(comp knowledge.StackComponent, hwProfile string) (bool, string) {
+	if comp.Conditions == nil || hwProfile == "" {
+		return false, ""
+	}
+	for _, p := range comp.Conditions.SkipProfiles {
+		if p == hwProfile {
+			return true, fmt.Sprintf("skipped: profile %s in skip_profiles", hwProfile)
+		}
+	}
+	if len(comp.Conditions.RequiredProfiles) > 0 {
+		for _, p := range comp.Conditions.RequiredProfiles {
+			if p == hwProfile {
+				return false, ""
+			}
+		}
+		return true, fmt.Sprintf("skipped: profile %s not in required_profiles", hwProfile)
+	}
+	return false, ""
 }
 
 // Init runs the full initialization workflow for all stack components.
@@ -238,12 +280,12 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 }
 
 // Status checks whether all stack components are installed and ready.
-func (inst *Installer) Status(ctx context.Context, components []knowledge.StackComponent) (*InitResult, error) {
+func (inst *Installer) Status(ctx context.Context, components []knowledge.StackComponent, hwProfile string) (*InitResult, error) {
 	result := &InitResult{AllReady: true}
 
 	hasReady := false
 	for _, comp := range components {
-		status := inst.checkComponent(ctx, comp)
+		status := inst.checkComponent(ctx, comp, hwProfile)
 		if !status.Ready && !status.Skipped {
 			result.AllReady = false
 		}
@@ -276,6 +318,14 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		return status, nil
 	}
 
+	// Check conditions (skip_profiles / required_profiles)
+	if skip, msg := shouldSkip(comp, hwProfile); skip {
+		status.Skipped = true
+		status.Message = msg
+		slog.Info("skipping component by conditions", "name", comp.Metadata.Name, "reason", msg)
+		return status, nil
+	}
+
 	// Always write registries config if configured (K3S hot-reloads registries.yaml)
 	if comp.Registries != nil {
 		if err := inst.writeRegistries(comp); err != nil {
@@ -284,7 +334,7 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 	}
 
 	// Check if already installed and ready
-	existing := inst.checkComponent(ctx, comp)
+	existing := inst.checkComponent(ctx, comp, hwProfile)
 	if existing.Ready {
 		slog.Info("stack component already ready", "name", comp.Metadata.Name)
 		// Still import system images for already-running instances (they may be missing)
@@ -493,7 +543,7 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 	return fmt.Errorf("timeout waiting for %s to become ready", comp.Metadata.Name)
 }
 
-func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackComponent) ComponentStatus {
+func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackComponent, hwProfile string) ComponentStatus {
 	status := ComponentStatus{
 		Name:    comp.Metadata.Name,
 		Version: comp.Metadata.Version,
@@ -502,6 +552,12 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 	if !platformSupported(comp.Source.Platforms) {
 		status.Skipped = true
 		status.Message = fmt.Sprintf("skipped: platform %s/%s not supported", runtime.GOOS, runtime.GOARCH)
+		return status
+	}
+
+	if skip, msg := shouldSkip(comp, hwProfile); skip {
+		status.Skipped = true
+		status.Message = msg
 		return status
 	}
 
@@ -534,6 +590,29 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 		status.Message = "ready"
 	} else {
 		status.Message = "installed but not ready"
+	}
+
+	// Query pod-level details if PodQuerier is available and pods are defined
+	if inst.podQuerier != nil && len(comp.Verify.Pods) > 0 {
+		for _, podSpec := range comp.Verify.Pods {
+			pods, err := inst.podQuerier.ListPodsByLabel(ctx, podSpec.Namespace, podSpec.Label)
+			if err != nil {
+				slog.Warn("pod query failed", "component", comp.Metadata.Name, "label", podSpec.Label, "error", err)
+				continue
+			}
+			status.Pods = append(status.Pods, pods...)
+			// If pod check requires min_ready, verify and potentially downgrade status
+			readyCount := 0
+			for _, p := range pods {
+				if p.Ready {
+					readyCount++
+				}
+			}
+			if readyCount < podSpec.MinReady {
+				status.Ready = false
+				status.Message = fmt.Sprintf("installed but pods not ready (%d/%d)", readyCount, podSpec.MinReady)
+			}
+		}
 	}
 
 	return status

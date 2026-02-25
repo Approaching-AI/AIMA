@@ -70,6 +70,12 @@ func newInitCmd(app *App) *cobra.Command {
 					Ready   bool   `json:"ready"`
 					Skipped bool   `json:"skipped"`
 					Message string `json:"message"`
+					Pods    []struct {
+						Name    string `json:"name"`
+						Phase   string `json:"phase"`
+						Ready   bool   `json:"ready"`
+						Message string `json:"message"`
+					} `json:"pods"`
 				} `json:"components"`
 				AllReady bool `json:"all_ready"`
 			}
@@ -86,6 +92,17 @@ func newInitCmd(app *App) *cobra.Command {
 					status = "SKIP"
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s: %s\n", status, c.Name, c.Message)
+				for _, p := range c.Pods {
+					podStatus := "FAIL"
+					if p.Ready {
+						podStatus = "OK"
+					}
+					detail := p.Phase
+					if p.Message != "" {
+						detail += " (" + p.Message + ")"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "    [%s] pod/%s: %s\n", podStatus, p.Name, detail)
+				}
 			}
 
 			if result.AllReady {

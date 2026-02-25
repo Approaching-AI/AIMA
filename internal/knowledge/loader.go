@@ -196,6 +196,11 @@ type ModelVariantHardware struct {
 
 // --- Stack Component ---
 
+type StackConditions struct {
+	SkipProfiles     []string `yaml:"skip_profiles,omitempty"`
+	RequiredProfiles []string `yaml:"required_profiles,omitempty"`
+}
+
 type StackComponent struct {
 	Kind          string               `yaml:"kind"`
 	Metadata      StackMetadata        `yaml:"metadata"`
@@ -203,6 +208,7 @@ type StackComponent struct {
 	Source        StackSource          `yaml:"source"`
 	Install       StackInstall         `yaml:"install"`
 	Verify        StackVerify          `yaml:"verify"`
+	Conditions    *StackConditions     `yaml:"conditions,omitempty"`
 	Profiles      map[string]StackProfile `yaml:"profiles,omitempty"`
 	Registries    map[string]any       `yaml:"registries,omitempty"`   // container registry mirror config (written as-is to registries.yaml)
 	SystemImages  []StackSystemImage   `yaml:"system_images,omitempty"` // images to pre-import from mirrors
@@ -257,9 +263,16 @@ type StackHelm struct {
 }
 
 type StackVerify struct {
-	Command        string `yaml:"command"`
-	ReadyCondition string `yaml:"ready_condition"`
-	TimeoutS       int    `yaml:"timeout_s"`
+	Command        string           `yaml:"command"`
+	ReadyCondition string           `yaml:"ready_condition"`
+	TimeoutS       int              `yaml:"timeout_s"`
+	Pods           []StackVerifyPod `yaml:"pods,omitempty"`
+}
+
+type StackVerifyPod struct {
+	Namespace string `yaml:"namespace"`
+	Label     string `yaml:"label"`
+	MinReady  int    `yaml:"min_ready"`
 }
 
 type StackProfile struct {

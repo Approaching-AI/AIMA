@@ -63,7 +63,7 @@ func TestStatusAllReady(t *testing.T) {
 		},
 	}
 
-	result, err := inst.Status(context.Background(), components)
+	result, err := inst.Status(context.Background(), components, "")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestStatusNotInstalled(t *testing.T) {
 		},
 	}
 
-	result, err := inst.Status(context.Background(), components)
+	result, err := inst.Status(context.Background(), components, "")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestCollectArgs(t *testing.T) {
 			},
 		},
 		Profiles: map[string]knowledge.StackProfile{
-			"nvidia-gb10-arm64": {
+			"Blackwell-arm64": {
 				ExtraArgs: []knowledge.StackArg{
 					{Flag: "--kubelet-arg=kube-reserved=cpu=500m"},
 				},
@@ -173,7 +173,7 @@ func TestCollectArgs(t *testing.T) {
 	}
 
 	// With matching profile
-	args = collectArgs(comp, "nvidia-gb10-arm64")
+	args = collectArgs(comp, "Blackwell-arm64")
 	if len(args) != 3 {
 		t.Errorf("expected 3 args with profile, got %d", len(args))
 	}
@@ -405,7 +405,7 @@ func TestAllSkippedNotReady(t *testing.T) {
 	}
 
 	// Status: all skipped → AllReady must be false
-	result, err = inst.Status(context.Background(), components)
+	result, err = inst.Status(context.Background(), components, "")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestMixedSkipAndReady(t *testing.T) {
 		},
 	}
 
-	result, err := inst.Status(context.Background(), components)
+	result, err := inst.Status(context.Background(), components, "")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -524,6 +524,124 @@ func TestDownloadItemsFallbackToMirror(t *testing.T) {
 	}
 	if string(data) != "mirror-content" {
 		t.Errorf("content = %q, want %q", string(data), "mirror-content")
+	}
+}
+
+func TestShouldSkip(t *testing.T) {
+	tests := []struct {
+		name      string
+		cond      *knowledge.StackConditions
+		hwProfile string
+		wantSkip  bool
+	}{
+		{"nil conditions", nil, "Blackwell-arm64", false},
+		{"empty profile", &knowledge.StackConditions{SkipProfiles: []string{"Blackwell-arm64"}}, "", false},
+		{"in skip_profiles", &knowledge.StackConditions{SkipProfiles: []string{"Blackwell-arm64"}}, "Blackwell-arm64", true},
+		{"not in skip_profiles", &knowledge.StackConditions{SkipProfiles: []string{"Ada-x86_64"}}, "Blackwell-arm64", false},
+		{"in required_profiles", &knowledge.StackConditions{RequiredProfiles: []string{"Blackwell-arm64"}}, "Blackwell-arm64", false},
+		{"not in required_profiles", &knowledge.StackConditions{RequiredProfiles: []string{"Ada-x86_64"}}, "Blackwell-arm64", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			comp := knowledge.StackComponent{Conditions: tt.cond}
+			skip, _ := shouldSkip(comp, tt.hwProfile)
+			if skip != tt.wantSkip {
+				t.Errorf("shouldSkip() = %v, want %v", skip, tt.wantSkip)
+			}
+		})
+	}
+}
+
+// mockPodQuerier implements PodQuerier for testing.
+type mockPodQuerier struct {
+	pods map[string][]PodDetail // key: "namespace/label"
+}
+
+func (m *mockPodQuerier) ListPodsByLabel(_ context.Context, namespace, label string) ([]PodDetail, error) {
+	key := namespace + "/" + label
+	if pods, ok := m.pods[key]; ok {
+		return pods, nil
+	}
+	return nil, nil
+}
+
+func TestCheckComponentWithPods(t *testing.T) {
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"k3s kubectl": {output: []byte("node1   Ready   control-plane")},
+		},
+	}
+
+	pq := &mockPodQuerier{
+		pods: map[string][]PodDetail{
+			"kube-system/k8s-app=kube-dns": {
+				{Name: "coredns-abc123", Phase: "Running", Ready: true},
+			},
+		},
+	}
+
+	inst := NewInstaller(runner, t.TempDir()).WithPodQuerier(pq)
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+		Verify: knowledge.StackVerify{
+			Command:        "k3s kubectl get nodes",
+			ReadyCondition: "Ready",
+			TimeoutS:       5,
+			Pods: []knowledge.StackVerifyPod{
+				{Namespace: "kube-system", Label: "k8s-app=kube-dns", MinReady: 1},
+			},
+		},
+	}
+
+	status := inst.checkComponent(context.Background(), comp, "")
+	if !status.Ready {
+		t.Errorf("expected Ready=true, got message=%q", status.Message)
+	}
+	if len(status.Pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(status.Pods))
+	}
+	if status.Pods[0].Name != "coredns-abc123" {
+		t.Errorf("pod name = %q, want %q", status.Pods[0].Name, "coredns-abc123")
+	}
+}
+
+func TestCheckComponentWithPodsNotReady(t *testing.T) {
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"k3s kubectl": {output: []byte("Running")},
+		},
+	}
+
+	pq := &mockPodQuerier{
+		pods: map[string][]PodDetail{
+			"hami-system/app=hami-device-plugin": {
+				{Name: "hami-device-plugin-xyz", Phase: "Running", Ready: false, Message: "CrashLoopBackOff"},
+			},
+		},
+	}
+
+	inst := NewInstaller(runner, t.TempDir()).WithPodQuerier(pq)
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "hami", Version: "2.4.1"},
+		Verify: knowledge.StackVerify{
+			Command:        "k3s kubectl get pods -n hami-system",
+			ReadyCondition: "Running",
+			TimeoutS:       5,
+			Pods: []knowledge.StackVerifyPod{
+				{Namespace: "hami-system", Label: "app=hami-device-plugin", MinReady: 1},
+			},
+		},
+	}
+
+	status := inst.checkComponent(context.Background(), comp, "")
+	if status.Ready {
+		t.Error("expected Ready=false when pod is not ready")
+	}
+	if !strings.Contains(status.Message, "pods not ready") {
+		t.Errorf("expected 'pods not ready' in message, got %q", status.Message)
 	}
 }
 

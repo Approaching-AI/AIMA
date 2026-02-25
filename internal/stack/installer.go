@@ -510,6 +510,19 @@ WantedBy=multi-user.target
 	}
 
 	slog.Info("daemon installed as systemd service", "name", name, "unit", unitPath)
+
+	// Create kubectl symlink so "kubectl" resolves in PATH.
+	// K3S is a multi-call binary: when invoked as "kubectl", it auto-detects
+	// /etc/rancher/k3s/k3s.yaml and acts as a standard kubectl.
+	kubectlLink := "/usr/local/bin/kubectl"
+	if _, err := os.Lstat(kubectlLink); os.IsNotExist(err) {
+		if err := os.Symlink(absBinary, kubectlLink); err != nil {
+			slog.Warn("failed to create kubectl symlink", "target", absBinary, "link", kubectlLink, "error", err)
+		} else {
+			slog.Info("created kubectl symlink", "link", kubectlLink, "target", absBinary)
+		}
+	}
+
 	return nil
 }
 

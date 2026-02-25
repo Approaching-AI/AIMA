@@ -76,7 +76,7 @@ func run() error {
 	knowledgeStore := knowledge.NewStore(db.RawDB())
 
 	// 6. Create infrastructure components
-	k3sClient := k3s.NewClient()
+	k3sClient := newK3SClient(dataDir)
 	proxyServer := proxy.NewServer(proxy.WithAddr(":8080"))
 	zeroClawMgr := zeroclaw.NewManager(
 		zeroclaw.WithDataDir(dataDir),
@@ -233,6 +233,25 @@ func detectHWProfile(ctx context.Context) string {
 		return ""
 	}
 	return hw.GPU.Arch + "-" + hw.CPU.Arch
+}
+
+// newK3SClient creates a K3S client configured for the current system.
+// If "kubectl" is in PATH, uses it directly. Otherwise, looks for the k3s binary
+// in dist/ or PATH and uses its built-in kubectl (k3s kubectl ...).
+func newK3SClient(dataDir string) *k3s.Client {
+	if _, err := exec.LookPath("kubectl"); err == nil {
+		return k3s.NewClient()
+	}
+	// kubectl not in PATH — try k3s binary directly
+	platform := goruntime.GOOS + "-" + goruntime.GOARCH
+	k3sPath := filepath.Join(dataDir, "dist", platform, "k3s")
+	if _, err := os.Stat(k3sPath); err == nil {
+		return k3s.NewClient(k3s.WithK3SBinary(k3sPath))
+	}
+	if p, err := exec.LookPath("k3s"); err == nil {
+		return k3s.NewClient(k3s.WithK3SBinary(p))
+	}
+	return k3s.NewClient()
 }
 
 // selectRuntime picks the best runtime: K3S on Linux if available, else native.

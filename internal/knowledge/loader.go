@@ -173,9 +173,10 @@ type ModelStorage struct {
 }
 
 type ModelSource struct {
-	Type string `yaml:"type"`
-	Repo string `yaml:"repo"`
-	Path string `yaml:"path"`
+	Type   string `yaml:"type"`
+	Repo   string `yaml:"repo"`
+	Path   string `yaml:"path"`
+	Format string `yaml:"format,omitempty"` // e.g. "gguf", "safetensors" — used to pick correct source for engine
 }
 
 type ModelVariant struct {

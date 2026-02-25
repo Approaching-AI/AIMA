@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jguan/aima/internal/engine"
 )
 
 func newEngineCmd(app *App) *cobra.Command {
@@ -33,21 +31,12 @@ func newEngineScanCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			// Build engine asset map from catalog
-			engineAssets := make(map[string][]string)
-			for _, ea := range app.Catalog.EngineAssets {
-				engineAssets[ea.Metadata.Type] = append(engineAssets[ea.Metadata.Type], ea.Image.Name)
-			}
-
-			images, err := engine.Scan(ctx, engine.ScanOptions{
-				EngineAssets: engineAssets,
-			})
+			data, err := app.ToolDeps.ScanEngines(ctx)
 			if err != nil {
 				return fmt.Errorf("scan engines: %w", err)
 			}
 
-			out, _ := json.MarshalIndent(images, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

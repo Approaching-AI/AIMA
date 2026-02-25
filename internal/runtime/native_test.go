@@ -10,9 +10,18 @@ import (
 	"time"
 )
 
+func newTestRuntime(t *testing.T) *NativeRuntime {
+	t.Helper()
+	base := t.TempDir()
+	return NewNativeRuntime(
+		filepath.Join(base, "logs"),
+		"",
+		filepath.Join(base, "deployments"),
+	)
+}
+
 func TestNativeDeployAndDelete(t *testing.T) {
-	logDir := filepath.Join(t.TempDir(), "logs")
-	rt := NewNativeRuntime(logDir, "")
+	rt := newTestRuntime(t)
 
 	// Use a command that exists cross-platform and exits quickly after a while
 	var cmd []string
@@ -70,8 +79,7 @@ func TestNativeDeployAndDelete(t *testing.T) {
 }
 
 func TestNativeDeployDuplicate(t *testing.T) {
-	logDir := filepath.Join(t.TempDir(), "logs")
-	rt := NewNativeRuntime(logDir, "")
+	rt := newTestRuntime(t)
 
 	var cmd []string
 	if runtime.GOOS == "windows" {
@@ -106,8 +114,7 @@ func TestNativeDeployDuplicate(t *testing.T) {
 }
 
 func TestNativeModelPathSubstitution(t *testing.T) {
-	logDir := filepath.Join(t.TempDir(), "logs")
-	rt := NewNativeRuntime(logDir, "")
+	rt := newTestRuntime(t)
 
 	// Deploy with a command containing {{.ModelPath}} — use echo to verify substitution
 	var cmd []string
@@ -171,7 +178,7 @@ func TestNativeLogsReadTail(t *testing.T) {
 }
 
 func TestNativeDeleteNotFound(t *testing.T) {
-	rt := NewNativeRuntime(t.TempDir(), "")
+	rt := newTestRuntime(t)
 	err := rt.Delete(context.Background(), "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent deployment")
@@ -179,7 +186,7 @@ func TestNativeDeleteNotFound(t *testing.T) {
 }
 
 func TestNativeEmptyCommand(t *testing.T) {
-	rt := NewNativeRuntime(t.TempDir(), "")
+	rt := newTestRuntime(t)
 	err := rt.Deploy(context.Background(), &DeployRequest{
 		Name:    "empty",
 		Engine:  "test",
@@ -188,4 +195,83 @@ func TestNativeEmptyCommand(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for empty command")
 	}
+}
+
+// TestNativePersistenceAcrossInvocations simulates two separate CLI invocations
+// sharing the same deployDir, verifying that deployments persist.
+func TestNativePersistenceAcrossInvocations(t *testing.T) {
+	base := t.TempDir()
+	logDir := filepath.Join(base, "logs")
+	deployDir := filepath.Join(base, "deployments")
+
+	// "First CLI invocation": deploy a long-running process
+	rt1 := NewNativeRuntime(logDir, "", deployDir)
+
+	var cmd []string
+	if runtime.GOOS == "windows" {
+		cmd = []string{"cmd", "/c", "ping -n 30 127.0.0.1 >nul"}
+	} else {
+		cmd = []string{"sleep", "30"}
+	}
+
+	err := rt1.Deploy(context.Background(), &DeployRequest{
+		Name:    "persistent",
+		Engine:  "test",
+		Command: cmd,
+		Port:    19876,
+		Labels:  map[string]string{"aima.dev/engine": "test"},
+	})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// Verify metadata file was written
+	metaPath := filepath.Join(deployDir, "persistent.json")
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("metadata file not created: %v", err)
+	}
+
+	// "Second CLI invocation": create a fresh NativeRuntime with same deployDir
+	rt2 := NewNativeRuntime(logDir, "", deployDir)
+
+	// Should discover the deployment from persisted metadata
+	statuses, err := rt2.List(context.Background())
+	if err != nil {
+		t.Fatalf("List on rt2: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status from persistence, got %d", len(statuses))
+	}
+	if statuses[0].Name != "persistent" {
+		t.Errorf("name = %q, want %q", statuses[0].Name, "persistent")
+	}
+
+	// Status should also work on rt2
+	s, err := rt2.Status(context.Background(), "persistent")
+	if err != nil {
+		t.Fatalf("Status on rt2: %v", err)
+	}
+	if s.Address != "127.0.0.1:19876" {
+		t.Errorf("address = %q, want %q", s.Address, "127.0.0.1:19876")
+	}
+
+	// Logs should work via persisted log path
+	_, err = rt2.Logs(context.Background(), "persistent", 5)
+	if err != nil {
+		t.Fatalf("Logs on rt2: %v", err)
+	}
+
+	// Delete via rt2 (kills by PID from metadata)
+	if err := rt2.Delete(context.Background(), "persistent"); err != nil {
+		t.Fatalf("Delete on rt2: %v", err)
+	}
+
+	// Metadata file should be removed
+	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+		t.Error("metadata file should be removed after delete")
+	}
+
+	// Cleanup: also ensure rt1's in-memory state is cleaned
+	rt1.Delete(context.Background(), "persistent")
+	time.Sleep(100 * time.Millisecond)
 }

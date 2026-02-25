@@ -3,9 +3,11 @@ package runtime
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,7 +19,21 @@ import (
 	"time"
 )
 
-// nativeProcess tracks a running inference engine process.
+// deploymentMeta is persisted to disk so deployments survive across CLI invocations.
+type deploymentMeta struct {
+	Name               string            `json:"name"`
+	PID                int               `json:"pid"`
+	Port               int               `json:"port"`
+	Engine             string            `json:"engine"`
+	Labels             map[string]string `json:"labels"`
+	LogPath            string            `json:"log_path"`
+	Command            []string          `json:"command"`
+	StartTime          time.Time         `json:"start_time"`
+	HealthCheckPath    string            `json:"health_check_path,omitempty"`
+	HealthCheckTimeout int               `json:"health_check_timeout_s,omitempty"`
+}
+
+// nativeProcess tracks a running inference engine process started in THIS CLI session.
 type nativeProcess struct {
 	name      string
 	cmd       *exec.Cmd
@@ -36,14 +52,16 @@ type nativeProcess struct {
 type NativeRuntime struct {
 	logDir    string
 	distDir   string // e.g. ~/.aima/dist/windows-amd64/
+	deployDir string // e.g. ~/.aima/deployments/ — persisted deployment metadata
 	processes map[string]*nativeProcess
 	mu        sync.RWMutex
 }
 
-func NewNativeRuntime(logDir, distDir string) *NativeRuntime {
+func NewNativeRuntime(logDir, distDir, deployDir string) *NativeRuntime {
 	return &NativeRuntime{
 		logDir:    logDir,
 		distDir:   distDir,
+		deployDir: deployDir,
 		processes: make(map[string]*nativeProcess),
 	}
 }
@@ -57,6 +75,15 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		return fmt.Errorf("deployment %q already exists", req.Name)
 	}
 	r.mu.Unlock()
+
+	// Check persisted metadata: if a deployment with this name is still alive, reject
+	if meta, err := r.loadMeta(req.Name); err == nil {
+		if portAlive(meta.Port) {
+			return fmt.Errorf("deployment %q already running (PID %d, port %d)", req.Name, meta.PID, meta.Port)
+		}
+		// Stale metadata — clean up
+		r.removeMeta(req.Name)
+	}
 
 	if len(req.Command) == 0 {
 		return fmt.Errorf("deploy %s: empty command", req.Name)
@@ -112,6 +139,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		return fmt.Errorf("start %s: %w", req.Name, err)
 	}
 
+	now := time.Now()
 	proc := &nativeProcess{
 		name:      req.Name,
 		cmd:       cmd,
@@ -120,12 +148,31 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		logPath:   logPath,
 		port:      req.Port,
 		labels:    req.Labels,
-		startTime: time.Now(),
+		startTime: now,
 	}
 
 	r.mu.Lock()
 	r.processes[req.Name] = proc
 	r.mu.Unlock()
+
+	// Persist deployment metadata for cross-invocation discovery
+	meta := &deploymentMeta{
+		Name:      req.Name,
+		PID:       cmd.Process.Pid,
+		Port:      req.Port,
+		Engine:    req.Engine,
+		Labels:    req.Labels,
+		LogPath:   logPath,
+		Command:   command,
+		StartTime: now,
+	}
+	if req.HealthCheck != nil {
+		meta.HealthCheckPath = req.HealthCheck.Path
+		meta.HealthCheckTimeout = req.HealthCheck.TimeoutS
+	}
+	if err := r.saveMeta(meta); err != nil {
+		slog.Warn("failed to persist deployment metadata", "name", req.Name, "error", err)
+	}
 
 	// Background: wait for process exit and run health checks
 	go r.watchProcess(proc)
@@ -143,32 +190,43 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 
 func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 	r.mu.Lock()
-	proc, ok := r.processes[name]
-	if !ok {
-		r.mu.Unlock()
-		return fmt.Errorf("deployment %q not found", name)
+	proc, inMemory := r.processes[name]
+	if inMemory {
+		delete(r.processes, name)
 	}
-	delete(r.processes, name)
 	r.mu.Unlock()
 
-	proc.cancel()
-	// Wait briefly for process to exit
-	done := make(chan struct{})
-	go func() {
-		proc.cmd.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		slog.Warn("process did not exit within timeout", "name", name)
+	if inMemory {
+		proc.cancel()
+		done := make(chan struct{})
+		go func() {
+			proc.cmd.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			slog.Warn("process did not exit within timeout", "name", name)
+		}
+		if proc.logFile != nil {
+			proc.logFile.Close()
+		}
+	} else {
+		// Recover from persisted metadata and kill by PID
+		meta, err := r.loadMeta(name)
+		if err != nil {
+			return fmt.Errorf("deployment %q not found", name)
+		}
+		if meta.PID > 0 {
+			if p, err := os.FindProcess(meta.PID); err == nil {
+				if err := p.Kill(); err != nil {
+					slog.Warn("kill process", "name", name, "pid", meta.PID, "error", err)
+				}
+			}
+		}
 	}
 
-	// Close log file after process exits
-	if proc.logFile != nil {
-		proc.logFile.Close()
-	}
-
+	r.removeMeta(name)
 	return nil
 }
 
@@ -177,21 +235,36 @@ func (r *NativeRuntime) Status(_ context.Context, name string) (*DeploymentStatu
 	proc, ok := r.processes[name]
 	r.mu.RUnlock()
 
-	if !ok {
-		return nil, fmt.Errorf("deployment %q not found", name)
+	if ok {
+		return r.procToStatus(proc), nil
 	}
 
-	return r.procToStatus(proc), nil
+	// Try persisted metadata
+	meta, err := r.loadMeta(name)
+	if err != nil {
+		return nil, fmt.Errorf("deployment %q not found", name)
+	}
+	return r.metaToStatus(meta), nil
 }
 
 func (r *NativeRuntime) List(_ context.Context) ([]*DeploymentStatus, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	statuses := make([]*DeploymentStatus, 0, len(r.processes))
+	seen := make(map[string]bool)
+	statuses := make([]*DeploymentStatus, 0)
 	for _, proc := range r.processes {
+		seen[proc.name] = true
 		statuses = append(statuses, r.procToStatus(proc))
 	}
+	r.mu.RUnlock()
+
+	// Add persisted deployments not in memory (from previous CLI sessions)
+	for _, meta := range r.loadAllMeta() {
+		if seen[meta.Name] {
+			continue
+		}
+		statuses = append(statuses, r.metaToStatus(meta))
+	}
+
 	return statuses, nil
 }
 
@@ -200,11 +273,16 @@ func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (str
 	proc, ok := r.processes[name]
 	r.mu.RUnlock()
 
-	if !ok {
-		return "", fmt.Errorf("deployment %q not found", name)
+	if ok {
+		return readTail(proc.logPath, tailLines)
 	}
 
-	return readTail(proc.logPath, tailLines)
+	// Try persisted metadata for log path
+	meta, err := r.loadMeta(name)
+	if err != nil {
+		return "", fmt.Errorf("deployment %q not found", name)
+	}
+	return readTail(meta.LogPath, tailLines)
 }
 
 func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
@@ -253,7 +331,6 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 
 	phase := "running"
 	if proc.cmd.ProcessState != nil {
-		// Process has exited
 		if proc.cmd.ProcessState.Success() {
 			phase = "stopped"
 		} else {
@@ -271,6 +348,92 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 		StartTime: proc.startTime.Format(time.RFC3339),
 		Runtime:   "native",
 	}
+}
+
+// metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness.
+func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
+	alive := portAlive(meta.Port)
+
+	phase := "running"
+	ready := alive
+	if !alive {
+		timeout := meta.HealthCheckTimeout
+		if timeout == 0 {
+			timeout = 60
+		}
+		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
+			phase = "starting"
+		} else {
+			phase = "stopped"
+		}
+	}
+
+	return &DeploymentStatus{
+		Name:      meta.Name,
+		Phase:     phase,
+		Ready:     ready,
+		Address:   fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Labels:    meta.Labels,
+		StartTime: meta.StartTime.Format(time.RFC3339),
+		Runtime:   "native",
+	}
+}
+
+// --- Deployment metadata persistence ---
+
+func (r *NativeRuntime) saveMeta(meta *deploymentMeta) error {
+	if err := os.MkdirAll(r.deployDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(r.deployDir, meta.Name+".json"), data, 0o644)
+}
+
+func (r *NativeRuntime) loadMeta(name string) (*deploymentMeta, error) {
+	data, err := os.ReadFile(filepath.Join(r.deployDir, name+".json"))
+	if err != nil {
+		return nil, err
+	}
+	var meta deploymentMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
+func (r *NativeRuntime) removeMeta(name string) {
+	os.Remove(filepath.Join(r.deployDir, name+".json"))
+}
+
+func (r *NativeRuntime) loadAllMeta() []*deploymentMeta {
+	entries, err := os.ReadDir(r.deployDir)
+	if err != nil {
+		return nil
+	}
+	var metas []*deploymentMeta
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if meta, err := r.loadMeta(name); err == nil {
+			metas = append(metas, meta)
+		}
+	}
+	return metas
+}
+
+// portAlive checks if a TCP port is responding on localhost.
+func portAlive(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // readTail reads the last n lines from a file.

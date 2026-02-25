@@ -10,8 +10,13 @@ storage:
   sources:
     - type: huggingface
       repo: THUDM/GLM-4.7-Flash
+      format: safetensors
+    - type: huggingface
+      repo: THUDM/GLM-4.7-Flash-GGUF
+      format: gguf
     - type: modelscope
       repo: ZhipuAI/GLM-4.7-Flash
+      format: safetensors
     - type: local_path
       path: ""
 variants:

@@ -41,7 +41,7 @@ type ResolvedConfig struct {
 func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any) (*ResolvedConfig, error) {
 	// Auto-detect engine from model variants when not specified
 	if engineType == "" {
-		inferred, err := c.inferEngineType(modelName, hw)
+		inferred, err := c.InferEngineType(modelName, hw)
 		if err != nil {
 			return nil, err
 		}
@@ -136,9 +136,9 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
 }
 
-// inferEngineType picks the best engine for a model on the given hardware.
+// InferEngineType picks the best engine for a model on the given hardware.
 // Priority: exact gpu_arch match first, then wildcard.
-func (c *Catalog) inferEngineType(modelName string, hw HardwareInfo) (string, error) {
+func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, error) {
 	for _, ma := range c.ModelAssets {
 		if ma.Metadata.Name != modelName {
 			continue

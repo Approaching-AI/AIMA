@@ -210,7 +210,11 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) r
 		return runtime.NewK3SRuntime(k3sClient)
 	}
 	platform := goruntime.GOOS + "-" + goruntime.GOARCH
-	return runtime.NewNativeRuntime(filepath.Join(dataDir, "logs"), filepath.Join(dataDir, "dist", platform))
+	return runtime.NewNativeRuntime(
+		filepath.Join(dataDir, "logs"),
+		filepath.Join(dataDir, "dist", platform),
+		filepath.Join(dataDir, "deployments"),
+	)
 }
 
 // buildHardwareInfo creates a HardwareInfo with platform and runtime awareness.
@@ -267,12 +271,34 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if ma == nil {
 				return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
 			}
+
+			// Determine required format: resolve what engine this hardware would use
+			requiredFormat := ""
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			if engineType, err := cat.InferEngineType(ma.Metadata.Name, hwInfo); err == nil {
+				for _, v := range ma.Variants {
+					if v.Engine == engineType {
+						requiredFormat = v.Format
+						break
+					}
+				}
+				slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat)
+			}
+
 			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
 			var sources []model.Source
 			for _, s := range ma.Storage.Sources {
-				if s.Type != "local_path" {
-					sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
+				if s.Type == "local_path" {
+					continue
 				}
+				// Skip sources that don't match the required format
+				if requiredFormat != "" && s.Format != "" && s.Format != requiredFormat {
+					continue
+				}
+				sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
+			}
+			if len(sources) == 0 {
+				return fmt.Errorf("no download source for model %q with format %q", name, requiredFormat)
 			}
 			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
 				return err
@@ -285,14 +311,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 				return nil
 			})
+			dlFormat := requiredFormat
+			if dlFormat == "" {
+				dlFormat = strings.Join(ma.Storage.Formats, ",")
+			}
 			return db.InsertModel(ctx, &state.Model{
-				ID:     ma.Metadata.Name,
-				Name:   ma.Metadata.Name,
-				Type:   ma.Metadata.Type,
-				Path:   destPath,
-				Format: strings.Join(ma.Storage.Formats, ","),
+				ID:        ma.Metadata.Name,
+				Name:      ma.Metadata.Name,
+				Type:      ma.Metadata.Type,
+				Path:      destPath,
+				Format:    dlFormat,
 				SizeBytes: sizeBytes,
-				Status: "ready",
+				Status:    "ready",
 			})
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
@@ -317,7 +347,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			for _, ea := range cat.EngineAssets {
 				engineAssets[ea.Metadata.Type] = append(engineAssets[ea.Metadata.Type], ea.Image.Name)
 			}
-			images, err := engine.Scan(ctx, engine.ScanOptions{EngineAssets: engineAssets})
+			images, err := engine.Scan(ctx, engine.ScanOptions{EngineAssets: engineAssets, Runner: &execRunner{}})
 			if err != nil {
 				return nil, err
 			}

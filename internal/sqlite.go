@@ -157,6 +157,19 @@ func (d *DB) migrate(ctx context.Context) error {
 }
 
 func (d *DB) migrateV1(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+
+	if version < 1 {
+		// Old table schemas may be incomplete (e.g. missing size_bytes column).
+		// These are all scan caches that can be safely rebuilt.
+		for _, t := range []string{"models", "engines", "knowledge_notes", "config", "audit_log"} {
+			if _, err := d.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+t); err != nil {
+				return fmt.Errorf("drop old table %s: %w", t, err)
+			}
+		}
+	}
+
 	ddl := `
 CREATE TABLE IF NOT EXISTS models (
     id TEXT PRIMARY KEY,
@@ -209,9 +222,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
     result_summary TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`
-	_, err := d.db.ExecContext(ctx, ddl)
-	if err != nil {
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("migrate v1 schema: %w", err)
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
 }

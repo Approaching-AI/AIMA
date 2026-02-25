@@ -113,6 +113,56 @@ func run() error {
 	return rootCmd.ExecuteContext(ctx)
 }
 
+// findModelAsset resolves a user-provided name to a catalog ModelAsset.
+// Priority: exact catalog name → case-insensitive name → exact source repo → source repo prefix.
+func findModelAsset(cat *knowledge.Catalog, name string) (*knowledge.ModelAsset, *knowledge.ModelSource) {
+	// 1. Exact catalog name
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		if ma.Metadata.Name == name && len(ma.Storage.Sources) > 0 {
+			return ma, &ma.Storage.Sources[0]
+		}
+	}
+	// 2. Case-insensitive catalog name
+	lower := strings.ToLower(name)
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		if strings.ToLower(ma.Metadata.Name) == lower && len(ma.Storage.Sources) > 0 {
+			return ma, &ma.Storage.Sources[0]
+		}
+	}
+	// 3. Exact source repo match
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		for j := range ma.Storage.Sources {
+			src := &ma.Storage.Sources[j]
+			if src.Repo == name {
+				return ma, src
+			}
+		}
+	}
+	// 4. Source repo prefix match (e.g. "Qwen/Qwen3-8B-GGUF" matches repo "Qwen/Qwen3-8B")
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		for j := range ma.Storage.Sources {
+			src := &ma.Storage.Sources[j]
+			if src.Repo != "" && strings.HasPrefix(name, src.Repo) {
+				return ma, src
+			}
+		}
+	}
+	return nil, nil
+}
+
+// catalogModelNames returns a comma-separated list of available model names.
+func catalogModelNames(cat *knowledge.Catalog) string {
+	names := make([]string, 0, len(cat.ModelAssets))
+	for _, ma := range cat.ModelAssets {
+		names = append(names, ma.Metadata.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
 // mcpToolAdapter bridges mcp.Server to agent.ToolExecutor interface.
 type mcpToolAdapter struct {
 	server *mcp.Server
@@ -212,17 +262,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			for _, ma := range cat.ModelAssets {
-				if ma.Metadata.Name == name && len(ma.Storage.Sources) > 0 {
-					src := ma.Storage.Sources[0]
-					destPath := filepath.Join(dataDir, "models", name)
-					return model.Download(ctx, model.DownloadOptions{
-						URL:      src.Repo,
-						DestPath: destPath,
-					})
-				}
+			ma, src := findModelAsset(cat, name)
+			if ma == nil {
+				return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
 			}
-			return fmt.Errorf("model %q not found in catalog", name)
+			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+			return model.DownloadFromSource(ctx, model.Source{Type: src.Type, Repo: src.Repo}, destPath)
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")

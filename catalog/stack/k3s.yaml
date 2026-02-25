@@ -14,8 +14,8 @@ source:
     linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
     linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
   mirror:
-    linux/amd64: "https://ghproxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
-    linux/arm64: "https://ghproxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+    linux/amd64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+    linux/arm64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
 
 install:
   method: binary

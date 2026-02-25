@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -128,5 +130,69 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 		pr.onRead(n)
 	}
 	return n, err
+}
+
+// Source describes a model download source.
+type Source struct {
+	Type string
+	Repo string
+}
+
+// DownloadFromSource downloads a model from a catalog source.
+func DownloadFromSource(ctx context.Context, src Source, destPath string) error {
+	switch src.Type {
+	case "huggingface":
+		return downloadHuggingFace(ctx, src.Repo, destPath)
+	case "modelscope":
+		return downloadModelScope(ctx, src.Repo, destPath)
+	case "local_path":
+		return fmt.Errorf("local_path source: use 'aima model import' instead")
+	default:
+		return Download(ctx, DownloadOptions{URL: src.Repo, DestPath: destPath})
+	}
+}
+
+func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
+	if err := os.MkdirAll(destPath, 0o755); err != nil {
+		return fmt.Errorf("create dest dir %s: %w", destPath, err)
+	}
+
+	// Prefer huggingface-cli if available (handles auth, multi-file, resume)
+	if hfCLI, err := exec.LookPath("huggingface-cli"); err == nil {
+		slog.Info("downloading via huggingface-cli", "repo", repo, "dest", destPath)
+		cmd := exec.CommandContext(ctx, hfCLI, "download", repo, "--local-dir", destPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Fallback: download via HuggingFace HTTP API
+	endpoint := os.Getenv("HF_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "https://huggingface.co"
+	}
+	url := fmt.Sprintf("%s/%s/resolve/main/config.json", endpoint, repo)
+	slog.Info("downloading via HuggingFace HTTP", "repo", repo, "url", url)
+	return Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")})
+}
+
+func downloadModelScope(ctx context.Context, repo, destPath string) error {
+	if err := os.MkdirAll(destPath, 0o755); err != nil {
+		return fmt.Errorf("create dest dir %s: %w", destPath, err)
+	}
+
+	// Prefer modelscope CLI if available
+	if msCLI, err := exec.LookPath("modelscope"); err == nil {
+		slog.Info("downloading via modelscope CLI", "repo", repo, "dest", destPath)
+		cmd := exec.CommandContext(ctx, msCLI, "download", repo, "--local_dir", destPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Fallback: direct HTTP download
+	url := fmt.Sprintf("https://modelscope.cn/models/%s/resolve/master/config.json", repo)
+	slog.Info("downloading via ModelScope HTTP", "repo", repo, "url", url)
+	return Download(ctx, DownloadOptions{URL: url, DestPath: filepath.Join(destPath, "config.json")})
 }
 

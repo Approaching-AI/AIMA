@@ -1,0 +1,26 @@
+kind: hardware_profile
+metadata:
+  name: apple-m4-arm64
+  description: "Apple M4, ARM64, 16GB unified memory, Metal GPU"
+hardware:
+  gpu:
+    arch: Apple
+    vram_mib: 0
+    compute_capability: "metal3"
+    cuda_cores: 0
+    resource_name: ""
+  cpu:
+    arch: arm64
+    cores: 10
+    freq_ghz: 4.4
+  ram:
+    total_mib: 16384
+    bandwidth_gbps: 120
+  unified_memory: true
+constraints:
+  tdp_watts: 22
+  power_modes: [22]
+  cooling: passive
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]

@@ -1,0 +1,26 @@
+kind: hardware_profile
+metadata:
+  name: nvidia-rtx4060-x86
+  description: "NVIDIA RTX 4060 Laptop, x86_64, 8GB VRAM"
+hardware:
+  gpu:
+    arch: Ada
+    vram_mib: 8192
+    compute_capability: "8.9"
+    cuda_cores: 3072
+    resource_name: "nvidia.com/gpu"
+  cpu:
+    arch: x86_64
+    cores: 32
+    freq_ghz: 5.4
+  ram:
+    total_mib: 32768
+    bandwidth_gbps: 40
+  unified_memory: false
+constraints:
+  tdp_watts: 140
+  power_modes: [140]
+  cooling: active
+partition:
+  gpu_tools: [hami, engine_params]
+  cpu_tools: [k3s_cgroups]

@@ -170,18 +170,19 @@ internal/
   proxy/                      # HTTP inference proxy (OpenAI-compatible)
   knowledge/                  # go:embed YAML + SQLite relational loader + L0-L3 resolver
                               #   + query engine (query.go) + vector similarity (similarity.go)
-                              #   + Pod YAML generator
+                              #   + Pod YAML generator (dynamic GPU resource names)
+  runtime/                    # Multi-Runtime: K3S (Pod) + Native (exec + warmup)
   state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
-  engine/                     # Engine image scan/pull/import
+  engine/                     # Engine image scan/pull/import + native binary manager
   mcp/                        # MCP server + ~32 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
 catalog/                      # Knowledge assets (go:embed)
   embed.go
-  hardware/                   # Hardware Profile YAML
-  engines/                    # Engine Asset YAML
+  hardware/                   # Hardware Profile YAML (incl. gpu.resource_name)
+  engines/                    # Engine Asset YAML (incl. source, warmup)
   models/                     # Model Asset YAML
   partitions/                 # Partition Strategy YAML
 ```

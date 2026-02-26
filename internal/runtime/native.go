@@ -48,21 +48,40 @@ type nativeProcess struct {
 	mu        sync.Mutex
 }
 
+// BinaryResolveFunc resolves a native engine binary, downloading if needed.
+// Returns the absolute path to the binary.
+type BinaryResolveFunc func(ctx context.Context, source *BinarySource) (string, error)
+
 // NativeRuntime manages inference engines as direct OS processes.
 type NativeRuntime struct {
-	logDir    string
-	distDir   string // e.g. ~/.aima/dist/windows-amd64/
-	deployDir string // e.g. ~/.aima/deployments/ — persisted deployment metadata
-	processes map[string]*nativeProcess
-	mu        sync.RWMutex
+	logDir        string
+	distDir       string // e.g. ~/.aima/dist/windows-amd64/
+	deployDir     string // e.g. ~/.aima/deployments/ — persisted deployment metadata
+	resolveBinary BinaryResolveFunc
+	processes     map[string]*nativeProcess
+	mu            sync.RWMutex
 }
 
-func NewNativeRuntime(logDir, distDir, deployDir string) *NativeRuntime {
-	return &NativeRuntime{
+func NewNativeRuntime(logDir, distDir, deployDir string, opts ...NativeOption) *NativeRuntime {
+	r := &NativeRuntime{
 		logDir:    logDir,
 		distDir:   distDir,
 		deployDir: deployDir,
 		processes: make(map[string]*nativeProcess),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// NativeOption configures a NativeRuntime.
+type NativeOption func(*NativeRuntime)
+
+// WithBinaryResolver sets the function used to auto-download missing engine binaries.
+func WithBinaryResolver(fn BinaryResolveFunc) NativeOption {
+	return func(r *NativeRuntime) {
+		r.resolveBinary = fn
 	}
 }
 
@@ -117,10 +136,17 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		return fmt.Errorf("create log file: %w", err)
 	}
 
-	// Resolve binary: dist/ first, then PATH
+	// Resolve binary: dist/ first, then auto-download if source is available
 	if r.distDir != "" {
 		if resolved := r.findInDist(command[0]); resolved != "" {
 			command[0] = resolved
+		} else if r.resolveBinary != nil && req.BinarySource != nil {
+			slog.Info("binary not in dist, attempting auto-download", "binary", command[0])
+			if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
+				command[0] = resolved
+			} else {
+				slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
+			}
 		}
 	}
 
@@ -177,7 +203,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	// Background: wait for process exit and run health checks
 	go r.watchProcess(proc)
 	if req.HealthCheck != nil && req.HealthCheck.Path != "" {
-		go r.healthCheck(proc, req.HealthCheck)
+		go r.healthCheckAndWarmup(proc, req.HealthCheck, req.Warmup)
 	} else {
 		// No health check configured — mark ready after process starts
 		proc.mu.Lock()
@@ -297,7 +323,7 @@ func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
 	}
 }
 
-func (r *NativeRuntime) healthCheck(proc *nativeProcess, hc *HealthCheckConfig) {
+func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthCheckConfig, warmup *WarmupConfig) {
 	timeout := time.Duration(hc.TimeoutS) * time.Second
 	if timeout == 0 {
 		timeout = 60 * time.Second
@@ -311,6 +337,11 @@ func (r *NativeRuntime) healthCheck(proc *nativeProcess, hc *HealthCheckConfig) 
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
+				slog.Info("health check passed", "name", proc.name)
+				// Run warmup before marking ready
+				if warmup != nil {
+					r.warmup(proc, warmup)
+				}
 				proc.mu.Lock()
 				proc.ready = true
 				proc.mu.Unlock()
@@ -322,6 +353,40 @@ func (r *NativeRuntime) healthCheck(proc *nativeProcess, hc *HealthCheckConfig) 
 	}
 
 	slog.Warn("health check timeout", "name", proc.name, "url", url)
+}
+
+// warmup sends a dummy inference request to force model weight loading and CUDA kernel compilation.
+func (r *NativeRuntime) warmup(proc *nativeProcess, cfg *WarmupConfig) {
+	prompt := cfg.Prompt
+	if prompt == "" {
+		prompt = "Hello"
+	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 1
+	}
+	timeout := time.Duration(cfg.TimeoutS) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", proc.port)
+	body := fmt.Sprintf(`{"model":"warmup","messages":[{"role":"user","content":%q}],"max_tokens":%d}`, prompt, maxTokens)
+
+	slog.Info("warming up engine", "name", proc.name, "url", url)
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		slog.Warn("warmup request failed", "name", proc.name, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		slog.Info("warmup complete", "name", proc.name)
+	} else {
+		slog.Warn("warmup returned non-200", "name", proc.name, "status", resp.StatusCode)
+	}
 }
 
 func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {

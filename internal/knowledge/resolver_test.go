@@ -203,16 +203,17 @@ func TestResolveAutoEngine(t *testing.T) {
 
 func TestBuildSyntheticModelAsset(t *testing.T) {
 	tests := []struct {
-		name       string
-		format     string
-		modelType  string
-		wantEngine string
-		wantType   string
+		name          string
+		format        string
+		modelType     string
+		wantEngine    string
+		wantType      string
+		wantVariants  int  // non-llamacpp engines get a llamacpp fallback variant
 	}{
-		{"safetensors→vllm", "safetensors", "llm", "vllm", "llm"},
-		{"gguf→llamacpp", "gguf", "llm", "llamacpp", "llm"},
-		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm"},
-		{"unknown format→llamacpp", "awq", "llm", "llamacpp", "llm"},
+		{"safetensors→vllm", "safetensors", "llm", "vllm", "llm", 2},
+		{"gguf→llamacpp", "gguf", "llm", "llamacpp", "llm", 1},
+		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm", 1},
+		{"unknown format→llamacpp", "awq", "llm", "llamacpp", "llm", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -220,8 +221,8 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			if ma.Metadata.Type != tt.wantType {
 				t.Errorf("Type = %q, want %q", ma.Metadata.Type, tt.wantType)
 			}
-			if len(ma.Variants) != 1 {
-				t.Fatalf("Variants count = %d, want 1", len(ma.Variants))
+			if len(ma.Variants) != tt.wantVariants {
+				t.Fatalf("Variants count = %d, want %d", len(ma.Variants), tt.wantVariants)
 			}
 			v := ma.Variants[0]
 			if v.Engine != tt.wantEngine {
@@ -232,6 +233,13 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			}
 			if !strings.HasSuffix(v.Name, "-auto") {
 				t.Errorf("variant Name = %q, want suffix -auto", v.Name)
+			}
+			// Non-llamacpp engines should have a llamacpp fallback variant
+			if tt.wantVariants == 2 {
+				fb := ma.Variants[1]
+				if fb.Engine != "llamacpp" {
+					t.Errorf("fallback Engine = %q, want llamacpp", fb.Engine)
+				}
 			}
 		})
 	}

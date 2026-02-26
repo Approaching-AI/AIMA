@@ -807,6 +807,216 @@ func TestCheckComponentSystemdHint(t *testing.T) {
 	}
 }
 
+func TestPreCheckNonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("this test verifies PreCheck is no-op on non-Linux")
+	}
+
+	runner := &mockRunner{}
+	inst := NewInstaller(runner, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+			Source:   knowledge.StackSource{Platforms: []string{"linux/amd64", "linux/arm64"}},
+			Install:  knowledge.StackInstall{Method: "binary", Daemon: true},
+		},
+	}
+
+	err := inst.PreCheck(context.Background(), components)
+	if err != nil {
+		t.Errorf("PreCheck on non-Linux should return nil, got: %v", err)
+	}
+
+	// Should not have called any commands
+	if len(runner.calls) != 0 {
+		t.Errorf("expected 0 runner calls on non-Linux, got %d", len(runner.calls))
+	}
+}
+
+func TestPreCheckLinuxDaemonNotRunning(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only test")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("must run as non-root")
+	}
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"systemctl is-active": {output: []byte("inactive"), err: fmt.Errorf("exit status 3")},
+		},
+	}
+	inst := NewInstaller(runner, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+			Source:   knowledge.StackSource{Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH}},
+			Install:  knowledge.StackInstall{Method: "binary", Daemon: true},
+		},
+	}
+
+	err := inst.PreCheck(context.Background(), components)
+	if err == nil {
+		t.Error("PreCheck should fail when Linux non-root and daemon not running")
+	}
+	if !strings.Contains(err.Error(), "root privileges required") {
+		t.Errorf("expected 'root privileges required', got: %v", err)
+	}
+}
+
+func TestPreCheckLinuxDaemonAlreadyRunning(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only test")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("must run as non-root")
+	}
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"systemctl is-active": {output: []byte("active")},
+		},
+	}
+	inst := NewInstaller(runner, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+			Source:   knowledge.StackSource{Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH}},
+			Install:  knowledge.StackInstall{Method: "binary", Daemon: true},
+		},
+	}
+
+	err := inst.PreCheck(context.Background(), components)
+	if err != nil {
+		t.Errorf("PreCheck should pass when daemon already running, got: %v", err)
+	}
+}
+
+func TestPreflightIncludesAirgapTar(t *testing.T) {
+	inst := NewInstaller(&mockRunner{}, t.TempDir())
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+			Source: knowledge.StackSource{
+				Binary:    "k3s",
+				Airgap:    "k3s-airgap-images.tar.zst",
+				Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH},
+				Download: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/k3s",
+				},
+				AirgapDownload: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/k3s-airgap.tar.zst",
+				},
+				AirgapMirror: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://mirror.example.com/k3s-airgap.tar.zst",
+				},
+			},
+		},
+	}
+
+	items := inst.Preflight(components)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items (binary + airgap), got %d", len(items))
+	}
+
+	// First: binary
+	if items[0].Name != "k3s" {
+		t.Errorf("item[0].Name = %q, want %q", items[0].Name, "k3s")
+	}
+	if !items[0].Executable {
+		t.Error("binary item should have Executable=true")
+	}
+
+	// Second: airgap tar
+	if items[1].Name != "k3s-airgap" {
+		t.Errorf("item[1].Name = %q, want %q", items[1].Name, "k3s-airgap")
+	}
+	if items[1].Executable {
+		t.Error("airgap item should have Executable=false")
+	}
+	if items[1].MirrorURL != "https://mirror.example.com/k3s-airgap.tar.zst" {
+		t.Errorf("airgap MirrorURL = %q", items[1].MirrorURL)
+	}
+}
+
+func TestPreflightSkipsExistingAirgap(t *testing.T) {
+	dir := t.TempDir()
+	inst := NewInstaller(&mockRunner{}, dir).WithDistDir(dir)
+
+	// Create both files so they're skipped
+	os.WriteFile(filepath.Join(dir, "k3s"), []byte("bin"), 0o755)
+	os.WriteFile(filepath.Join(dir, "k3s-airgap.tar.zst"), []byte("tar"), 0o644)
+
+	components := []knowledge.StackComponent{
+		{
+			Metadata: knowledge.StackMetadata{Name: "k3s", Version: "1.31.4"},
+			Source: knowledge.StackSource{
+				Binary:    "k3s",
+				Airgap:    "k3s-airgap.tar.zst",
+				Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH},
+				Download: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/k3s",
+				},
+				AirgapDownload: map[string]string{
+					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/k3s-airgap.tar.zst",
+				},
+			},
+		},
+	}
+
+	items := inst.Preflight(components)
+	if len(items) != 0 {
+		t.Errorf("expected 0 items when all files exist, got %d", len(items))
+	}
+}
+
+func TestDownloadItemsParallel(t *testing.T) {
+	dir := t.TempDir()
+
+	// HTTP server serves two files
+	handler := http.NewServeMux()
+	handler.HandleFunc("/file1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("content-1"))
+	})
+	handler.HandleFunc("/file2", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("content-2"))
+	})
+
+	server := &http.Server{Handler: handler}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go server.Serve(ln)
+	defer server.Close()
+
+	base := "http://" + ln.Addr().String()
+
+	items := []DownloadItem{
+		{Name: "a", FileName: "file1", FilePath: filepath.Join(dir, "file1"), URL: base + "/file1"},
+		{Name: "b", FileName: "file2", FilePath: filepath.Join(dir, "file2"), URL: base + "/file2"},
+	}
+
+	if err := DownloadItems(context.Background(), items); err != nil {
+		t.Fatalf("DownloadItems: %v", err)
+	}
+
+	for _, f := range []struct{ name, want string }{{"file1", "content-1"}, {"file2", "content-2"}} {
+		data, err := os.ReadFile(filepath.Join(dir, f.name))
+		if err != nil {
+			t.Fatalf("read %s: %v", f.name, err)
+		}
+		if string(data) != f.want {
+			t.Errorf("%s = %q, want %q", f.name, string(data), f.want)
+		}
+	}
+}
+
 func TestCollectEnv(t *testing.T) {
 	comp := knowledge.StackComponent{
 		Install: knowledge.StackInstall{

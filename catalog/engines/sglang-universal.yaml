@@ -1,25 +1,24 @@
 kind: engine_asset
 metadata:
-  name: vllm-0.8-blackwell
-  type: vllm
-  version: "0.8"
+  name: sglang-universal
+  type: sglang
+  version: "latest"
 image:
-  name: vllm/vllm-openai
+  name: lmsysorg/sglang
   tag: "latest"
-  size_approx_mb: 8500
+  size_approx_mb: 6000
   platforms: [linux/amd64, linux/arm64]
   registries:
-    - docker.io/vllm/vllm-openai
-    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
+    - docker.io/lmsysorg/sglang
+    - registry.cn-hangzhou.aliyuncs.com/aima/sglang
 hardware:
-  gpu_arch: Blackwell
+  gpu_arch: "*"
   vram_min_mib: 4096
 startup:
-  command: ["vllm", "serve", "--model", "{{.ModelPath}}"]
+  command: ["python3", "-m", "sglang.launch_server", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
   default_args:
-    port: 8000
-    gpu_memory_utilization: 0.75
-    max_model_len: 8192
+    port: 30000
+    mem_fraction_static: 0.80
   health_check:
     path: /health
     timeout_s: 300
@@ -33,10 +32,10 @@ api:
   base_path: /v1
 amplifier:
   features:
-    - paged_attention
+    - flash_infer
     - continuous_batching
-    - flash_attention
-  performance_gain: "2-4x throughput vs naive serving"
+    - radix_attention
+  performance_gain: "1.5-3x throughput, low-latency streaming"
   resource_expansion:
     cpu_offload: false
     ssd_offload: false
@@ -45,7 +44,7 @@ partition_hints:
   min_gpu_memory_mib: 4096
   recommended_gpu_cores_percent: 50
 time_constraints:
-  cold_start_s: [30, 60]
-  model_switch_s: [30, 60]
+  cold_start_s: [30, 90]
+  model_switch_s: [30, 90]
 power_constraints:
-  typical_draw_watts: [60, 80]
+  typical_draw_watts: [60, 350]

@@ -21,10 +21,10 @@ metadata:
   {{- if .HasAnnotations }}
   annotations:
     {{- if gt .GPUMemoryMiB 0 }}
-    nvidia.com/gpumem: "{{ .GPUMemoryMiB }}"
+    {{ .GPUVendorDomain }}/gpumem: "{{ .GPUMemoryMiB }}"
     {{- end }}
     {{- if gt .GPUCoresPercent 0 }}
-    nvidia.com/gpucores: "{{ .GPUCoresPercent }}"
+    {{ .GPUVendorDomain }}/gpucores: "{{ .GPUCoresPercent }}"
     {{- end }}
   {{- end }}
 spec:
@@ -44,7 +44,7 @@ spec:
       {{- if .HasResources }}
       resources:
         limits:
-          nvidia.com/gpu: "1"
+          {{ .GPUResourceName }}: "1"
           {{- if gt .CPUCores 0 }}
           cpu: "{{ .CPUCores }}"
           {{- end }}
@@ -52,7 +52,7 @@ spec:
           memory: "{{ .RAMMiB }}Mi"
           {{- end }}
         requests:
-          nvidia.com/gpu: "1"
+          {{ .GPUResourceName }}: "1"
       {{- end }}
       {{- if .HealthCheckPath }}
       livenessProbe:
@@ -84,19 +84,20 @@ spec:
 `))
 
 type podData struct {
-	PodName        string
-	Engine         string
-	EngineImage    string
-	ModelName      string
-	Slot           string
-	Port           int
-	Command        []string
-	GPUMemoryMiB   int
+	PodName         string
+	Engine          string
+	EngineImage     string
+	ModelName       string
+	Slot            string
+	Port            int
+	Command         []string
+	GPUMemoryMiB    int
 	GPUCoresPercent int
-	CPUCores       int
-	RAMMiB         int
+	CPUCores        int
+	RAMMiB          int
 	HealthCheckPath string
-	ModelHostPath  string
+	ModelHostPath   string
+	GPUResourceName string
 }
 
 func (d podData) HasAnnotations() bool {
@@ -105,6 +106,15 @@ func (d podData) HasAnnotations() bool {
 
 func (d podData) HasResources() bool {
 	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0 || d.CPUCores > 0 || d.RAMMiB > 0
+}
+
+// GPUVendorDomain extracts the vendor domain from the GPU resource name.
+// e.g. "nvidia.com/gpu" -> "nvidia.com", "amd.com/gpu" -> "amd.com"
+func (d podData) GPUVendorDomain() string {
+	if i := strings.LastIndex(d.GPUResourceName, "/"); i > 0 {
+		return d.GPUResourceName[:i]
+	}
+	return d.GPUResourceName
 }
 
 // GeneratePod generates K3S Pod YAML from a resolved configuration.
@@ -134,15 +144,21 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", "/models")
 	}
 
+	gpuResource := resolved.GPUResourceName
+	if gpuResource == "" {
+		gpuResource = "nvidia.com/gpu"
+	}
+
 	data := podData{
-		PodName:     sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
-		Engine:      resolved.Engine,
-		EngineImage: resolved.EngineImage,
-		ModelName:   resolved.ModelName,
-		Slot:        resolved.Slot,
-		Port:        port,
-		Command:     command,
-		ModelHostPath: modelHostPath,
+		PodName:         sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
+		Engine:          resolved.Engine,
+		EngineImage:     resolved.EngineImage,
+		ModelName:       resolved.ModelName,
+		Slot:            resolved.Slot,
+		Port:            port,
+		Command:         command,
+		ModelHostPath:   modelHostPath,
+		GPUResourceName: gpuResource,
 	}
 
 	if resolved.Partition != nil {

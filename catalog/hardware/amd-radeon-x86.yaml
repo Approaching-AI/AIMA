@@ -1,0 +1,26 @@
+kind: hardware_profile
+metadata:
+  name: amd-radeon-8060s-x86
+  description: "AMD Radeon 8060S (RDNA 4), x86_64, shared memory with Ryzen AI MAX+ 395"
+hardware:
+  gpu:
+    arch: RDNA4
+    vram_mib: 16384
+    compute_capability: "gfx12"
+    cuda_cores: 0
+    resource_name: "amd.com/gpu"
+  cpu:
+    arch: x86_64
+    cores: 16
+    freq_ghz: 4.0
+  ram:
+    total_mib: 63488
+    bandwidth_gbps: 60
+  unified_memory: true
+constraints:
+  tdp_watts: 120
+  power_modes: [120]
+  cooling: active
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]

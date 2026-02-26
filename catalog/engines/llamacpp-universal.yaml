@@ -23,6 +23,11 @@ startup:
   health_check:
     path: /health
     timeout_s: 60
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 30
 api:
   protocol: openai
   base_path: /v1

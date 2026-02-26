@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -49,13 +48,12 @@ func newEngineListCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			engines, err := app.DB.ListEngines(ctx)
+			data, err := app.ToolDeps.ListEngines(ctx)
 			if err != nil {
 				return fmt.Errorf("list engines: %w", err)
 			}
 
-			out, _ := json.MarshalIndent(engines, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

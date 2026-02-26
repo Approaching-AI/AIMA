@@ -9,6 +9,7 @@ compatibility:
 
 source:
   binary: "k3s"
+  airgap: "k3s-airgap-images.tar.zst"
   platforms: [linux/amd64, linux/arm64]
   download:
     linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
@@ -16,6 +17,12 @@ source:
   mirror:
     linux/amd64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
     linux/arm64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+  airgap_download:
+    linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+    linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
+  airgap_mirror:
+    linux/amd64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+    linux/arm64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
 
 install:
   method: binary
@@ -86,23 +93,6 @@ registries:
     ghcr.io:
       endpoint:
         - "https://ghcr.nju.edu.cn"
-
-system_images:
-  - name: rancher/mirrored-pause
-    tag: "3.6"
-    required: true
-    mirrors:
-      - registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.6
-  - name: rancher/mirrored-coredns-coredns
-    tag: "1.12.0"
-    required: true
-    mirrors:
-      - registry.cn-hangzhou.aliyuncs.com/rancher/mirrored-coredns-coredns:1.12.0
-  - name: rancher/klipper-helm
-    tag: "v0.9.3-build20241008"
-    required: true
-    mirrors:
-      - registry.cn-hangzhou.aliyuncs.com/rancher/klipper-helm:v0.9.3-build20241008
 
 open_questions:
   - question: "What kubelet reserved values work best for GB10 unified memory?"

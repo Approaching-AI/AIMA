@@ -9,6 +9,7 @@ compatibility:
 
 source:
   chart: "hami-2.4.1.tgz"
+  airgap: "hami-airgap-images.tar"
   platforms: [linux/amd64, linux/arm64]
   download:
     linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
@@ -16,6 +17,12 @@ source:
   mirror:
     linux/amd64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
     linux/arm64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+  airgap_download:
+    linux/amd64: "https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
+    linux/arm64: "https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
+  airgap_mirror:
+    linux/amd64: "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
+    linux/arm64: "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
 
 install:
   method: helm
@@ -34,18 +41,6 @@ install:
       devicePlugin:
         deviceMemoryScaling: 1.0
         runtimeClassName: nvidia
-
-system_images:
-  - name: projecthami/hami
-    tag: "v2.4.1"
-    required: true
-    mirrors:
-      - docker.m.daocloud.io/projecthami/hami:v2.4.1
-  - name: liangjw/kube-webhook-certgen
-    tag: "v1.1.1"
-    required: true
-    mirrors:
-      - docker.m.daocloud.io/liangjw/kube-webhook-certgen:v1.1.1
 
 verify:
   command: "k3s kubectl get pods -n hami-system"

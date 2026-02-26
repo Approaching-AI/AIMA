@@ -1,24 +1,24 @@
 kind: engine_asset
 metadata:
-  name: vllm-0.8-blackwell
+  name: vllm-0.8-ada
   type: vllm
   version: "0.8"
 image:
   name: vllm/vllm-openai
   tag: "latest"
   size_approx_mb: 8500
-  platforms: [linux/amd64, linux/arm64]
+  platforms: [linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
     - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
 hardware:
-  gpu_arch: Blackwell
+  gpu_arch: Ada
   vram_min_mib: 4096
 startup:
   command: ["vllm", "serve", "--model", "{{.ModelPath}}"]
   default_args:
     port: 8000
-    gpu_memory_utilization: 0.75
+    gpu_memory_utilization: 0.90
     max_model_len: 8192
   health_check:
     path: /health
@@ -48,4 +48,4 @@ time_constraints:
   cold_start_s: [30, 60]
   model_switch_s: [30, 60]
 power_constraints:
-  typical_draw_watts: [60, 80]
+  typical_draw_watts: [150, 350]

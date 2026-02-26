@@ -260,10 +260,20 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) r
 		return runtime.NewK3SRuntime(k3sClient)
 	}
 	platform := goruntime.GOOS + "-" + goruntime.GOARCH
+	distDir := filepath.Join(dataDir, "dist", platform)
+	bm := engine.NewBinaryManager(distDir)
 	return runtime.NewNativeRuntime(
 		filepath.Join(dataDir, "logs"),
-		filepath.Join(dataDir, "dist", platform),
+		distDir,
 		filepath.Join(dataDir, "deployments"),
+		runtime.WithBinaryResolver(func(ctx context.Context, src *runtime.BinarySource) (string, error) {
+			return bm.Resolve(ctx, &engine.BinarySource{
+				Binary:    src.Binary,
+				Platforms: src.Platforms,
+				Download:  src.Download,
+				Mirror:    src.Mirror,
+			})
+		}),
 	)
 }
 
@@ -479,6 +489,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						Image:      ea.Image.Name,
 						Tag:        ea.Image.Tag,
 						Registries: ea.Image.Registries,
+						Runner:     &execRunner{},
 					})
 				}
 			}
@@ -532,6 +543,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,
 					"aima.dev/slot":   resolved.Slot,
+					"aima.dev/port":   fmt.Sprintf("%d", port),
 				},
 			}
 			if resolved.Partition != nil {
@@ -546,6 +558,21 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				req.HealthCheck = &runtime.HealthCheckConfig{
 					Path:     resolved.HealthCheck.Path,
 					TimeoutS: resolved.HealthCheck.TimeoutS,
+				}
+			}
+			if resolved.Source != nil {
+				req.BinarySource = &runtime.BinarySource{
+					Binary:    resolved.Source.Binary,
+					Platforms: resolved.Source.Platforms,
+					Download:  resolved.Source.Download,
+					Mirror:    resolved.Source.Mirror,
+				}
+			}
+			if resolved.Warmup != nil {
+				req.Warmup = &runtime.WarmupConfig{
+					Prompt:    resolved.Warmup.Prompt,
+					MaxTokens: resolved.Warmup.MaxTokens,
+					TimeoutS:  resolved.Warmup.TimeoutS,
 				}
 			}
 
@@ -721,6 +748,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		StackInit: func(ctx context.Context, allowDownload bool) (json.RawMessage, error) {
 			installer := stack.NewInstaller(&execRunner{}, dataDir).
 				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
+			if err := installer.PreCheck(ctx, cat.StackComponents); err != nil {
+				return nil, err
+			}
 			if allowDownload {
 				missing := installer.Preflight(cat.StackComponents)
 				if err := stack.DownloadItems(ctx, missing); err != nil {

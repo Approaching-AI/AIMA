@@ -47,6 +47,7 @@ type GPUSpec struct {
 	VRAMMiB           int    `yaml:"vram_mib"`
 	ComputeCapability string `yaml:"compute_capability"`
 	CUDACores         int    `yaml:"cuda_cores"`
+	ResourceName      string `yaml:"resource_name,omitempty"` // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
 }
 
 type CPUSpec struct {
@@ -118,11 +119,20 @@ type EngineStartup struct {
 	Command     []string       `yaml:"command"`
 	DefaultArgs map[string]any `yaml:"default_args"`
 	HealthCheck HealthCheck    `yaml:"health_check"`
+	Warmup      WarmupConfig   `yaml:"warmup"`
 }
 
 type HealthCheck struct {
 	Path     string `yaml:"path"`
 	TimeoutS int    `yaml:"timeout_s"`
+}
+
+// WarmupConfig describes how to warm up an engine after health check passes.
+type WarmupConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Prompt    string `yaml:"prompt"`
+	MaxTokens int    `yaml:"max_tokens"`
+	TimeoutS  int    `yaml:"timeout_s"`
 }
 
 type EngineAPI struct {
@@ -211,15 +221,7 @@ type StackComponent struct {
 	Conditions    *StackConditions     `yaml:"conditions,omitempty"`
 	Profiles      map[string]StackProfile `yaml:"profiles,omitempty"`
 	Registries    map[string]any       `yaml:"registries,omitempty"`   // container registry mirror config (written as-is to registries.yaml)
-	SystemImages  []StackSystemImage   `yaml:"system_images,omitempty"` // images to pre-import from mirrors
 	OpenQuestions []StackQuestion      `yaml:"open_questions,omitempty"`
-}
-
-type StackSystemImage struct {
-	Name     string   `yaml:"name"`     // e.g. "rancher/mirrored-pause"
-	Tag      string   `yaml:"tag"`      // e.g. "3.6"
-	Required bool     `yaml:"required"`
-	Mirrors  []string `yaml:"mirrors"`  // full mirror image refs, e.g. "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.6"
 }
 
 type StackMetadata struct {
@@ -233,11 +235,14 @@ type StackCompatibility struct {
 }
 
 type StackSource struct {
-	Binary    string            `yaml:"binary,omitempty"`
-	Chart     string            `yaml:"chart,omitempty"`
-	Platforms []string          `yaml:"platforms"`
-	Download  map[string]string `yaml:"download,omitempty"` // platform → URL
-	Mirror    map[string]string `yaml:"mirror,omitempty"`   // platform → fallback URL
+	Binary         string            `yaml:"binary,omitempty"`
+	Chart          string            `yaml:"chart,omitempty"`
+	Airgap         string            `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
+	Platforms      []string          `yaml:"platforms"`
+	Download       map[string]string `yaml:"download,omitempty"`         // platform → URL
+	Mirror         map[string]string `yaml:"mirror,omitempty"`           // platform → fallback URL
+	AirgapDownload map[string]string `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
+	AirgapMirror   map[string]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URL
 }
 
 type StackInstall struct {

@@ -25,16 +25,19 @@ type PartitionSlot struct {
 
 // ResolvedConfig is the merged output of the L0-L2 config resolution process.
 type ResolvedConfig struct {
-	Engine      string
-	EngineImage string
-	ModelPath   string
-	ModelName   string
-	Slot        string
-	Config      map[string]any
-	Provenance  map[string]string
-	Partition   *PartitionSlot
-	Command     []string
-	HealthCheck *HealthCheck
+	Engine          string
+	EngineImage     string
+	ModelPath       string
+	ModelName       string
+	Slot            string
+	Config          map[string]any
+	Provenance      map[string]string
+	Partition       *PartitionSlot
+	Command         []string
+	HealthCheck     *HealthCheck
+	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
+	Source          *EngineSource // native binary source info (nil if container-only)
+	GPUResourceName string        // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -95,7 +98,14 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Partition:   slot,
 		Command:     engine.Startup.Command,
 		HealthCheck: &engine.Startup.HealthCheck,
+		Source:      engine.Source,
 	}
+	if engine.Startup.Warmup.Enabled {
+		resolved.Warmup = &engine.Startup.Warmup
+	}
+
+	// Set GPU resource name from hardware profile
+	resolved.GPUResourceName = c.findGPUResourceName(hw)
 
 	// Set ModelPath from user overrides or default pattern
 	if mp, ok := userOverrides["model_path"]; ok {
@@ -163,6 +173,17 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, er
 		return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q", modelName, hw.GPUArch)
 	}
 	return "", fmt.Errorf("model %q not found in catalog", modelName)
+}
+
+// findGPUResourceName looks up the K8s GPU resource name from hardware profiles.
+// Falls back to "nvidia.com/gpu" if not specified.
+func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Hardware.GPU.ResourceName != "" {
+			return hp.Hardware.GPU.ResourceName
+		}
+	}
+	return "nvidia.com/gpu"
 }
 
 func platformInList(platform string, platforms []string) bool {

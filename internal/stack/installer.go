@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -118,6 +119,33 @@ func shouldSkip(comp knowledge.StackComponent, hwProfile string) (bool, string) 
 	return false, ""
 }
 
+// PreCheck verifies prerequisites before downloading or installing.
+// On Linux, daemon components (e.g. K3S) require root to install systemd units
+// and write to /etc. This check runs early to fail fast before wasting time
+// downloading large files.
+func (inst *Installer) PreCheck(ctx context.Context, components []knowledge.StackComponent) error {
+	if runtime.GOOS != "linux" || os.Getuid() == 0 {
+		return nil
+	}
+
+	for _, comp := range components {
+		if !platformSupported(comp.Source.Platforms) {
+			continue
+		}
+		if !comp.Install.Daemon {
+			continue
+		}
+		// If this daemon is already running, no root needed
+		out, err := inst.runner.Run(ctx, "systemctl", "is-active", comp.Metadata.Name)
+		if err == nil && strings.TrimSpace(string(out)) == "active" {
+			continue
+		}
+		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo aima init", comp.Metadata.Name)
+	}
+
+	return nil
+}
+
 // Init runs the full initialization workflow for all stack components.
 func (inst *Installer) Init(ctx context.Context, components []knowledge.StackComponent, hwProfile string) (*InitResult, error) {
 	result := &InitResult{AllReady: true}
@@ -163,10 +191,12 @@ type DownloadItem struct {
 	URL        string `json:"url"`                   // download URL
 	MirrorURL  string `json:"mirror_url,omitempty"`  // fallback URL (e.g. ghproxy mirror)
 	Executable bool   `json:"executable,omitempty"`  // chmod +x after download
+	Optional   bool   `json:"optional,omitempty"`    // if true, download failure won't abort init (e.g. airgap tars)
 }
 
 // Preflight checks which components need files downloaded.
-// It returns a list of missing files that have download URLs configured.
+// It returns a list of missing files that have download URLs configured,
+// including airgap image tars when configured.
 func (inst *Installer) Preflight(components []knowledge.StackComponent) []DownloadItem {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	var items []DownloadItem
@@ -176,61 +206,98 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 			continue
 		}
 
-		// Determine the local file to check
+		// Main artifact: binary or chart
 		fileName := comp.Source.Binary
 		if fileName == "" {
 			fileName = comp.Source.Chart
 		}
-		if fileName == "" {
-			continue
+		if fileName != "" {
+			localPath := filepath.Join(inst.distDir, fileName)
+			if _, err := os.Stat(localPath); err != nil {
+				if url := comp.Source.Download[platform]; url != "" {
+					items = append(items, DownloadItem{
+						Name:       comp.Metadata.Name,
+						FileName:   fileName,
+						FilePath:   localPath,
+						URL:        url,
+						MirrorURL:  comp.Source.Mirror[platform],
+						Executable: comp.Source.Binary != "",
+					})
+				}
+			}
 		}
 
-		localPath := filepath.Join(inst.distDir, fileName)
-
-		// Skip if file already exists
-		if _, err := os.Stat(localPath); err == nil {
-			continue
+		// Airgap image tar (optional — init can still succeed via online pull)
+		if comp.Source.Airgap != "" {
+			airgapPath := filepath.Join(inst.distDir, comp.Source.Airgap)
+			if _, err := os.Stat(airgapPath); err != nil {
+				if url := comp.Source.AirgapDownload[platform]; url != "" {
+					items = append(items, DownloadItem{
+						Name:      comp.Metadata.Name + "-airgap",
+						FileName:  comp.Source.Airgap,
+						FilePath:  airgapPath,
+						URL:       url,
+						MirrorURL: comp.Source.AirgapMirror[platform],
+						Optional:  true,
+					})
+				}
+			}
 		}
-
-		// Check if download URL is available for this platform
-		url := comp.Source.Download[platform]
-		if url == "" {
-			continue
-		}
-
-		items = append(items, DownloadItem{
-			Name:       comp.Metadata.Name,
-			FileName:   fileName,
-			FilePath:   localPath,
-			URL:        url,
-			MirrorURL:  comp.Source.Mirror[platform],
-			Executable: comp.Source.Binary != "",
-		})
 	}
 
 	return items
 }
 
-// DownloadItems downloads all items in the list, creating directories as needed.
+// DownloadItems downloads all items in parallel, creating directories as needed.
 // If a primary URL fails and a mirror URL is configured, it retries with the mirror.
+// Optional items (e.g. airgap tars) log a warning on failure instead of aborting.
 func DownloadItems(ctx context.Context, items []DownloadItem) error {
-	for _, item := range items {
-		slog.Info("downloading", "name", item.Name, "url", item.URL)
-		err := downloadFile(ctx, item.URL, item.FilePath)
-		if err != nil && item.MirrorURL != "" {
-			slog.Warn("primary download failed, trying mirror", "name", item.Name, "error", err, "mirror", item.MirrorURL)
-			err = downloadFile(ctx, item.MirrorURL, item.FilePath)
-		}
-		if err != nil {
-			return fmt.Errorf("download %s: %w", item.Name, err)
-		}
-		if item.Executable {
-			if err := os.Chmod(item.FilePath, 0o755); err != nil {
-				return fmt.Errorf("chmod %s: %w", item.FilePath, err)
-			}
-		}
+	if len(items) == 0 {
+		return nil
 	}
-	return nil
+
+	var (
+		mu       sync.Mutex
+		firstErr error
+		wg       sync.WaitGroup
+	)
+
+	for _, item := range items {
+		wg.Add(1)
+		go func(item DownloadItem) {
+			defer wg.Done()
+			slog.Info("downloading", "name", item.Name, "url", item.URL)
+			err := downloadFile(ctx, item.URL, item.FilePath)
+			if err != nil && item.MirrorURL != "" {
+				slog.Warn("primary download failed, trying mirror", "name", item.Name, "error", err, "mirror", item.MirrorURL)
+				err = downloadFile(ctx, item.MirrorURL, item.FilePath)
+			}
+			if err != nil {
+				if item.Optional {
+					slog.Warn("optional download failed, skipping", "name", item.Name, "error", err)
+					return
+				}
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("download %s: %w", item.Name, err)
+				}
+				mu.Unlock()
+				return
+			}
+			if item.Executable {
+				if err := os.Chmod(item.FilePath, 0o755); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("chmod %s: %w", item.FilePath, err)
+					}
+					mu.Unlock()
+				}
+			}
+		}(item)
+	}
+
+	wg.Wait()
+	return firstErr
 }
 
 // downloadFile downloads url to destPath via a .partial temp file.
@@ -340,20 +407,15 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		inst.ensureKubectlLink(comp.Source.Binary)
 	}
 
+	// Always prepare airgap images, even for already-ready components.
+	// K3S may be running but klipper-helm image could be missing (needed by HAMi helm install).
+	inst.prepareAirgapImages(ctx, comp)
+
 	// Check if already installed and ready
 	existing := inst.checkComponent(ctx, comp, hwProfile)
 	if existing.Ready {
 		slog.Info("stack component already ready", "name", comp.Metadata.Name)
-		// Still import system images for already-running instances (they may be missing)
-		if len(comp.SystemImages) > 0 {
-			inst.importSystemImages(ctx, comp)
-		}
 		return existing, nil
-	}
-
-	// Pre-install: import system images so pods can start after helm install
-	if len(comp.SystemImages) > 0 {
-		inst.importSystemImages(ctx, comp)
 	}
 
 	// Install based on method
@@ -818,40 +880,62 @@ func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
 	return nil
 }
 
-// importSystemImages pre-imports K3S system images from Chinese mirrors.
-// This runs after K3S is verified ready, ensuring containerd is available.
-func (inst *Installer) importSystemImages(ctx context.Context, comp knowledge.StackComponent) {
-	k3sBin := inst.findK3sBinary()
-	if k3sBin == "" {
+// prepareAirgapImages places or imports airgap image tars before component installation.
+// For binary components (K3S): copies tar to /var/lib/rancher/k3s/agent/images/ for auto-import on startup.
+// For helm components: imports tar via "k3s ctr images import" since K3S is already running.
+func (inst *Installer) prepareAirgapImages(ctx context.Context, comp knowledge.StackComponent) {
+	if comp.Source.Airgap == "" {
 		return
 	}
 
-	for _, img := range comp.SystemImages {
-		fullName := "docker.io/" + img.Name + ":" + img.Tag
+	airgapPath := filepath.Join(inst.distDir, comp.Source.Airgap)
+	if _, err := os.Stat(airgapPath); err != nil {
+		slog.Warn("airgap tar not found, skipping", "path", airgapPath)
+		return
+	}
 
-		// Check if image already exists
-		out, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "ls", "-q")
-		if err == nil && strings.Contains(string(out), fullName) {
-			slog.Info("system image already present", "image", fullName)
-			continue
+	k3sBin := inst.findK3sBinary()
+
+	switch comp.Install.Method {
+	case "binary":
+		// K3S airgap: place tar in auto-import directory for startup import
+		destDir := "/var/lib/rancher/k3s/agent/images"
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			slog.Warn("failed to create K3S images dir", "error", err)
+			return
+		}
+		dest := filepath.Join(destDir, comp.Source.Airgap)
+		if err := copyFile(airgapPath, dest, 0o644); err != nil {
+			slog.Warn("failed to place airgap tar", "src", airgapPath, "dest", dest, "error", err)
+		} else {
+			slog.Info("placed airgap images for K3S auto-import", "path", dest)
+		}
+		// Also import directly if K3S containerd is already running
+		// (auto-import only happens on K3S startup, not for already-running instances)
+		if k3sBin != "" {
+			slog.Info("importing airgap images into running containerd", "file", airgapPath)
+			importCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			out, err := inst.runner.Run(importCtx, k3sBin, "ctr", "images", "import", airgapPath)
+			cancel()
+			if err != nil {
+				slog.Debug("airgap import skipped (K3S may not be running yet)", "error", err, "output", string(out))
+			}
 		}
 
-		// Try pulling from mirrors
-		imported := false
-		for _, mirror := range img.Mirrors {
-			slog.Info("importing system image from mirror", "image", fullName, "mirror", mirror)
-			if _, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "pull", mirror); err != nil {
-				slog.Warn("mirror pull failed", "mirror", mirror, "error", err)
-				continue
-			}
-			if _, err := inst.runner.Run(ctx, k3sBin, "ctr", "images", "tag", mirror, fullName); err != nil {
-				slog.Warn("image tag failed", "from", mirror, "to", fullName, "error", err)
-			}
-			imported = true
-			break
+	case "helm":
+		// Helm components (HAMi): K3S is already running, import directly via containerd
+		if k3sBin == "" {
+			slog.Warn("k3s not found, cannot import airgap images")
+			return
 		}
-		if !imported && img.Required {
-			slog.Warn("failed to import required system image", "image", fullName)
+		slog.Info("importing airgap images via containerd", "file", airgapPath)
+		importCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		out, err := inst.runner.Run(importCtx, k3sBin, "ctr", "images", "import", airgapPath)
+		cancel()
+		if err != nil {
+			slog.Warn("airgap import failed", "error", err, "output", string(out))
+		} else {
+			slog.Info("airgap images imported successfully")
 		}
 	}
 }

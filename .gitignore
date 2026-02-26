@@ -1,0 +1,17 @@
+# Build outputs (cross-compiled binaries)
+build/
+/aima
+/aima.exe
+
+# Claude Code local config
+.claude/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

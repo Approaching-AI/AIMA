@@ -11,8 +11,9 @@ type HardwareInfo struct {
 	OS      OSInfo      `json:"os"`
 }
 
-// GPUInfo describes an NVIDIA GPU's capabilities.
+// GPUInfo describes a GPU or accelerator's capabilities.
 type GPUInfo struct {
+	Vendor             string  `json:"vendor"`
 	Name               string  `json:"name"`
 	Arch               string  `json:"arch"`
 	VRAMMiB            int     `json:"vram_mib"`

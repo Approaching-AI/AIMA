@@ -482,8 +482,17 @@ compatibility:
 
 source:
   binary: "k3s"
+  airgap: "k3s-airgap-images.tar.zst"  # 离线镜像包文件名
   platforms: [linux/amd64, linux/arm64]
-  # 离线安装包在 dist/{platform}/ 下预置
+  download:    # 主制品下载 URL (platform → URL)
+    linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+    linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+  airgap_download:  # 离线镜像包下载 URL (Optional — 失败不中断 init)
+    linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+    linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
+  airgap_mirror:    # GFW 备用 URL
+    linux/amd64: "https://ghfast.top/https://github.com/k3s-io/..."
+    linux/arm64: "https://ghfast.top/https://github.com/k3s-io/..."
 
 install:
   method: binary
@@ -565,15 +574,29 @@ aima init
   │
   ├── 1. 读 catalog/stack/*.yaml (知道要装什么、什么版本、什么配置)
   ├── 2. hardware.detect (检测当前硬件，选择对应 profile)
-  ├── 3. 逐项检查已安装组件:
-  │      ├── 已有且版本兼容 → 跳过 ✓
-  │      ├── 已有但版本不兼容 → 提示升级
-  │      └── 未安装 → 从 dist/ 本地包安装 + 应用 AIMA 配置
-  ├── 4. 安装 K3S (dist/ 预置包 + stack YAML 配置参数)
-  ├── 5. 安装 HAMi (helm install 本地 chart + stack YAML values)
-  ├── 6. 逐项验证 (每个组件的 verify 条件)
+  ├── 3. PreCheck: 快速失败检查
+  │      └── Linux 上 daemon 组件 (K3S) 需 root 权限 → 提前报错，避免下载后才发现
+  ├── 4. Preflight: 计算缺失文件列表
+  │      ├── 主制品: binary / chart → 必须下载
+  │      └── Airgap 镜像包: .tar / .tar.zst → Optional (失败不中断)
+  ├── 5. DownloadItems: 并行下载所有缺失文件 (goroutine + sync.WaitGroup)
+  │      ├── 主 URL 失败 → 自动切换 mirror URL
+  │      └── Optional 项失败 → 仅 WARN，不 abort
+  ├── 6. 按 priority 排序后逐项安装:
+  │      ├── writeRegistries → 写容器镜像 mirror 配置
+  │      ├── prepareAirgapImages → 导入离线镜像包
+  │      │     ├── binary 方法: 放入 /var/lib/rancher/k3s/agent/images/ (自动导入)
+  │      │     │   + ctrImportAirgap (已运行的 K3S 需通过 ctr 额外导入)
+  │      │     └── helm 方法: ctrImportAirgap (K3S 已运行，直接导入)
+  │      ├── checkComponent → 已就绪则跳过
+  │      ├── installBinary / installHelm → 安装
+  │      └── verify → 验证就绪条件
   └── 7. 输出就绪状态
 ```
+
+**ctrImportAirgap**: containerd 的 `ctr images import` 只接受裸 `.tar`。
+对 `.tar.zst` 文件，通过 `sh -c "zstd -dc file.tar.zst | k3s ctr images import -"` 管道解压后导入。
+`.tar.gz` 同理使用 `gzip -dc`。K3S 的 `agent/images/` 自动导入目录原生支持 zstd。
 
 **Go 代码只需一个通用的 "stack installer"**——
 读 stack YAML → 执行安装命令 → 应用配置 → 验证。
@@ -583,16 +606,24 @@ aima init
 #### 离线安装包
 
 ```
-dist/                          # 预构建安装包 (git-lfs 或独立 release)
+dist/                          # ~/.aima/dist/{os}-{arch}/
   linux-amd64/
     k3s                        # K3S 二进制 (~70MB)
-    hami-chart.tgz             # HAMi Helm chart (锁定版本+AIMA values)
+    k3s-airgap-images.tar.zst  # K3S 系统镜像 (pause, coredns, klipper-helm) (~134MB)
+    hami-2.4.1.tgz             # HAMi Helm chart (锁定版本+AIMA values)
+    hami-airgap-images.tar     # HAMi 容器镜像 (hami, certgen) (~398MB)
     zeroclaw                   # ZeroClaw 二进制 (~8.8MB)
   linux-arm64/
-    ...
+    ...                        # arm64 版本 (HAMi ~237MB)
 ```
 
-`dist/` 确保完全离线安装。`aima init` 优先使用本地包，无网络时不尝试下载。
+**制品来源**:
+- K3S 二进制 + airgap tar: K3S 官方 GitHub release
+- HAMi chart: HAMi 官方 GitHub release
+- HAMi airgap tar: AIMA GitHub release ([v0.1.0-images](https://github.com/Approaching-AI/AIMA/releases/tag/v0.1.0-images))
+
+`dist/` 确保完全离线安装。`aima init` 优先使用本地包，缺失时尝试下载（主 URL + mirror 备选）。
+Airgap 镜像包标记为 `Optional`——即使下载失败，init 仍可通过在线拉取完成（graceful degradation）。
 
 ---
 

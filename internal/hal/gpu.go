@@ -86,6 +86,7 @@ func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
 		}
 		if gpu := p.parse(string(out)); gpu != nil {
 			gpu.Vendor = p.vendor
+			enrichGPU(ctx, runner, gpu)
 			return gpu
 		}
 	}
@@ -132,8 +133,11 @@ func parseNvidiaGPULine(line string) *GPUInfo {
 	}
 
 	var vram int
+	var memIsNA bool
 	if !isNA(fields[1]) {
 		vram, _ = strconv.Atoi(fields[1])
+	} else {
+		memIsNA = true
 	}
 
 	var driverVersion string
@@ -166,6 +170,7 @@ func parseNvidiaGPULine(line string) *GPUInfo {
 		PowerDrawWatts:     powerDraw,
 		PowerLimitWatts:    powerLimit,
 		TemperatureCelsius: temp,
+		UnifiedMemory:      memIsNA,
 		Count:              1,
 	}
 }
@@ -243,6 +248,75 @@ func computeCapToArch(cc string) string {
 	}
 }
 
+// enrichGPU fills in fields that the primary probe couldn't provide.
+func enrichGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	switch gpu.Vendor {
+	case "nvidia":
+		enrichNvidiaGPU(ctx, runner, gpu)
+	}
+}
+
+// enrichNvidiaGPU supplements GPUInfo with data from standard nvidia-smi output.
+// The CSV query format lacks CUDA version and may lack power limit on some platforms.
+func enrichNvidiaGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	out, err := runner.Run(ctx, "nvidia-smi")
+	if err != nil {
+		return
+	}
+	s := string(out)
+
+	if gpu.CUDAVersion == "" {
+		gpu.CUDAVersion = parseNvidiaCUDAVersion(s)
+	}
+	if gpu.PowerLimitWatts == 0 {
+		gpu.PowerLimitWatts = parseNvidiaPowerCap(s)
+	}
+}
+
+// parseNvidiaCUDAVersion extracts CUDA version from nvidia-smi standard output header.
+func parseNvidiaCUDAVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		idx := strings.Index(line, "CUDA Version:")
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len("CUDA Version:"):])
+		end := 0
+		for end < len(rest) && (rest[end] == '.' || (rest[end] >= '0' && rest[end] <= '9')) {
+			end++
+		}
+		if end > 0 {
+			return rest[:end]
+		}
+	}
+	return ""
+}
+
+// parseNvidiaPowerCap extracts power cap from nvidia-smi "Pwr:Usage/Cap" column.
+func parseNvidiaPowerCap(output string) float64 {
+	for _, line := range strings.Split(output, "\n") {
+		idx := strings.Index(line, "W /")
+		if idx < 0 {
+			continue
+		}
+		rest := line[idx+3:]
+		if pipeIdx := strings.Index(rest, "|"); pipeIdx >= 0 {
+			rest = rest[:pipeIdx]
+		}
+		rest = strings.TrimSpace(rest)
+		rest = strings.TrimSuffix(rest, "W")
+		rest = strings.TrimSpace(rest)
+		if isNA(rest) {
+			continue
+		}
+		cap, err := strconv.ParseFloat(rest, 64)
+		if err == nil && cap > 0 {
+			return cap
+		}
+	}
+	return 0
+}
+
 // --- AMD ---
 
 func parseAMDGPU(output string) *GPUInfo {
@@ -274,6 +348,14 @@ func parseAMDGPU(output string) *GPUInfo {
 		return nil
 	}
 
+	// Determine arch: prefer name matching, fall back to GFX version.
+	arch := amdGPUToArch(name)
+	if arch == "unknown" {
+		if gfxArch := gfxVersionToArch(jsonStr(firstCard, "GFX Version")); gfxArch != "" {
+			arch = gfxArch
+		}
+	}
+
 	var vram int
 	if b := jsonInt(firstCard, "VRAM Total Memory (B)"); b > 0 {
 		vram = int(b / (1024 * 1024))
@@ -281,10 +363,10 @@ func parseAMDGPU(output string) *GPUInfo {
 
 	return &GPUInfo{
 		Name:               name,
-		Arch:               amdGPUToArch(name),
+		Arch:               arch,
 		VRAMMiB:            vram,
 		TemperatureCelsius: jsonFloat(firstCard, "Temperature (Sensor edge) (C)", "Temperature (Sensor junction) (C)"),
-		PowerDrawWatts:     jsonFloat(firstCard, "Average Graphics Package Power (W)"),
+		PowerDrawWatts:     jsonFloat(firstCard, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"),
 		Count:              count,
 	}
 }
@@ -316,7 +398,7 @@ func parseAMDGPUMetrics(output string) *GPUMetrics {
 			MemoryUsedMiB:      memUsed,
 			MemoryTotalMiB:     memTotal,
 			TemperatureCelsius: jsonFloat(data, "Temperature (Sensor edge) (C)"),
-			PowerDrawWatts:     roundTo(jsonFloat(data, "Average Graphics Package Power (W)"), 2),
+			PowerDrawWatts:     roundTo(jsonFloat(data, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"), 2),
 		}
 	}
 	return nil
@@ -337,6 +419,39 @@ func amdGPUToArch(name string) string {
 		return "RDNA2"
 	default:
 		return "unknown"
+	}
+}
+
+// gfxVersionToArch maps AMD GFX IP version strings to architecture names.
+// Used as fallback when product name is too generic (e.g., "AMD Radeon Graphics").
+func gfxVersionToArch(gfxVer string) string {
+	gfxVer = strings.ToLower(strings.TrimSpace(gfxVer))
+	if !strings.HasPrefix(gfxVer, "gfx") {
+		return ""
+	}
+	suffix := gfxVer[3:]
+
+	switch {
+	case strings.HasPrefix(suffix, "12"):
+		return "RDNA4"
+	case strings.HasPrefix(suffix, "115"):
+		return "RDNA3.5"
+	case strings.HasPrefix(suffix, "11"):
+		return "RDNA3"
+	case strings.HasPrefix(suffix, "103"):
+		return "RDNA2"
+	case strings.HasPrefix(suffix, "101"):
+		return "RDNA"
+	case strings.HasPrefix(suffix, "94"):
+		return "CDNA3"
+	case suffix == "90a":
+		return "CDNA2"
+	case suffix == "908":
+		return "CDNA"
+	case strings.HasPrefix(suffix, "90"):
+		return "GCN5"
+	default:
+		return ""
 	}
 }
 

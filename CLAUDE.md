@@ -9,6 +9,135 @@ and exposes ~32 MCP tools for AI Agents to operate everything. **This project is
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
 
+## ====== Remote Test Lab (Heterogeneous Hardware) ======
+
+**This is a live, SSH-driven test environment for real-device validation.**
+Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them back into development.
+
+### Machine Registry
+
+| ID | User@Host | OS | Arch | Chip/GPU | RAM | Disk Free | K3S/Docker | SSH Auth | Role |
+|----|-----------|-----|------|----------|-----|-----------|------------|----------|------|
+| dev-win | **local** (Light-Salt) | Windows 11 | x86_64 | i9-13980HX + RTX 4060 8GB (Driver 566, CUDA) | 32 GB | 551 GB | no | local | Dev machine, `go build/test` runs here directly |
+| mac-m4 | `user@<REDACTED_IP>` | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
+| gb10 | `user@<REDACTED_IP>` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
+| linux-1 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 550, CUDA) | 1 TB | 371 GB | Docker 28.0 | key | Dual-GPU inference validation |
+| amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
+
+> **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
+> Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
+
+### Test Loop Workflow — ALL COLLECT, THEN ANALYZE
+
+> **核心原则：先全量采集，再统一分析，最后一次性修改。**
+> 绝对不要看一台改一台。逐台修复会制造"按下葫芦浮起瓢"的兼容性问题。
+> 每一轮修改必须基于所有设备的完整结果矩阵。
+
+```
+ [1] Develop locally (edit Go / YAML)
+      │
+ [2] Build: 一次性交叉编译所有目标
+      │  go build -o build/aima.exe ./cmd/aima                                       # dev-win
+      │  GOOS=darwin  GOARCH=arm64 go build -o build/aima-darwin-arm64  ./cmd/aima   # mac-m4
+      │  GOOS=linux   GOARCH=arm64 go build -o build/aima-linux-arm64   ./cmd/aima   # gb10
+      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1
+      │
+ [3] Distribute: 同步到所有远程机器
+      │  scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
+      │  scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
+      │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
+      │
+ [4] Execute: 对所有设备（含本机）并行执行同一组测试命令
+      │  本机:  build/aima.exe hal detect
+      │  SSH:   ssh user@<REDACTED_IP> './aima hal detect'
+      │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
+      │  SSH:   ssh user@<REDACTED_IP>      './aima hal detect'
+      │
+      ╔══════════════════════════════════════════════════════════╗
+      ║  ⚠ BARRIER: 等待所有设备返回结果，一台都不能少。       ║
+      ║  如果某台超时/不可达，记录为 UNREACHABLE，不要跳过。    ║
+      ╚══════════════════════════════════════════════════════════╝
+      │
+ [5] Collect: 将所有结果汇总为对比矩阵
+      │
+      │  ┌──────────┬──────────────┬──────────┬──────────────┐
+      │  │ 测试项    │ dev-win      │ mac-m4   │ gb10   │ ... │
+      │  ├──────────┼──────────────┼──────────┼──────────────┤
+      │  │ hal detect│ ✅ RTX 4060 │ ✅ no-gpu│ ❌ N/A parse│
+      │  │ engine ls │ ✅           │ ✅       │ ✅          │
+      │  │ ...       │              │          │              │
+      │  └──────────┴──────────────┴──────────┴──────────────┘
+      │
+ [6] Analyze: 基于完整矩阵统一分析
+      │  - 哪些设备通过、哪些失败、失败模式是否相同
+      │  - 是否存在仅在某一架构上出现的 edge case
+      │  - 修复方案是否对所有设备都安全（不能只修一个平台）
+      │
+ [7] Fix: 一次性提交修改，修改必须覆盖所有已知平台
+      │
+ [8] Re-verify: 回到 [2]，再次全量验证，直到矩阵全绿
+```
+
+### Standard Test Commands
+
+```bash
+# --- Device probe (first time or hardware change) ---
+ssh <user@host> 'uname -a && cat /etc/os-release 2>/dev/null; sw_vers 2>/dev/null; nvidia-smi 2>/dev/null || echo no-nvidia; free -h 2>/dev/null; df -h / | tail -1'
+
+# --- Smoke test suite (run same commands on EVERY device) ---
+./aima version                # or ssh <user@host> './aima version'
+./aima hal detect
+./aima engine list
+./aima model list
+./aima deploy list            # only meaningful on K3S-capable devices
+```
+
+### Quick Reference: Full-Fleet Build → Distribute → Test
+
+```bash
+# ── [2] Build all targets ──
+go build -o build/aima.exe ./cmd/aima && \
+GOOS=darwin GOARCH=arm64 go build -o build/aima-darwin-arm64 ./cmd/aima && \
+GOOS=linux  GOARCH=arm64 go build -o build/aima-linux-arm64  ./cmd/aima && \
+GOOS=linux  GOARCH=amd64 go build -o build/aima-linux-amd64  ./cmd/aima
+
+# ── [3] Distribute ──
+scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
+scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
+scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
+
+# ── [4] Execute ALL in parallel, wait for ALL ──
+build/aima.exe hal detect > build/result-dev-win.txt 2>&1 &
+ssh user@<REDACTED_IP> 'chmod +x ~/aima && ~/aima hal detect' > build/result-mac-m4.txt 2>&1 &
+ssh user@<REDACTED_IP>      'chmod +x ~/aima && ~/aima hal detect' > build/result-gb10.txt 2>&1 &
+ssh user@<REDACTED_IP>       'chmod +x ~/aima && ~/aima hal detect' > build/result-linux-1.txt 2>&1 &
+wait
+
+# ── [5] Collect: print comparison matrix ──
+echo "=== dev-win ===" && cat build/result-dev-win.txt
+echo "=== mac-m4 ===" && cat build/result-mac-m4.txt
+echo "=== gb10 ===" && cat build/result-gb10.txt
+echo "=== linux-1 ===" && cat build/result-linux-1.txt
+```
+
+### Adding a New Machine
+
+1. Ensure SSH key auth works: `ssh-copy-id <user@host>`
+2. SSH in and run the device probe command above
+3. Update the Machine Registry table with the results
+4. Determine the correct `GOOS/GOARCH` for cross-compilation
+5. Add the machine to the sync & test scripts
+
+### Conventions
+
+- **全量采集、统一分析、一次修改。** 这是最高优先级的流程约束。不要在看到一台设备的结果后就开始改代码。必须等所有设备结果到齐，对比后再动手。违反此原则的修改大概率引入平台特异性 bug。
+- **Never store passwords in this file or any tracked file.** Use SSH keys only.
+- **Cross-compile locally.** Don't install Go on remote machines — AIMA has zero CGO, so cross-compilation always works.
+- **Test results are ephemeral.** Don't commit raw test outputs. Summarize findings in commit messages or design docs.
+- **One binary per arch.** Build outputs go to `build/` (gitignored). Name pattern: `aima-{os}-{arch}`.
+
+---
+
 ## The Prime Directive: Less Code
 
 **Every line of Go code is a liability.** The goal is the smallest possible binary that glues

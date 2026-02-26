@@ -29,21 +29,24 @@ func newModelCmd(app *App) *cobra.Command {
 }
 
 func newModelScanCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan local filesystem for model files",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			data, err := app.ToolDeps.ScanModels(ctx)
-			if err != nil {
-				return fmt.Errorf("scan models: %w", err)
-			}
-
-			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
-			return nil
-		},
 	}
+
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		data, err := app.ToolDeps.ScanModels(ctx)
+		if err != nil {
+			return fmt.Errorf("scan models: %w", err)
+		}
+
+		fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+		return nil
+	}
+
+	return cmd
 }
 
 func newModelListCmd(app *App) *cobra.Command {

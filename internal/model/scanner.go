@@ -3,16 +3,16 @@ package model
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+const maxScanDepth = 4 // Limit recursion depth
 
 // ModelInfo represents a discovered local model.
 type ModelInfo struct {
@@ -72,7 +72,10 @@ func DefaultScanPaths() []string {
 	}
 
 	if runtime.GOOS == "linux" {
-		paths = append(paths, "/mnt/data/models")
+		paths = append(paths,
+			"/mnt/data/models",
+			filepath.Join(home, "data/models"),
+		)
 	}
 
 	return paths
@@ -95,14 +98,13 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	for _, root := range paths {
 		info, err := os.Stat(root)
 		if err != nil {
-			slog.Debug("skip scan path", "path", root, "error", err)
 			continue
 		}
 		if !info.IsDir() {
 			continue
 		}
 
-		found, err := scanDirectory(ctx, root, seen)
+		found, err := scanDirectory(ctx, root, 0, seen)
 		if err != nil {
 			return nil, err
 		}
@@ -112,171 +114,270 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	return models, nil
 }
 
-func scanDirectory(ctx context.Context, root string, seen map[string]bool) ([]*ModelInfo, error) {
+func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool) ([]*ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("scan directory %s: %w", root, err)
+		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
+	}
+	if depth > maxScanDepth {
+		return nil, nil
 	}
 
 	var models []*ModelInfo
 
-	// Check if the root directory itself contains model files
-	if m := tryDetectModel(ctx, root); m != nil {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+	}
+
+	// First, recurse into subdirectories
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		subdir := filepath.Join(dir, entry.Name())
+		subModels, err := scanDirectory(ctx, subdir, depth+1, seen)
+		if err == nil {
+			models = append(models, subModels...)
+		}
+	}
+
+	// Then check if current directory itself is a model (after recursion)
+	if m := tryDetectModel(ctx, dir); m != nil {
 		if !seen[m.Path] {
 			seen[m.Path] = true
 			models = append(models, m)
 		}
 	}
 
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, fmt.Errorf("read directory %s: %w", root, err)
-	}
-
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("scan directory %s: %w", root, err)
-		}
-
-		if !entry.IsDir() {
-			continue
-		}
-
-		subdir := filepath.Join(root, entry.Name())
-		if m := tryDetectModel(ctx, subdir); m != nil {
-			if !seen[m.Path] {
-				seen[m.Path] = true
-				models = append(models, m)
-			}
-		}
-	}
-
 	return models, nil
 }
 
+// ModelPattern defines how to detect a model format.
+type ModelPattern struct {
+	name        string   // Pattern name for debugging
+	configFiles []string // Possible config filenames (empty = no config needed)
+	weightExts  []string // Possible weight file extensions
+	format      string   // Output format name
+	typeHint    string   // Type hint when detectArch fails
+}
+
+// modelPatterns defines all supported model detection patterns.
+var modelPatterns = []ModelPattern{
+	{
+		name:        "huggingface_safetensors",
+		configFiles: []string{"config.json"},
+		weightExts:  []string{".safetensors"},
+		format:      "safetensors",
+	},
+	{
+		name:        "huggingface_pytorch",
+		configFiles: []string{"config.json", "configuration.json"},
+		weightExts:  []string{"pytorch_model.bin", ".bin"},
+		format:      "pytorch",
+	},
+	{
+		name:        "pytorch_pt",
+		configFiles: []string{"config.json", "configuration.json"},
+		weightExts:  []string{".pt"},
+		format:      "pytorch",
+	},
+	{
+		name:        "pytorch_pth",
+		configFiles: []string{"config.json", "configuration.json"},
+		weightExts:  []string{".pth"},
+		format:      "pytorch",
+	},
+	{
+		name:        "funasr",
+		configFiles: []string{"configuration.json"},
+		weightExts:  []string{".pt"},
+		format:      "pytorch",
+		typeHint:    "asr",
+	},
+	{
+		name:        "onnx",
+		configFiles: []string{"config.json"},
+		weightExts:  []string{".onnx"},
+		format:      "onnx",
+	},
+	{
+		name:        "gguf",
+		configFiles: []string{},
+		weightExts:  []string{".gguf"},
+		format:      "gguf",
+		typeHint:    "llm",
+	},
+}
+
 func tryDetectModel(_ context.Context, dir string) *ModelInfo {
-	// Try HuggingFace format: config.json + *.safetensors
-	if m := detectHuggingFace(dir); m != nil {
-		return m
-	}
-	// Try GGUF format: *.gguf with valid magic
-	if m := detectGGUF(dir); m != nil {
-		return m
+	for _, p := range modelPatterns {
+		if m := detectByPattern(dir, p); m != nil {
+			return m
+		}
 	}
 	return nil
 }
 
-func detectHuggingFace(dir string) *ModelInfo {
-	configPath := filepath.Join(dir, "config.json")
-	configData, err := os.ReadFile(configPath)
+func detectByPattern(dir string, p ModelPattern) *ModelInfo {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
-	// Check for safetensors files
-	safetensorsSize := sumFilesByExtension(dir, ".safetensors")
-	if safetensorsSize == 0 {
+	if !hasConfigFile(entries, p.configFiles) {
+		return nil
+	}
+
+	weightPath := findWeightFile(dir, entries, p.weightExts)
+	if weightPath == "" {
 		return nil
 	}
 
 	var config map[string]any
-	if err := json.Unmarshal(configData, &config); err != nil {
-		return nil
+	configPath := findConfigFile(dir, entries, p.configFiles)
+	if configPath != "" {
+		data, err := os.ReadFile(configPath)
+		if err == nil {
+			json.Unmarshal(data, &config)
+		}
 	}
 
 	modelType, _ := config["model_type"].(string)
+	arch := detectArch(modelType)
+	mType := p.typeHint
+	if mType == "" {
+		mType = detectModelType(arch)
+	}
+
+	sizeBytes := calculateModelSize(dir, entries, p.weightExts)
+
 	hiddenSize := jsonInt(config, "hidden_size")
 	numLayers := jsonInt(config, "num_hidden_layers")
-
-	arch := detectArch(modelType)
 	params := estimateParams(hiddenSize, numLayers)
-	mType := detectModelType(arch)
+
+	name := filepath.Base(dir)
+	if p.format == "gguf" {
+		name = strings.TrimSuffix(filepath.Base(weightPath), ".gguf")
+	} else {
+		name = normalizeModelName(dir)
+	}
 
 	return &ModelInfo{
 		ID:             fmt.Sprintf("%x", sha256.Sum256([]byte(dir))),
-		Name:           filepath.Base(dir),
+		Name:           name,
 		Type:           mType,
 		Path:           dir,
-		Format:         "safetensors",
-		SizeBytes:      safetensorsSize,
+		Format:         p.format,
+		SizeBytes:      sizeBytes,
 		DetectedArch:   arch,
 		DetectedParams: params,
 	}
 }
 
-func detectGGUF(dir string) *ModelInfo {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+func normalizeModelName(path string) string {
+	name := filepath.Base(path)
+
+	// HF Hub cache: models--<org>--<repo> -> <repo>
+	if strings.HasPrefix(name, "models--") {
+		parts := strings.SplitN(name, "--", 3)
+		if len(parts) == 3 {
+			return parts[2]
+		}
 	}
 
+	// If name looks like a hash, try to extract from parent path
+	// (e.g., models--openbmb--MiniCPM-o-4_5/snapshots/<hash>)
+	if isHexString(name) && strings.Contains(path, "models--") {
+		parts := strings.Split(path, "/")
+		for _, part := range parts {
+			if strings.HasPrefix(part, "models--") {
+				subParts := strings.SplitN(part, "--", 3)
+				if len(subParts) == 3 {
+					return subParts[2]
+				}
+			}
+		}
+	}
+
+	return name
+}
+
+func isHexString(s string) bool {
+	if len(s) < 8 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasConfigFile(entries []os.DirEntry, files []string) bool {
+	if len(files) == 0 {
+		return true
+	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".gguf") {
-			continue
-		}
-
-		path := filepath.Join(dir, entry.Name())
-		if !validateGGUFMagic(path) {
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		return &ModelInfo{
-			ID:             fmt.Sprintf("%x", sha256.Sum256([]byte(dir))),
-			Name:           filepath.Base(dir),
-			Type:           "llm",
-			Path:           dir,
-			Format:         "gguf",
-			SizeBytes:      info.Size(),
-			DetectedArch:   "",
-			DetectedParams: "",
+		for _, cfg := range files {
+			if !entry.IsDir() && entry.Name() == cfg {
+				return true
+			}
 		}
 	}
-
-	return nil
+	return false
 }
 
-func validateGGUFMagic(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
+func findConfigFile(dir string, entries []os.DirEntry, files []string) string {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		for _, cfg := range files {
+			if entry.Name() == cfg {
+				return filepath.Join(dir, cfg)
+			}
+		}
 	}
-	defer f.Close()
-
-	var magic [4]byte
-	if _, err := f.Read(magic[:]); err != nil {
-		return false
-	}
-
-	// GGUF magic: bytes "GGUF" = 0x47 0x47 0x55 0x46
-	m := binary.LittleEndian.Uint32(magic[:])
-	return m == 0x46554747
+	return ""
 }
 
-func sumFilesByExtension(dir, ext string) int64 {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
+func findWeightFile(dir string, entries []os.DirEntry, exts []string) string {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		for _, ext := range exts {
+			if strings.HasSuffix(strings.ToLower(name), ext) {
+				return filepath.Join(dir, name)
+			}
+		}
 	}
+	return ""
+}
+
+func calculateModelSize(dir string, entries []os.DirEntry, exts []string) int64 {
 	var total int64
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(strings.ToLower(entry.Name()), ext) {
-			info, err := entry.Info()
-			if err == nil {
-				total += info.Size()
+		name := entry.Name()
+		for _, ext := range exts {
+			if strings.HasSuffix(strings.ToLower(name), ext) {
+				info, err := entry.Info()
+				if err == nil {
+					total += info.Size()
+				}
+				break
 			}
 		}
 	}
 	return total
 }
 
-// detectArch maps a model_type string from config.json to a canonical architecture name.
 func detectArch(modelType string) string {
 	if modelType == "" {
 		return ""
@@ -288,17 +389,15 @@ func detectArch(modelType string) string {
 		substr string
 		arch   string
 	}{
+		// --- LLM ---
 		{"llama", "llama"},
 		{"chatglm", "glm"},
 		{"glm", "glm"},
 		{"qwen", "qwen"},
-		{"whisper", "whisper"},
 		{"mistral", "mistral"},
 		{"baichuan", "baichuan"},
 		{"internlm", "internlm"},
 		{"deepseek", "deepseek"},
-		{"llava", "llava"},
-		{"internvl", "internvl"},
 		{"phi", "phi"},
 		{"gemma", "gemma"},
 		{"yi", "yi"},
@@ -309,9 +408,54 @@ func detectArch(modelType string) string {
 		{"gpt2", "gpt2"},
 		{"gptneox", "gptneox"},
 		{"stablelm", "stablelm"},
+		{"minicpm", "minicpm"},
+		// --- ASR ---
+		{"whisper", "whisper"},
+		{"wav2vec2", "wav2vec2"},
+		{"hubert", "hubert"},
+		{"wavlm", "wavlm"},
+		{"wenet", "wenet"},
+		{"conformer", "conformer"},
+		{"unispeech", "unispeech"},
+		{"funasr", "funasr"},
+		// --- TTS ---
 		{"bark", "bark"},
 		{"speecht5", "speecht5"},
+		{"vits", "vits"},
+		{"fastspeech2", "fastspeech2"},
+		{"coqui", "coqui"},
+		{"tacotron", "tacotron"},
+		{"gpt_sovits", "gpt_sovits"},
+		{"styletts2", "styletts2"},
+		{"vallex", "vallex"},
+		{"glow", "glow"},
+		{"tortoise", "tortoise"},
+		{"cosyvoice", "cosyvoice"},
+		// --- Diffusion ---
 		{"stable_diffusion", "stable_diffusion"},
+		{"flux", "flux"},
+		{"sdxl", "sdxl"},
+		{"latent_diffusion", "latent_diffusion"},
+		{"ddim", "ddim"},
+		{"eulercfg", "eulercfg"},
+		// --- VLM ---
+		{"llava", "llava"},
+		{"internvl", "internvl"},
+		{"phi3_vision", "phi3_vision"},
+		{"qwen_vl", "qwen_vl"},
+		{"glm_v", "glm_v"},
+		{"minicpm_v", "minicpm_v"},
+		// --- Embedding/Reranker ---
+		{"clip", "clip"},
+		{"bert", "bert"},
+		{"roberta", "roberta"},
+		{"xlm_roberta", "xlm_roberta"},
+		{"e5", "e5"},
+		{"bge", "bge"},
+		{"jina", "jina"},
+		{"sentence_t5", "sentence_t5"},
+		{"colbert", "colbert"},
+		{"cross_encoder", "cross_encoder"},
 	}
 
 	for _, p := range archPatterns {
@@ -323,25 +467,25 @@ func detectArch(modelType string) string {
 	return modelType
 }
 
-// detectModelType infers the broad model category from architecture name.
 func detectModelType(arch string) string {
 	switch arch {
-	case "whisper":
+	case "whisper", "wav2vec2", "hubert", "wavlm", "wenet", "conformer", "unispeech", "funasr":
 		return "asr"
-	case "bark", "speecht5":
+	case "bark", "speecht5", "vits", "fastspeech2", "coqui", "tacotron",
+		"gpt_sovits", "styletts2", "vallex", "glow", "tortoise", "cosyvoice":
 		return "tts"
-	case "stable_diffusion":
+	case "stable_diffusion", "flux", "sdxl", "latent_diffusion", "ddim", "eulercfg":
 		return "diffusion"
-	case "llava", "internvl":
+	case "llava", "internvl", "phi3_vision", "qwen_vl", "glm_v", "minicpm_v":
 		return "vlm"
+	case "clip", "bert", "roberta", "xlm_roberta", "e5", "bge",
+		"jina", "sentence_t5", "colbert", "cross_encoder":
+		return "embedding"
 	default:
 		return "llm"
 	}
 }
 
-// estimateParams estimates parameter count from hidden_size and num_hidden_layers.
-// Uses the standard transformer formula: params ~= 12 * L * d^2
-// and rounds to the nearest standard size bucket.
 func estimateParams(hiddenSize, numLayers int) string {
 	if hiddenSize == 0 || numLayers == 0 {
 		return ""
@@ -354,7 +498,6 @@ func estimateParams(hiddenSize, numLayers int) string {
 		return "<1B"
 	}
 
-	// Standard parameter count buckets
 	buckets := []float64{1, 3, 7, 8, 13, 14, 22, 32, 34, 70, 72, 110, 200, 400}
 	closest := buckets[0]
 	closestDist := math.Abs(billions - closest)

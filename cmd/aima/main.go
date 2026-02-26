@@ -442,6 +442,20 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err != nil {
 				return nil, err
 			}
+			// Register imported model in database
+			if err := db.UpsertScannedModel(ctx, &state.Model{
+				ID:             info.ID,
+				Name:           info.Name,
+				Type:           info.Type,
+				Path:           info.Path,
+				Format:         info.Format,
+				SizeBytes:      info.SizeBytes,
+				DetectedArch:   info.DetectedArch,
+				DetectedParams: info.DetectedParams,
+				Status:         "registered",
+			}); err != nil {
+				return nil, fmt.Errorf("register imported model: %w", err)
+			}
 			return json.Marshal(info)
 		},
 		GetModelInfo: func(ctx context.Context, name string) (json.RawMessage, error) {

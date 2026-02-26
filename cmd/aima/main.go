@@ -451,6 +451,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			return json.Marshal(m)
 		},
+		RemoveModel: func(ctx context.Context, name string) error {
+			return db.DeleteModel(ctx, name)
+		},
 
 		// Engine management
 		ScanEngines: func(ctx context.Context) (json.RawMessage, error) {

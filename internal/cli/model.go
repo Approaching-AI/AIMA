@@ -1,13 +1,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jguan/aima/internal/model" // still needed for model.Import, model.ScanOptions
 )
 
 func newModelCmd(app *App) *cobra.Command {
@@ -50,26 +46,28 @@ func newModelScanCmd(app *App) *cobra.Command {
 }
 
 func newModelListCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List known models from the database",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			models, err := app.DB.ListModels(ctx)
-			if err != nil {
-				return fmt.Errorf("list models: %w", err)
-			}
-
-			out, _ := json.MarshalIndent(models, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
-			return nil
-		},
+		Short: "List all known models from the database",
 	}
+
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		data, err := app.ToolDeps.ListModels(ctx)
+		if err != nil {
+			return fmt.Errorf("list models: %w", err)
+		}
+
+		fmt.Fprintln(cmd.OutOrStdout(), string(data))
+		return nil
+	}
+
+	return cmd
 }
 
 func newModelPullCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "pull <name>",
 		Short: "Download a model by name",
 		Args:  cobra.ExactArgs(1),
@@ -86,10 +84,12 @@ func newModelPullCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
 }
 
 func newModelImportCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "import <path>",
 		Short: "Import a model from a local path",
 		Args:  cobra.ExactArgs(1),
@@ -97,21 +97,21 @@ func newModelImportCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			srcPath := args[0]
 
-			destDir := filepath.Join(app.DataDir, "models")
-			info, err := model.Import(ctx, srcPath, destDir)
+			data, err := app.ToolDeps.ImportModel(ctx, srcPath)
 			if err != nil {
 				return fmt.Errorf("import model from %s: %w", srcPath, err)
 			}
 
-			out, _ := json.MarshalIndent(info, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
 			return nil
 		},
 	}
+
+	return cmd
 }
 
 func newModelInfoCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "info <name>",
 		Short: "Get detailed information about a model",
 		Args:  cobra.ExactArgs(1),
@@ -119,20 +119,21 @@ func newModelInfoCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			name := args[0]
 
-			m, err := app.DB.GetModel(ctx, name)
+			data, err := app.ToolDeps.GetModelInfo(ctx, name)
 			if err != nil {
 				return fmt.Errorf("get model info %s: %w", name, err)
 			}
 
-			out, _ := json.MarshalIndent(m, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
 			return nil
 		},
 	}
+
+	return cmd
 }
 
 func newModelRemoveCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a model from the database",
 		Args:  cobra.ExactArgs(1),
@@ -140,7 +141,11 @@ func newModelRemoveCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			name := args[0]
 
-			if err := app.DB.DeleteModel(ctx, name); err != nil {
+			// Call MCP tool for removal
+			if app.ToolDeps.RemoveModel == nil {
+				return fmt.Errorf("model.remove not implemented")
+			}
+			if err := app.ToolDeps.RemoveModel(ctx, name); err != nil {
 				return fmt.Errorf("remove model %s: %w", name, err)
 			}
 
@@ -148,4 +153,6 @@ func newModelRemoveCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
 }

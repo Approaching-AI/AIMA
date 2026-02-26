@@ -10,9 +10,216 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/jguan/aima/catalog"
+	"gopkg.in/yaml.v3"
 )
 
-const maxScanDepth = 4 // Limit recursion depth
+// ScannerConfig is the top-level YAML structure.
+type ScannerConfig struct {
+	Kind     string              `yaml:"kind"`
+	Metadata map[string]any      `yaml:"metadata"`
+	Config   Config              `yaml:"config"`
+}
+
+// Config contains scanner settings.
+type Config struct {
+	MaxScanDepth      int                   `yaml:"max_scan_depth"`
+	MinModelSizeBytes int64                 `yaml:"min_model_size_bytes"`
+	SkipSubdirNames   []string              `yaml:"skip_subdir_names"`
+	ParentPatterns    []ConfigParentPattern `yaml:"parent_patterns"`
+	ModelPatterns     []ConfigPattern       `yaml:"model_patterns"`
+}
+
+// ConfigParentPattern defines parent model detection.
+type ConfigParentPattern struct {
+	IndicatorFiles       []string `yaml:"indicator_files"`
+	IndicatorField       string   `yaml:"indicator_field"`
+	IndicatorValueContains string  `yaml:"indicator_value_contains"`
+}
+
+// ConfigPattern defines model detection from YAML.
+type ConfigPattern struct {
+	Name        string   `yaml:"name"`
+	ConfigFiles []string `yaml:"config_files"`
+	WeightExts  []string `yaml:"weight_exts"`
+	Format      string   `yaml:"format"`
+	TypeHint    string   `yaml:"type_hint"`
+}
+
+// ParentPattern is internal representation.
+type ParentPattern struct {
+	IndicatorFiles       []string
+	IndicatorField       string
+	IndicatorValueContains string
+}
+
+// Runtime configuration (loaded from YAML or defaults).
+var (
+	maxScanDepth      int
+	minModelSize     int64
+	skipSubdirNames  map[string]bool  // Set for O(1) lookup
+	parentPatterns    []ParentPattern
+	modelPatterns     []ModelPattern
+)
+
+// init loads scanner configuration from embedded catalog.
+func init() {
+	applyConfig()
+}
+
+func applyConfig() {
+	data, err := catalog.FS.ReadFile("scanner.yaml")
+	if err != nil {
+		applyDefaultConfig()
+		return
+	}
+
+	var yamlConfig ScannerConfig
+	if err := yaml.Unmarshal(data, &yamlConfig); err != nil {
+		applyDefaultConfig()
+		return
+	}
+
+	if yamlConfig.Kind != "scanner_config" {
+		applyDefaultConfig()
+		return
+	}
+
+	cfg := yamlConfig.Config
+
+	// Apply values with fallback to defaults
+	if cfg.MaxScanDepth > 0 {
+		maxScanDepth = cfg.MaxScanDepth
+	} else {
+		maxScanDepth = 4
+	}
+
+	if cfg.MinModelSizeBytes > 0 {
+		minModelSize = cfg.MinModelSizeBytes
+	} else {
+		minModelSize = 10 * 1024 * 1024 // 10MB
+	}
+
+	// Load skip subdir names as a set for O(1) lookup
+	skipSubdirNames = make(map[string]bool)
+	for _, name := range cfg.SkipSubdirNames {
+		skipSubdirNames[strings.ToLower(name)] = true
+	}
+
+	// Convert parent patterns
+	for _, p := range cfg.ParentPatterns {
+		if len(p.IndicatorFiles) == 0 {
+			continue
+		}
+		parentPatterns = append(parentPatterns, ParentPattern{
+			IndicatorFiles:       p.IndicatorFiles,
+			IndicatorField:       p.IndicatorField,
+			IndicatorValueContains: p.IndicatorValueContains,
+		})
+	}
+
+	// Convert model patterns
+	for _, p := range cfg.ModelPatterns {
+		if p.Name == "" || p.Format == "" {
+			continue
+		}
+		modelPatterns = append(modelPatterns, ModelPattern{
+			name:        p.Name,
+			configFiles: p.ConfigFiles,
+			weightExts:  p.WeightExts,
+			format:      p.Format,
+			typeHint:    p.TypeHint,
+		})
+	}
+
+	// Fallback to defaults if empty
+	if len(modelPatterns) == 0 {
+		applyDefaultPatterns()
+	}
+}
+
+func applyDefaultConfig() {
+	maxScanDepth = 4
+	minModelSize = 10 * 1024 * 1024 // 10MB
+	skipSubdirNames = make(map[string]bool)
+	defaultSkipNames := []string{
+		"text_encoder", "transformer", "vae", "unet", "controlnet",
+		"scheduler", "feature_extractor", "speech_tokenizer", "tokenizer",
+		"tokenizer_config", "processor", "onnx", "gguf-fp16", "gguf-q4", "gguf-q8",
+		"fp16", "fp32", "quantized", "mmproj", "encoder", "decoder",
+		"postprocessor", "preprocessor", "vision_model", "audio_encoder", "projection",
+	}
+	for _, name := range defaultSkipNames {
+		skipSubdirNames[name] = true
+	}
+	parentPatterns = []ParentPattern{
+		{
+			IndicatorFiles:       []string{"model_index.json"},
+			IndicatorField:       "_class_name",
+			IndicatorValueContains: "Pipeline",
+		},
+	}
+	applyDefaultPatterns()
+}
+
+func applyDefaultPatterns() {
+	modelPatterns = []ModelPattern{
+		{
+			name:        "huggingface_safetensors",
+			configFiles: []string{"config.json"},
+			weightExts:  []string{".safetensors"},
+			format:      "safetensors",
+		},
+		{
+			name:        "huggingface_pytorch",
+			configFiles: []string{"config.json", "configuration.json"},
+			weightExts:  []string{"pytorch_model.bin", ".bin"},
+			format:      "pytorch",
+		},
+		{
+			name:        "pytorch_pt",
+			configFiles: []string{"config.json", "configuration.json"},
+			weightExts:  []string{".pt"},
+			format:      "pytorch",
+		},
+		{
+			name:        "pytorch_pth",
+			configFiles: []string{"config.json", "configuration.json"},
+			weightExts:  []string{".pth"},
+			format:      "pytorch",
+		},
+		{
+			name:        "funasr",
+			configFiles: []string{"configuration.json"},
+			weightExts:  []string{".pt"},
+			format:      "pytorch",
+			typeHint:    "asr",
+		},
+		{
+			name:        "onnx",
+			configFiles: []string{"config.json"},
+			weightExts:  []string{".onnx"},
+			format:      "onnx",
+		},
+		{
+			name:        "gguf",
+			configFiles: []string{},
+			weightExts:  []string{".gguf"},
+			format:      "gguf",
+			typeHint:    "llm",
+		},
+	}
+}
+
+// ModelPattern defines how to detect a model format (internal).
+type ModelPattern struct {
+	name        string   // Pattern name for debugging
+	configFiles []string // Possible config filenames (empty = no config needed)
+	weightExts  []string // Possible weight file extensions
+	format      string   // Output format name
+	typeHint    string   // Type hint when detectArch fails
+}
 
 // ModelInfo represents a discovered local model.
 type ModelInfo struct {
@@ -94,6 +301,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 
 	var models []*ModelInfo
 	seen := make(map[string]bool)
+	skipParentPaths := make(map[string]bool)
 
 	for _, root := range paths {
 		info, err := os.Stat(root)
@@ -104,7 +312,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 			continue
 		}
 
-		found, err := scanDirectory(ctx, root, 0, seen)
+		found, err := scanDirectory(ctx, root, 0, seen, skipParentPaths)
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +322,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	return models, nil
 }
 
-func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool) ([]*ModelInfo, error) {
+func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool, skipParentPaths map[string]bool) ([]*ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
 	}
@@ -129,21 +337,42 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 		return nil, fmt.Errorf("read directory %s: %w", dir, err)
 	}
 
+	// Check if this is a parent pipeline (e.g., diffusion model)
+	if isParentPipeline(dir, entries) {
+		skipParentPaths[dir] = true
+	}
+
 	// First, recurse into subdirectories
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
+		subdirName := strings.ToLower(entry.Name())
 		subdir := filepath.Join(dir, entry.Name())
-		subModels, err := scanDirectory(ctx, subdir, depth+1, seen)
+
+		// Skip subdirectories with known component names
+		if skipSubdirNames[subdirName] {
+			continue
+		}
+
+		// Skip if parent of this directory is a known parent model
+		if shouldSkipParentChild(subdir, skipParentPaths) {
+			continue
+		}
+
+		subModels, err := scanDirectory(ctx, subdir, depth+1, seen, skipParentPaths)
 		if err == nil {
 			models = append(models, subModels...)
 		}
 	}
 
 	// Then check if current directory itself is a model (after recursion)
-	if m := tryDetectModel(ctx, dir); m != nil {
+	// Skip if this is a known component subdirectory
+	if skipSubdirNames[strings.ToLower(filepath.Base(dir))] {
+		return models, nil
+	}
+	if m := tryDetectModel(ctx, dir, entries); m != nil {
 		if !seen[m.Path] {
 			seen[m.Path] = true
 			models = append(models, m)
@@ -153,78 +382,57 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 	return models, nil
 }
 
-// ModelPattern defines how to detect a model format.
-type ModelPattern struct {
-	name        string   // Pattern name for debugging
-	configFiles []string // Possible config filenames (empty = no config needed)
-	weightExts  []string // Possible weight file extensions
-	format      string   // Output format name
-	typeHint    string   // Type hint when detectArch fails
+func isParentPipeline(dir string, entries []os.DirEntry) bool {
+	for _, pp := range parentPatterns {
+		for _, indicatorFile := range pp.IndicatorFiles {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				if entry.Name() != indicatorFile {
+					continue
+				}
+
+				data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+				if err != nil {
+					continue
+				}
+
+				var config map[string]any
+				if err := json.Unmarshal(data, &config); err != nil {
+					continue
+				}
+
+				if classValue, ok := config[pp.IndicatorField].(string); ok {
+					if strings.Contains(classValue, pp.IndicatorValueContains) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
-// modelPatterns defines all supported model detection patterns.
-var modelPatterns = []ModelPattern{
-	{
-		name:        "huggingface_safetensors",
-		configFiles: []string{"config.json"},
-		weightExts:  []string{".safetensors"},
-		format:      "safetensors",
-	},
-	{
-		name:        "huggingface_pytorch",
-		configFiles: []string{"config.json", "configuration.json"},
-		weightExts:  []string{"pytorch_model.bin", ".bin"},
-		format:      "pytorch",
-	},
-	{
-		name:        "pytorch_pt",
-		configFiles: []string{"config.json", "configuration.json"},
-		weightExts:  []string{".pt"},
-		format:      "pytorch",
-	},
-	{
-		name:        "pytorch_pth",
-		configFiles: []string{"config.json", "configuration.json"},
-		weightExts:  []string{".pth"},
-		format:      "pytorch",
-	},
-	{
-		name:        "funasr",
-		configFiles: []string{"configuration.json"},
-		weightExts:  []string{".pt"},
-		format:      "pytorch",
-		typeHint:    "asr",
-	},
-	{
-		name:        "onnx",
-		configFiles: []string{"config.json"},
-		weightExts:  []string{".onnx"},
-		format:      "onnx",
-	},
-	{
-		name:        "gguf",
-		configFiles: []string{},
-		weightExts:  []string{".gguf"},
-		format:      "gguf",
-		typeHint:    "llm",
-	},
+func shouldSkipParentChild(dir string, skipParentPaths map[string]bool) bool {
+	for parentPath := range skipParentPaths {
+		if strings.HasPrefix(dir, parentPath+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
-func tryDetectModel(_ context.Context, dir string) *ModelInfo {
+func tryDetectModel(_ context.Context, dir string, entries []os.DirEntry) *ModelInfo {
 	for _, p := range modelPatterns {
-		if m := detectByPattern(dir, p); m != nil {
+		if m := detectByPattern(dir, entries, p); m != nil {
 			return m
 		}
 	}
 	return nil
 }
 
-func detectByPattern(dir string, p ModelPattern) *ModelInfo {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
+func detectByPattern(dir string, entries []os.DirEntry, p ModelPattern) *ModelInfo {
 	if !hasConfigFile(entries, p.configFiles) {
 		return nil
 	}
@@ -251,6 +459,11 @@ func detectByPattern(dir string, p ModelPattern) *ModelInfo {
 	}
 
 	sizeBytes := calculateModelSize(dir, entries, p.weightExts)
+
+	// Filter out incomplete models (below minimum size)
+	if sizeBytes < minModelSize {
+		return nil
+	}
 
 	hiddenSize := jsonInt(config, "hidden_size")
 	numLayers := jsonInt(config, "num_hidden_layers")
@@ -367,7 +580,9 @@ func calculateModelSize(dir string, entries []os.DirEntry, exts []string) int64 
 		name := entry.Name()
 		for _, ext := range exts {
 			if strings.HasSuffix(strings.ToLower(name), ext) {
-				info, err := entry.Info()
+				// Use os.Stat to follow symlinks (HF Hub cache uses symlinks to blobs)
+				fullPath := filepath.Join(dir, name)
+				info, err := os.Stat(fullPath)
 				if err == nil {
 					total += info.Size()
 				}

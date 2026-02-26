@@ -14,7 +14,7 @@
 | Runtime | [runtime.md](runtime.md) | K3S Runtime、Native Runtime、Multi-Runtime 抽象 |
 | Knowledge | [knowledge.md](knowledge.md) | 知识库、配置解析、Pod 生成 |
 | HAL | [hal.md](hal.md) | 硬件检测、能力向量 |
-| K3S | [k3s.md](k3s.md) | K8s 集成、Pod 管理 |
+| K3S | [k3s.md](k3s.md) | K8s 集成、Pod 管理、HAMi |
 | Stack | [stack.md](stack.md) | 基础设施（K3S, HAMi） |
 | MCP | [mcp.md](mcp.md) | MCP 服务器、工具定义 |
 | CLI | [cli.md](cli.md) | 命令行接口 |

@@ -1221,6 +1221,102 @@ func TestDetectWithRunner_AMDDiscreteNotUnified(t *testing.T) {
 	}
 }
 
+// --- NPU tests ---
+
+func TestParseAccelUevent(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantDriver string
+		wantPCIID  string
+	}{
+		{
+			name: "AMD XDNA (amd395)",
+			content: "DRIVER=amdxdna\n" +
+				"PCI_CLASS=118000\n" +
+				"PCI_ID=1022:17F0\n" +
+				"PCI_SUBSYS_ID=1022:17F0\n" +
+				"PCI_SLOT_NAME=0000:c7:00.1\n" +
+				"MODALIAS=pci:v00001022d000017F0sv00001022sd000017F0bc11sc80i00\n",
+			wantDriver: "amdxdna",
+			wantPCIID:  "1022:17F0",
+		},
+		{
+			name: "Intel NPU",
+			content: "DRIVER=intel_vpu\n" +
+				"PCI_CLASS=118000\n" +
+				"PCI_ID=8086:7D1D\n",
+			wantDriver: "intel_vpu",
+			wantPCIID:  "8086:7D1D",
+		},
+		{
+			name:       "empty",
+			content:    "",
+			wantDriver: "",
+			wantPCIID:  "",
+		},
+		{
+			name:       "no driver",
+			content:    "PCI_ID=1022:17F0\n",
+			wantDriver: "",
+			wantPCIID:  "1022:17F0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver, pciID := parseAccelUevent(tt.content)
+			if driver != tt.wantDriver {
+				t.Errorf("driver = %q, want %q", driver, tt.wantDriver)
+			}
+			if pciID != tt.wantPCIID {
+				t.Errorf("pciID = %q, want %q", pciID, tt.wantPCIID)
+			}
+		})
+	}
+}
+
+func TestNpuVendorFromDriver(t *testing.T) {
+	tests := []struct {
+		driver string
+		want   string
+	}{
+		{"amdxdna", "amd"},
+		{"intel_vpu", "intel"},
+		{"qcom_npu", "qualcomm"},
+		{"unknown_driver", "unknown_driver"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.driver, func(t *testing.T) {
+			got := npuVendorFromDriver(tt.driver)
+			if got != tt.want {
+				t.Errorf("npuVendorFromDriver(%q) = %q, want %q", tt.driver, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNpuName(t *testing.T) {
+	tests := []struct {
+		name    string
+		vbnv    string
+		pciID   string
+		driver  string
+		want    string
+	}{
+		{"prefer vbnv", "RyzenAI-npu5", "1022:17F0", "amdxdna", "RyzenAI-npu5"},
+		{"fallback to pciID", "", "1022:17F0", "amdxdna", "1022:17F0"},
+		{"fallback to driver", "", "", "amdxdna", "amdxdna"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := npuName(tt.vbnv, tt.pciID, tt.driver)
+			if got != tt.want {
+				t.Errorf("npuName(%q, %q, %q) = %q, want %q", tt.vbnv, tt.pciID, tt.driver, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollectMetrics_UnifiedMemoryBackfill(t *testing.T) {
 	mocks := platformMockOutputs()
 	mocks["nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits"] = mockResult{

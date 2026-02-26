@@ -1163,9 +1163,15 @@ AIMA 启动时及用户手动触发时，扫描本地已存在的模型文件。
 **扫描结果 → SQLite 注册**:
 
 ```sql
-INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params)
-VALUES ('sha256:...', 'GLM-4.7-Flash', 'llm', '/mnt/data/models/GLM-4.7-Flash',
-        'safetensors', 18000000000, 'glm', '9B');
+INSERT INTO models (
+    id, name, type, path, format, size_bytes, detected_arch, detected_params,
+    model_class, total_params, active_params, quantization, quant_src, status
+  )
+VALUES (
+    'sha256:...', 'GLM-4.7-Flash', 'llm', '/mnt/data/models/GLM-4.7-Flash',
+    'safetensors', 18000000000, 'glm', '9B',
+    'dense', 7247757312, 7247757312, 'bf16', 'config', 'registered'
+);
 ```
 
 **与 Knowledge Layer 的关联**:

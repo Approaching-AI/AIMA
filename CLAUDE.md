@@ -175,6 +175,7 @@ internal/
   state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager
+  stack/                      # Infrastructure stack installer (K3S + HAMi, airgap, parallel downloads)
   mcp/                        # MCP server + ~32 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
@@ -185,6 +186,7 @@ catalog/                      # Knowledge assets (go:embed)
   engines/                    # Engine Asset YAML (incl. source, warmup)
   models/                     # Model Asset YAML
   partitions/                 # Partition Strategy YAML
+  stack/                      # Stack Component YAML (K3S, HAMi — install config + airgap sources)
 ```
 
 ## Key Commands

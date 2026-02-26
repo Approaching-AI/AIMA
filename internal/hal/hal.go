@@ -5,6 +5,7 @@ import "context"
 // HardwareInfo is the device capability vector (matches PRD Resource vector R).
 type HardwareInfo struct {
 	GPU     *GPUInfo    `json:"gpu,omitempty"`
+	NPU     *NPUInfo    `json:"npu,omitempty"`
 	CPU     CPUInfo     `json:"cpu"`
 	RAM     RAMInfo     `json:"ram"`
 	Storage StorageInfo `json:"storage"`
@@ -26,6 +27,15 @@ type GPUInfo struct {
 	TemperatureCelsius float64 `json:"temperature_celsius,omitempty"`
 	UnifiedMemory      bool    `json:"unified_memory"`
 	Count              int     `json:"count"`
+}
+
+// NPUInfo describes a Neural Processing Unit (AI accelerator co-processor).
+type NPUInfo struct {
+	Vendor          string `json:"vendor"`
+	Name            string `json:"name"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	Driver          string `json:"driver"`
+	Count           int    `json:"count"`
 }
 
 // CPUInfo describes the host CPU.

@@ -23,6 +23,7 @@ func detectWithRunner(ctx context.Context, runner CommandRunner) (*HardwareInfo,
 	}
 
 	hw.GPU = detectGPU(ctx, runner)
+	hw.NPU = detectNPU()
 	hw.CPU = detectCPU(ctx, runner)
 	hw.RAM = detectRAM(ctx, runner)
 	hw.Storage = detectStorage()

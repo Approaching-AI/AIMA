@@ -372,6 +372,30 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 	if skipSubdirNames[strings.ToLower(filepath.Base(dir))] {
 		return models, nil
 	}
+
+	// Check if any subdirectory was detected as a model (container directory detection)
+	hasModelSubdirs := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subdirPath := filepath.Join(dir, entry.Name())
+			for _, m := range models {
+				// Exact match: subdirectory path equals a detected model's path
+				if m.Path == subdirPath {
+					hasModelSubdirs = true
+					break
+				}
+			}
+			if hasModelSubdirs {
+				break
+			}
+		}
+	}
+
+	// If a subdirectory is a model, don't detect the parent as a model
+	if hasModelSubdirs {
+		return models, nil
+	}
+
 	if m := tryDetectModel(ctx, dir, entries); m != nil {
 		if !seen[m.Path] {
 			seen[m.Path] = true

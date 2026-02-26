@@ -60,15 +60,16 @@ func TestIsNA(t *testing.T) {
 
 func TestParseNvidiaGPU(t *testing.T) {
 	tests := []struct {
-		name       string
-		output     string
-		wantNil    bool
-		wantName   string
-		wantVRAM   int
-		wantArch   string
-		wantCC     string
-		wantDriver string
-		wantCount  int
+		name        string
+		output      string
+		wantNil     bool
+		wantName    string
+		wantVRAM    int
+		wantArch    string
+		wantCC      string
+		wantDriver  string
+		wantUnified bool
+		wantCount   int
 	}{
 		{
 			name:       "RTX 4090 single GPU",
@@ -141,34 +142,37 @@ func TestParseNvidiaGPU(t *testing.T) {
 			wantCount:  1,
 		},
 		{
-			name:       "GB10 with N/A fields",
-			output:     "NVIDIA GB10, [N/A], 560.35.05, 10.0, [N/A], [N/A], 45.0\n",
-			wantName:   "NVIDIA GB10",
-			wantVRAM:   0,
-			wantArch:   "Blackwell",
-			wantCC:     "10.0",
-			wantDriver: "560.35.05",
-			wantCount:  1,
+			name:        "GB10 with N/A fields",
+			output:      "NVIDIA GB10, [N/A], 560.35.05, 10.0, [N/A], [N/A], 45.0\n",
+			wantName:    "NVIDIA GB10",
+			wantVRAM:    0,
+			wantArch:    "Blackwell",
+			wantCC:      "10.0",
+			wantDriver:  "560.35.05",
+			wantUnified: true,
+			wantCount:   1,
 		},
 		{
-			name:       "all N/A except name",
-			output:     "NVIDIA Orin, [N/A], [N/A], [N/A], [N/A], [N/A], [N/A]\n",
-			wantName:   "NVIDIA Orin",
-			wantVRAM:   0,
-			wantArch:   "unknown",
-			wantCC:     "",
-			wantDriver: "",
-			wantCount:  1,
+			name:        "all N/A except name",
+			output:      "NVIDIA Orin, [N/A], [N/A], [N/A], [N/A], [N/A], [N/A]\n",
+			wantName:    "NVIDIA Orin",
+			wantVRAM:    0,
+			wantArch:    "unknown",
+			wantCC:      "",
+			wantDriver:  "",
+			wantUnified: true,
+			wantCount:   1,
 		},
 		{
-			name:       "Not Supported variants",
-			output:     "NVIDIA Jetson, [Not Supported], 535.00, [Not Supported], [Not Supported], [Not Supported], 50.0\n",
-			wantName:   "NVIDIA Jetson",
-			wantVRAM:   0,
-			wantArch:   "unknown",
-			wantCC:     "",
-			wantDriver: "535.00",
-			wantCount:  1,
+			name:        "Not Supported variants",
+			output:      "NVIDIA Jetson, [Not Supported], 535.00, [Not Supported], [Not Supported], [Not Supported], 50.0\n",
+			wantName:    "NVIDIA Jetson",
+			wantVRAM:    0,
+			wantArch:    "unknown",
+			wantCC:      "",
+			wantDriver:  "535.00",
+			wantUnified: true,
+			wantCount:   1,
 		},
 		{
 			name:    "name is N/A",
@@ -213,6 +217,9 @@ func TestParseNvidiaGPU(t *testing.T) {
 			}
 			if gpu.DriverVersion != tt.wantDriver {
 				t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, tt.wantDriver)
+			}
+			if gpu.UnifiedMemory != tt.wantUnified {
+				t.Errorf("UnifiedMemory = %v, want %v", gpu.UnifiedMemory, tt.wantUnified)
 			}
 			if gpu.Count != tt.wantCount {
 				t.Errorf("Count = %d, want %d", gpu.Count, tt.wantCount)
@@ -543,12 +550,13 @@ func TestCollectMetrics_NoGPU(t *testing.T) {
 
 func TestParseAMDGPU(t *testing.T) {
 	tests := []struct {
-		name     string
-		output   string
-		wantNil  bool
-		wantName string
-		wantArch string
-		wantVRAM int
+		name      string
+		output    string
+		wantNil   bool
+		wantName  string
+		wantArch  string
+		wantVRAM  int
+		wantPower float64
 	}{
 		{
 			name:     "MI250X CDNA2",
@@ -577,6 +585,14 @@ func TestParseAMDGPU(t *testing.T) {
 			wantName: "AMD Instinct MI250X",
 			wantArch: "CDNA2",
 			wantVRAM: 131072,
+		},
+		{
+			name:      "Radeon 8060S APU via GFX version",
+			output:    `{"card0": {"Temperature (Sensor edge) (C)": "32.0", "Current Socket Graphics Package Power (W)": "6.03", "VRAM Total Memory (B)": "68719476736", "VRAM Total Used Memory (B)": "154820608", "Card Series": "AMD Radeon Graphics", "Card Model": "0x1586", "Card Vendor": "Advanced Micro Devices, Inc. [AMD/ATI]", "Card SKU": "STRXLGEN", "Subsystem ID": "-0x7fe3", "Device Rev": "0xc1", "Node ID": "1", "GUID": "11131", "GFX Version": "gfx1151"}}`,
+			wantName:  "AMD Radeon Graphics",
+			wantArch:  "RDNA3.5",
+			wantVRAM:  65536,
+			wantPower: 6.03,
 		},
 		{
 			name:    "empty JSON",
@@ -615,6 +631,9 @@ func TestParseAMDGPU(t *testing.T) {
 			}
 			if gpu.VRAMMiB != tt.wantVRAM {
 				t.Errorf("VRAMMiB = %d, want %d", gpu.VRAMMiB, tt.wantVRAM)
+			}
+			if tt.wantPower > 0 && gpu.PowerDrawWatts != tt.wantPower {
+				t.Errorf("PowerDrawWatts = %f, want %f", gpu.PowerDrawWatts, tt.wantPower)
 			}
 		})
 	}
@@ -910,6 +929,41 @@ func TestAMDGPUToArch(t *testing.T) {
 	}
 }
 
+func TestGfxVersionToArch(t *testing.T) {
+	tests := []struct {
+		gfxVer string
+		want   string
+	}{
+		{"gfx1151", "RDNA3.5"},
+		{"gfx1150", "RDNA3.5"},
+		{"gfx1100", "RDNA3"},
+		{"gfx1103", "RDNA3"},
+		{"gfx1030", "RDNA2"},
+		{"gfx1036", "RDNA2"},
+		{"gfx1010", "RDNA"},
+		{"gfx1012", "RDNA"},
+		{"gfx942", "CDNA3"},
+		{"gfx940", "CDNA3"},
+		{"gfx90a", "CDNA2"},
+		{"gfx908", "CDNA"},
+		{"gfx900", "GCN5"},
+		{"gfx906", "GCN5"},
+		{"gfx1200", "RDNA4"},
+		{"", ""},
+		{"notgfx", ""},
+		{"gfx", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.gfxVer, func(t *testing.T) {
+			got := gfxVersionToArch(tt.gfxVer)
+			if got != tt.want {
+				t.Errorf("gfxVersionToArch(%q) = %q, want %q", tt.gfxVer, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHuaweiNPUToArch(t *testing.T) {
 	tests := []struct {
 		name string
@@ -930,5 +984,262 @@ func TestHuaweiNPUToArch(t *testing.T) {
 				t.Errorf("huaweiNPUToArch(%q) = %q, want %q", tt.name, got, tt.arch)
 			}
 		})
+	}
+}
+
+// --- Enrichment tests ---
+
+func TestParseNvidiaCUDAVersion(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "dev-win header",
+			output: "| NVIDIA-SMI 566.36                 Driver Version: 566.36         CUDA Version: 12.7     |\n",
+			want:   "12.7",
+		},
+		{
+			name:   "GB10 header",
+			output: "| NVIDIA-SMI 580.126.09             Driver Version: 580.126.09     CUDA Version: 13.0     |\n",
+			want:   "13.0",
+		},
+		{
+			name:   "linux-1 header",
+			output: "| NVIDIA-SMI 550.135                Driver Version: 550.135        CUDA Version: 12.4     |\n",
+			want:   "12.4",
+		},
+		{
+			name: "full output",
+			output: "Thu Feb 26 11:34:43 2026\n" +
+				"+-----------------------------------------------------------------------------------------+\n" +
+				"| NVIDIA-SMI 566.36                 Driver Version: 566.36         CUDA Version: 12.7     |\n" +
+				"|-----------------------------------------+------------------------+----------------------+\n",
+			want: "12.7",
+		},
+		{
+			name:   "no CUDA version",
+			output: "| NVIDIA-SMI 566.36                 Driver Version: 566.36         |\n",
+			want:   "",
+		},
+		{
+			name:   "empty",
+			output: "",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseNvidiaCUDAVersion(tt.output)
+			if got != tt.want {
+				t.Errorf("parseNvidiaCUDAVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseNvidiaPowerCap(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   float64
+	}{
+		{
+			name:   "desktop RTX 4090",
+			output: "|  0%   30C    P8             19W /  450W |   41141MiB /  49140MiB |      0%      Default |\n",
+			want:   450,
+		},
+		{
+			name:   "laptop RTX 4060",
+			output: "| N/A   51C    P0             15W /   75W |       0MiB /   8188MiB |      0%      Default |\n",
+			want:   75,
+		},
+		{
+			name:   "N/A power cap (GB10)",
+			output: "| N/A   38C    P8              4W /  N/A  | Not Supported          |      0%      Default |\n",
+			want:   0,
+		},
+		{
+			name:   "no power line",
+			output: "some other output\n",
+			want:   0,
+		},
+		{
+			name:   "empty",
+			output: "",
+			want:   0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseNvidiaPowerCap(tt.output)
+			if got != tt.want {
+				t.Errorf("parseNvidiaPowerCap() = %f, want %f", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnrichNvidiaGPU(t *testing.T) {
+	smiOutput := "Thu Feb 26 11:34:43 2026\n" +
+		"+-----------------------------------------------------------------------------------------+\n" +
+		"| NVIDIA-SMI 566.36                 Driver Version: 566.36         CUDA Version: 12.7     |\n" +
+		"|-----------------------------------------+------------------------+----------------------+\n" +
+		"|   0  NVIDIA GeForce RTX 4060 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |\n" +
+		"| N/A   51C    P0             15W /   75W |       0MiB /   8188MiB |      0%      Default |\n"
+
+	t.Run("fills CUDA version and power limit", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"nvidia-smi": {output: []byte(smiOutput)},
+		})
+		gpu := &GPUInfo{Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4060 Laptop GPU"}
+		enrichNvidiaGPU(context.Background(), runner, gpu)
+
+		if gpu.CUDAVersion != "12.7" {
+			t.Errorf("CUDAVersion = %q, want %q", gpu.CUDAVersion, "12.7")
+		}
+		if gpu.PowerLimitWatts != 75 {
+			t.Errorf("PowerLimitWatts = %f, want 75", gpu.PowerLimitWatts)
+		}
+	})
+
+	t.Run("does not overwrite existing values", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"nvidia-smi": {output: []byte(smiOutput)},
+		})
+		gpu := &GPUInfo{Vendor: "nvidia", CUDAVersion: "11.0", PowerLimitWatts: 300}
+		enrichNvidiaGPU(context.Background(), runner, gpu)
+
+		if gpu.CUDAVersion != "11.0" {
+			t.Errorf("CUDAVersion = %q, want %q (should not overwrite)", gpu.CUDAVersion, "11.0")
+		}
+		if gpu.PowerLimitWatts != 300 {
+			t.Errorf("PowerLimitWatts = %f, want 300 (should not overwrite)", gpu.PowerLimitWatts)
+		}
+	})
+
+	t.Run("graceful degradation when nvidia-smi fails", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{})
+		gpu := &GPUInfo{Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4090"}
+		enrichNvidiaGPU(context.Background(), runner, gpu)
+
+		if gpu.CUDAVersion != "" {
+			t.Errorf("CUDAVersion = %q, want empty on failure", gpu.CUDAVersion)
+		}
+	})
+}
+
+func TestDetectWithRunner_UnifiedMemoryBackfill(t *testing.T) {
+	mocks := platformMockOutputs()
+	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
+		output: []byte("NVIDIA GB10, [N/A], 580.126.09, 12.1, 4.72, [N/A], 38\n"),
+	}
+	runner := newMockRunner(mocks)
+
+	ctx := context.Background()
+	hw, err := detectWithRunner(ctx, runner)
+	if err != nil {
+		t.Fatalf("Detect returned error: %v", err)
+	}
+	if hw.GPU == nil {
+		t.Fatal("expected GPU info")
+	}
+	if !hw.GPU.UnifiedMemory {
+		t.Error("expected UnifiedMemory = true for GB10")
+	}
+	if hw.GPU.VRAMMiB != hw.RAM.TotalMiB {
+		t.Errorf("VRAMMiB = %d, want %d (RAM total)", hw.GPU.VRAMMiB, hw.RAM.TotalMiB)
+	}
+	if hw.GPU.VRAMMiB <= 0 {
+		t.Error("VRAMMiB should be > 0 after backfill")
+	}
+}
+
+func TestDetectWithRunner_AMDUnifiedMemory(t *testing.T) {
+	mocks := platformMockOutputs()
+	// nvidia-smi fails (no NVIDIA GPU), rocm-smi returns AMD APU data
+	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
+		err: fmt.Errorf("nvidia-smi failed"),
+	}
+	mocks["rocm-smi --json --showproductname --showmeminfo vram --showtemp --showpower"] = mockResult{
+		output: []byte(`{"card0": {"Card Series": "AMD Radeon Graphics", "VRAM Total Memory (B)": "68719476736", "Temperature (Sensor edge) (C)": "32.0", "Current Socket Graphics Package Power (W)": "6.03", "GFX Version": "gfx1151"}}`),
+	}
+	runner := newMockRunner(mocks)
+
+	ctx := context.Background()
+	hw, err := detectWithRunner(ctx, runner)
+	if err != nil {
+		t.Fatalf("Detect returned error: %v", err)
+	}
+	if hw.GPU == nil {
+		t.Fatal("expected GPU info")
+	}
+	if hw.GPU.Vendor != "amd" {
+		t.Errorf("Vendor = %q, want %q", hw.GPU.Vendor, "amd")
+	}
+	if hw.GPU.Arch != "RDNA3.5" {
+		t.Errorf("Arch = %q, want %q", hw.GPU.Arch, "RDNA3.5")
+	}
+	// VRAM (65536 MiB) ≈ system RAM → unified memory should be detected.
+	// Note: RAM.TotalMiB comes from platform mock outputs which report real system RAM.
+	// The test validates the heuristic triggers when VRAM/RAM ratio is within [0.9, 1.1].
+	if hw.RAM.TotalMiB > 0 {
+		ratio := float64(hw.GPU.VRAMMiB) / float64(hw.RAM.TotalMiB)
+		if ratio >= 0.9 && ratio <= 1.1 {
+			if !hw.GPU.UnifiedMemory {
+				t.Error("expected UnifiedMemory = true for AMD APU where VRAM ≈ RAM")
+			}
+		}
+	}
+	if hw.GPU.PowerDrawWatts != 6.03 {
+		t.Errorf("PowerDrawWatts = %f, want 6.03", hw.GPU.PowerDrawWatts)
+	}
+}
+
+func TestDetectWithRunner_AMDDiscreteNotUnified(t *testing.T) {
+	mocks := platformMockOutputs()
+	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
+		err: fmt.Errorf("nvidia-smi failed"),
+	}
+	mocks["rocm-smi --json --showproductname --showmeminfo vram --showtemp --showpower"] = mockResult{
+		output: []byte(`{"card0": {"Card Series": "Radeon RX 7900 XTX", "VRAM Total Memory (B)": "25769803776", "Temperature (Sensor edge) (C)": "45.0", "Average Graphics Package Power (W)": "200.0"}}`),
+	}
+	runner := newMockRunner(mocks)
+
+	ctx := context.Background()
+	hw, err := detectWithRunner(ctx, runner)
+	if err != nil {
+		t.Fatalf("Detect returned error: %v", err)
+	}
+	if hw.GPU == nil {
+		t.Fatal("expected GPU info")
+	}
+	// Discrete GPU: VRAM (24576 MiB) << system RAM → NOT unified memory.
+	if hw.GPU.UnifiedMemory {
+		t.Error("expected UnifiedMemory = false for discrete AMD GPU")
+	}
+}
+
+func TestCollectMetrics_UnifiedMemoryBackfill(t *testing.T) {
+	mocks := platformMockOutputs()
+	mocks["nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits"] = mockResult{
+		output: []byte("0, [N/A], [N/A], 38, 4.72\n"),
+	}
+	runner := newMockRunner(mocks)
+
+	ctx := context.Background()
+	m, err := collectMetricsWithRunner(ctx, runner)
+	if err != nil {
+		t.Fatalf("CollectMetrics returned error: %v", err)
+	}
+	if m.GPU == nil {
+		t.Fatal("expected GPU metrics")
+	}
+	if m.GPU.MemoryTotalMiB != m.RAM.TotalMiB {
+		t.Errorf("GPU MemoryTotalMiB = %d, want %d (RAM total)", m.GPU.MemoryTotalMiB, m.RAM.TotalMiB)
+	}
+	if m.GPU.MemoryUsedMiB != m.RAM.UsedMiB {
+		t.Errorf("GPU MemoryUsedMiB = %d, want %d (RAM used)", m.GPU.MemoryUsedMiB, m.RAM.UsedMiB)
 	}
 }

@@ -898,7 +898,8 @@ func (inst *Installer) prepareAirgapImages(ctx context.Context, comp knowledge.S
 
 	switch comp.Install.Method {
 	case "binary":
-		// K3S airgap: place tar in auto-import directory for startup import
+		// K3S airgap: place tar in auto-import directory for startup import.
+		// K3S agent natively handles .tar, .tar.gz, .tar.zst in this directory.
 		destDir := "/var/lib/rancher/k3s/agent/images"
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			slog.Warn("failed to create K3S images dir", "error", err)
@@ -911,15 +912,11 @@ func (inst *Installer) prepareAirgapImages(ctx context.Context, comp knowledge.S
 			slog.Info("placed airgap images for K3S auto-import", "path", dest)
 		}
 		// Also import directly if K3S containerd is already running
-		// (auto-import only happens on K3S startup, not for already-running instances)
+		// (auto-import only happens on K3S startup, not for already-running instances).
+		// containerd's ctr only handles raw .tar; compressed files need decompression via pipe.
 		if k3sBin != "" {
 			slog.Info("importing airgap images into running containerd", "file", airgapPath)
-			importCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			out, err := inst.runner.Run(importCtx, k3sBin, "ctr", "images", "import", airgapPath)
-			cancel()
-			if err != nil {
-				slog.Debug("airgap import skipped (K3S may not be running yet)", "error", err, "output", string(out))
-			}
+			inst.ctrImportAirgap(ctx, k3sBin, airgapPath)
 		}
 
 	case "helm":
@@ -929,14 +926,35 @@ func (inst *Installer) prepareAirgapImages(ctx context.Context, comp knowledge.S
 			return
 		}
 		slog.Info("importing airgap images via containerd", "file", airgapPath)
-		importCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		out, err := inst.runner.Run(importCtx, k3sBin, "ctr", "images", "import", airgapPath)
-		cancel()
-		if err != nil {
-			slog.Warn("airgap import failed", "error", err, "output", string(out))
-		} else {
-			slog.Info("airgap images imported successfully")
-		}
+		inst.ctrImportAirgap(ctx, k3sBin, airgapPath)
+	}
+}
+
+// ctrImportAirgap imports an airgap tar into containerd via k3s ctr.
+// containerd's ctr only handles raw .tar — compressed files (.tar.zst, .tar.gz)
+// are piped through the appropriate decompressor first.
+func (inst *Installer) ctrImportAirgap(ctx context.Context, k3sBin, airgapPath string) {
+	importCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var out []byte
+	var err error
+
+	switch {
+	case strings.HasSuffix(airgapPath, ".tar.zst"):
+		out, err = inst.runner.Run(importCtx, "sh", "-c",
+			fmt.Sprintf("zstd -dc %q | %q ctr images import -", airgapPath, k3sBin))
+	case strings.HasSuffix(airgapPath, ".tar.gz"), strings.HasSuffix(airgapPath, ".tgz"):
+		out, err = inst.runner.Run(importCtx, "sh", "-c",
+			fmt.Sprintf("gzip -dc %q | %q ctr images import -", airgapPath, k3sBin))
+	default:
+		out, err = inst.runner.Run(importCtx, k3sBin, "ctr", "images", "import", airgapPath)
+	}
+
+	if err != nil {
+		slog.Debug("airgap import failed (containerd may not be running yet)", "error", err, "output", string(out))
+	} else {
+		slog.Info("airgap images imported successfully")
 	}
 }
 

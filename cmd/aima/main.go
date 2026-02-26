@@ -476,7 +476,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(m)
 		},
 		RemoveModel: func(ctx context.Context, name string) error {
-			return db.DeleteModel(ctx, name)
+			// First get the model to find its ID
+			m, err := db.GetModel(ctx, name)
+			if err != nil {
+				return err
+			}
+			// Delete using ID
+			return db.DeleteModel(ctx, m.ID)
 		},
 
 		// Engine management

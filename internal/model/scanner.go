@@ -270,7 +270,8 @@ type StoreModel struct {
 
 // ScanOptions configures which directories to scan.
 type ScanOptions struct {
-	Paths []string
+	Paths             []string
+	MinModelSizeBytes int64 // override default 10MB floor; 0 means use default
 }
 
 // DefaultScanPaths returns platform-appropriate default scan locations.
@@ -304,6 +305,12 @@ func DefaultScanPaths() []string {
 func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan models: %w", err)
+	}
+
+	if opts.MinModelSizeBytes > 0 {
+		orig := minModelSize
+		minModelSize = opts.MinModelSizeBytes
+		defer func() { minModelSize = orig }()
 	}
 
 	paths := opts.Paths

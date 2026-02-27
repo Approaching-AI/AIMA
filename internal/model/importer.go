@@ -45,8 +45,8 @@ func Import(ctx context.Context, srcPath, destDir string) (*ModelInfo, error) {
 		}
 	}
 
-	// Scan the (possibly copied) model directory
-	models, err := Scan(ctx, ScanOptions{Paths: []string{filepath.Dir(modelDir)}})
+	// Scan the (possibly copied) model directory; no size floor since we know it's a model
+	models, err := Scan(ctx, ScanOptions{Paths: []string{filepath.Dir(modelDir)}, MinModelSizeBytes: 1})
 	if err != nil {
 		return nil, fmt.Errorf("scan imported model: %w", err)
 	}

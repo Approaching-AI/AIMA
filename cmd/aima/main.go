@@ -339,6 +339,49 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
 func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
+	scanEnginesImpl := func(ctx context.Context, runtimeFilter string) (json.RawMessage, error) {
+		assetPatterns := make(map[string][]string)
+		binaryAssets := make(map[string]string)
+		for _, ea := range cat.EngineAssets {
+			if len(ea.Patterns) > 0 {
+				assetPatterns[ea.Metadata.Type] = ea.Patterns
+			}
+			if ea.Source != nil && ea.Source.Binary != "" {
+				binaryAssets[ea.Source.Binary] = ea.Metadata.Type
+				binaryAssets[ea.Source.Binary+".exe"] = ea.Metadata.Type
+			}
+		}
+		platform := goruntime.GOOS + "-" + goruntime.GOARCH
+		distDir := filepath.Join(dataDir, "dist", platform)
+		images, err := engine.ScanUnified(ctx, engine.ScanOptions{
+			AssetPatterns: assetPatterns,
+			Runner:       &execRunner{},
+			DistDir:      distDir,
+			Platform:     platform,
+			BinaryAssets: binaryAssets,
+		})
+		if err != nil {
+			return nil, err
+		}
+		filtered := make([]*engine.EngineImage, 0)
+		for _, img := range images {
+			if runtimeFilter == "auto" || img.RuntimeType == runtimeFilter {
+				filtered = append(filtered, img)
+				_ = db.UpsertScannedEngine(ctx, &state.Engine{
+					ID:          img.ID,
+					Type:        img.Type,
+					Image:       img.Image,
+					Tag:         img.Tag,
+					SizeBytes:   img.SizeBytes,
+					Platform:    img.Platform,
+					RuntimeType: img.RuntimeType,
+					BinaryPath:  img.BinaryPath,
+					Available:   img.Available,
+				})
+			}
+		}
+		return json.Marshal(filtered)
+	}
 	return &mcp.ToolDeps{
 		// Hardware
 		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
@@ -422,30 +465,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if len(sources) == 0 {
 				return fmt.Errorf("no download source for model %q with format %q", name, requiredFormat)
 			}
-			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-				return err
-			}
-			// Register model in DB after successful download
-			var sizeBytes int64
-			filepath.Walk(destPath, func(_ string, info os.FileInfo, _ error) error {
-				if info != nil && !info.IsDir() {
-					sizeBytes += info.Size()
-				}
-				return nil
-			})
-			dlFormat := requiredFormat
-			if dlFormat == "" {
-				dlFormat = strings.Join(ma.Storage.Formats, ",")
-			}
-			return db.UpsertScannedModel(ctx, &state.Model{
-				ID:        ma.Metadata.Name,
-				Name:      ma.Metadata.Name,
-				Type:      ma.Metadata.Type,
-				Path:      destPath,
-				Format:    dlFormat,
-				SizeBytes: sizeBytes,
-				Status:    "ready",
-			})
+			return model.DownloadFromSource(ctx, sources, destPath)
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")
@@ -510,53 +530,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 
 		// Engine management
-		ScanEngines: func(ctx context.Context, runtime string) (json.RawMessage, error) {
-			// Use patterns from Engine Asset YAMLs (knowledge-driven)
-			assetPatterns := make(map[string][]string)
-			binaryAssets := make(map[string]string) // binary name -> engine type
-			for _, ea := range cat.EngineAssets {
-				if len(ea.Patterns) > 0 {
-					assetPatterns[ea.Metadata.Type] = ea.Patterns
-				}
-				if ea.Source != nil && ea.Source.Binary != "" {
-					binaryAssets[ea.Source.Binary] = ea.Metadata.Type
-					binaryAssets[ea.Source.Binary+".exe"] = ea.Metadata.Type
-				}
-			}
-			platform := goruntime.GOOS + "-" + goruntime.GOARCH // Use hyphen for directory name
-			distDir := filepath.Join(dataDir, "dist", platform)
-
-			images, err := engine.ScanUnified(ctx, engine.ScanOptions{
-				AssetPatterns: assetPatterns,
-				Runner:       &execRunner{},
-				DistDir:      distDir,
-				Platform:     platform,
-				BinaryAssets: binaryAssets,
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			// Filter by runtime if specified
-			filtered := make([]*engine.EngineImage, 0)
-			for _, img := range images {
-				if runtime == "auto" || img.RuntimeType == runtime {
-					filtered = append(filtered, img)
-					_ = db.UpsertScannedEngine(ctx, &state.Engine{
-						ID:         img.ID,
-						Type:       img.Type,
-						Image:      img.Image,
-						Tag:        img.Tag,
-						SizeBytes:  img.SizeBytes,
-						Platform:   img.Platform,
-						RuntimeType: img.RuntimeType,
-						BinaryPath: img.BinaryPath,
-						Available:  img.Available,
-					})
-				}
-			}
-			return json.Marshal(filtered)
-		},
+		ScanEngines: scanEnginesImpl,
 		ListEngines: func(ctx context.Context) (json.RawMessage, error) {
 			engines, err := db.ListEngines(ctx)
 			if err != nil {
@@ -631,29 +605,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 					distDir := filepath.Join(dataDir, "dist", distPlatform)
 					mgr := engine.NewBinaryManager(distDir)
-					if err := mgr.Download(ctx, toEngineBinarySource(ea.Source)); err != nil {
-						return err
-					}
-					// Upsert into DB so engine list reflects the newly pulled binary
-					binaryName := ea.Source.Binary
-					if goruntime.GOOS == "windows" {
-						binaryName += ".exe"
-					}
-					binaryPath := filepath.Join(distDir, binaryName)
-					var sizeBytes int64
-					if fi, err := os.Stat(binaryPath); err == nil {
-						sizeBytes = fi.Size()
-					}
-					_ = db.UpsertScannedEngine(ctx, &state.Engine{
-						ID:          engine.BinaryHash(binaryName),
-						Type:        ea.Metadata.Type,
-						SizeBytes:   sizeBytes,
-						Platform:    distPlatform,
-						RuntimeType: "native",
-						BinaryPath:  binaryPath,
-						Available:   true,
-					})
-					return nil
+					return mgr.Download(ctx, toEngineBinarySource(ea.Source))
 				}
 				// Container image path
 				if ea.Image.Name != "" {
@@ -678,7 +630,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err != nil {
 				return fmt.Errorf("resolve path %s: %w", path, err)
 			}
-			return engine.Import(ctx, absPath, &execRunner{})
+			if err := engine.Import(ctx, absPath, &execRunner{}); err != nil {
+				return err
+			}
+			// Refresh DB: imported image only visible via runtime scan
+			_, _ = scanEnginesImpl(ctx, "auto")
+			return nil
 		},
 
 		// Deployment (runtime abstraction: K3S or native)

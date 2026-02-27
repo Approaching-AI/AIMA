@@ -15,6 +15,19 @@ type PullOptions struct {
 	Runner     CommandRunner
 }
 
+// ImageExists reports whether a container image is already present in the local runtime.
+// Tries crictl first, then docker. Returns false on any error.
+func ImageExists(ctx context.Context, image, tag string, runner CommandRunner) bool {
+	ref := image + ":" + tag
+	if out, err := runner.Run(ctx, "crictl", "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return true
+	}
+	if out, err := runner.Run(ctx, "docker", "images", "-q", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return true
+	}
+	return false
+}
+
 // Pull downloads a container image, trying registries in order.
 // Falls back from crictl to docker if crictl fails.
 func Pull(ctx context.Context, opts PullOptions) error {

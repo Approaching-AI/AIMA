@@ -197,6 +197,16 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 	return defs
 }
 
+// sourceSupportsPlatform reports whether a platform string is in the supported list.
+func sourceSupportsPlatform(supported []string, platform string) bool {
+	for _, p := range supported {
+		if p == platform {
+			return true
+		}
+	}
+	return false
+}
+
 // execRunner implements engine.CommandRunner using real exec.
 type execRunner struct{}
 
@@ -611,8 +621,29 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(result)
 		},
 		PullEngine: func(ctx context.Context, name string) error {
+			if name == "" {
+				name = "llamacpp"
+			}
+			nameLower := strings.ToLower(name)
 			for _, ea := range cat.EngineAssets {
-				if ea.Metadata.Type == name || ea.Image.Name == name {
+				if strings.ToLower(ea.Metadata.Type) != nameLower && strings.ToLower(ea.Metadata.Name) != nameLower {
+					continue
+				}
+				// Native binary path: prefer if platform is supported
+				platform := goruntime.GOOS + "/" + goruntime.GOARCH
+				if ea.Source != nil && sourceSupportsPlatform(ea.Source.Platforms, platform) {
+					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
+					distDir := filepath.Join(dataDir, "dist", distPlatform)
+					mgr := engine.NewBinaryManager(distDir)
+					return mgr.Download(ctx, &engine.BinarySource{
+						Binary:    ea.Source.Binary,
+						Platforms: ea.Source.Platforms,
+						Download:  ea.Source.Download,
+						Mirror:    ea.Source.Mirror,
+					})
+				}
+				// Container image path
+				if ea.Image.Name != "" {
 					return engine.Pull(ctx, engine.PullOptions{
 						Image:      ea.Image.Name,
 						Tag:        ea.Image.Tag,
@@ -620,6 +651,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						Runner:     &execRunner{},
 					})
 				}
+				return fmt.Errorf("engine %q has no download source for platform %s/%s", name, goruntime.GOOS, goruntime.GOARCH)
 			}
 			return fmt.Errorf("engine %q not found in catalog", name)
 		},

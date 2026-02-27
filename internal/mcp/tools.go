@@ -361,23 +361,24 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.pull
 	s.RegisterTool(&Tool{
 		Name:        "engine.pull",
-		Description: "Pull an inference engine image by name",
-		InputSchema: schema(`"name":{"type":"string","description":"Engine image name to pull"}`, "name"),
+		Description: "Pull an inference engine. Downloads native binary or container image depending on platform. Defaults to llamacpp (fallback engine) if name is omitted.",
+		InputSchema: schema(`"name":{"type":"string","description":"Engine type (llamacpp, vllm, etc). Defaults to llamacpp (fallback engine) if omitted"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.PullEngine == nil {
 				return ErrorResult("engine.pull not implemented"), nil
 			}
 			var p struct{ Name string `json:"name"` }
-			if err := json.Unmarshal(params, &p); err != nil {
-				return nil, fmt.Errorf("parse params: %w", err)
+			if len(params) > 0 {
+				json.Unmarshal(params, &p) //nolint:errcheck
 			}
-			if p.Name == "" {
-				return ErrorResult("name is required"), nil
+			name := p.Name
+			if name == "" {
+				name = "llamacpp"
 			}
-			if err := deps.PullEngine(ctx, p.Name); err != nil {
-				return nil, fmt.Errorf("pull engine %s: %w", p.Name, err)
+			if err := deps.PullEngine(ctx, name); err != nil {
+				return nil, fmt.Errorf("pull engine %s: %w", name, err)
 			}
-			return TextResult(fmt.Sprintf("engine %s pull started", p.Name)), nil
+			return TextResult(fmt.Sprintf("engine %s pulled successfully", name)), nil
 		},
 	})
 

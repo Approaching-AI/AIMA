@@ -179,10 +179,13 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	return found, nil
 }
 
-func binaryHash(name string) string {
+// BinaryHash returns a stable 16-char ID for a native binary, keyed by filename.
+func BinaryHash(name string) string {
 	h := sha256.Sum256([]byte(name))
 	return hex.EncodeToString(h[:])[:16]
 }
+
+func binaryHash(name string) string { return BinaryHash(name) }
 
 type imageInfo struct {
 	id   string

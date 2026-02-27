@@ -631,7 +631,29 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 					distDir := filepath.Join(dataDir, "dist", distPlatform)
 					mgr := engine.NewBinaryManager(distDir)
-					return mgr.Download(ctx, toEngineBinarySource(ea.Source))
+					if err := mgr.Download(ctx, toEngineBinarySource(ea.Source)); err != nil {
+						return err
+					}
+					// Upsert into DB so engine list reflects the newly pulled binary
+					binaryName := ea.Source.Binary
+					if goruntime.GOOS == "windows" {
+						binaryName += ".exe"
+					}
+					binaryPath := filepath.Join(distDir, binaryName)
+					var sizeBytes int64
+					if fi, err := os.Stat(binaryPath); err == nil {
+						sizeBytes = fi.Size()
+					}
+					_ = db.UpsertScannedEngine(ctx, &state.Engine{
+						ID:          engine.BinaryHash(binaryName),
+						Type:        ea.Metadata.Type,
+						SizeBytes:   sizeBytes,
+						Platform:    distPlatform,
+						RuntimeType: "native",
+						BinaryPath:  binaryPath,
+						Available:   true,
+					})
+					return nil
 				}
 				// Container image path
 				if ea.Image.Name != "" {

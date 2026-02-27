@@ -158,6 +158,19 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	cmd := exec.CommandContext(procCtx, command[0], command[1:]...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Ensure co-bundled shared libraries (.so/.dylib) next to the binary are found.
+	if r.distDir != "" {
+		ldVar := "LD_LIBRARY_PATH"
+		if goruntime.GOOS == "darwin" {
+			ldVar = "DYLD_LIBRARY_PATH"
+		}
+		existing := os.Getenv(ldVar)
+		newVal := r.distDir
+		if existing != "" {
+			newVal = r.distDir + ":" + existing
+		}
+		cmd.Env = append(os.Environ(), ldVar+"="+newVal)
+	}
 
 	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "))
 

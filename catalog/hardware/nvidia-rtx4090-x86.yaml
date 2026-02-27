@@ -9,6 +9,7 @@ hardware:
     compute_capability: "8.9"
     cuda_cores: 16384
     resource_name: "nvidia.com/gpu"
+    runtime_class_name: "nvidia"
   cpu:
     arch: x86_64
     cores: 16

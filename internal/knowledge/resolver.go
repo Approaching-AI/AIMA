@@ -37,7 +37,9 @@ type ResolvedConfig struct {
 	HealthCheck     *HealthCheck
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)
-	GPUResourceName string        // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
+	GPUResourceName       string // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
+	RuntimeClassName      string // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
+	RuntimeRecommendation string // "native" or "container" or "" — from engine's platform_recommendations
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -104,8 +106,16 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.Warmup = &engine.Startup.Warmup
 	}
 
-	// Set GPU resource name from hardware profile
+	// Set GPU resource name and runtimeClassName from hardware profile
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
+	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
+
+	// Set runtime recommendation from engine's platform_recommendations
+	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {
+		resolved.RuntimeRecommendation = rec
+	} else {
+		resolved.RuntimeRecommendation = engine.Runtime.Default
+	}
 
 	// Set ModelPath from user overrides or default pattern
 	if mp, ok := userOverrides["model_path"]; ok {
@@ -184,6 +194,17 @@ func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {
 		}
 	}
 	return "nvidia.com/gpu"
+}
+
+// findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.
+// Returns "" if not specified (no runtimeClassName in pod spec).
+func (c *Catalog) findRuntimeClassName(hw HardwareInfo) string {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch {
+			return hp.Hardware.GPU.RuntimeClassName
+		}
+	}
+	return ""
 }
 
 func platformInList(platform string, platforms []string) bool {

@@ -4,12 +4,12 @@ metadata:
   type: llamacpp
   version: "b8157"
 image:
-  name: ghcr.io/ggerganov/llama.cpp
+  name: ghcr.io/ggml-org/llama.cpp
   tag: "server"
   size_approx_mb: 500
   platforms: [linux/amd64]
   registries:
-    - ghcr.io/ggerganov/llama.cpp
+    - ghcr.io/ggml-org/llama.cpp
     - registry.cn-hangzhou.aliyuncs.com/aima/llama-cpp-server
 patterns:
   - "^llama\\.cpp$"
@@ -22,9 +22,9 @@ patterns:
   - "llama-server"
   - "llama-box"
 hardware:
-  # gpu_arch: RDNA4 — 精确匹配 amd395 的 Radeon 8060S
-  # resolver 优先匹配精确 gpu_arch，因此 RDNA4 设备不会 fallback 到 llamacpp-universal
-  gpu_arch: RDNA4
+  # gpu_arch: RDNA3.5 — 精确匹配 amd395 的 Radeon 8060S (Strix Halo iGPU, RDNA3.5)
+  # resolver 优先匹配精确 gpu_arch，因此 RDNA3.5 设备不会 fallback 到 llamacpp-universal
+  gpu_arch: RDNA3.5
   vram_min_mib: 0
 startup:
   command: ["llama-server", "--model", "{{.ModelPath}}", "--host", "0.0.0.0"]

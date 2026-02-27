@@ -79,13 +79,14 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 	config["port"] = port
 
 	rc := &knowledge.ResolvedConfig{
-		Engine:      req.Engine,
-		EngineImage: req.Image,
-		ModelPath:   req.ModelPath,
-		ModelName:   req.Name,
-		Slot:        slot,
-		Config:      config,
-		Command:     req.Command,
+		Engine:           req.Engine,
+		EngineImage:      req.Image,
+		ModelPath:        req.ModelPath,
+		ModelName:        req.Name,
+		Slot:             slot,
+		Config:           config,
+		Command:          req.Command,
+		RuntimeClassName: req.RuntimeClassName,
 	}
 
 	if req.HealthCheck != nil {
@@ -111,12 +112,16 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 	addr := ""
 	if pod.IP != "" {
-		// Try to get port from labels
-		port := "8000"
+		// Port priority: aima.dev/port label > containerPort from spec > 8080 fallback
+		port := "8080"
 		if pod.Labels != nil {
 			if p, ok := pod.Labels["aima.dev/port"]; ok {
 				port = p
+			} else if pod.ContainerPort > 0 {
+				port = strconv.Itoa(pod.ContainerPort)
 			}
+		} else if pod.ContainerPort > 0 {
+			port = strconv.Itoa(pod.ContainerPort)
 		}
 		addr = pod.IP + ":" + port
 	}

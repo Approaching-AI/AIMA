@@ -4,12 +4,12 @@ metadata:
   type: llamacpp
   version: "b8157"
 image:
-  name: ghcr.io/ggerganov/llama.cpp
+  name: ghcr.io/ggml-org/llama.cpp
   tag: "server"
   size_approx_mb: 500
-  platforms: [linux/amd64, linux/arm64]
+  platforms: [linux/amd64]
   registries:
-    - ghcr.io/ggerganov/llama.cpp
+    - ghcr.io/ggml-org/llama.cpp
     - registry.cn-hangzhou.aliyuncs.com/aima/llama-cpp-server
 patterns:
   - "^llama\\.cpp$"
@@ -65,7 +65,6 @@ runtime:
     darwin/arm64: "native"
     darwin/amd64: "native"
     linux/amd64: "container"
-    linux/arm64: "container"
 source:
   binary: "llama-server"
   # 原生二进制仅 3 个平台有预编译，linux/arm64 无预编译需用容器

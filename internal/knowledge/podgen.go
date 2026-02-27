@@ -3,6 +3,7 @@ package knowledge
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -29,30 +30,37 @@ metadata:
   {{- end }}
 spec:
   restartPolicy: Always
+  {{- if .RuntimeClassName }}
+  runtimeClassName: {{ .RuntimeClassName }}
+  {{- end }}
   containers:
     - name: inference
       image: {{ .EngineImage }}
-      {{- if .Command }}
-      command:
-        {{- range .Command }}
+      {{- if .Args }}
+      args:
+        {{- range .Args }}
         - "{{ . }}"
         {{- end }}
       {{- end }}
       ports:
         - containerPort: {{ .Port }}
           name: http
-      {{- if .HasResources }}
+      {{- if or .HasGPUResource .HasComputeResources }}
       resources:
         limits:
+          {{- if .HasGPUResource }}
           {{ .GPUResourceName }}: "1"
+          {{- end }}
           {{- if gt .CPUCores 0 }}
           cpu: "{{ .CPUCores }}"
           {{- end }}
           {{- if gt .RAMMiB 0 }}
           memory: "{{ .RAMMiB }}Mi"
           {{- end }}
+        {{- if .HasGPUResource }}
         requests:
           {{ .GPUResourceName }}: "1"
+        {{- end }}
       {{- end }}
       {{- if .HealthCheckPath }}
       livenessProbe:
@@ -84,28 +92,37 @@ spec:
 `))
 
 type podData struct {
-	PodName         string
-	Engine          string
-	EngineImage     string
-	ModelName       string
-	Slot            string
-	Port            int
-	Command         []string
-	GPUMemoryMiB    int
-	GPUCoresPercent int
-	CPUCores        int
-	RAMMiB          int
-	HealthCheckPath string
-	ModelHostPath   string
-	GPUResourceName string
+	PodName          string
+	Engine           string
+	EngineImage      string
+	ModelName        string
+	Slot             string
+	Port             int
+	Args             []string // command arguments (excluding binary name — image entrypoint is used)
+	GPUMemoryMiB     int
+	GPUCoresPercent  int
+	CPUCores         int
+	RAMMiB           int
+	HealthCheckPath  string
+	ModelHostPath    string
+	GPUResourceName  string
+	RuntimeClassName string // e.g. "nvidia" for NVIDIA CUDA containers
 }
 
 func (d podData) HasAnnotations() bool {
 	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
 }
 
-func (d podData) HasResources() bool {
-	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0 || d.CPUCores > 0 || d.RAMMiB > 0
+// HasGPUResource reports whether a device-plugin GPU resource request should be added.
+// True only when there is explicit GPU partitioning (HAMi-style); false when using
+// runtimeClassName for GPU access without a device plugin.
+func (d podData) HasGPUResource() bool {
+	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
+}
+
+// HasComputeResources reports whether CPU or RAM limits should be set.
+func (d podData) HasComputeResources() bool {
+	return d.CPUCores > 0 || d.RAMMiB > 0
 }
 
 // GPUVendorDomain extracts the vendor domain from the GPU resource name.
@@ -138,10 +155,24 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		modelHostPath = "/data/models/" + resolved.ModelName
 	}
 
-	// Process command: replace {{.ModelPath}} template
+	// containerModelPath is the path passed to the engine command inside the pod.
+	// If modelHostPath points to a specific file (e.g. a .gguf), mount its parent
+	// directory so type:DirectoryOrCreate works, and point the command at the file.
+	containerModelPath := "/models"
+	if isModelFilePath(modelHostPath) {
+		containerModelPath = "/models/" + filepath.Base(modelHostPath)
+		modelHostPath = filepath.Dir(modelHostPath)
+	}
+
+	// Process command: replace {{.ModelPath}} template, then extract args (skip binary name).
+	// K8s pods use the image's own ENTRYPOINT; we only pass args to avoid path issues.
 	command := make([]string, len(resolved.Command))
 	for i, c := range resolved.Command {
-		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", "/models")
+		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", containerModelPath)
+	}
+	args := command
+	if len(command) > 1 {
+		args = command[1:]
 	}
 
 	gpuResource := resolved.GPUResourceName
@@ -150,15 +181,16 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	}
 
 	data := podData{
-		PodName:         sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
-		Engine:          resolved.Engine,
-		EngineImage:     resolved.EngineImage,
-		ModelName:       resolved.ModelName,
-		Slot:            resolved.Slot,
-		Port:            port,
-		Command:         command,
-		ModelHostPath:   modelHostPath,
-		GPUResourceName: gpuResource,
+		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
+		Engine:           resolved.Engine,
+		EngineImage:      resolved.EngineImage,
+		ModelName:        resolved.ModelName,
+		Slot:             resolved.Slot,
+		Port:             port,
+		Args:             args,
+		ModelHostPath:    modelHostPath,
+		GPUResourceName:  gpuResource,
+		RuntimeClassName: resolved.RuntimeClassName,
 	}
 
 	if resolved.Partition != nil {
@@ -207,4 +239,15 @@ func sanitizePodName(name string) string {
 		result = "aima-inference"
 	}
 	return result
+}
+
+// isModelFilePath reports whether path points to a model file (not a directory).
+// Recognized by common model file extensions.
+func isModelFilePath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".gguf", ".ggml", ".bin", ".safetensors":
+		return true
+	}
+	return false
 }

@@ -83,12 +83,13 @@ func run() error {
 	)
 
 	// 7. Select runtime: K3S if available (Linux), else native process
-	rt := selectRuntime(ctx, k3sClient, dataDir)
+	nativeRt := buildNativeRuntime(dataDir)
+	rt := selectRuntime(ctx, k3sClient, nativeRt)
 	slog.Info("runtime selected", "runtime", rt.Name())
 
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
-	deps := buildToolDeps(cat, db, knowledgeStore, rt, proxyServer, k3sClient, dataDir)
+	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 9. Create agent (L3a Go Agent)
@@ -265,11 +266,8 @@ func newK3SClient(dataDir string) *k3s.Client {
 	return k3s.NewClient()
 }
 
-// selectRuntime picks the best runtime: K3S on Linux if available, else native.
-func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) runtime.Runtime {
-	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
-		return runtime.NewK3SRuntime(k3sClient)
-	}
+// buildNativeRuntime constructs a native process runtime for the current platform.
+func buildNativeRuntime(dataDir string) runtime.Runtime {
 	platform := goruntime.GOOS + "-" + goruntime.GOARCH
 	distDir := filepath.Join(dataDir, "dist", platform)
 	bm := engine.NewBinaryManager(distDir)
@@ -281,6 +279,14 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) r
 			return bm.Resolve(ctx, src)
 		}),
 	)
+}
+
+// selectRuntime picks the best runtime: K3S on Linux if available, else native.
+func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.Runtime) runtime.Runtime {
+	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
+		return runtime.NewK3SRuntime(k3sClient)
+	}
+	return nativeRt
 }
 
 // buildHardwareInfo creates a HardwareInfo with platform and runtime awareness.
@@ -338,7 +344,8 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 }
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
-func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
+// nativeRt is always provided so DeployApply can use it when the engine recommends native runtime.
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
 	scanEnginesImpl := func(ctx context.Context, runtimeFilter string) (json.RawMessage, error) {
 		assetPatterns := make(map[string][]string)
 		binaryAssets := make(map[string]string)
@@ -665,15 +672,22 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if modelPath == "" {
 				modelPath = filepath.Join(dataDir, "models", modelName)
 			}
+			// If modelPath is a directory, find the model file inside it.
+			if fi, err := os.Stat(modelPath); err == nil && fi.IsDir() {
+				if f := findModelFileInDir(modelPath, resolved.Engine); f != "" {
+					modelPath = f
+				}
+			}
 
 			req := &runtime.DeployRequest{
-				Name:      modelName,
-				Engine:    resolved.Engine,
-				Image:     resolved.EngineImage,
-				Command:   resolved.Command,
-				ModelPath: modelPath,
-				Port:      port,
-				Config:    resolved.Config,
+				Name:             modelName,
+				Engine:           resolved.Engine,
+				Image:            resolved.EngineImage,
+				Command:          resolved.Command,
+				ModelPath:        modelPath,
+				Port:             port,
+				Config:           resolved.Config,
+				RuntimeClassName: resolved.RuntimeClassName,
 				Labels: map[string]string{
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,
@@ -706,7 +720,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 			}
 
-			if err := rt.Deploy(ctx, req); err != nil {
+			// Use native runtime when the engine explicitly recommends it (e.g. Vulkan on AMD).
+			activeRt := rt
+			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
+				activeRt = nativeRt
+			}
+			if err := activeRt.Deploy(ctx, req); err != nil {
 				return nil, fmt.Errorf("deploy: %w", err)
 			}
 			proxyServer.RegisterBackend(modelName, &proxy.Backend{
@@ -717,12 +736,16 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			result := map[string]any{
 				"model": modelName, "engine": resolved.Engine,
 				"slot": resolved.Slot, "status": "deploying",
-				"runtime": rt.Name(),
+				"runtime": activeRt.Name(),
 			}
 			return json.Marshal(result)
 		},
 		DeployDelete: func(ctx context.Context, name string) error {
-			if err := rt.Delete(ctx, name); err != nil {
+			err := rt.Delete(ctx, name)
+			if err != nil && nativeRt != nil && nativeRt != rt {
+				err = nativeRt.Delete(ctx, name)
+			}
+			if err != nil {
 				return err
 			}
 			proxyServer.RemoveBackend(name)
@@ -730,6 +753,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		DeployStatus: func(ctx context.Context, name string) (json.RawMessage, error) {
 			s, err := rt.Status(ctx, name)
+			if err != nil && nativeRt != nil && nativeRt != rt {
+				s, err = nativeRt.Status(ctx, name)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -740,10 +766,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err != nil {
 				return nil, err
 			}
+			// Also include native deployments (when engine recommended native on a K3S machine).
+			if nativeRt != nil && nativeRt != rt {
+				nativeStatuses, _ := nativeRt.List(ctx)
+				statuses = append(statuses, nativeStatuses...)
+			}
 			return json.Marshal(statuses)
 		},
 		DeployLogs: func(ctx context.Context, name string, tailLines int) (string, error) {
-			return rt.Logs(ctx, name, tailLines)
+			logs, err := rt.Logs(ctx, name, tailLines)
+			if err != nil && nativeRt != nil && nativeRt != rt {
+				logs, err = nativeRt.Logs(ctx, name, tailLines)
+			}
+			return logs, err
 		},
 
 		// Knowledge
@@ -929,3 +964,24 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 	}
 }
 
+// findModelFileInDir returns the first model file found inside dir for the given engine.
+// For llamacpp, prefers .gguf files. For other engines, returns empty (use dir as-is).
+func findModelFileInDir(dir, engineType string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var ext string
+	switch engineType {
+	case "llamacpp":
+		ext = ".gguf"
+	default:
+		return "" // container engines take the directory
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ext) {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return ""
+}

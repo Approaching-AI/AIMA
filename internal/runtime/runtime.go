@@ -26,8 +26,9 @@ type DeployRequest struct {
 	ModelPath    string            // host path to model files
 	Port         int
 	Config       map[string]any
-	Partition    *PartitionRequest // resource limits (K3S+HAMi); native ignores
-	HealthCheck  *HealthCheckConfig
+	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
+	RuntimeClassName string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
+	HealthCheck      *HealthCheckConfig
 	Labels       map[string]string
 	BinarySource *engine.BinarySource // native: where to download the engine binary if missing
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)

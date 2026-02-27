@@ -151,6 +151,11 @@ func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destDir, b
 			}
 		}
 
+		// Create missing .so.X → .so.X.Y.Z symlinks so dlopen finds versioned libraries.
+		if goruntime.GOOS != "windows" {
+			createSoSymlinks(destDir)
+		}
+
 		slog.Info("engine binary ready", "dir", destDir, "binary", binaryName)
 		return nil
 	}
@@ -307,9 +312,6 @@ func extractTarGz(archivePath, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
-			continue
-		}
 
 		name := normalizeTarPath(hdr.Name)
 		name = strings.TrimPrefix(name, prefix)
@@ -324,18 +326,29 @@ func extractTarGz(archivePath, destDir string) error {
 		}
 
 		destPath := filepath.Join(destDir, cleaned)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			return err
-		}
 
-		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(out, tr)
-		out.Close()
-		if err != nil {
-			return err
+		switch hdr.Typeflag {
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(out, tr)
+			out.Close()
+			if err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+				return err
+			}
+			os.Remove(destPath) // remove stale symlink or file if present
+			if err := os.Symlink(hdr.Linkname, destPath); err != nil {
+				slog.Warn("create symlink", "link", destPath, "target", hdr.Linkname, "error", err)
+			}
 		}
 	}
 	return nil
@@ -415,6 +428,39 @@ func binaryCandidates(name string) []string {
 		candidates = append(candidates, name+".exe")
 	}
 	return candidates
+}
+
+// createSoSymlinks scans dir for versioned shared libraries (e.g. libfoo.so.1.2.3)
+// and creates the SONAME symlink (libfoo.so.1) if it does not already exist.
+// This mirrors what ldconfig does and is needed when extracting tar.gz bundles
+// that include .so.X.Y.Z files but not the .so.X symlinks.
+func createSoSymlinks(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		soIdx := strings.Index(name, ".so.")
+		if soIdx < 0 {
+			continue
+		}
+		rest := name[soIdx+4:] // e.g. "0.0.8149" or "0.9.7"
+		if rest == "" || !strings.ContainsAny(rest, ".") {
+			continue // already a soname (libfoo.so.1) or no version number
+		}
+		major := rest
+		if dot := strings.Index(rest, "."); dot >= 0 {
+			major = rest[:dot]
+		}
+		soname := name[:soIdx+4+len(major)] // e.g. "libmtmd.so.0"
+		symlinkPath := filepath.Join(dir, soname)
+		if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+			if err := os.Symlink(name, symlinkPath); err == nil {
+				slog.Debug("created so symlink", "link", soname, "target", name)
+			}
+		}
+	}
 }
 
 func lookPath(name string) (string, error) {

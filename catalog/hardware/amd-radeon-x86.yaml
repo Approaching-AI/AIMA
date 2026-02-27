@@ -1,10 +1,10 @@
 kind: hardware_profile
 metadata:
   name: amd-radeon-8060s-x86
-  description: "AMD Radeon 8060S (RDNA 4), x86_64, shared memory with Ryzen AI MAX+ 395"
+  description: "AMD Radeon 8060S (RDNA 3.5), x86_64, shared memory with Ryzen AI MAX+ 395"
 hardware:
   gpu:
-    arch: RDNA4
+    arch: RDNA3.5
     vram_mib: 16384
     compute_capability: "gfx12"
     cuda_cores: 0

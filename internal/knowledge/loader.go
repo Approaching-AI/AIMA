@@ -47,7 +47,8 @@ type GPUSpec struct {
 	VRAMMiB           int    `yaml:"vram_mib"`
 	ComputeCapability string `yaml:"compute_capability"`
 	CUDACores         int    `yaml:"cuda_cores"`
-	ResourceName      string `yaml:"resource_name,omitempty"` // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	ResourceName      string `yaml:"resource_name,omitempty"`     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	RuntimeClassName  string `yaml:"runtime_class_name,omitempty"` // K8s runtimeClassName for GPU containers, e.g. "nvidia"
 }
 
 type CPUSpec struct {

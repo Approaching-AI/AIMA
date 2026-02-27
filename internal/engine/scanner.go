@@ -90,6 +90,7 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 		matched := matchImages(images, opts.AssetPatterns)
 		for _, img := range matched {
 			img.RuntimeType = "container"
+			img.Platform = opts.Platform
 		}
 		allEngines = append(allEngines, matched...)
 	}

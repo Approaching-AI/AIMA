@@ -532,7 +532,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 
 			// Filter by runtime if specified
-			var filtered []*engine.EngineImage
+			filtered := make([]*engine.EngineImage, 0)
 			for _, img := range images {
 				if runtime == "auto" || img.RuntimeType == runtime {
 					filtered = append(filtered, img)

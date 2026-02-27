@@ -42,16 +42,16 @@ type Model struct {
 }
 
 type Engine struct {
-	ID         string
-	Type       string
-	Image      string // container image name (container engines) or empty (native)
-	Tag        string // container image tag (container engines) or empty (native)
-	SizeBytes  int64
-	Platform   string
-	RuntimeType string // "container" or "native"
-	BinaryPath string // path to native binary (native engines only)
-	Available  bool
-	CreatedAt  time.Time
+	ID          string    `json:"id"`
+	Type        string    `json:"type"`
+	Image       string    `json:"image"`        // container image name (container engines) or empty (native)
+	Tag         string    `json:"tag"`          // container image tag (container engines) or empty (native)
+	SizeBytes   int64     `json:"size_bytes"`
+	Platform    string    `json:"platform"`
+	RuntimeType string    `json:"runtime_type"` // "container" or "native"
+	BinaryPath  string    `json:"binary_path"`  // path to native binary (native engines only)
+	Available   bool      `json:"available"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type KnowledgeNote struct {
@@ -666,7 +666,7 @@ func (d *DB) ListModels(ctx context.Context) ([]*Model, error) {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
 	defer rows.Close()
-	var models []*Model
+	models := make([]*Model, 0)
 	for rows.Next() {
 		m := &Model{}
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
@@ -801,7 +801,7 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 		return nil, fmt.Errorf("list engines: %w", err)
 	}
 	defer rows.Close()
-	var engines []*Engine
+	engines := make([]*Engine, 0)
 	for rows.Next() {
 		e := &Engine{}
 		if err := rows.Scan(&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes,
@@ -869,7 +869,7 @@ func (d *DB) SearchNotes(ctx context.Context, filter NoteFilter) ([]*KnowledgeNo
 	}
 	defer rows.Close()
 
-	var notes []*KnowledgeNote
+	notes := make([]*KnowledgeNote, 0)
 	for rows.Next() {
 		n := &KnowledgeNote{}
 		var tagsStr string

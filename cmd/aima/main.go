@@ -197,14 +197,15 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 	return defs
 }
 
-// sourceSupportsPlatform reports whether a platform string is in the supported list.
-func sourceSupportsPlatform(supported []string, platform string) bool {
-	for _, p := range supported {
-		if p == platform {
-			return true
-		}
+// toEngineBinarySource converts a knowledge.EngineSource to engine.BinarySource.
+// Centralises the mapping so callers don't repeat the 4-field struct literal.
+func toEngineBinarySource(src *knowledge.EngineSource) *engine.BinarySource {
+	return &engine.BinarySource{
+		Binary:    src.Binary,
+		Platforms: src.Platforms,
+		Download:  src.Download,
+		Mirror:    src.Mirror,
 	}
-	return false
 }
 
 // execRunner implements engine.CommandRunner using real exec.
@@ -276,13 +277,8 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, dataDir string) r
 		filepath.Join(dataDir, "logs"),
 		distDir,
 		filepath.Join(dataDir, "deployments"),
-		runtime.WithBinaryResolver(func(ctx context.Context, src *runtime.BinarySource) (string, error) {
-			return bm.Resolve(ctx, &engine.BinarySource{
-				Binary:    src.Binary,
-				Platforms: src.Platforms,
-				Download:  src.Download,
-				Mirror:    src.Mirror,
-			})
+		runtime.WithBinaryResolver(func(ctx context.Context, src *engine.BinarySource) (string, error) {
+			return bm.Resolve(ctx, src)
 		}),
 	)
 }
@@ -631,16 +627,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 				// Native binary path: prefer if platform is supported
 				platform := goruntime.GOOS + "/" + goruntime.GOARCH
-				if ea.Source != nil && sourceSupportsPlatform(ea.Source.Platforms, platform) {
+				if ea.Source != nil && ea.Source.Supports(platform) {
 					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 					distDir := filepath.Join(dataDir, "dist", distPlatform)
 					mgr := engine.NewBinaryManager(distDir)
-					return mgr.Download(ctx, &engine.BinarySource{
-						Binary:    ea.Source.Binary,
-						Platforms: ea.Source.Platforms,
-						Download:  ea.Source.Download,
-						Mirror:    ea.Source.Mirror,
-					})
+					return mgr.Download(ctx, toEngineBinarySource(ea.Source))
 				}
 				// Container image path
 				if ea.Image.Name != "" {
@@ -726,12 +717,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 			}
 			if resolved.Source != nil {
-				req.BinarySource = &runtime.BinarySource{
-					Binary:    resolved.Source.Binary,
-					Platforms: resolved.Source.Platforms,
-					Download:  resolved.Source.Download,
-					Mirror:    resolved.Source.Mirror,
-				}
+				req.BinarySource = toEngineBinarySource(resolved.Source)
 			}
 			if resolved.Warmup != nil {
 				req.Warmup = &runtime.WarmupConfig{

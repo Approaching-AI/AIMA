@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jguan/aima/internal/engine"
 )
 
 // deploymentMeta is persisted to disk so deployments survive across CLI invocations.
@@ -50,7 +52,7 @@ type nativeProcess struct {
 
 // BinaryResolveFunc resolves a native engine binary, downloading if needed.
 // Returns the absolute path to the binary.
-type BinaryResolveFunc func(ctx context.Context, source *BinarySource) (string, error)
+type BinaryResolveFunc func(ctx context.Context, source *engine.BinarySource) (string, error)
 
 // NativeRuntime manages inference engines as direct OS processes.
 type NativeRuntime struct {

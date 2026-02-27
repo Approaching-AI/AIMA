@@ -34,6 +34,16 @@ type BinarySource struct {
 	Mirror    map[string]string // platform -> mirror URL
 }
 
+// Supports reports whether this source supports the given platform string (e.g. "linux/amd64").
+func (s *BinarySource) Supports(platform string) bool {
+	for _, p := range s.Platforms {
+		if p == platform {
+			return true
+		}
+	}
+	return false
+}
+
 // Resolve returns the path to a native engine binary, downloading it if needed.
 // Search order: distDir -> PATH -> download from source.
 func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (string, error) {

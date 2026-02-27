@@ -1,6 +1,10 @@
 package runtime
 
-import "context"
+import (
+	"context"
+
+	"github.com/jguan/aima/internal/engine"
+)
 
 // Runtime abstracts deployment execution. K3S uses Pod YAML via kubectl;
 // Native uses direct process exec. MCP tools and CLI are unaware of which.
@@ -25,16 +29,8 @@ type DeployRequest struct {
 	Partition    *PartitionRequest // resource limits (K3S+HAMi); native ignores
 	HealthCheck  *HealthCheckConfig
 	Labels       map[string]string
-	BinarySource *BinarySource  // native: where to download the engine binary if missing
+	BinarySource *engine.BinarySource // native: where to download the engine binary if missing
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
-}
-
-// BinarySource describes where to download a native engine binary.
-type BinarySource struct {
-	Binary    string            // e.g. "llama-server"
-	Platforms []string          // e.g. ["linux/amd64", "darwin/arm64"]
-	Download  map[string]string // platform -> URL
-	Mirror    map[string]string // platform -> mirror URL
 }
 
 // DeploymentStatus is the unified status across runtimes.

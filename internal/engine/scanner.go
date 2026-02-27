@@ -25,28 +25,6 @@ type EngineImage struct {
 	Available  bool   `json:"available"`
 }
 
-// Store is the persistence interface for engine records.
-type Store interface {
-	InsertEngine(ctx context.Context, e *StoreEngine) error
-	GetEngine(ctx context.Context, id string) (*StoreEngine, error)
-	ListEngines(ctx context.Context) ([]*StoreEngine, error)
-	DeleteEngine(ctx context.Context, id string) error
-}
-
-// StoreEngine is the persistence representation of an engine.
-type StoreEngine struct {
-	ID        string
-	Type      string
-	Image     string
-	Tag       string
-	SizeBytes int64
-	Platform  string
-	RuntimeType string // "container" or "native"
-	BinaryPath string // path to native binary (native engines only)
-	Available  bool
-	CreatedAt  string
-}
-
 // CommandRunner abstracts shell command execution for testability.
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -59,20 +37,6 @@ type ScanOptions struct {
 	DistDir      string // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
 	Platform     string // current platform (e.g., "windows-amd64")
 	BinaryAssets map[string]string // binary name -> engine type (native engines)
-}
-
-// Scan discovers container images that match known engine types (legacy function, container-only).
-func Scan(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("scan engine images: %w", err)
-	}
-
-	images, err := listImages(ctx, opts.Runner)
-	if err != nil {
-		return nil, fmt.Errorf("scan engine images: %w", err)
-	}
-
-	return matchImages(images, opts.AssetPatterns), nil
 }
 
 // ScanUnified discovers both container images and native binaries.
@@ -112,21 +76,11 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 		return nil, fmt.Errorf("distDir not configured")
 	}
 
-	// Use BinaryAssets if provided (binary name -> engine type)
+	// BinaryAssets maps binary filename -> engine type; populated from YAML source.binary fields.
+	// If not provided, native scan returns empty (caller must supply the mapping).
 	knownBinaries := opts.BinaryAssets
 	if knownBinaries == nil {
-		knownBinaries = make(map[string]string)
-		// For container engines that also have native binaries, add them
-		// This is a fallback - ideally all engines specify source.binary in YAML
-		if ea, ok := opts.AssetPatterns["llamacpp"]; ok {
-			for _, pattern := range ea {
-				if strings.Contains(pattern, "llama-server") || pattern == "llama-server" {
-					knownBinaries["llama-server"] = "llamacpp"
-					knownBinaries["llama-server.exe"] = "llamacpp"
-					break
-				}
-			}
-		}
+		return nil, nil
 	}
 
 	// Build reverse lookup: filename (without .exe) -> engine type

@@ -82,6 +82,16 @@ type EngineSource struct {
 	Mirror    map[string]string `yaml:"mirror,omitempty"    json:"mirror,omitempty"`
 }
 
+// Supports reports whether this source supports the given platform (e.g. "linux/amd64").
+func (s *EngineSource) Supports(platform string) bool {
+	for _, p := range s.Platforms {
+		if p == platform {
+			return true
+		}
+	}
+	return false
+}
+
 // EngineRuntime provides runtime selection guidance for engine deployment.
 type EngineRuntime struct {
 	Default                 string            `yaml:"default,omitempty"                  json:"default,omitempty"`

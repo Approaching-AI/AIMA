@@ -1,0 +1,59 @@
+kind: model_asset
+metadata:
+  name: qwen3-coder-next-fp8
+  type: llm
+  family: qwen
+  parameter_count: "80B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    # FP8 预量化权重 (F8_E4M3 + BF16 混合), ~80GB
+    - type: huggingface
+      repo: Qwen/Qwen3-Coder-Next-FP8
+      format: safetensors
+    # GGUF 量化 (Q4_K_M=48GB, Q8_0=85GB)
+    - type: huggingface
+      repo: Qwen/Qwen3-Coder-Next-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen3-Coder-Next-FP8
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # FP8 权重 ~80GB, 128GB unified memory 可容纳
+  # MoE 80B total / 3B active, 推理高效
+  - name: qwen3-coder-next-fp8-blackwell-vllm-fp8
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 81920
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.70
+      max_model_len: 8192
+      dtype: auto
+      kv_cache_dtype: fp8_e4m3
+    expected_performance:
+      tokens_per_second: [10, 25]
+      latency_first_token_ms: [50, 200]
+
+  # --- 通用 llamacpp (GGUF Q4_K_M=48GB) ---
+  # amd395 (128GB unified) ✓, linux-1 (24GB/GPU + 1TB RAM, GPU+CPU offload) ✓
+  # FP8 80GB >> 2×24GB=48GB TP=2，不设 Ada-vllm
+  # dev-win (8GB) / mac-m4 (16GB) 太小，需极大量 CPU offload
+  - name: qwen3-coder-next-fp8-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [3, 15]
+      latency_first_token_ms: [100, 500]

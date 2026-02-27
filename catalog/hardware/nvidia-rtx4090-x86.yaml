@@ -1,7 +1,7 @@
 kind: hardware_profile
 metadata:
   name: nvidia-rtx4090-x86
-  description: "NVIDIA RTX 4090, x86_64, 24GB VRAM"
+  description: "NVIDIA RTX 4090, x86_64, 24GB VRAM per GPU (linux-1: 2× GPU = 48GB total)"
 hardware:
   gpu:
     arch: Ada

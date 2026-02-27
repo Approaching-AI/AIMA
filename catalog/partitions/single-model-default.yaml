@@ -9,7 +9,7 @@ slots:
   - name: primary
     gpu:
       memory_mib: 0
-      cores_percent: 90
+      cores_percent: 0
     cpu:
       cores: 0
     ram:

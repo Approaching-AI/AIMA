@@ -108,7 +108,7 @@ func (c *Client) Apply(ctx context.Context, yamlData []byte) error {
 	args := append(c.baseArgs(), "apply", "-f", "-")
 	out, err := c.runWithStdin(ctx, yamlData, args...)
 	if err != nil {
-		return fmt.Errorf("apply pod: %w", err)
+		return fmt.Errorf("apply pod: %w\nkubectl output: %s", err, strings.TrimSpace(string(out)))
 	}
 	slog.Info("kubectl apply", "output", string(out))
 	return nil

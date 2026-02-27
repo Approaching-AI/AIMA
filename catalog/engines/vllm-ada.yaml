@@ -1,17 +1,17 @@
 kind: engine_asset
 metadata:
-  name: vllm-0.8-ada
+  name: vllm-ada
   type: vllm
-  version: "0.8"
+  version: "0.8.5"
 image:
   name: vllm/vllm-openai
-  tag: "latest"
-  size_approx_mb: 8500
+  tag: "v0.8.5"
+  size_approx_mb: 9000
   platforms: [linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
     - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
-patterns:              # image name patterns for matching
+patterns:
   - "^vllm$"
   - "^vllm-"
   - "^vllm/"
@@ -60,4 +60,3 @@ runtime:
   default: "container"
   platform_recommendations:
     linux/amd64: "container"
-    linux/arm64: "container"

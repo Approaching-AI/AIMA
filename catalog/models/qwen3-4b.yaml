@@ -1,66 +1,65 @@
 kind: model_asset
 metadata:
-  name: qwen3-8b
+  name: qwen3-4b
   type: llm
   family: qwen
-  parameter_count: "8B"
+  parameter_count: "4B"
 storage:
   formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
-      repo: Qwen/Qwen3-8B
+      repo: Qwen/Qwen3-4B
       format: safetensors
     - type: huggingface
-      repo: Qwen/Qwen3-8B-GGUF
+      repo: Qwen/Qwen3-4B-GGUF
       format: gguf
     - type: modelscope
-      repo: Qwen/Qwen3-8B
+      repo: Qwen/Qwen3-4B
       format: safetensors
     - type: local_path
       path: ""
 variants:
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
-  # FP16 weights ~16GB, GB10 unified memory 128GB
-  # gpu_memory_utilization 0.30 on 128GB ≈ 38.4GB → 充裕
-  - name: qwen3-8b-blackwell-vllm-bf16
+  # FP16 weights ~8GB, GB10 unified memory 充裕
+  # gpu_memory_utilization 0.20 on 128GB unified ≈ 25.6GB → 远超 8GB 权重
+  - name: qwen3-4b-blackwell-vllm-bf16
     hardware:
       gpu_arch: Blackwell
-      vram_min_mib: 6144
+      vram_min_mib: 4096
       unified_memory: true
     engine: vllm
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.30
+      gpu_memory_utilization: 0.20
       max_model_len: 8192
       dtype: bfloat16
     expected_performance:
-      tokens_per_second: [25, 50]
-      latency_first_token_ms: [20, 60]
+      tokens_per_second: [40, 80]
+      latency_first_token_ms: [15, 40]
 
   # --- RTX 4090 (Ada, 24GB discrete) ---
-  # FP16 weights ~16GB + KV cache ~2GB = ~18GB
-  # vram_min_mib: 16384 → 排除 RTX 4060 (8GB)，仅 4090 (24GB) 匹配
-  # gpu_memory_utilization 0.80 on 24GB = 19.2GB
-  - name: qwen3-8b-ada-vllm-fp16
+  # FP16 weights ~8GB, 24GB VRAM 宽裕
+  # vram_min_mib: 10240 → 排除 RTX 4060 (8GB), 4060 走 llamacpp
+  - name: qwen3-4b-ada-vllm-bf16
     hardware:
       gpu_arch: Ada
-      vram_min_mib: 16384
+      vram_min_mib: 10240
       unified_memory: false
     engine: vllm
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.80
-      max_model_len: 4096
+      gpu_memory_utilization: 0.50
+      max_model_len: 8192
       dtype: auto
     expected_performance:
-      tokens_per_second: [30, 60]
-      latency_first_token_ms: [15, 40]
+      tokens_per_second: [50, 100]
+      latency_first_token_ms: [10, 30]
 
   # --- 所有设备通用 (llamacpp + GGUF) ---
-  # Q4_K_M = 5.03GB → RTX 4060 (8GB) ✓, M4 (16GB) ✓
-  # Q8_0 = 8.71GB → RTX 4060 需部分 CPU offload
-  - name: qwen3-8b-universal-llamacpp-q4
+  # Q4_K_M = 2.5GB, 所有设备可运行（含 8GB RTX 4060、16GB M4）
+  # n_gpu_layers: 999 → 尽可能 GPU offload，剩余自动 CPU
+  - name: qwen3-4b-universal-llamacpp-q4
     hardware:
       gpu_arch: "*"
       vram_min_mib: 0
@@ -68,7 +67,7 @@ variants:
     format: gguf
     default_config:
       n_gpu_layers: 999
-      ctx_size: 4096
+      ctx_size: 8192
     expected_performance:
-      tokens_per_second: [10, 40]
-      latency_first_token_ms: [30, 150]
+      tokens_per_second: [15, 50]
+      latency_first_token_ms: [20, 100]

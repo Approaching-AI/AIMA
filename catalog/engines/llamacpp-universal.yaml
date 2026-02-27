@@ -2,7 +2,7 @@ kind: engine_asset
 metadata:
   name: llamacpp-universal
   type: llamacpp
-  version: "latest"
+  version: "b8157"
 image:
   name: ghcr.io/ggerganov/llama.cpp
   tag: "server"
@@ -11,7 +11,7 @@ image:
   registries:
     - ghcr.io/ggerganov/llama.cpp
     - registry.cn-hangzhou.aliyuncs.com/aima/llama-cpp-server
-patterns:              # image name patterns for matching
+patterns:
   - "^llama\\.cpp$"
   - "^llama\\.cpp-server$"
   - "^llama-cpp-server$"
@@ -45,7 +45,7 @@ amplifier:
   features:
     - flash_attention
     - quantization_gguf
-  performance_gain: "fast startup, low memory"
+  performance_gain: "fast startup, low memory, CPU offload"
   resource_expansion:
     cpu_offload: true
     ssd_offload: false
@@ -68,12 +68,13 @@ runtime:
     linux/arm64: "container"
 source:
   binary: "llama-server"
-  platforms: [linux/amd64, darwin/arm64, windows/amd64]
+  # 原生二进制仅 3 个平台有预编译，linux/arm64 无预编译需用容器
+  platforms: [windows/amd64, darwin/arm64, linux/amd64]
   download:
-    windows/amd64: "https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-win-cuda-12.4-x64.zip"
-    linux/amd64:   "https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-ubuntu-x64.tar.gz"
-    darwin/arm64:  "https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-macos-arm64.tar.gz"
+    windows/amd64: "https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-win-cuda-12.4-x64.zip"
+    darwin/arm64:  "https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-macos-arm64.tar.gz"
+    linux/amd64:   "https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-x64.tar.gz"
   mirror:
-    windows/amd64: "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-win-cuda-12.4-x64.zip"
-    linux/amd64:   "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-ubuntu-x64.tar.gz"
-    darwin/arm64:  "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8149/llama-b8149-bin-macos-arm64.tar.gz"
+    windows/amd64: "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-win-cuda-12.4-x64.zip"
+    darwin/arm64:  "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-macos-arm64.tar.gz"
+    linux/amd64:   "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-x64.tar.gz"

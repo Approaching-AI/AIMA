@@ -644,6 +644,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 				// Container image path
 				if ea.Image.Name != "" {
+					// Skip network pull if the image is already available locally
+					if engine.ImageExists(ctx, ea.Image.Name, ea.Image.Tag, &execRunner{}) {
+						slog.Info("engine image already available locally", "image", ea.Image.Name+":"+ea.Image.Tag)
+						return nil
+					}
 					return engine.Pull(ctx, engine.PullOptions{
 						Image:      ea.Image.Name,
 						Tag:        ea.Image.Tag,

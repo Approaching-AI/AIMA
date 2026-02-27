@@ -2,7 +2,22 @@
 
 > AI-Inference-Managed-by-AI
 
-本文档描述 AIMA 的引擎镜像和二进制管理功能。
+本文档描述 AIMA 的统一引擎管理功能（容器镜像 + Native 二进制）。
+
+## 设计理念：异构引擎统一管理
+
+AIMA 支持两种引擎运行时，提供统一的用户界面：
+
+| 运行时 | 适用场景 | 引擎类型 |
+|--------|---------|----------|
+| **Container Runtime** (K3S/Docker) | Linux 服务器，GPU 集群 | vLLM, SGLang, Ollama, llama.cpp |
+| **Native Runtime** (进程) | Windows/macOS, 边缘设备, 无容器环境 | llama.cpp, 其他 Native 引擎 |
+
+**`aima engine scan` 自动检测可用运行时并扫描对应引擎：**
+- 有 K3S/Docker → 扫描容器镜像
+- 无容器运行时 → 扫描 Native 二进制 (distDir + PATH)
+
+---
 
 ## 接口定义
 
@@ -10,17 +25,17 @@
 
 | 命令 | 功能 |
 |------|------|
-| `aima engine scan` | 扫描 containerd 镜像，匹配 Engine Asset |
+| `aima engine scan` | 扫描本地引擎（容器镜像或 Native 二进制，自动检测） |
 | `aima engine list` | 列出所有已注册引擎 |
-| `aima engine pull <name>` | 拉取引擎镜像 |
-| `aima engine import <path>` | 从 OCI tar 文件导入镜像 |
-| `aima engine remove <name>` | 删除引擎镜像 |
+| `aima engine pull <name>` | 拉取引擎镜像（容器运行时） |
+| `aima engine import <path>` | 从 OCI tar 文件导入镜像（容器运行时） |
+| `aima engine remove <name>` | 删除引擎 |
 
 ### MCP 工具
 
 | 工具 | JSON-RPC 方法 | 功能 |
 |------|---------------|------|
-| `engine.scan` | `engine.scan` | 扫描本地引擎 |
+| `engine.scan` | `engine.scan` | 扫描本地引擎（统一） |
 | `engine.list` | `engine.list` | 列出所有引擎 |
 | `engine.pull` | `engine.pull` | 拉取引擎镜像 |
 | `engine.import` | `engine.import` | 导入引擎镜像 |
@@ -32,19 +47,39 @@
 
 ### Engine (internal/sqlite.go)
 
-数据库表定义，存储已注册的引擎镜像：
+数据库表定义，存储已注册的引擎（支持容器和 Native）：
 
 ```sql
 CREATE TABLE engines (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,               -- vllm | llamacpp | ollama | sglang
-    image TEXT NOT NULL,              -- 完整镜像名 (含 registry)
-    tag TEXT NOT NULL,
+    image TEXT NOT NULL,              -- 容器镜像名（容器引擎）或空（Native）
+    tag TEXT NOT NULL,               -- 容器镜像 tag（容器引擎）或空（Native）
     size_bytes INTEGER,
-    platform TEXT,                    -- linux/amd64 | linux/arm64
-    available BOOLEAN DEFAULT TRUE,   -- 镜像是否在本地
+    platform TEXT,                    -- linux/amd64 | linux/arm64 | darwin/arm64 | windows/amd64
+    runtime_type TEXT DEFAULT 'container', -- "container" or "native"
+    binary_path TEXT,                 -- Native 二进制路径（Native 引擎）
+    available BOOLEAN DEFAULT TRUE,   -- 引擎是否在本地可用
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+```
+
+### EngineImage (internal/engine/scanner.go)
+
+扫描返回的引擎表示：
+
+```go
+type EngineImage struct {
+    ID         string // 引擎唯一标识（容器 SHA256 或 Native 二进制 hash）
+    Type       string // 引擎类型：vllm, llamacpp, sglang, ollama
+    Image      string // 容器镜像名（容器引擎）或空（Native）
+    Tag        string // 容器镜像 tag（容器引擎）或空（Native）
+    SizeBytes  int64  // 大小（字节）
+    Platform   string // 平台标识
+    RuntimeType string // "container" or "native"
+    BinaryPath string // Native 二进制完整路径
+    Available  bool   // 是否可用
+}
 ```
 
 ### Engine Asset YAML (catalog/engines/*.yaml)
@@ -97,19 +132,41 @@ api:
 
 ## 核心功能
 
-### 1. 引擎镜像扫描
+### 1. 统一引擎扫描 (engine.scan)
 
-扫描 containerd 已有镜像，匹配 Engine Asset YAML：
+`aima engine scan` 自动检测运行时并扫描对应引擎：
 
 ```
-containerd 镜像列表 (ctr images ls / crictl images)
+engine.scan
   │
-  ├── 匹配 image.name:tag
-  │   └── vllm/vllm-openai:latest       → 标记为 "vllm" 引擎可用
-  │   └── ghcr.io/ggerganov/llama.cpp:server → 标记为 "llamacpp" 引擎可用
-  │
-  └── 扫描结果注册到 SQLite engines 表
+  ├── 尝试容器扫描 (crictl / docker)
+  │   ├── 成功 → 返回容器镜像列表
+  │   │   └── vllm/vllm-openai:latest       → vllm 引擎 (runtime_type=container)
+  │   │   └── ghcr.io/ggerganov/llama.cpp:server → llamacpp 引擎 (runtime_type=container)
+  │   │
+  │   └── 失败 → 尝试 Native 扫描
+  │       ├── 扫描 distDir: ~/.aima/dist/{os}-{arch}/
+  │       │   └── llama-server                   → llamacpp 引擎 (runtime_type=native)
+  │       ├── 扫描 PATH
+  │       │   └── /usr/local/bin/llama-server   → llamacpp 引擎 (runtime_type=native)
+  │       │
+  │       └── 扫描结果注册到 SQLite engines 表
 ```
+
+**扫描优先级：**
+1. Container Runtime 优先：有 K3S/Docker 则扫描容器镜像
+2. Native Fallback：无容器运行时时扫描 Native 二进制
+3. 两者都不可用：返回错误
+
+**Native 扫描规则：**
+- 扫描 `~/.aima/dist/{os}-{arch}/` 目录
+- 扫描 PATH 中的可执行文件
+- 匹配 Engine Asset YAML 中的 `source.binary` 字段
+- 已知映射：`ghcr.io/ggerganov/llama.cpp` → `llama-server`
+
+---
+
+### 2. 引擎镜像拉取 (engine.pull)
 
 ### 2. 引擎镜像拉取
 
@@ -206,20 +263,40 @@ Deploy → 启动进程 → health check 轮询
 ### 扫描并查看引擎
 
 ```bash
-# 扫描 containerd 已有镜像
+# 自动检测运行时并扫描引擎
 ./aima engine scan
 
-# 输出示例
+# 输出示例（容器运行时）
 [
   {
-    "id": "vllm-latest",
+    "id": "sha256:9fed...",
     "type": "vllm",
     "image": "vllm/vllm-openai",
-    "tag": "latest",
-    "available": true,
-    "platform": "linux/amd64"
+    "tag": "v0.15.0",
+    "size_bytes": 8900000000,
+    "platform": "linux/amd64",
+    "runtime_type": "container",
+    "available": true
   }
 ]
+
+# 输出示例（Native 运行时）
+[
+  {
+    "id": "a1b2c3d4e5f6...",
+    "type": "llamacpp",
+    "image": "",
+    "tag": "",
+    "size_bytes": 52428800,
+    "platform": "windows/amd64",
+    "runtime_type": "native",
+    "binary_path": "C:\\Users\\user\\.aima\\dist\\windows-amd64\\llama-server.exe",
+    "available": true
+  }
+]
+
+# 查看所有已注册引擎
+./aima engine list
 ```
 
 ### 拉取引擎镜像
@@ -246,13 +323,14 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 ## 相关文件
 
-- `internal/engine/scanner.go` - 容器镜像扫描
+- `internal/engine/scanner.go` - 统一引擎扫描（容器 + Native）
 - `internal/engine/puller.go` - 镜像拉取
 - `internal/engine/importer.go` - OCI tar 导入
 - `internal/engine/binary.go` - Native 二进制管理
 - `internal/cli/engine.go` - CLI 命令处理
 - `internal/mcp/tools.go` - MCP 工具定义
+- `internal/sqlite.go` - 数据库 schema (migrateV4 添加 runtime_type/binary_path)
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-27 (v4: 统一引擎扫描)*

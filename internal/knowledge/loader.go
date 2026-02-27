@@ -82,6 +82,12 @@ type EngineSource struct {
 	Mirror    map[string]string `yaml:"mirror,omitempty"`
 }
 
+// EngineRuntime provides runtime selection guidance for engine deployment.
+type EngineRuntime struct {
+	Default                 string            `yaml:"default,omitempty"`                 // "container" | "native" | "auto"
+	PlatformRecommendations map[string]string `yaml:"platform_recommendations,omitempty"` // "linux/amd64" -> "container", "windows/amd64" -> "native"
+}
+
 type EngineAsset struct {
 	Kind     string         `yaml:"kind"`
 	Metadata EngineMetadata `yaml:"metadata"`
@@ -93,6 +99,8 @@ type EngineAsset struct {
 	PartitionHints PartitionHints   `yaml:"partition_hints"`
 	TimeConstraints TimeConstraints `yaml:"time_constraints"`
 	PowerConstraints PowerConstraints `yaml:"power_constraints"`
+	Runtime  EngineRuntime  `yaml:"runtime,omitempty"`  // runtime selection guidance
+	Patterns  []string         `yaml:"patterns,omitempty"` // image name patterns for matching (e.g., ["-llama-", "llama-server"])
 	Source   *EngineSource  `yaml:"source,omitempty"` // native runtime: binary source info
 }
 

@@ -24,13 +24,21 @@ func newEngineCmd(app *App) *cobra.Command {
 }
 
 func newEngineScanCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	var runtime string
+	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan for locally available engine images",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			data, err := app.ToolDeps.ScanEngines(ctx)
+			if runtime == "" {
+				runtime = "auto"
+			}
+			if runtime != "auto" && runtime != "container" && runtime != "native" {
+				return fmt.Errorf("invalid runtime: %s (must be auto, container, or native)", runtime)
+			}
+
+			data, err := app.ToolDeps.ScanEngines(ctx, runtime)
 			if err != nil {
 				return fmt.Errorf("scan engines: %w", err)
 			}
@@ -39,6 +47,8 @@ func newEngineScanCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&runtime, "runtime", "auto", "Runtime filter: auto, container, or native")
+	return cmd
 }
 
 func newEngineListCmd(app *App) *cobra.Command {

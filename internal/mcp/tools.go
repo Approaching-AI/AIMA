@@ -23,7 +23,7 @@ type ToolDeps struct {
 	RemoveModel func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines  func(ctx context.Context) (json.RawMessage, error)
+	ScanEngines  func(ctx context.Context, runtime string) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
 	ListEngines  func(ctx context.Context) (json.RawMessage, error)
 	PullEngine   func(ctx context.Context, name string) error
 	ImportEngine func(ctx context.Context, path string) error
@@ -293,13 +293,22 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.scan
 	s.RegisterTool(&Tool{
 		Name:        "engine.scan",
-		Description: "Scan for locally available inference engine images",
-		InputSchema: noParamsSchema(),
+		Description: "Scan for locally available inference engines (container and/or native)",
+		InputSchema: schema(`"runtime":{"type":"string","enum":["auto","container","native"],"description":"Runtime filter: auto (both), container only, or native only (default: auto)"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ScanEngines == nil {
 				return ErrorResult("engine.scan not implemented"), nil
 			}
-			data, err := deps.ScanEngines(ctx)
+			var p struct {
+				Runtime string `json:"runtime"`
+			}
+			if len(params) > 0 {
+				json.Unmarshal(params, &p)
+			}
+			if p.Runtime == "" {
+				p.Runtime = "auto"
+			}
+			data, err := deps.ScanEngines(ctx, p.Runtime)
 			if err != nil {
 				return nil, fmt.Errorf("scan engines: %w", err)
 			}

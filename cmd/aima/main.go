@@ -504,27 +504,52 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 
 		// Engine management
-		ScanEngines: func(ctx context.Context) (json.RawMessage, error) {
-			engineAssets := make(map[string][]string)
+		ScanEngines: func(ctx context.Context, runtime string) (json.RawMessage, error) {
+			// Use patterns from Engine Asset YAMLs (knowledge-driven)
+			assetPatterns := make(map[string][]string)
+			binaryAssets := make(map[string]string) // binary name -> engine type
 			for _, ea := range cat.EngineAssets {
-				engineAssets[ea.Metadata.Type] = append(engineAssets[ea.Metadata.Type], ea.Image.Name)
+				if len(ea.Patterns) > 0 {
+					assetPatterns[ea.Metadata.Type] = ea.Patterns
+				}
+				if ea.Source != nil && ea.Source.Binary != "" {
+					binaryAssets[ea.Source.Binary] = ea.Metadata.Type
+					binaryAssets[ea.Source.Binary+".exe"] = ea.Metadata.Type
+				}
 			}
-			images, err := engine.Scan(ctx, engine.ScanOptions{EngineAssets: engineAssets, Runner: &execRunner{}})
+			platform := goruntime.GOOS + "-" + goruntime.GOARCH // Use hyphen for directory name
+			distDir := filepath.Join(dataDir, "dist", platform)
+
+			images, err := engine.ScanUnified(ctx, engine.ScanOptions{
+				AssetPatterns: assetPatterns,
+				Runner:       &execRunner{},
+				DistDir:      distDir,
+				Platform:     platform,
+				BinaryAssets: binaryAssets,
+			})
 			if err != nil {
 				return nil, err
 			}
+
+			// Filter by runtime if specified
+			var filtered []*engine.EngineImage
 			for _, img := range images {
-				_ = db.UpsertScannedEngine(ctx, &state.Engine{
-					ID:        img.ID,
-					Type:      img.Type,
-					Image:     img.Image,
-					Tag:       img.Tag,
-					SizeBytes: img.SizeBytes,
-					Platform:  img.Platform,
-					Available: img.Available,
-				})
+				if runtime == "auto" || img.RuntimeType == runtime {
+					filtered = append(filtered, img)
+					_ = db.UpsertScannedEngine(ctx, &state.Engine{
+						ID:         img.ID,
+						Type:       img.Type,
+						Image:      img.Image,
+						Tag:        img.Tag,
+						SizeBytes:  img.SizeBytes,
+						Platform:   img.Platform,
+						RuntimeType: img.RuntimeType,
+						BinaryPath: img.BinaryPath,
+						Available:  img.Available,
+					})
+				}
 			}
-			return json.Marshal(images)
+			return json.Marshal(filtered)
 		},
 		ListEngines: func(ctx context.Context) (json.RawMessage, error) {
 			engines, err := db.ListEngines(ctx)

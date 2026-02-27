@@ -14,7 +14,7 @@ hardware:
     cores: 16
     freq_ghz: 4.0
   ram:
-    total_mib: 63488
+    total_mib: 131072
     bandwidth_gbps: 60
   unified_memory: true
 constraints:

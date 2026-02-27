@@ -9,17 +9,17 @@ import (
 	"strings"
 )
 
-// execRunner is the real CommandRunner that executes system commands.
+// execRunner is a real CommandRunner that executes system commands.
 type execRunner struct{}
 
 func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
 }
 
-// detectWithRunner performs hardware detection using the given CommandRunner.
+// detectWithRunner performs hardware detection using a given CommandRunner.
 func detectWithRunner(ctx context.Context, runner CommandRunner) (*HardwareInfo, error) {
 	hw := &HardwareInfo{
-		OS: detectOS(),
+		OS: detectOSWithRunner(ctx, runner),
 	}
 
 	hw.GPU = detectGPU(ctx, runner)
@@ -35,7 +35,7 @@ func detectWithRunner(ctx context.Context, runner CommandRunner) (*HardwareInfo,
 	}
 
 	// AMD APUs (e.g., Ryzen AI MAX): rocm-smi reports full physical memory as VRAM.
-	// When GPU VRAM ≈ system RAM and the card isn't a known datacenter GPU, flag as unified.
+	// When GPU VRAM ≈ system RAM and card isn't a known datacenter GPU, flag as unified.
 	if hw.GPU != nil && !hw.GPU.UnifiedMemory && hw.GPU.Vendor == "amd" &&
 		hw.GPU.VRAMMiB > 0 && hw.RAM.TotalMiB > 0 &&
 		!strings.HasPrefix(hw.GPU.Arch, "CDNA") {
@@ -46,6 +46,68 @@ func detectWithRunner(ctx context.Context, runner CommandRunner) (*HardwareInfo,
 	}
 
 	return hw, nil
+}
+
+// detectOSWithRunner detects OS information with version and container runtime.
+func detectOSWithRunner(ctx context.Context, runner CommandRunner) OSInfo {
+	info := OSInfo{
+		OS:   runtime.GOOS,
+		Arch: runtime.GOARCH,
+	}
+
+	// Detect OS version for Linux
+	if runtime.GOOS == "linux" {
+		if version := detectLinuxVersion(ctx, runner); version != "" {
+			info.Version = version
+		}
+	}
+
+	// Detect container runtime
+	containerRuntime := detectContainerRuntime(ctx, runner)
+	if containerRuntime != "none" {
+		info.ContainerRuntime = containerRuntime
+	}
+
+	return info
+}
+
+// detectLinuxVersion detects Linux distribution version.
+func detectLinuxVersion(ctx context.Context, runner CommandRunner) string {
+	// Try /etc/os-release first
+	if out, err := runner.Run(ctx, "cat", "/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "VERSION_ID=") {
+				return strings.TrimPrefix(line, "VERSION_ID=")
+			}
+		}
+	}
+
+	// Try uname -r as fallback
+	if out, err := runner.Run(ctx, "uname", "-r"); err == nil {
+		// Parse kernel version from uname output
+		// e.g., "6.8.0-48-generic"
+		parts := strings.Fields(string(out))
+		if len(parts) >= 1 {
+			return parts[0] // Kernel version
+		}
+	}
+
+	return ""
+}
+
+// detectContainerRuntime detects if K3S or Docker is installed and available.
+func detectContainerRuntime(ctx context.Context, runner CommandRunner) string {
+	// Check for K3S
+	if _, err := runner.Run(ctx, "k3s", "version"); err == nil {
+		return "k3s"
+	}
+
+	// Check for Docker daemon
+	if _, err := runner.Run(ctx, "docker", "version"); err == nil {
+		return "docker"
+	}
+
+	return "none"
 }
 
 func detectOS() OSInfo {
@@ -73,7 +135,7 @@ func detectStorage() StorageInfo {
 	}
 }
 
-// collectMetricsWithRunner gathers real-time metrics using the given CommandRunner.
+// collectMetricsWithRunner gathers real-time metrics using given CommandRunner.
 func collectMetricsWithRunner(ctx context.Context, runner CommandRunner) (*Metrics, error) {
 	m := &Metrics{}
 

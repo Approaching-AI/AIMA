@@ -42,14 +42,16 @@ type Model struct {
 }
 
 type Engine struct {
-	ID        string
-	Type      string
-	Image     string
-	Tag       string
-	SizeBytes int64
-	Platform  string
-	Available bool
-	CreatedAt time.Time
+	ID         string
+	Type       string
+	Image      string // container image name (container engines) or empty (native)
+	Tag        string // container image tag (container engines) or empty (native)
+	SizeBytes  int64
+	Platform   string
+	RuntimeType string // "container" or "native"
+	BinaryPath string // path to native binary (native engines only)
+	Available  bool
+	CreatedAt  time.Time
 }
 
 type KnowledgeNote struct {
@@ -160,6 +162,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	}
 	// v3: enhanced model metadata
 	if err := d.migrateV3(ctx); err != nil {
+		return err
+	}
+	// v4: unified engine scan (container + native)
+	if err := d.migrateV4(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -496,6 +502,46 @@ func (d *DB) migrateV3(ctx context.Context) error {
 	return nil
 }
 
+func (d *DB) migrateV4(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 4 {
+		return nil
+	}
+
+	// Add runtime_type column to engines table
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name='runtime_type'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check runtime_type column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE engines ADD COLUMN runtime_type TEXT DEFAULT 'container'`)
+		if err != nil {
+			return fmt.Errorf("add runtime_type column: %w", err)
+		}
+	}
+
+	// Add binary_path column to engines table
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name='binary_path'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check binary_path column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE engines ADD COLUMN binary_path TEXT`)
+		if err != nil {
+			return fmt.Errorf("add binary_path column: %w", err)
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
 // ClearStaticKnowledge deletes all rows from static knowledge tables.
 // Called on startup before reloading from go:embed YAML.
 func (d *DB) ClearStaticKnowledge(ctx context.Context) error {
@@ -701,9 +747,9 @@ func (d *DB) DeleteModel(ctx context.Context, id string) error {
 
 func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.Available)
+		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
 	if err != nil {
 		return fmt.Errorf("insert engine %s: %w", e.ID, err)
 	}
@@ -713,13 +759,14 @@ func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
 // UpsertScannedEngine inserts a new engine or updates an existing one.
 func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   type=excluded.type, image=excluded.image, tag=excluded.tag,
 		   size_bytes=excluded.size_bytes, platform=excluded.platform,
+		   runtime_type=excluded.runtime_type, binary_path=excluded.binary_path,
 		   available=excluded.available`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.Available)
+		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
 	if err != nil {
 		return fmt.Errorf("upsert scanned engine %s: %w", e.ID, err)
 	}
@@ -730,9 +777,11 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 	e := &Engine{}
 	err := d.db.QueryRowContext(ctx,
 		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
+		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
 		        available, created_at
 		 FROM engines WHERE id = ?`, id).Scan(
-		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform, &e.Available, &e.CreatedAt)
+		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform,
+		&e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("engine %s not found", id)
 	}
@@ -745,6 +794,7 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
+		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
 		        available, created_at
 		 FROM engines ORDER BY created_at DESC`)
 	if err != nil {
@@ -755,7 +805,7 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	for rows.Next() {
 		e := &Engine{}
 		if err := rows.Scan(&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes,
-			&e.Platform, &e.Available, &e.CreatedAt); err != nil {
+			&e.Platform, &e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan engine row: %w", err)
 		}
 		engines = append(engines, e)

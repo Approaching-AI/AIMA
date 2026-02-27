@@ -11,6 +11,14 @@ image:
   registries:
     - docker.io/lmsysorg/sglang
     - registry.cn-hangzhou.aliyuncs.com/aima/sglang
+patterns:              # image name patterns for matching
+  - "^sglang$"
+  - "^sglang-"
+  - "^sglang/"
+  - "-sglang"
+  - "sglang"
+  - "sglang/"
+  - ":sglang"
 hardware:
   gpu_arch: "*"
   vram_min_mib: 4096
@@ -48,3 +56,8 @@ time_constraints:
   model_switch_s: [30, 90]
 power_constraints:
   typical_draw_watts: [60, 350]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"
+    linux/arm64: "container"

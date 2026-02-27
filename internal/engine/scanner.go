@@ -2,21 +2,27 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// EngineImage represents a locally available engine container image.
+// EngineImage represents a locally available engine (container image or native binary).
 type EngineImage struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Image     string `json:"image"`
-	Tag       string `json:"tag"`
-	SizeBytes int64  `json:"size_bytes"`
-	Platform  string `json:"platform"`
-	Available bool   `json:"available"`
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Image      string `json:"image"`      // container image name (container engines) or empty (native)
+	Tag        string `json:"tag"`       // container image tag (container engines) or empty (native)
+	SizeBytes  int64  `json:"size_bytes"`
+	Platform   string `json:"platform"`
+	RuntimeType string `json:"runtime_type"` // "container" or "native"
+	BinaryPath string `json:"binary_path"`  // path to native binary (native engines only)
+	Available  bool   `json:"available"`
 }
 
 // Store is the persistence interface for engine records.
@@ -35,7 +41,10 @@ type StoreEngine struct {
 	Tag       string
 	SizeBytes int64
 	Platform  string
-	Available bool
+	RuntimeType string // "container" or "native"
+	BinaryPath string // path to native binary (native engines only)
+	Available  bool
+	CreatedAt  string
 }
 
 // CommandRunner abstracts shell command execution for testability.
@@ -43,13 +52,16 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// ScanOptions configures engine image scanning.
+// ScanOptions configures engine scanning (both container and native).
 type ScanOptions struct {
-	EngineAssets map[string][]string // engine type -> known image names
+	AssetPatterns map[string][]string // engine type -> patterns from Engine Asset YAML
 	Runner       CommandRunner
+	DistDir      string // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
+	Platform     string // current platform (e.g., "windows-amd64")
+	BinaryAssets map[string]string // binary name -> engine type (native engines)
 }
 
-// Scan discovers container images that match known engine types.
+// Scan discovers container images that match known engine types (legacy function, container-only).
 func Scan(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan engine images: %w", err)
@@ -60,7 +72,161 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 		return nil, fmt.Errorf("scan engine images: %w", err)
 	}
 
-	return matchImages(images, opts.EngineAssets), nil
+	return matchImages(images, opts.AssetPatterns), nil
+}
+
+// ScanUnified discovers both container images and native binaries.
+// Returns all available engines from both runtimes (container + native).
+func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("scan engines: %w", err)
+	}
+
+	var allEngines []*EngineImage
+
+	// Scan container images
+	images, err := listImages(ctx, opts.Runner)
+	if err == nil {
+		matched := matchImages(images, opts.AssetPatterns)
+		for _, img := range matched {
+			img.RuntimeType = "container"
+		}
+		allEngines = append(allEngines, matched...)
+	}
+
+	// Scan native binaries
+	if opts.DistDir != "" {
+		native, err := ScanNative(ctx, opts)
+		if err == nil {
+			allEngines = append(allEngines, native...)
+		}
+	}
+
+	return allEngines, nil
+}
+
+// ScanNative discovers native engine binaries in distDir and PATH.
+func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
+	if opts.DistDir == "" {
+		return nil, fmt.Errorf("distDir not configured")
+	}
+
+	// Use BinaryAssets if provided (binary name -> engine type)
+	knownBinaries := opts.BinaryAssets
+	if knownBinaries == nil {
+		knownBinaries = make(map[string]string)
+		// For container engines that also have native binaries, add them
+		// This is a fallback - ideally all engines specify source.binary in YAML
+		if ea, ok := opts.AssetPatterns["llamacpp"]; ok {
+			for _, pattern := range ea {
+				if strings.Contains(pattern, "llama-server") || pattern == "llama-server" {
+					knownBinaries["llama-server"] = "llamacpp"
+					knownBinaries["llama-server.exe"] = "llamacpp"
+					break
+				}
+			}
+		}
+	}
+
+	// Build reverse lookup: filename (without .exe) -> engine type
+	filenameLookup := make(map[string]string)
+	for filename, engineType := range knownBinaries {
+		filenameLookup[filename] = engineType
+	}
+
+	var found []*EngineImage
+	seen := make(map[string]bool)
+
+	// Scan distDir
+	if entries, err := os.ReadDir(opts.DistDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if seen[name] {
+				continue
+			}
+			// Check if this is a known engine binary (with or without .exe)
+			binaryName := name
+			if strings.HasSuffix(name, ".exe") {
+				binaryName = strings.TrimSuffix(name, ".exe")
+			}
+			engineType, ok1 := filenameLookup[binaryName]
+			if !ok1 {
+				engineType, ok1 = filenameLookup[name]
+			}
+			if ok1 {
+				path := filepath.Join(opts.DistDir, name)
+				info, _ := entry.Info()
+				binaryID := binaryHash(name)
+				found = append(found, &EngineImage{
+					ID:         binaryID,
+					Type:       engineType,
+					Image:      "",
+					Tag:        "",
+					SizeBytes:  info.Size(),
+					Platform:   opts.Platform,
+					RuntimeType: "native",
+					BinaryPath: path,
+					Available:  true,
+				})
+				seen[name] = true
+			}
+		}
+	}
+
+	// Scan PATH for additional binaries
+	pathEnv := os.Getenv("PATH")
+	if pathEnv != "" {
+		sep := string(os.PathListSeparator)
+		for _, dir := range strings.Split(pathEnv, sep) {
+			if entries, err := os.ReadDir(dir); err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					name := entry.Name()
+					if seen[name] {
+						continue
+					}
+					// Check if this is a known engine binary
+					binaryName := name
+					if strings.HasSuffix(name, ".exe") {
+						binaryName = strings.TrimSuffix(name, ".exe")
+					}
+					engineType, ok1 := filenameLookup[binaryName]
+					if !ok1 {
+						engineType, ok1 = filenameLookup[name]
+					}
+					if ok1 {
+						path := filepath.Join(dir, name)
+						info, _ := entry.Info()
+						binaryID := binaryHash(name + "-" + dir)
+						found = append(found, &EngineImage{
+							ID:         binaryID,
+							Type:       engineType,
+							Image:      "",
+							Tag:        "",
+							SizeBytes:  info.Size(),
+							Platform:   opts.Platform,
+							RuntimeType: "native",
+							BinaryPath: path,
+							Available:  true,
+						})
+						seen[name] = true
+					}
+				}
+			}
+		}
+	}
+
+	return found, nil
+}
+
+func binaryHash(name string) string {
+	h := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(h[:])[:16]
 }
 
 type imageInfo struct {
@@ -71,19 +237,25 @@ type imageInfo struct {
 }
 
 func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
-	// Try crictl first (K3S containerd)
-	images, err := listCrictlImages(ctx, runner)
+	var allImages []imageInfo
+
+	// Try crictl (K3S containerd)
+	crictlImages, err := listCrictlImages(ctx, runner)
 	if err == nil {
-		return images, nil
+		allImages = append(allImages, crictlImages...)
 	}
 
-	// Fallback to docker
-	images, err = listDockerImages(ctx, runner)
-	if err != nil {
+	// Also try docker (may have additional images)
+	dockerImages, err := listDockerImages(ctx, runner)
+	if err == nil {
+		allImages = append(allImages, dockerImages...)
+	}
+
+	if len(allImages) == 0 {
 		return nil, fmt.Errorf("neither crictl nor docker available")
 	}
 
-	return images, nil
+	return allImages, nil
 }
 
 func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
@@ -144,47 +316,79 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			id:   img.ID,
 			repo: img.Repository,
 			tag:  img.Tag,
+			size: 0, // Docker format doesn't reliably include size
 		})
 	}
 
 	return images, nil
 }
 
-func matchImages(images []imageInfo, engineAssets map[string][]string) []*EngineImage {
+// matchImages matches images to engine types using YAML knowledge.
+// Knowledge-driven: patterns come from Engine Asset YAMLs, not hardcoded.
+func matchImages(images []imageInfo, assetPatterns map[string][]string) []*EngineImage {
 	var matched []*EngineImage
 	seen := make(map[string]bool)
 
-	for engineType, knownImages := range engineAssets {
-		for _, img := range images {
-			if seen[img.id] || img.repo == "<none>" || img.tag == "<none>" {
-				continue
-			}
+	// Compile pattern lookup: pattern -> engine type
+	patternToEngine := make(map[string]string)
+	for engineType, patterns := range assetPatterns {
+		for _, pattern := range patterns {
+			patternToEngine[pattern] = engineType
+		}
+	}
 
-			// Exact match on known image names
-			hit := false
-			for _, knownImage := range knownImages {
-				if img.repo == knownImage {
-					hit = true
-					break
-				}
-			}
+	for _, img := range images {
+		if seen[img.id] || img.repo == "<none>" || img.tag == "<none>" {
+			continue
+		}
 
-			// Keyword fallback: repo name contains engine type
-			if !hit && strings.Contains(strings.ToLower(img.repo), strings.ToLower(engineType)) {
+		// Check patterns: exact, prefix, suffix, or contains match
+		hit := false
+		matchedEngineType := ""
+		searchName := strings.ToLower(img.repo)
+
+		for pattern, engineType := range patternToEngine {
+			lowerPattern := strings.ToLower(pattern)
+
+			// Exact match
+			if searchName == lowerPattern {
 				hit = true
+				matchedEngineType = engineType
+				break
 			}
 
-			if hit {
-				matched = append(matched, &EngineImage{
-					ID:        img.id,
-					Type:      engineType,
-					Image:     img.repo,
-					Tag:       img.tag,
-					SizeBytes: img.size,
-					Available: true,
-				})
-				seen[img.id] = true
+			// Prefix match (^pattern)
+			if strings.HasPrefix(pattern, "^") && strings.HasPrefix(searchName, lowerPattern[1:]) {
+				hit = true
+				matchedEngineType = engineType
+				break
 			}
+
+			// Suffix match (pattern$)
+			if strings.HasSuffix(pattern, "$") && strings.HasSuffix(searchName, lowerPattern[:len(pattern)-1]) {
+				hit = true
+				matchedEngineType = engineType
+				break
+			}
+
+			// Contains match (default)
+			if !hit && strings.Contains(searchName, lowerPattern) {
+				hit = true
+				matchedEngineType = engineType
+				break
+			}
+		}
+
+		if hit {
+			matched = append(matched, &EngineImage{
+				ID:        img.id,
+				Type:      matchedEngineType,
+				Image:     img.repo,
+				Tag:       img.tag,
+				SizeBytes: img.size,
+				Available: true,
+			})
+			seen[img.id] = true
 		}
 	}
 
@@ -200,5 +404,5 @@ func splitImageTag(ref string) (repo, tag string) {
 			return ref[:idx], ref[idx+1:]
 		}
 	}
-	return ref, "latest"
+	return ref, ""
 }

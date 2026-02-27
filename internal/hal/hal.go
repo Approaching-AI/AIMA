@@ -61,8 +61,11 @@ type StorageInfo struct {
 
 // OSInfo describes the operating system.
 type OSInfo struct {
-	OS   string `json:"os"`
-	Arch string `json:"arch"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	Version         string `json:"version,omitempty"`       // OS version (e.g., "11", "22.04", "14.5")
+	Kernel          string `json:"kernel,omitempty"`      // Kernel version (Linux)
+	ContainerRuntime string `json:"container_runtime,omitempty"` // "k3s" | "docker" | "none"
 }
 
 // Metrics holds real-time utilization data.

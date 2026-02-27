@@ -11,6 +11,16 @@ image:
   registries:
     - ghcr.io/ggerganov/llama.cpp
     - registry.cn-hangzhou.aliyuncs.com/aima/llama-cpp-server
+patterns:              # image name patterns for matching
+  - "^llama\\.cpp$"
+  - "^llama\\.cpp-server$"
+  - "^llama-cpp-server$"
+  - "-llama-"
+  - "-llamacpp"
+  - "llama.cpp"
+  - "llamacpp"
+  - "llama-server"
+  - "llama-box"
 hardware:
   gpu_arch: "*"
   vram_min_mib: 0
@@ -48,6 +58,14 @@ time_constraints:
   model_switch_s: [3, 10]
 power_constraints:
   typical_draw_watts: [20, 60]
+runtime:
+  default: "auto"
+  platform_recommendations:
+    windows/amd64: "native"
+    darwin/arm64: "native"
+    darwin/amd64: "native"
+    linux/amd64: "container"
+    linux/arm64: "container"
 source:
   binary: "llama-server"
   platforms: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]

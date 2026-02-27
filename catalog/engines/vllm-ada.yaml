@@ -11,6 +11,13 @@ image:
   registries:
     - docker.io/vllm/vllm-openai
     - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
+patterns:              # image name patterns for matching
+  - "^vllm$"
+  - "^vllm-"
+  - "^vllm/"
+  - "-vllm"
+  - "vllm/"
+  - ":vllm"
 hardware:
   gpu_arch: Ada
   vram_min_mib: 4096
@@ -49,3 +56,8 @@ time_constraints:
   model_switch_s: [30, 60]
 power_constraints:
   typical_draw_watts: [150, 350]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"
+    linux/arm64: "container"

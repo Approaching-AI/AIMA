@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -68,21 +71,45 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 		return "", fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	destPath := filepath.Join(m.distDir, name)
-	if goruntime.GOOS == "windows" && !strings.HasSuffix(destPath, ".exe") {
-		destPath += ".exe"
-	}
-
-	if err := m.download(ctx, url, mirrorURL, destPath); err != nil {
+	if err := m.download(ctx, url, mirrorURL, m.distDir, name); err != nil {
 		return "", fmt.Errorf("download %s: %w", name, err)
 	}
 
-	return destPath, nil
+	// Binary should now be in distDir
+	for _, c := range candidates {
+		p := filepath.Join(m.distDir, c)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+
+	return "", fmt.Errorf("binary %s not found in %s after download", name, m.distDir)
 }
 
-// download tries primary URL first, then mirror. Supports .tar.gz and .zip archives.
-func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+// Download forces download of the binary for the current platform,
+// regardless of whether it already exists in distDir or PATH.
+func (m *BinaryManager) Download(ctx context.Context, source *BinarySource) error {
+	if source == nil {
+		return fmt.Errorf("no binary source configured")
+	}
+
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	if !platformSupported(platform, source.Platforms) {
+		return fmt.Errorf("platform %s not supported (available: %v)", platform, source.Platforms)
+	}
+
+	url := source.Download[platform]
+	mirrorURL := source.Mirror[platform]
+	if url == "" && mirrorURL == "" {
+		return fmt.Errorf("no download URL for platform %s", platform)
+	}
+
+	return m.download(ctx, url, mirrorURL, m.distDir, source.Binary)
+}
+
+// download tries primary URL first, then mirror. Extracts zip/tar.gz archives.
+func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destDir, binaryName string) error {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create dist dir: %w", err)
 	}
 
@@ -96,26 +123,43 @@ func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destPath s
 
 	var lastErr error
 	for _, u := range urls {
-		slog.Info("downloading engine binary", "url", u, "dest", destPath)
-		if err := downloadToFile(ctx, u, destPath); err != nil {
+		slog.Info("downloading engine binary", "url", u, "dest", destDir)
+		if err := downloadAndExtract(ctx, u, destDir, binaryName); err != nil {
 			slog.Warn("download failed, trying next source", "url", u, "error", err)
 			lastErr = err
 			continue
 		}
 
-		// Make executable on non-Windows
+		// Make binary executable on non-Windows
 		if goruntime.GOOS != "windows" {
-			os.Chmod(destPath, 0o755)
+			for _, c := range binaryCandidates(binaryName) {
+				p := filepath.Join(destDir, c)
+				if _, err := os.Stat(p); err == nil {
+					os.Chmod(p, 0o755)
+					break
+				}
+			}
 		}
 
-		slog.Info("engine binary downloaded", "path", destPath)
+		slog.Info("engine binary ready", "dir", destDir, "binary", binaryName)
 		return nil
 	}
 
 	return fmt.Errorf("all download sources failed: %w", lastErr)
 }
 
-func downloadToFile(ctx context.Context, url, destPath string) error {
+// downloadAndExtract downloads url to a temp file then extracts or renames it.
+func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) error {
+	tmpFile, err := os.CreateTemp(destDir, ".download-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+	}()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -131,16 +175,6 @@ func downloadToFile(ctx context.Context, url, destPath string) error {
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(destPath), ".download-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpFile.Name()
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpPath) // clean up on failure; on success it's already renamed
-	}()
-
 	h := sha256.New()
 	written, err := io.Copy(io.MultiWriter(tmpFile, h), resp.Body)
 	if err != nil {
@@ -150,12 +184,188 @@ func downloadToFile(ctx context.Context, url, destPath string) error {
 
 	slog.Info("download complete", "bytes", written, "sha256", fmt.Sprintf("%x", h.Sum(nil))[:16])
 
-	// Atomic rename
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		return fmt.Errorf("rename: %w", err)
+	// Detect format from URL and extract
+	urlLower := strings.ToLower(url)
+	switch {
+	case strings.HasSuffix(urlLower, ".tar.gz") || strings.HasSuffix(urlLower, ".tgz"):
+		return extractTarGz(tmpPath, destDir)
+	case strings.HasSuffix(urlLower, ".zip"):
+		return extractZip(tmpPath, destDir)
+	default:
+		// Plain binary — rename directly
+		binPath := filepath.Join(destDir, binaryName)
+		if goruntime.GOOS == "windows" && !strings.HasSuffix(binPath, ".exe") {
+			binPath += ".exe"
+		}
+		return os.Rename(tmpPath, binPath)
+	}
+}
+
+// extractZip extracts a zip archive to destDir, stripping a common top-level directory.
+func extractZip(archivePath, destDir string) error {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	defer r.Close()
+
+	prefix := zipCommonPrefix(r.File)
+
+	for _, f := range r.File {
+		relName := strings.TrimPrefix(f.Name, prefix)
+		if relName == "" || strings.HasSuffix(relName, "/") {
+			continue // skip directories
+		}
+
+		// Prevent path traversal
+		cleaned := filepath.Clean(filepath.FromSlash(relName))
+		if strings.HasPrefix(cleaned, "..") {
+			continue
+		}
+
+		destPath := filepath.Join(destDir, cleaned)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, err = io.Copy(out, rc)
+		out.Close()
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// zipCommonPrefix returns the single top-level directory prefix shared by all entries, or "".
+func zipCommonPrefix(files []*zip.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	prefix := ""
+	for _, f := range files {
+		parts := strings.SplitN(f.Name, "/", 2)
+		if len(parts) < 2 {
+			return "" // file at root
+		}
+		candidate := parts[0] + "/"
+		if prefix == "" {
+			prefix = candidate
+		} else if candidate != prefix {
+			return "" // multiple top-level dirs
+		}
+	}
+	return prefix
+}
+
+// extractTarGz extracts a .tar.gz archive to destDir, stripping a common top-level directory.
+func extractTarGz(archivePath, destDir string) error {
+	// Two passes: first detect common prefix, then extract.
+	prefix, err := tarGzCommonPrefix(archivePath)
+	if err != nil {
+		return fmt.Errorf("detect archive prefix: %w", err)
 	}
 
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open tar.gz: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		name := strings.TrimPrefix(hdr.Name, prefix)
+		if name == "" {
+			continue
+		}
+
+		// Prevent path traversal
+		cleaned := filepath.Clean(filepath.FromSlash(name))
+		if strings.HasPrefix(cleaned, "..") {
+			continue
+		}
+
+		destPath := filepath.Join(destDir, cleaned)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			return err
+		}
+
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, tr)
+		out.Close()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// tarGzCommonPrefix reads archive headers to find a shared top-level directory prefix.
+func tarGzCommonPrefix(archivePath string) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	prefix := ""
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		parts := strings.SplitN(hdr.Name, "/", 2)
+		if len(parts) < 2 {
+			return "", nil // file at root, no prefix
+		}
+		candidate := parts[0] + "/"
+		if prefix == "" {
+			prefix = candidate
+		} else if candidate != prefix {
+			return "", nil // multiple top-level dirs
+		}
+	}
+	return prefix, nil
 }
 
 func platformSupported(platform string, supported []string) bool {

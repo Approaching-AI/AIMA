@@ -23,7 +23,7 @@ hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096
 startup:
-  command: ["vllm", "serve", "--model", "{{.ModelPath}}"]
+  command: ["vllm", "serve", "{{.ModelPath}}"]
   default_args:
     port: 8000
     gpu_memory_utilization: 0.75

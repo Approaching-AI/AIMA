@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -29,6 +30,7 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
+  schedulerName: default-scheduler
   restartPolicy: Always
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
@@ -37,7 +39,7 @@ spec:
     - name: inference
       image: {{ .EngineImage }}
       {{- if .Args }}
-      args:
+      command:
         {{- range .Args }}
         - "{{ . }}"
         {{- end }}
@@ -67,7 +69,7 @@ spec:
         httpGet:
           path: {{ .HealthCheckPath }}
           port: {{ .Port }}
-        initialDelaySeconds: 30
+        initialDelaySeconds: {{ .HealthCheckInitDelaySec }}
         periodSeconds: 10
         timeoutSeconds: 5
         failureThreshold: 3
@@ -84,11 +86,16 @@ spec:
         - name: model-data
           mountPath: /models
           readOnly: true
+        - name: dshm
+          mountPath: /dev/shm
   volumes:
     - name: model-data
       hostPath:
         path: {{ .ModelHostPath }}
         type: DirectoryOrCreate
+    - name: dshm
+      emptyDir:
+        medium: Memory
 `))
 
 type podData struct {
@@ -103,10 +110,11 @@ type podData struct {
 	GPUCoresPercent  int
 	CPUCores         int
 	RAMMiB           int
-	HealthCheckPath  string
-	ModelHostPath    string
-	GPUResourceName  string
-	RuntimeClassName string // e.g. "nvidia" for NVIDIA CUDA containers
+	HealthCheckPath        string
+	HealthCheckInitDelaySec int // initialDelaySeconds for liveness probe — use health_check.timeout_s
+	ModelHostPath          string
+	GPUResourceName        string
+	RuntimeClassName       string // e.g. "nvidia" for NVIDIA CUDA containers
 }
 
 func (d podData) HasAnnotations() bool {
@@ -164,15 +172,31 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		modelHostPath = filepath.Dir(modelHostPath)
 	}
 
-	// Process command: replace {{.ModelPath}} template, then extract args (skip binary name).
-	// K8s pods use the image's own ENTRYPOINT; we only pass args to avoid path issues.
-	command := make([]string, len(resolved.Command))
+	// Process command: replace {{.ModelPath}} template.
+	// Use K8s command: (not args:) so we override the container ENTRYPOINT entirely.
+	// This is required for NGC images that wrap their entrypoint in a shell script
+	// (e.g. nvcr.io/nvidia/vllm uses /opt/nvidia/nvidia_entrypoint.sh as ENTRYPOINT,
+	// so args alone would be passed to the shell, not to vllm directly).
+	args := make([]string, len(resolved.Command))
 	for i, c := range resolved.Command {
-		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", containerModelPath)
+		args[i] = strings.ReplaceAll(c, "{{.ModelPath}}", containerModelPath)
 	}
-	args := command
-	if len(command) > 1 {
-		args = command[1:]
+
+	// Append resolved config values as CLI flags.
+	// Config keys use underscore (e.g. "gpu_memory_utilization") → "--gpu-memory-utilization".
+	// "port" is excluded: it is mapped to containerPort in the pod spec.
+	if len(resolved.Config) > 0 {
+		keys := make([]string, 0, len(resolved.Config))
+		for k := range resolved.Config {
+			if k != "port" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys) // deterministic ordering for reproducible pod specs
+		for _, k := range keys {
+			flag := "--" + strings.ReplaceAll(k, "_", "-")
+			args = append(args, flag, fmt.Sprintf("%v", resolved.Config[k]))
+		}
 	}
 
 	gpuResource := resolved.GPUResourceName
@@ -202,6 +226,11 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 
 	if resolved.HealthCheck != nil {
 		data.HealthCheckPath = resolved.HealthCheck.Path
+		if resolved.HealthCheck.TimeoutS > 0 {
+			data.HealthCheckInitDelaySec = resolved.HealthCheck.TimeoutS
+		} else {
+			data.HealthCheckInitDelaySec = 300
+		}
 	}
 
 	var buf bytes.Buffer
@@ -217,6 +246,9 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
+
+// SanitizePodName is the exported version for use by other packages.
+func SanitizePodName(name string) string { return sanitizePodName(name) }
 
 func sanitizePodName(name string) string {
 	// K8s pod names: lowercase, alphanumeric, dashes, max 253 chars

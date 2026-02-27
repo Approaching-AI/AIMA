@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
@@ -26,7 +27,15 @@ func (r *K3SRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	if err != nil {
 		return fmt.Errorf("generate pod: %w", err)
 	}
-	return r.client.Apply(ctx, podYAML)
+	err = r.client.Apply(ctx, podYAML)
+	if err != nil && (strings.Contains(err.Error(), "immutable") || strings.Contains(err.Error(), "Forbidden")) {
+		// Pod spec has immutable fields that changed (e.g. QoS class, schedulerName).
+		// Delete the existing pod and recreate it.
+		podName := knowledge.SanitizePodName(req.Name + "-" + req.Engine)
+		_ = r.client.Delete(ctx, podName)
+		err = r.client.Apply(ctx, podYAML)
+	}
+	return err
 }
 
 func (r *K3SRuntime) Delete(ctx context.Context, name string) error {

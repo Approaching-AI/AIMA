@@ -249,7 +249,9 @@ func (c *Catalog) findModelVariant(modelName, engineType, gpuArch string) (*Mode
 }
 
 func (c *Catalog) findPartition(hw HardwareInfo) *PartitionStrategy {
-	// Try specific hardware_profile match first, then wildcard
+	// Try specific hardware_profile match first, then wildcard.
+	// Only considers single_model strategies (or those with no workload_pattern) —
+	// dual_model and other non-default patterns must be requested explicitly.
 	var wildcard *PartitionStrategy
 	profileName := hw.HardwareProfile
 	if profileName == "" {
@@ -264,6 +266,10 @@ func (c *Catalog) findPartition(hw HardwareInfo) *PartitionStrategy {
 
 	for i := range c.PartitionStrategies {
 		ps := &c.PartitionStrategies[i]
+		// Skip strategies designed for non-default workload patterns (e.g. dual_model).
+		if ps.Target.WorkloadPattern != "" && ps.Target.WorkloadPattern != "single_model" {
+			continue
+		}
 		if ps.Target.HardwareProfile == profileName && profileName != "" {
 			return ps
 		}

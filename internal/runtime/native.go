@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,6 +127,23 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	}
 	if !hasPort && req.Port > 0 {
 		command = append(command, "--port", strconv.Itoa(req.Port))
+	}
+
+	// Append other config values as CLI flags.
+	// Config keys use underscore (e.g. "gpu_memory_utilization") → "--gpu-memory-utilization".
+	// "port" is excluded since it is handled above.
+	if len(req.Config) > 0 {
+		keys := make([]string, 0, len(req.Config))
+		for k := range req.Config {
+			if k != "port" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			flag := "--" + strings.ReplaceAll(k, "_", "-")
+			command = append(command, flag, fmt.Sprintf("%v", req.Config[k]))
+		}
 	}
 
 	// Set up log file

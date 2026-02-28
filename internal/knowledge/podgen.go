@@ -38,6 +38,7 @@ spec:
   containers:
     - name: inference
       image: {{ .EngineImage }}
+      imagePullPolicy: IfNotPresent
       {{- if .Args }}
       command:
         {{- range .Args }}

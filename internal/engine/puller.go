@@ -63,6 +63,28 @@ func Pull(ctx context.Context, opts PullOptions) error {
 	return fmt.Errorf("pull image %s:%s: all registries failed: %w", opts.Image, opts.Tag, lastErr)
 }
 
+// ImageExistsInDocker checks whether image exists in Docker store.
+func ImageExistsInDocker(ctx context.Context, image string, runner CommandRunner) bool {
+	ref := image
+	if !strings.Contains(ref, ":") {
+		ref += ":latest"
+	}
+	out, err := runner.Run(ctx, "docker", "images", "-q", ref)
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
+}
+
+// ImportDockerToContainerd pipes `docker save | k3s ctr -n k8s.io images import -`
+// to transfer an image from Docker store to K3S containerd.
+// Requires root privileges (containerd socket is root-owned).
+func ImportDockerToContainerd(ctx context.Context, image string, runner CommandRunner) error {
+	_, err := runner.Run(ctx, "sh", "-c",
+		fmt.Sprintf("docker save %q | k3s ctr -n k8s.io images import -", image))
+	if err != nil {
+		return fmt.Errorf("import %s from docker to containerd: %w", image, err)
+	}
+	return nil
+}
+
 // buildImageRef constructs a full image reference from registry, image name, and tag.
 // For registries that include a namespace (e.g., "registry.cn-hangzhou.aliyuncs.com/aima"),
 // only the base image name is appended (not the full original path).

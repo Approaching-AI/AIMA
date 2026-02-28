@@ -858,6 +858,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
 				activeRt = nativeRt
 			}
+			// Pre-flight: warn if image is only in Docker (not importable without root).
+			if activeRt.Name() == "k3s" && req.Image != "" {
+				if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
+					slog.Info("image found in Docker; K3S uses separate containerd store",
+						"image", req.Image,
+						"hint", "if pod fails ImagePullBackOff, run: sudo aima init")
+				}
+			}
 			if err := activeRt.Deploy(ctx, req); err != nil {
 				return nil, fmt.Errorf("deploy: %w", err)
 			}
@@ -1238,3 +1246,4 @@ func findModelFileInDir(dir string) string {
 	}
 	return ""
 }
+

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,15 +15,16 @@ import (
 
 // EngineImage represents a locally available engine (container image or native binary).
 type EngineImage struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Image      string `json:"image"`      // container image name (container engines) or empty (native)
-	Tag        string `json:"tag"`       // container image tag (container engines) or empty (native)
-	SizeBytes  int64  `json:"size_bytes"`
-	Platform   string `json:"platform"`
-	RuntimeType string `json:"runtime_type"` // "container" or "native"
-	BinaryPath string `json:"binary_path"`  // path to native binary (native engines only)
-	Available  bool   `json:"available"`
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Image       string `json:"image"`               // container image name (container engines) or empty (native)
+	Tag         string `json:"tag"`                  // container image tag (container engines) or empty (native)
+	SizeBytes   int64  `json:"size_bytes"`
+	Platform    string `json:"platform"`
+	RuntimeType string `json:"runtime_type"`         // "container" or "native"
+	BinaryPath  string `json:"binary_path"`          // path to native binary (native engines only)
+	Available   bool   `json:"available"`
+	DockerOnly  bool   `json:"docker_only,omitempty"` // true if image is in Docker but not K3S containerd
 }
 
 // CommandRunner abstracts shell command execution for testability.
@@ -41,6 +43,7 @@ type ScanOptions struct {
 
 // ScanUnified discovers both container images and native binaries.
 // Returns all available engines from both runtimes (container + native).
+// For Docker-only images, attempts import to K3S containerd; warns if no permission.
 func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan engines: %w", err)
@@ -52,9 +55,42 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 	images, err := listImages(ctx, opts.Runner)
 	if err == nil {
 		matched := matchImages(images, opts.AssetPatterns)
+
+		// Check if any Docker-only images need import
+		hasDockerOnly := false
+		for _, img := range matched {
+			if img.DockerOnly {
+				hasDockerOnly = true
+				break
+			}
+		}
+
+		// Pre-check containerd access before attempting expensive imports
+		canImport := false
+		if hasDockerOnly {
+			_, checkErr := opts.Runner.Run(ctx, "k3s", "ctr", "-n", "k8s.io", "version")
+			canImport = checkErr == nil
+		}
+
 		for _, img := range matched {
 			img.RuntimeType = "container"
 			img.Platform = opts.Platform
+
+			// Docker-only image: try to import into K3S containerd
+			if img.DockerOnly {
+				ref := img.Image + ":" + img.Tag
+				if !canImport {
+					slog.Warn("engine in Docker but not in K3S containerd; import requires root",
+						"engine", img.Type, "image", ref,
+						"fix", "sudo docker save "+ref+" | sudo k3s ctr -n k8s.io images import -")
+				} else if err := ImportDockerToContainerd(ctx, ref, opts.Runner); err != nil {
+					slog.Warn("failed to import engine from Docker to K3S containerd",
+						"engine", img.Type, "image", ref, "error", err)
+				} else {
+					slog.Info("imported engine from Docker to K3S containerd", "image", ref)
+					img.DockerOnly = false
+				}
+			}
 		}
 		allEngines = append(allEngines, matched...)
 	}
@@ -185,25 +221,35 @@ func binaryHash(name string) string {
 }
 
 type imageInfo struct {
-	id   string
-	repo string // image name without tag
-	tag  string
-	size int64
+	id     string
+	repo   string // image name without tag
+	tag    string
+	size   int64
+	source string // "containerd" or "docker"
 }
 
 func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
 	var allImages []imageInfo
 
 	// Try crictl (K3S containerd)
+	containerdSet := make(map[string]bool)
 	crictlImages, err := listCrictlImages(ctx, runner)
 	if err == nil {
 		allImages = append(allImages, crictlImages...)
+		for _, img := range crictlImages {
+			containerdSet[img.repo+":"+img.tag] = true
+		}
 	}
 
 	// Also try docker (may have additional images)
 	dockerImages, err := listDockerImages(ctx, runner)
 	if err == nil {
-		allImages = append(allImages, dockerImages...)
+		for _, img := range dockerImages {
+			if containerdSet[img.repo+":"+img.tag] {
+				continue // already in containerd, skip Docker duplicate
+			}
+			allImages = append(allImages, img)
+		}
 	}
 
 	if len(allImages) == 0 {
@@ -236,10 +282,11 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 		for _, tag := range img.RepoTags {
 			repo, tagStr := splitImageTag(tag)
 			images = append(images, imageInfo{
-				id:   img.ID,
-				repo: repo,
-				tag:  tagStr,
-				size: size,
+				id:     img.ID,
+				repo:   repo,
+				tag:    tagStr,
+				size:   size,
+				source: "containerd",
 			})
 		}
 	}
@@ -268,10 +315,11 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			continue
 		}
 		images = append(images, imageInfo{
-			id:   img.ID,
-			repo: img.Repository,
-			tag:  img.Tag,
-			size: 0, // Docker format doesn't reliably include size
+			id:     img.ID,
+			repo:   img.Repository,
+			tag:    img.Tag,
+			size:   0, // Docker format doesn't reliably include size
+			source: "docker",
 		})
 	}
 
@@ -336,12 +384,13 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 
 		if hit {
 			matched = append(matched, &EngineImage{
-				ID:        img.id,
-				Type:      matchedEngineType,
-				Image:     img.repo,
-				Tag:       img.tag,
-				SizeBytes: img.size,
-				Available: true,
+				ID:         img.id,
+				Type:       matchedEngineType,
+				Image:      img.repo,
+				Tag:        img.tag,
+				SizeBytes:  img.size,
+				Available:  true,
+				DockerOnly: img.source == "docker",
 			})
 			seen[img.id] = true
 		}

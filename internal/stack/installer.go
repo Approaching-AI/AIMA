@@ -884,15 +884,16 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// writeRegistries writes the component's container registry mirror config to /etc/rancher/k3s/registries.yaml.
-// This must happen before K3S starts so containerd picks up the mirrors on first boot.
-func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
+// WriteRegistries writes container registry mirror config to /etc/rancher/k3s/registries.yaml.
+// K3S containerd hot-reloads this file, so no restart is needed.
+// Called from aima init (which runs as root).
+func WriteRegistries(registries map[string]any) error {
 	dir := "/etc/rancher/k3s"
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create registries dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(comp.Registries)
+	data, err := yaml.Marshal(registries)
 	if err != nil {
 		return fmt.Errorf("marshal registries config: %w", err)
 	}
@@ -903,6 +904,10 @@ func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
 	}
 	slog.Info("wrote containerd registries config", "path", path)
 	return nil
+}
+
+func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
+	return WriteRegistries(comp.Registries)
 }
 
 // prepareAirgapImages places or imports airgap image tars before component installation.

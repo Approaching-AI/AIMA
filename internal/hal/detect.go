@@ -127,11 +127,13 @@ func detectStorage() StorageInfo {
 		dataDir = filepath.Join(home, ".aima")
 	}
 
-	freeMiB := diskFreeMiB(dataDir)
+	free, total := diskStats(dataDir)
 
 	return StorageInfo{
 		DataDirPath: dataDir,
-		FreeMiB:     freeMiB,
+		FreeMiB:     free,
+		TotalMiB:    total,
+		Volumes:     listVolumes(),
 	}
 }
 

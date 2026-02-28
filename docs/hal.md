@@ -31,8 +31,8 @@ type GPUInfo struct {
     Arch      string  `json:"arch"`       // Blackwell | Ada | RDNA3 | ...
     Model     string  `json:"model"`      // RTX 4090 | GB10 | ...
     VRAMMiB   int     `json:"vram_mib"`
-    ComputeCap string `json:"compute_capability"` // "10.0" | "8.9"
-    CUDACores int     `json:"cuda_cores"`
+    ComputeID string  `json:"compute_id"`     // "8.9" (NV) | "gfx1151" (AMD) | "metal3" (Apple)
+    ComputeUnits int   `json:"compute_units"`  // CUDA cores / stream processors / GPU cores
     Driver    string  `json:"driver"`
     ResourceName string `json:"resource_name"` // "nvidia.com/gpu" | "amd.com/gpu"
 }
@@ -203,8 +203,8 @@ constraints:
     "arch": "Blackwell",
     "model": "RTX 4090",
     "vram_mib": 24576,
-    "compute_capability": "8.9",
-    "cuda_cores": 16384,
+    "compute_id": "8.9",
+    "compute_units": 16384,
     "driver": "550.90.07",
     "resource_name": "nvidia.com/gpu"
   },

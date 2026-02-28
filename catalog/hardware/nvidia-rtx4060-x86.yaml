@@ -6,8 +6,8 @@ hardware:
   gpu:
     arch: Ada
     vram_mib: 8192
-    compute_capability: "8.9"
-    cuda_cores: 3072
+    compute_id: "8.9"
+    compute_units: 3072
     resource_name: "nvidia.com/gpu"
     runtime_class_name: "nvidia"
   cpu:

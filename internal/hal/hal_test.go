@@ -212,8 +212,8 @@ func TestParseNvidiaGPU(t *testing.T) {
 			if gpu.Arch != tt.wantArch {
 				t.Errorf("Arch = %q, want %q", gpu.Arch, tt.wantArch)
 			}
-			if gpu.ComputeCapability != tt.wantCC {
-				t.Errorf("ComputeCapability = %q, want %q", gpu.ComputeCapability, tt.wantCC)
+			if gpu.ComputeID != tt.wantCC {
+				t.Errorf("ComputeID = %q, want %q", gpu.ComputeID, tt.wantCC)
 			}
 			if gpu.DriverVersion != tt.wantDriver {
 				t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, tt.wantDriver)
@@ -1096,8 +1096,8 @@ func TestEnrichNvidiaGPU(t *testing.T) {
 		gpu := &GPUInfo{Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4060 Laptop GPU"}
 		enrichNvidiaGPU(context.Background(), runner, gpu)
 
-		if gpu.CUDAVersion != "12.7" {
-			t.Errorf("CUDAVersion = %q, want %q", gpu.CUDAVersion, "12.7")
+		if gpu.SDKVersion != "CUDA 12.7" {
+			t.Errorf("SDKVersion = %q, want %q", gpu.SDKVersion, "CUDA 12.7")
 		}
 		if gpu.PowerLimitWatts != 75 {
 			t.Errorf("PowerLimitWatts = %f, want 75", gpu.PowerLimitWatts)
@@ -1108,11 +1108,11 @@ func TestEnrichNvidiaGPU(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
 			"nvidia-smi": {output: []byte(smiOutput)},
 		})
-		gpu := &GPUInfo{Vendor: "nvidia", CUDAVersion: "11.0", PowerLimitWatts: 300}
+		gpu := &GPUInfo{Vendor: "nvidia", SDKVersion: "CUDA 11.0", PowerLimitWatts: 300}
 		enrichNvidiaGPU(context.Background(), runner, gpu)
 
-		if gpu.CUDAVersion != "11.0" {
-			t.Errorf("CUDAVersion = %q, want %q (should not overwrite)", gpu.CUDAVersion, "11.0")
+		if gpu.SDKVersion != "CUDA 11.0" {
+			t.Errorf("SDKVersion = %q, want %q (should not overwrite)", gpu.SDKVersion, "CUDA 11.0")
 		}
 		if gpu.PowerLimitWatts != 300 {
 			t.Errorf("PowerLimitWatts = %f, want 300 (should not overwrite)", gpu.PowerLimitWatts)
@@ -1124,8 +1124,55 @@ func TestEnrichNvidiaGPU(t *testing.T) {
 		gpu := &GPUInfo{Vendor: "nvidia", Name: "NVIDIA GeForce RTX 4090"}
 		enrichNvidiaGPU(context.Background(), runner, gpu)
 
-		if gpu.CUDAVersion != "" {
-			t.Errorf("CUDAVersion = %q, want empty on failure", gpu.CUDAVersion)
+		if gpu.SDKVersion != "" {
+			t.Errorf("SDKVersion = %q, want empty on failure", gpu.SDKVersion)
+		}
+	})
+}
+
+func TestEnrichAMDGPU(t *testing.T) {
+	t.Run("fills SDK and driver version", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /opt/rocm/.info/version":       {output: []byte("6.4.0\n")},
+			"modinfo -F version amdgpu":          {output: []byte("6.11.8\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics"}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.SDKVersion != "ROCm 6.4.0" {
+			t.Errorf("SDKVersion = %q, want %q", gpu.SDKVersion, "ROCm 6.4.0")
+		}
+		if gpu.DriverVersion != "6.11.8" {
+			t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, "6.11.8")
+		}
+	})
+
+	t.Run("does not overwrite existing values", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /opt/rocm/.info/version":       {output: []byte("6.4.0\n")},
+			"modinfo -F version amdgpu":          {output: []byte("6.11.8\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", SDKVersion: "ROCm 5.0", DriverVersion: "5.0.0"}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.SDKVersion != "ROCm 5.0" {
+			t.Errorf("SDKVersion = %q, want %q (should not overwrite)", gpu.SDKVersion, "ROCm 5.0")
+		}
+		if gpu.DriverVersion != "5.0.0" {
+			t.Errorf("DriverVersion = %q, want %q (should not overwrite)", gpu.DriverVersion, "5.0.0")
+		}
+	})
+
+	t.Run("graceful degradation when tools absent", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{})
+		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics"}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.SDKVersion != "" {
+			t.Errorf("SDKVersion = %q, want empty on failure", gpu.SDKVersion)
+		}
+		if gpu.DriverVersion != "" {
+			t.Errorf("DriverVersion = %q, want empty on failure", gpu.DriverVersion)
 		}
 	})
 }

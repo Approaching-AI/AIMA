@@ -15,8 +15,8 @@ hardware:
   gpu:
     arch: TestArch
     vram_mib: 8192
-    compute_capability: "8.0"
-    cuda_cores: 4096
+    compute_id: "8.0"
+    compute_units: 4096
   cpu:
     arch: x86_64
     cores: 8

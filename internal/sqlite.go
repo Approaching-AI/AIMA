@@ -168,6 +168,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err := d.migrateV4(ctx); err != nil {
 		return err
 	}
+	// v5: vendor-neutral GPU fields (gpu_compute_cap → gpu_compute_id)
+	if err := d.migrateV5(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -269,7 +273,7 @@ CREATE TABLE hardware_profiles (
     name TEXT NOT NULL,
     gpu_arch TEXT NOT NULL,
     gpu_vram_mib INTEGER,
-    gpu_compute_cap TEXT,
+    gpu_compute_id TEXT,
     cpu_arch TEXT,
     cpu_cores INTEGER,
     ram_mib INTEGER,
@@ -537,6 +541,33 @@ func (d *DB) migrateV4(ctx context.Context) error {
 	}
 
 	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV5(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 5 {
+		return nil
+	}
+
+	// Rename gpu_compute_cap → gpu_compute_id (vendor-neutral)
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('hardware_profiles') WHERE name='gpu_compute_cap'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check gpu_compute_cap column: %w", err)
+	}
+	if count > 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE hardware_profiles RENAME COLUMN gpu_compute_cap TO gpu_compute_id`)
+		if err != nil {
+			return fmt.Errorf("rename gpu_compute_cap: %w", err)
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 5"); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil

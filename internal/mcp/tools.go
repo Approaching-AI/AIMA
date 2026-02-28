@@ -60,6 +60,9 @@ type ToolDeps struct {
 	StackInit      func(ctx context.Context, allowDownload bool) (json.RawMessage, error)
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
+	// Discovery
+	DiscoverLAN func(ctx context.Context, timeoutS int) (json.RawMessage, error)
+
 	// System
 	ExecShell func(ctx context.Context, command string) (json.RawMessage, error)
 	GetConfig func(ctx context.Context, key string) (string, error)
@@ -930,6 +933,32 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.RecordBenchmark(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("record benchmark: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// discover.lan
+	s.RegisterTool(&Tool{
+		Name:        "discover.lan",
+		Description: "Discover LLM inference services on the local network via mDNS",
+		InputSchema: schema(`"timeout_s":{"type":"integer","description":"Scan timeout in seconds (default 3)"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DiscoverLAN == nil {
+				return ErrorResult("discover.lan not implemented"), nil
+			}
+			var p struct {
+				TimeoutS int `json:"timeout_s"`
+			}
+			if len(params) > 0 {
+				json.Unmarshal(params, &p)
+			}
+			if p.TimeoutS <= 0 {
+				p.TimeoutS = 3
+			}
+			data, err := deps.DiscoverLAN(ctx, p.TimeoutS)
+			if err != nil {
+				return nil, fmt.Errorf("discover lan: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

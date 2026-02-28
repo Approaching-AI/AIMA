@@ -1100,6 +1100,15 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			})
 		},
 
+		// Discovery
+		DiscoverLAN: func(ctx context.Context, timeoutS int) (json.RawMessage, error) {
+			services, err := proxy.Discover(ctx, time.Duration(timeoutS)*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(services)
+		},
+
 		// Stack management
 		StackPreflight: func(ctx context.Context) (json.RawMessage, error) {
 			installer := stack.NewInstaller(&execRunner{}, dataDir)

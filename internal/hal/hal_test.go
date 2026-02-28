@@ -1163,6 +1163,23 @@ func TestEnrichAMDGPU(t *testing.T) {
 		}
 	})
 
+	t.Run("fallback to uname -r when modinfo has no version", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /opt/rocm/.info/version": {output: []byte("7.9.0\n")},
+			"modinfo -F version amdgpu":   {output: []byte("\n")},
+			"uname -r":                    {output: []byte("6.14.0-1020-oem\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics"}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.SDKVersion != "ROCm 7.9.0" {
+			t.Errorf("SDKVersion = %q, want %q", gpu.SDKVersion, "ROCm 7.9.0")
+		}
+		if gpu.DriverVersion != "6.14.0-1020-oem" {
+			t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, "6.14.0-1020-oem")
+		}
+	})
+
 	t.Run("graceful degradation when tools absent", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{})
 		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics"}

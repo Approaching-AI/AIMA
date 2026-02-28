@@ -287,9 +287,18 @@ func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 		}
 	}
 	if gpu.DriverVersion == "" {
+		// Try modinfo first; amdgpu built into kernel often has no version field,
+		// so fall back to kernel version (uname -r) since amdgpu ships with the kernel.
 		if out, err := runner.Run(ctx, "modinfo", "-F", "version", "amdgpu"); err == nil {
 			if ver := strings.TrimSpace(string(out)); ver != "" {
 				gpu.DriverVersion = ver
+			}
+		}
+		if gpu.DriverVersion == "" {
+			if out, err := runner.Run(ctx, "uname", "-r"); err == nil {
+				if ver := strings.TrimSpace(string(out)); ver != "" {
+					gpu.DriverVersion = ver
+				}
 			}
 		}
 	}

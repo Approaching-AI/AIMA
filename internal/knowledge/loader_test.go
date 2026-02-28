@@ -315,3 +315,65 @@ metadata:
 		t.Error("expected 0 hardware profiles for unknown kind")
 	}
 }
+
+func TestMergeCatalogOverride(t *testing.T) {
+	base := mustLoadCatalog(t)
+	if base.HardwareProfiles[0].Hardware.GPU.VRAMMiB != 8192 {
+		t.Fatal("precondition: base VRAM should be 8192")
+	}
+
+	// Overlay with same name but different VRAM
+	overlay := &Catalog{
+		HardwareProfiles: []HardwareProfile{{
+			Kind:     "hardware_profile",
+			Metadata: HardwareMetadata{Name: "test-gpu"},
+			Hardware: HardwareSpec{GPU: GPUSpec{Arch: "TestArch", VRAMMiB: 16384}},
+		}},
+	}
+
+	merged := MergeCatalog(base, overlay)
+	if len(merged.HardwareProfiles) != 1 {
+		t.Fatalf("expected 1 hardware profile, got %d", len(merged.HardwareProfiles))
+	}
+	if merged.HardwareProfiles[0].Hardware.GPU.VRAMMiB != 16384 {
+		t.Errorf("expected overlay VRAM 16384, got %d", merged.HardwareProfiles[0].Hardware.GPU.VRAMMiB)
+	}
+}
+
+func TestMergeCatalogAppend(t *testing.T) {
+	base := mustLoadCatalog(t)
+	baseEngineCount := len(base.EngineAssets)
+
+	overlay := &Catalog{
+		EngineAssets: []EngineAsset{{
+			Metadata: EngineMetadata{Name: "new-engine-1.0", Type: "new", Version: "1.0"},
+		}},
+	}
+
+	merged := MergeCatalog(base, overlay)
+	if len(merged.EngineAssets) != baseEngineCount+1 {
+		t.Fatalf("expected %d engine assets, got %d", baseEngineCount+1, len(merged.EngineAssets))
+	}
+	last := merged.EngineAssets[len(merged.EngineAssets)-1]
+	if last.Metadata.Name != "new-engine-1.0" {
+		t.Errorf("expected appended engine name %q, got %q", "new-engine-1.0", last.Metadata.Name)
+	}
+}
+
+func TestMergeCatalogEmpty(t *testing.T) {
+	base := mustLoadCatalog(t)
+	origHP := len(base.HardwareProfiles)
+	origEA := len(base.EngineAssets)
+	origMA := len(base.ModelAssets)
+
+	merged := MergeCatalog(base, &Catalog{})
+	if len(merged.HardwareProfiles) != origHP {
+		t.Errorf("HardwareProfiles changed: %d → %d", origHP, len(merged.HardwareProfiles))
+	}
+	if len(merged.EngineAssets) != origEA {
+		t.Errorf("EngineAssets changed: %d → %d", origEA, len(merged.EngineAssets))
+	}
+	if len(merged.ModelAssets) != origMA {
+		t.Errorf("ModelAssets changed: %d → %d", origMA, len(merged.ModelAssets))
+	}
+}

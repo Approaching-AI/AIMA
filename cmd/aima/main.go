@@ -60,10 +60,28 @@ func run() error {
 	}
 	defer db.Close()
 
-	// 3. Load knowledge catalog (YAML → in-memory structs)
+	// 3. Load knowledge catalog (embedded YAML → in-memory structs)
 	cat, err := knowledge.LoadCatalog(catalog.FS)
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
+	}
+
+	// 3b. Merge L1 overlay catalog from disk (if present)
+	overlayDir := filepath.Join(dataDir, "catalog")
+	if info, e := os.Stat(overlayDir); e == nil && info.IsDir() {
+		overlayCat, e2 := knowledge.LoadCatalog(os.DirFS(overlayDir))
+		if e2 != nil {
+			slog.Warn("load catalog overlay failed, skipping", "dir", overlayDir, "error", e2)
+		} else {
+			before := len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
+			cat = knowledge.MergeCatalog(cat, overlayCat)
+			after := len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
+			slog.Info("catalog overlay merged",
+				"dir", overlayDir,
+				"overlay_assets", len(overlayCat.HardwareProfiles)+len(overlayCat.EngineAssets)+len(overlayCat.ModelAssets)+len(overlayCat.PartitionStrategies)+len(overlayCat.StackComponents),
+				"new_assets", after-before,
+			)
+		}
 	}
 
 	// 4. Load static knowledge into SQLite relational tables

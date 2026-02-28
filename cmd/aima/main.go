@@ -420,7 +420,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		binaryAssets := make(map[string]string)
 		for _, ea := range cat.EngineAssets {
 			if len(ea.Patterns) > 0 {
-				assetPatterns[ea.Metadata.Type] = ea.Patterns
+				assetPatterns[ea.Metadata.Type] = append(assetPatterns[ea.Metadata.Type], ea.Patterns...)
 			}
 			if ea.Source != nil && ea.Source.Binary != "" {
 				binaryAssets[ea.Source.Binary] = ea.Metadata.Type

@@ -569,18 +569,23 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPat
 		return nil
 	}
 
-	hiddenSize := jsonInt(config, "hidden_size")
-	numLayers := jsonInt(config, "num_hidden_layers")
+	// VLM models (e.g. Qwen3.5-MoE) nest arch fields inside text_config
+	archConfig := resolveArchConfig(config)
+	hiddenSize := jsonInt(archConfig, "hidden_size")
+	numLayers := jsonInt(archConfig, "num_hidden_layers")
 	params := estimateParams(hiddenSize, numLayers)
 
-	// Enhanced metadata detection
-	modelClass := detectModelClass(config)
+	// Enhanced metadata detection — also check text_config for MOE fields
+	modelClass := detectModelClass(archConfig)
+	if modelClass == "unknown" {
+		modelClass = detectModelClass(config)
+	}
 	totalParams := int64(0)
 	activeParams := int64(0)
 
 	if modelClass == "moe" {
 		baseParams := calculateDenseParams(hiddenSize, numLayers)
-		totalParams, activeParams = calculateMOEParams(config, baseParams)
+		totalParams, activeParams = calculateMOEParams(archConfig, config, baseParams)
 	} else if modelClass == "dense" {
 		totalParams = calculateDenseParams(hiddenSize, numLayers)
 		activeParams = totalParams
@@ -931,30 +936,94 @@ func calculateDenseParams(hiddenSize, numLayers int) int64 {
 }
 
 // calculateMOEParams estimates total and active parameters for MOE models.
-func calculateMOEParams(config map[string]any, baseParams int64) (total, active int64) {
+// archConfig contains architecture fields (may be text_config for VLMs).
+// topConfig is the original top-level config (for tie_word_embeddings etc.).
+// Falls back to rough estimation when intermediate sizes are unavailable.
+func calculateMOEParams(archConfig, topConfig map[string]any, baseParams int64) (total, active int64) {
+	config := archConfig
 	numExperts := jsonInt(config, "num_experts")
 	if numExperts == 0 {
 		numExperts = jsonInt(config, "num_local_experts")
 	}
 	expertsPerTok := jsonInt(config, "num_experts_per_tok")
-
-	// If num_experts_per_tok not specified, assume 2 (common pattern)
 	if expertsPerTok == 0 {
 		expertsPerTok = 2
 	}
+	if numExperts == 0 {
+		return baseParams, baseParams
+	}
 
-	// For MOE models:
-	// - Base params: embedding, attention layers (shared across all tokens)
-	// - Expert params: MoE layers (only active experts used per token)
-	// - Total params ≈ base_params + (expert_params * num_experts)
-	// - Active params ≈ base_params + (expert_params * experts_per_tok)
+	hiddenSize := jsonInt(config, "hidden_size")
+	numLayers := jsonInt(config, "num_hidden_layers")
 
-	if numExperts > 0 && baseParams > 0 {
-		// Approximate: base is 1/3 of total, experts are 2/3
+	// Try to calculate from actual architecture fields
+	moeIntermediate := jsonInt(config, "moe_intermediate_size")
+	if moeIntermediate == 0 {
+		moeIntermediate = jsonInt(config, "intermediate_size")
+	}
+
+	if hiddenSize > 0 && numLayers > 0 && moeIntermediate > 0 {
+		H := int64(hiddenSize)
+		L := int64(numLayers)
+		I := int64(moeIntermediate)
+		E := int64(numExperts)
+		A := int64(expertsPerTok)
+
+		// Per-expert MLP: gate + up + down projections = 3 * H * I
+		expertMLP := 3 * H * I
+		// Shared expert (if present)
+		sharedI := int64(jsonInt(config, "shared_expert_intermediate_size"))
+		sharedMLP := int64(0)
+		if sharedI > 0 {
+			sharedMLP = 3 * H * sharedI
+		}
+
+		// Attention per layer (GQA-aware):
+		// Q: H * num_heads * head_dim, K: H * num_kv_heads * head_dim, V: same, O: same as Q
+		numHeads := int64(jsonInt(config, "num_attention_heads"))
+		numKVHeads := int64(jsonInt(config, "num_key_value_heads"))
+		headDim := int64(jsonInt(config, "head_dim"))
+		if headDim == 0 && numHeads > 0 {
+			headDim = H / numHeads
+		}
+		attnPerLayer := int64(0)
+		if numHeads > 0 && headDim > 0 {
+			qDim := numHeads * headDim
+			kvDim := numKVHeads * headDim
+			if numKVHeads == 0 {
+				kvDim = qDim
+			}
+			attnPerLayer = H * (qDim + 2*kvDim + qDim) // Q, K, V, O
+		} else {
+			attnPerLayer = 4 * H * H // fallback: standard MHA
+		}
+
+		// Router gate per layer: H * num_experts
+		routerPerLayer := H * E
+
+		// Embedding: vocab_size * hidden_size
+		vocabSize := int64(jsonInt(config, "vocab_size"))
+		embedding := vocabSize * H
+		// LM head (if untied from embedding) — check top-level config
+		lmHead := int64(0)
+		if tied, ok := topConfig["tie_word_embeddings"].(bool); ok && !tied {
+			lmHead = vocabSize * H
+		}
+
+		sharedPerLayer := attnPerLayer + sharedMLP + routerPerLayer
+		total = embedding + lmHead + L*(sharedPerLayer+E*expertMLP)
+		active = embedding + lmHead + L*(sharedPerLayer+A*expertMLP)
+		return
+	}
+
+	// Fallback: rough estimation
+	if baseParams > 0 {
+		E := int64(numExperts)
+		A := int64(expertsPerTok)
 		baseShare := baseParams / 3
 		expertShare := baseParams * 2 / 3
-		total = baseParams + expertShare*int64(numExperts-1) // Already counted one in baseParams
-		active = baseShare + (expertShare/int64(numExperts))*int64(expertsPerTok)
+		total = baseParams + expertShare*(E-1)
+		active = baseShare + (expertShare/E)*A
 	} else {
 		total = baseParams
 		active = baseParams
@@ -987,7 +1056,14 @@ func quantFromConfig(config map[string]any) string {
 	// Check quantization_config
 	if qc, ok := config["quantization_config"].(map[string]any); ok {
 		if q, ok := qc["quant_method"].(string); ok {
-			return normalizeQuantString(q)
+			normalized := normalizeQuantString(q)
+			// For compressed-tensors / marlin, extract actual bit depth from config_groups
+			if normalized == q && (q == "compressed-tensors" || q == "marlin") {
+				if bits := extractBitsFromConfigGroups(qc); bits > 0 {
+					return fmt.Sprintf("int%d", bits)
+				}
+			}
+			return normalized
 		}
 		if q, ok := qc["load_in_8bit"].(bool); ok && q {
 			return "int8"
@@ -995,12 +1071,39 @@ func quantFromConfig(config map[string]any) string {
 		if q, ok := qc["load_in_4bit"].(bool); ok && q {
 			return "int4"
 		}
+		// Also check top-level "bits" field (used by AWQ/GPTQ configs)
+		if bits, ok := qc["bits"].(float64); ok && bits > 0 {
+			return fmt.Sprintf("int%d", int(bits))
+		}
 	}
 	// Check for GGUF format specific configs
 	if _, ok := config["gguf"]; ok {
 		return "unknown" // GGUF quantization is determined from filename
 	}
 	return ""
+}
+
+// extractBitsFromConfigGroups reads num_bits from compressed-tensors config_groups.
+func extractBitsFromConfigGroups(qc map[string]any) int {
+	groups, ok := qc["config_groups"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	// Check first group (typically "group_0")
+	for _, g := range groups {
+		group, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		weights, ok := group["weights"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if bits, ok := weights["num_bits"].(float64); ok && bits > 0 {
+			return int(bits)
+		}
+	}
+	return 0
 }
 
 // quantFromFilename detects quantization from filename patterns.
@@ -1122,6 +1225,24 @@ func isLLMModelType(modelType string) bool {
 		}
 	}
 	return false
+}
+
+// resolveArchConfig returns the config map containing architecture fields
+// (hidden_size, num_hidden_layers, num_experts, etc.).
+// VLM models nest these inside "text_config"; pure LLMs have them at top level.
+func resolveArchConfig(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	// If top-level has hidden_size, use it directly
+	if _, ok := config["hidden_size"]; ok {
+		return config
+	}
+	// Fall back to text_config (VLM models like Qwen3.5-MoE)
+	if tc, ok := config["text_config"].(map[string]any); ok {
+		return tc
+	}
+	return config
 }
 
 // hasField checks if a field exists in a map.

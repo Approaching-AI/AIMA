@@ -19,8 +19,9 @@ func newTestBackend(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 
 func TestNewServer_Defaults(t *testing.T) {
 	s := NewServer()
-	if s.addr != ":8080" {
-		t.Errorf("default addr = %q, want ':8080'", s.addr)
+	want := fmt.Sprintf(":%d", DefaultPort)
+	if s.addr != want {
+		t.Errorf("default addr = %q, want %q", s.addr, want)
 	}
 	if s.routes == nil {
 		t.Error("routes map should be initialized")

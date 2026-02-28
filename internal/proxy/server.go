@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// DefaultPort is the default listen port for the AIMA proxy server.
+const DefaultPort = 6188
+
 // Backend represents a running inference engine.
 type Backend struct {
 	ModelName  string `json:"model_name"`
@@ -62,7 +65,7 @@ func (s *Server) SetAPIKey(key string) {
 
 func NewServer(opts ...Option) *Server {
 	s := &Server{
-		addr:   ":8080",
+		addr:   fmt.Sprintf(":%d", DefaultPort),
 		routes: make(map[string]*Backend),
 	}
 	for _, o := range opts {

@@ -123,7 +123,7 @@ func newServeCmd(app *App) *cobra.Command {
 	}
 
 	defaultKey := os.Getenv("AIMA_API_KEY")
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "Proxy server listen address")
+	cmd.Flags().StringVar(&addr, "addr", fmt.Sprintf(":%d", proxy.DefaultPort), "Proxy server listen address")
 	cmd.Flags().StringVar(&mcpAddr, "mcp-addr", ":9090", "MCP server listen address")
 	cmd.Flags().BoolVar(&mcpMod, "mcp", false, "Also serve MCP protocol over HTTP")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
@@ -133,15 +133,15 @@ func newServeCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-// parsePort extracts the port number from an address like ":8080" or "0.0.0.0:8080".
+// parsePort extracts the port number from an address like ":6188" or "0.0.0.0:6188".
 func parsePort(addr string) int {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return 8080
+		return proxy.DefaultPort
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		return 8080
+		return proxy.DefaultPort
 	}
 	return port
 }

@@ -76,7 +76,7 @@ func (m *Manager) Available() bool {
 
 // StartConfig configures ZeroClaw startup.
 type StartConfig struct {
-	ProviderBaseURL string // LLM endpoint (e.g., "http://localhost:8080/v1")
+	ProviderBaseURL string // LLM endpoint (e.g., "http://localhost:6188/v1")
 	MCPServerCmd    string // Command for AIMA MCP server
 	MemoryPath      string // SQLite memory DB path
 	IdentityPath    string // Agent identity markdown

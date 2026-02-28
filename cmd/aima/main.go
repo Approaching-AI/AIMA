@@ -79,7 +79,7 @@ func run() error {
 
 	// 6. Create infrastructure components
 	k3sClient := newK3SClient(dataDir)
-	proxyServer := proxy.NewServer(proxy.WithAddr(":8080"))
+	proxyServer := proxy.NewServer()
 	zeroClawMgr := zeroclaw.NewManager(
 		zeroclaw.WithDataDir(dataDir),
 	)

@@ -29,17 +29,19 @@ variants:
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # BF16 权重 ~72GB, 128GB unified 可容纳
   # MoE 35B total / 3B active, 支持视觉 + 思考模式
-  - name: qwen3.5-35b-a3b-blackwell-vllm-bf16
+  # qwen3_5_moe 架构需要 vllm-nightly (stable vLLM 尚不支持)
+  - name: qwen3.5-35b-a3b-blackwell-vllm-nightly-bf16
     hardware:
       gpu_arch: Blackwell
       vram_min_mib: 40960
       unified_memory: true
-    engine: vllm
+    engine: vllm-nightly
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.65
-      max_model_len: 8192
+      gpu_memory_utilization: 0.8
+      max_model_len: 128000
       dtype: bfloat16
+      enable_chunked_prefill: false
     expected_performance:
       tokens_per_second: [15, 35]
       latency_first_token_ms: [30, 100]

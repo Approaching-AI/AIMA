@@ -33,10 +33,11 @@ variants:
     engine: vllm
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.70
-      max_model_len: 8192
+      gpu_memory_utilization: 0.85
+      max_model_len: 128000
       dtype: auto
       kv_cache_dtype: fp8_e4m3
+      enable_chunked_prefill: false
     expected_performance:
       tokens_per_second: [10, 25]
       latency_first_token_ms: [50, 200]

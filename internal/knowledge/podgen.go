@@ -47,14 +47,20 @@ spec:
       ports:
         - containerPort: {{ .Port }}
           name: http
-      {{- if .RuntimeClassName }}
+      {{- if or .RuntimeClassName .ExtraEnv }}
       env:
+        {{- if .RuntimeClassName }}
         - name: NVIDIA_VISIBLE_DEVICES
           value: all
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: all
         - name: LD_LIBRARY_PATH
           value: /lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+        {{- end }}
+        {{- range $k, $v := .ExtraEnv }}
+        - name: {{ $k }}
+          value: "{{ $v }}"
+        {{- end }}
       {{- end }}
       {{- if or .HasGPUResource .HasComputeResources }}
       resources:
@@ -115,6 +121,7 @@ type podData struct {
 	Slot             string
 	Port             int
 	Args             []string // command arguments (excluding binary name — image entrypoint is used)
+	ExtraEnv         map[string]string // additional env vars from engine YAML
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
@@ -197,14 +204,23 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	if len(resolved.Config) > 0 {
 		keys := make([]string, 0, len(resolved.Config))
 		for k := range resolved.Config {
-			if k != "port" {
+			if k != "port" && k != "model_path" {
 				keys = append(keys, k)
 			}
 		}
 		sort.Strings(keys) // deterministic ordering for reproducible pod specs
 		for _, k := range keys {
-			flag := "--" + strings.ReplaceAll(k, "_", "-")
-			args = append(args, flag, fmt.Sprintf("%v", resolved.Config[k]))
+			flagName := strings.ReplaceAll(k, "_", "-")
+			switch v := resolved.Config[k].(type) {
+			case bool:
+				if v {
+					args = append(args, "--"+flagName)
+				} else {
+					args = append(args, "--no-"+flagName)
+				}
+			default:
+				args = append(args, "--"+flagName, fmt.Sprintf("%v", v))
+			}
 		}
 	}
 
@@ -221,6 +237,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Slot:             resolved.Slot,
 		Port:             port,
 		Args:             args,
+		ExtraEnv:         resolved.Env,
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  gpuResource,
 		RuntimeClassName: resolved.RuntimeClassName,

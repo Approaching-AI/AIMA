@@ -38,10 +38,10 @@ variants:
     engine: vllm-nightly
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.8
-      max_model_len: 128000
+      gpu_memory_utilization: 0.9
+      max_model_len: 262144
       dtype: bfloat16
-      enable_chunked_prefill: false
+      enable_chunked_prefill: true
     expected_performance:
       tokens_per_second: [24, 30]        # decode 30 tok/s @1K → 24 tok/s @128K
       latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms

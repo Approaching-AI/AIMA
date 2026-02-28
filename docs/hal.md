@@ -45,8 +45,22 @@ type CPUInfo struct {
 }
 
 type RAMInfo struct {
-    TotalMiB    int     `json:"total_mib"`
-    BandwidthGBPS float64 `json:"bandwidth_gbps"`
+    TotalMiB     int `json:"total_mib"`
+    AvailableMiB int `json:"available_mib"`
+}
+
+type StorageInfo struct {
+    DataDirPath string       `json:"data_dir_path"`
+    FreeMiB     int64        `json:"free_mib"`
+    TotalMiB    int64        `json:"total_mib"`
+    Volumes     []VolumeInfo `json:"volumes,omitempty"`
+}
+
+type VolumeInfo struct {
+    MountPoint string `json:"mount_point"`
+    Device     string `json:"device,omitempty"`
+    TotalMiB   int64  `json:"total_mib"`
+    FreeMiB    int64  `json:"free_mib"`
 }
 ```
 
@@ -96,11 +110,20 @@ Detect()
   │
   ├── 2. RAM 检测 (/proc/meminfo 或 sysctl)
   │
-  └── 3. GPU 检测 (按优先级)
-         ├── nvidia-smi (NVIDIA)
-         ├── rocm-smi (AMD)
-         ├── intel_gpu_top (Intel)
-         └── 无 GPU
+  ├── 3. GPU 检测 (按优先级)
+  │      ├── nvidia-smi (NVIDIA)
+  │      ├── rocm-smi (AMD)
+  │      ├── intel_gpu_top (Intel)
+  │      └── 无 GPU
+  │
+  ├── 4. 存储检测
+  │      ├── AIMA 数据目录磁盘空间 (free + total)
+  │      └── 所有挂载卷列表 (listVolumes)
+  │          ├── Linux: /proc/mounts 解析
+  │          ├── macOS: /Volumes 目录扫描
+  │          └── Windows: GetLogicalDrives API
+  │
+  └── 5. OS 检测 (版本、内核、容器运行时)
 ```
 
 ### GPU 资源名映射
@@ -231,6 +254,10 @@ constraints:
 ## 相关文件
 
 - `internal/hal/detect.go` - 硬件检测实现
+- `internal/hal/hal.go` - 数据结构定义（HardwareInfo, StorageInfo, VolumeInfo 等）
+- `internal/hal/disk_linux.go` - Linux 磁盘/卷检测
+- `internal/hal/disk_darwin.go` - macOS 磁盘/卷检测
+- `internal/hal/disk_windows.go` - Windows 磁盘/卷检测
 - `internal/hal/metrics.go` - 实时监控实现
 
 ---

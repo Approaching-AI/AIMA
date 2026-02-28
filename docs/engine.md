@@ -79,6 +79,7 @@ type EngineImage struct {
     RuntimeType string // "container" or "native"
     BinaryPath string // Native 二进制完整路径
     Available  bool   // 是否可用
+    DockerOnly bool   // true = 镜像仅在 Docker 中，不在 K3S containerd 中
 }
 ```
 
@@ -137,26 +138,35 @@ api:
 `aima engine scan` 自动检测运行时并扫描对应引擎：
 
 ```
-engine.scan
+engine.scan (ScanUnified)
   │
-  ├── 尝试容器扫描 (crictl / docker)
-  │   ├── 成功 → 返回容器镜像列表
-  │   │   └── vllm/vllm-openai:latest       → vllm 引擎 (runtime_type=container)
-  │   │   └── ghcr.io/ggerganov/llama.cpp:server → llamacpp 引擎 (runtime_type=container)
-  │   │
-  │   └── 失败 → 尝试 Native 扫描
-  │       ├── 扫描 distDir: ~/.aima/dist/{os}-{arch}/
-  │       │   └── llama-server                   → llamacpp 引擎 (runtime_type=native)
-  │       ├── 扫描 PATH
-  │       │   └── /usr/local/bin/llama-server   → llamacpp 引擎 (runtime_type=native)
-  │       │
-  │       └── 扫描结果注册到 SQLite engines 表
+  ├── 1. 容器扫描 (crictl + docker 同时扫描)
+  │   ├── crictl images → K3S containerd 镜像列表 (source="containerd")
+  │   ├── docker images → Docker 镜像列表 (source="docker")
+  │   └── 合并去重：containerd 优先，Docker-only 镜像标记 DockerOnly=true
+  │
+  ├── 2. 模式匹配 (matchImages)
+  │   ├── 按 Engine Asset YAML 的 patterns 匹配引擎类型
+  │   ├── 同 type 多个 YAML 的 patterns 合并（非覆盖）
+  │   └── DockerOnly 标记传递到 EngineImage
+  │
+  ├── 3. Docker-only 镜像处理
+  │   ├── 预检查：k3s ctr version → 判断是否有 containerd 权限
+  │   ├── 有权限 → docker save | k3s ctr import → 导入到 K3S containerd
+  │   └── 无权限 → WARN 提示手动导入命令（不阻塞扫描）
+  │
+  ├── 4. Native 扫描 (并行)
+  │   ├── 扫描 distDir: ~/.aima/dist/{os}-{arch}/
+  │   └── 扫描 PATH
+  │
+  └── 5. 扫描结果注册到 SQLite engines 表
 ```
 
-**扫描优先级：**
-1. Container Runtime 优先：有 K3S/Docker 则扫描容器镜像
-2. Native Fallback：无容器运行时时扫描 Native 二进制
-3. 两者都不可用：返回错误
+**扫描行为：**
+1. Container：crictl + docker 同时扫描，containerd 优先去重
+2. Docker-only 镜像：标记 `docker_only=true`，尝试导入到 K3S containerd（需 root）
+3. Native：始终扫描 distDir + PATH（不依赖容器运行时）
+4. Pattern 合并：同 type 多个 Engine YAML 的 patterns 合并匹配，不互相覆盖
 
 **Native 扫描规则：**
 - 扫描 `~/.aima/dist/{os}-{arch}/` 目录
@@ -202,7 +212,26 @@ aima engine pull vllm
   └── 6. Agent 可通过 deploy.apply 使用此引擎
 ```
 
-### 3. Native 二进制管理
+### 3. Docker ↔ K3S Containerd 互通
+
+Docker 和 K3S containerd 使用独立的镜像存储。通过 `docker pull` 拉取的镜像不会自动出现在 K3S containerd 中。
+
+**engine scan 自动检测与处理：**
+- 扫描时同时查询 crictl (containerd) 和 docker，按 image:tag 去重
+- 仅在 Docker 中的镜像标记 `docker_only=true`
+- 如有 containerd 写权限（root），自动通过 `docker save | k3s ctr import` 导入
+- 无权限时打印 WARN 和手动修复命令：
+  ```
+  WARN engine in Docker but not in K3S containerd; import requires root
+       engine=vllm image=vllm/vllm-openai:latest
+       fix="sudo docker save vllm/vllm-openai:latest | sudo k3s ctr -n k8s.io images import -"
+  ```
+
+**Pod 部署保障：**
+- Pod 模板设置 `imagePullPolicy: IfNotPresent`，防止 K3S 尝试从 registry 拉取已存在的镜像
+- deploy 前置检查：如果检测到镜像在 Docker 中，打印提示信息（非致命）
+
+### 4. Native 二进制管理
 
 除容器镜像外，AIMA 还管理 native 引擎二进制（用于非 K3S 环境）。
 
@@ -242,7 +271,7 @@ BinaryManager.Resolve(ctx, source)
 - `NativeRuntime.Deploy()` 在 `findInDist` 失败后调用 `resolveBinary` 作为第三级 fallback
 - 类型转换在 `main.go` 的 `selectRuntime()` 中完成，避免 runtime ↔ engine 包直接依赖
 
-### 4. 部署后预热 (Warmup)
+### 5. 部署后预热 (Warmup)
 
 引擎冷启动后首次推理通常很慢（CUDA kernel JIT 编译、模型权重加载到 GPU 等）。
 Engine Asset 可声明 `warmup` 配置，NativeRuntime 在 health check 通过后自动执行预热：
@@ -323,8 +352,8 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 ## 相关文件
 
-- `internal/engine/scanner.go` - 统一引擎扫描（容器 + Native）
-- `internal/engine/puller.go` - 镜像拉取
+- `internal/engine/scanner.go` - 统一引擎扫描（容器 + Native + Docker-only 检测）
+- `internal/engine/puller.go` - 镜像拉取 + Docker↔containerd 导入
 - `internal/engine/importer.go` - OCI tar 导入
 - `internal/engine/binary.go` - Native 二进制管理
 - `internal/cli/engine.go` - CLI 命令处理
@@ -333,4 +362,4 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 ---
 
-*最后更新：2026-02-27 (v4: 统一引擎扫描)*
+*最后更新：2026-02-28 (v5: Docker-only 检测 + containerd 导入 + pattern 合并)*

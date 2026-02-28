@@ -176,11 +176,22 @@ Stack Component 中的先验知识经历三个阶段：
 
 ---
 
+## 导出 API
+
+### WriteRegistries
+
+`stack.WriteRegistries(registries map[string]any) error` — 将容器镜像 mirror 配置写入
+`/etc/rancher/k3s/registries.yaml`。K3S containerd 自动 hot-reload，无需重启服务。
+
+需要 root 权限（`/etc/rancher/k3s/` 目录属 root 所有）。`aima init` 以 root 运行时调用。
+
+---
+
 ## 相关文件
 
-- `internal/stack/installer.go` - 通用 stack installer
+- `internal/stack/installer.go` - 通用 stack installer + `WriteRegistries` 导出函数
 - `catalog/stack/` - Stack Component YAML
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

@@ -27,14 +27,16 @@ type HardwareInfo struct {
 }
 
 type GPUInfo struct {
-    Vendor    string  `json:"vendor"`     // nvidia | amd | intel | none
-    Arch      string  `json:"arch"`       // Blackwell | Ada | RDNA3 | ...
-    Model     string  `json:"model"`      // RTX 4090 | GB10 | ...
-    VRAMMiB   int     `json:"vram_mib"`
-    ComputeID string  `json:"compute_id"`     // "8.9" (NV) | "gfx1151" (AMD) | "metal3" (Apple)
-    ComputeUnits int   `json:"compute_units"`  // CUDA cores / stream processors / GPU cores
-    Driver    string  `json:"driver"`
-    ResourceName string `json:"resource_name"` // "nvidia.com/gpu" | "amd.com/gpu"
+    Vendor       string  `json:"vendor"`         // nvidia | amd | intel | huawei | mthreads
+    Name         string  `json:"name"`           // NVIDIA GeForce RTX 4090 | AMD Radeon Graphics | ...
+    Arch         string  `json:"arch"`           // Blackwell | Ada | RDNA3.5 | Apple | ...
+    VRAMMiB      int     `json:"vram_mib"`
+    ComputeID    string  `json:"compute_id"`     // "8.9" (NV) | "gfx1151" (AMD) | "metal3" (Apple)
+    ComputeUnits int     `json:"compute_units"`  // CUDA cores | stream processors | GPU cores
+    DriverVersion string `json:"driver_version"` // "566.36" (NV) | "6.14.0-1020-oem" (AMD kernel)
+    SDKVersion   string  `json:"sdk_version"`    // "CUDA 12.7" | "ROCm 7.9.0"
+    UnifiedMemory bool   `json:"unified_memory"` // true for APU / shared memory devices
+    Count        int     `json:"count"`          // number of GPUs
 }
 
 type CPUInfo struct {
@@ -110,10 +112,12 @@ Detect()
   │
   ├── 2. RAM 检测 (/proc/meminfo 或 sysctl)
   │
-  ├── 3. GPU 检测 (按优先级)
-  │      ├── nvidia-smi (NVIDIA)
-  │      ├── rocm-smi (AMD)
-  │      ├── intel_gpu_top (Intel)
+  ├── 3. GPU 检测 (probe chain, 按优先级尝试)
+  │      ├── nvidia-smi (NVIDIA) → enrichNvidiaGPU
+  │      ├── rocm-smi (AMD) → enrichAMDGPU
+  │      ├── xpu-smi (Intel)
+  │      ├── npu-smi (Huawei)
+  │      ├── mthreads-gmi (MThreads)
   │      └── 无 GPU
   │
   ├── 4. 存储检测
@@ -125,6 +129,16 @@ Detect()
   │
   └── 5. OS 检测 (版本、内核、容器运行时)
 ```
+
+### GPU Enrichment（二次探测）
+
+主探测只获取基础信息（名称、VRAM、温度等），enrichment 补全 SDK 版本和驱动版本：
+
+| Vendor | SDKVersion 来源 | DriverVersion 来源 |
+|--------|----------------|-------------------|
+| NVIDIA | `nvidia-smi` 输出解析 → `"CUDA 12.7"` | `nvidia-smi --query-gpu=driver_version` |
+| AMD | `cat /opt/rocm/.info/version` → `"ROCm 7.9.0"` | `modinfo -F version amdgpu`，空则 fallback `uname -r` |
+| Intel/Huawei/MThreads | *(未实现)* | *(未实现)* |
 
 ### GPU 资源名映射
 
@@ -196,28 +210,43 @@ constraints:
 ```bash
 ./aima hal detect
 
-# 输出示例
+# NVIDIA 输出示例 (dev-win)
 {
   "gpu": {
     "vendor": "nvidia",
-    "arch": "Blackwell",
-    "model": "RTX 4090",
-    "vram_mib": 24576,
+    "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "arch": "Ada",
+    "vram_mib": 8188,
     "compute_id": "8.9",
-    "compute_units": 16384,
-    "driver": "550.90.07",
-    "resource_name": "nvidia.com/gpu"
+    "driver_version": "566.36",
+    "sdk_version": "CUDA 12.7",
+    "power_draw_watts": 17.41,
+    "power_limit_watts": 75,
+    "temperature_celsius": 57,
+    "unified_memory": false,
+    "count": 1
   },
-  "cpu": {
-    "arch": "x86_64",
-    "cores": 24,
-    "freq_ghz": 3.0,
-    "model": "Intel(R) Core(TM) i9-13980HX"
+  "cpu": { "arch": "amd64", "model": "13th Gen Intel(R) Core(TM) i9-13980HX", "cores": 24 },
+  "ram": { "total_mib": 32388, "available_mib": 10054 }
+}
+
+# AMD 输出示例 (amd395)
+{
+  "gpu": {
+    "vendor": "amd",
+    "name": "AMD Radeon Graphics",
+    "arch": "RDNA3.5",
+    "vram_mib": 65536,
+    "compute_id": "gfx1151",
+    "driver_version": "6.14.0-1020-oem",
+    "sdk_version": "ROCm 7.9.0",
+    "power_draw_watts": 13.03,
+    "temperature_celsius": 51,
+    "unified_memory": true,
+    "count": 1
   },
-  "ram": {
-    "total_mib": 131072,
-    "bandwidth_gbps": 200
-  }
+  "cpu": { "arch": "amd64", "model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S", "cores": 16 },
+  "ram": { "total_mib": 63937, "available_mib": 56926 }
 }
 ```
 
@@ -255,6 +284,7 @@ constraints:
 
 - `internal/hal/detect.go` - 硬件检测实现
 - `internal/hal/hal.go` - 数据结构定义（HardwareInfo, StorageInfo, VolumeInfo 等）
+- `internal/hal/gpu.go` - 多厂商 GPU 探测链 + enrichment（NVIDIA/AMD/Intel/Huawei/MThreads）
 - `internal/hal/disk_linux.go` - Linux 磁盘/卷检测
 - `internal/hal/disk_darwin.go` - macOS 磁盘/卷检测
 - `internal/hal/disk_windows.go` - Windows 磁盘/卷检测

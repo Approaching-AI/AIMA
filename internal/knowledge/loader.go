@@ -135,10 +135,11 @@ type EngineHardware struct {
 }
 
 type EngineStartup struct {
-	Command     []string       `yaml:"command"      json:"command"`
-	DefaultArgs map[string]any `yaml:"default_args" json:"default_args"`
-	HealthCheck HealthCheck    `yaml:"health_check" json:"health_check"`
-	Warmup      WarmupConfig   `yaml:"warmup"       json:"warmup"`
+	Command     []string          `yaml:"command"      json:"command"`
+	Env         map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	DefaultArgs map[string]any    `yaml:"default_args" json:"default_args"`
+	HealthCheck HealthCheck       `yaml:"health_check" json:"health_check"`
+	Warmup      WarmupConfig      `yaml:"warmup"       json:"warmup"`
 }
 
 type HealthCheck struct {

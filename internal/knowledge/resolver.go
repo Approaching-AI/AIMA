@@ -37,9 +37,10 @@ type ResolvedConfig struct {
 	HealthCheck     *HealthCheck
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)
-	GPUResourceName       string // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
-	RuntimeClassName      string // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
-	RuntimeRecommendation string // "native" or "container" or "" — from engine's platform_recommendations
+	Env                   map[string]string // Extra env vars for the container (from engine YAML)
+	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
+	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
+	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -84,8 +85,11 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		}
 	}
 
-	// L1: User overrides
+	// L1: User overrides (model_path is handled separately via resolved.ModelPath)
 	for k, v := range userOverrides {
+		if k == "model_path" {
+			continue
+		}
 		config[k] = v
 		provenance[k] = "L1"
 	}
@@ -99,6 +103,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Provenance:  provenance,
 		Partition:   slot,
 		Command:     engine.Startup.Command,
+		Env:         engine.Startup.Env,
 		HealthCheck: &engine.Startup.HealthCheck,
 		Source:      engine.Source,
 	}

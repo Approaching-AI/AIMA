@@ -716,10 +716,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if modelPath == "" {
 				modelPath = filepath.Join(dataDir, "models", modelName)
 			}
-			// If modelPath is a directory, find the model file inside it.
-			if fi, err := os.Stat(modelPath); err == nil && fi.IsDir() {
-				if f := findModelFileInDir(modelPath, resolved.Engine); f != "" {
-					modelPath = f
+			// Native binary engines require a single model file path; container engines
+			// take the directory. Use the presence of Source (native binary download) to
+			// distinguish — not the engine type name.
+			if resolved.Source != nil {
+				if fi, err := os.Stat(modelPath); err == nil && fi.IsDir() {
+					if f := findModelFileInDir(modelPath); f != "" {
+						modelPath = f
+					}
 				}
 			}
 
@@ -1029,22 +1033,20 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 	}
 }
 
-// findModelFileInDir returns the first model file found inside dir for the given engine.
-// For llamacpp, prefers .gguf files. For other engines, returns empty (use dir as-is).
-func findModelFileInDir(dir, engineType string) string {
+// findModelFileInDir returns the first model file found inside dir.
+// Only called for native binary engines (where the engine YAML has a source: field);
+// container engines receive the directory path directly.
+func findModelFileInDir(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
 	}
-	var ext string
-	switch engineType {
-	case "llamacpp":
-		ext = ".gguf"
-	default:
-		return "" // container engines take the directory
-	}
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ext) {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".gguf", ".ggml", ".bin", ".safetensors":
 			return filepath.Join(dir, e.Name())
 		}
 	}

@@ -323,7 +323,7 @@ Agent 探索 (L3a/L3b)
 - `internal/knowledge/resolver.go` - L0→L3 配置解析 + 硬件感知 variant 选择 + CheckFit
 - `internal/knowledge/query.go` - 知识查询引擎
 - `internal/knowledge/similarity.go` - 向量相似度
-- `internal/knowledge/podgen.go` - Pod YAML 生成
+- `internal/knowledge/podgen.go` - Pod YAML 生成（含 imagePullPolicy:IfNotPresent）
 - `catalog/embed.go` - go:embed 入口
 
 ---

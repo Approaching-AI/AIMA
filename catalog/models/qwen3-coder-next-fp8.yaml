@@ -37,7 +37,7 @@ variants:
       max_model_len: 128000
       dtype: auto
       kv_cache_dtype: fp8_e4m3
-      enable_chunked_prefill: false
+      enable_chunked_prefill: true
     expected_performance:
       tokens_per_second: [10, 25]
       latency_first_token_ms: [50, 200]

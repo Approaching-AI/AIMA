@@ -83,7 +83,7 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 					slog.Warn("engine in Docker but not in K3S containerd; import requires root",
 						"engine", img.Type, "image", ref,
 						"fix", "sudo docker save "+ref+" | sudo k3s ctr -n k8s.io images import -")
-				} else if err := ImportDockerToContainerd(ctx, ref, opts.Runner); err != nil {
+				} else if err := ImportDockerToContainerd(ctx, ref); err != nil {
 					slog.Warn("failed to import engine from Docker to K3S containerd",
 						"engine", img.Type, "image", ref, "error", err)
 				} else {
@@ -149,7 +149,10 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 			}
 			if ok1 {
 				path := filepath.Join(opts.DistDir, name)
-				info, _ := entry.Info()
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
 				binaryID := binaryHash(name)
 				found = append(found, &EngineImage{
 					ID:         binaryID,
@@ -192,7 +195,10 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 					}
 					if ok1 {
 						path := filepath.Join(dir, name)
-						info, _ := entry.Info()
+						info, err := entry.Info()
+						if err != nil {
+							continue
+						}
 						binaryID := binaryHash(name + "-" + dir)
 						found = append(found, &EngineImage{
 							ID:         binaryID,

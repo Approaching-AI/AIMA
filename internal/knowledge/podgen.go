@@ -48,16 +48,8 @@ spec:
       ports:
         - containerPort: {{ .Port }}
           name: http
-      {{- if or .RuntimeClassName .ExtraEnv }}
+      {{- if .ExtraEnv }}
       env:
-        {{- if .RuntimeClassName }}
-        - name: NVIDIA_VISIBLE_DEVICES
-          value: all
-        - name: NVIDIA_DRIVER_CAPABILITIES
-          value: all
-        - name: LD_LIBRARY_PATH
-          value: {{ .LibDir }}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
-        {{- end }}
         {{- range $k, $v := .ExtraEnv }}
         - name: {{ $k }}
           value: "{{ $v }}"
@@ -132,18 +124,17 @@ type podData struct {
 	ModelHostPath          string
 	GPUResourceName        string
 	RuntimeClassName       string // e.g. "nvidia" for NVIDIA CUDA containers
-	LibDir                 string // platform-specific lib path, e.g. "/lib/x86_64-linux-gnu"
 }
 
 func (d podData) HasAnnotations() bool {
-	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
+	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
 }
 
 // HasGPUResource reports whether a device-plugin GPU resource request should be added.
-// True only when there is explicit GPU partitioning (HAMi-style); false when using
-// runtimeClassName for GPU access without a device plugin.
+// Requires both a non-empty GPUResourceName and explicit GPU partitioning (HAMi-style).
+// False when GPUResourceName is unset or when using runtimeClassName without a device plugin.
 func (d podData) HasGPUResource() bool {
-	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
+	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
 }
 
 // HasComputeResources reports whether CPU or RAM limits should be set.
@@ -158,16 +149,6 @@ func (d podData) GPUVendorDomain() string {
 		return d.GPUResourceName[:i]
 	}
 	return d.GPUResourceName
-}
-
-// libDirForArch returns the platform-specific library directory path.
-func libDirForArch(cpuArch string) string {
-	switch cpuArch {
-	case "arm64", "aarch64":
-		return "/lib/aarch64-linux-gnu"
-	default:
-		return "/lib/x86_64-linux-gnu"
-	}
 }
 
 // GeneratePod generates K3S Pod YAML from a resolved configuration.
@@ -242,9 +223,6 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	}
 
 	gpuResource := resolved.GPUResourceName
-	if gpuResource == "" {
-		gpuResource = "nvidia.com/gpu"
-	}
 
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
@@ -258,7 +236,6 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  gpuResource,
 		RuntimeClassName: resolved.RuntimeClassName,
-		LibDir:           libDirForArch(resolved.CPUArch),
 	}
 
 	if resolved.Partition != nil {

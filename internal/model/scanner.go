@@ -56,7 +56,7 @@ type ParentPattern struct {
 	IndicatorValueContains string
 }
 
-// Runtime configuration (loaded from YAML or defaults).
+// Runtime configuration (loaded from YAML or defaults, read-only after init).
 var (
 	maxScanDepth      int
 	minModelSize     int64
@@ -309,10 +309,9 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 		return nil, fmt.Errorf("scan models: %w", err)
 	}
 
+	effectiveMinSize := minModelSize
 	if opts.MinModelSizeBytes > 0 {
-		orig := minModelSize
-		minModelSize = opts.MinModelSizeBytes
-		defer func() { minModelSize = orig }()
+		effectiveMinSize = opts.MinModelSizeBytes
 	}
 
 	paths := opts.Paths
@@ -333,7 +332,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 			continue
 		}
 
-		found, err := scanDirectory(ctx, root, 0, seen, skipParentPaths)
+		found, err := scanDirectory(ctx, root, 0, seen, skipParentPaths, effectiveMinSize)
 		if err != nil {
 			return nil, err
 		}
@@ -343,7 +342,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	return models, nil
 }
 
-func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool, skipParentPaths map[string]bool) ([]*ModelInfo, error) {
+func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool, skipParentPaths map[string]bool, minSize int64) ([]*ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
 	}
@@ -382,7 +381,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 			continue
 		}
 
-		subModels, err := scanDirectory(ctx, subdir, depth+1, seen, skipParentPaths)
+		subModels, err := scanDirectory(ctx, subdir, depth+1, seen, skipParentPaths, minSize)
 		if err == nil {
 			models = append(models, subModels...)
 		}
@@ -417,7 +416,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 		return models, nil
 	}
 
-	for _, m := range tryDetectModel(ctx, dir, entries) {
+	for _, m := range tryDetectModel(ctx, dir, entries, minSize) {
 		if !seen[m.Path] {
 			seen[m.Path] = true
 			models = append(models, m)
@@ -468,23 +467,23 @@ func shouldSkipParentChild(dir string, skipParentPaths map[string]bool) bool {
 	return false
 }
 
-func tryDetectModel(_ context.Context, dir string, entries []os.DirEntry) []*ModelInfo {
+func tryDetectModel(_ context.Context, dir string, entries []os.DirEntry, minSize int64) []*ModelInfo {
 	for _, p := range modelPatterns {
-		if ms := detectByPattern(dir, entries, p); len(ms) > 0 {
+		if ms := detectByPattern(dir, entries, p, minSize); len(ms) > 0 {
 			return ms
 		}
 	}
 	return nil
 }
 
-func detectByPattern(dir string, entries []os.DirEntry, p ModelPattern) []*ModelInfo {
+func detectByPattern(dir string, entries []os.DirEntry, p ModelPattern, minSize int64) []*ModelInfo {
 	if !hasConfigFile(entries, p.configFiles) {
 		return nil
 	}
 
 	// For GGUF format, detect all .gguf files in the directory
 	if p.format == "gguf" {
-		return detectGGUFModels(dir, entries, p)
+		return detectGGUFModels(dir, entries, p, minSize)
 	}
 
 	// For other formats, find the first weight file (existing behavior)
@@ -493,13 +492,13 @@ func detectByPattern(dir string, entries []os.DirEntry, p ModelPattern) []*Model
 		return nil
 	}
 
-	return buildModelInfo(dir, entries, p, weightPath, "")
+	return buildModelInfo(dir, entries, p, weightPath, "", minSize)
 }
 
 // detectGGUFModels detects all GGUF models in a directory.
 // GGUF models don't have config.json, so we detect one model per .gguf file.
 // Each GGUF file gets its own Path (file path, not directory) for uniqueness.
-func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern) []*ModelInfo {
+func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize int64) []*ModelInfo {
 	weightFiles := findAllWeightFiles(dir, entries, p.weightExts)
 	if len(weightFiles) == 0 {
 		return nil
@@ -512,7 +511,7 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern) []*Mode
 		if err != nil {
 			continue
 		}
-		if info.Size() < minModelSize {
+		if info.Size() < minSize {
 			continue
 		}
 
@@ -565,7 +564,7 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern) []*Mode
 
 // buildModelInfo builds a ModelInfo from a single weight file.
 // For formats with config files (safetensors, pytorch, etc.).
-func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPath string, overrideName string) []*ModelInfo {
+func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPath string, overrideName string, minSize int64) []*ModelInfo {
 	var config map[string]any
 	configPath := findConfigFile(dir, entries, p.configFiles)
 	if configPath != "" {
@@ -585,7 +584,7 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPat
 	sizeBytes := calculateModelSize(dir, entries, p.weightExts)
 
 	// Filter out incomplete models (below minimum size)
-	if sizeBytes < minModelSize {
+	if sizeBytes < minSize {
 		return nil
 	}
 
@@ -656,7 +655,7 @@ func normalizeModelName(path string) string {
 	// If name looks like a hash, try to extract from parent path
 	// (e.g., models--openbmb--MiniCPM-o-4_5/snapshots/<hash>)
 	if isHexString(name) && strings.Contains(path, "models--") {
-		parts := strings.Split(path, "/")
+		parts := strings.Split(filepath.ToSlash(path), "/")
 		for _, part := range parts {
 			if strings.HasPrefix(part, "models--") {
 				subParts := strings.SplitN(part, "--", 3)

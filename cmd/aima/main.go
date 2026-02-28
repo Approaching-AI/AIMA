@@ -850,7 +850,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				Port:             port,
 				Config:           resolved.Config,
 				RuntimeClassName: resolved.RuntimeClassName,
-				CPUArch:          hwInfo.CPUArch,
+				CPUArch:          resolved.CPUArch,
+				Env:              resolved.Env,
+				GPUResourceName:  resolved.GPUResourceName,
 				Labels: map[string]string{
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,
@@ -1126,7 +1128,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 
 			// Find or create configuration
-			configJSON, _ := json.Marshal(p.Config)
+			configJSON, err := json.Marshal(p.Config)
+			if err != nil {
+				return nil, fmt.Errorf("marshal benchmark config: %w", err)
+			}
 			configHash := fmt.Sprintf("%x", sha256.Sum256(
 				[]byte(p.Hardware+"|"+p.Engine+"|"+p.Model+"|"+string(configJSON))))
 
@@ -1136,7 +1141,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			if cfg == nil {
 				cfg = &state.Configuration{
-					ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(configHash)))[:16],
+					ID:         configHash[:16],
 					HardwareID: p.Hardware,
 					EngineID:   p.Engine,
 					ModelID:    p.Model,

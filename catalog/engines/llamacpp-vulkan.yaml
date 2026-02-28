@@ -48,7 +48,7 @@ amplifier:
     - flash_attention
     - quantization_gguf
     - vulkan_compute
-  performance_gain: "Vulkan GPU acceleration for AMD RDNA4, fast startup, CPU offload"
+  performance_gain: "Vulkan GPU acceleration for AMD RDNA3.5, fast startup, CPU offload"
   resource_expansion:
     cpu_offload: true
     ssd_offload: false

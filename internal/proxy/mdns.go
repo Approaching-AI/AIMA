@@ -110,7 +110,9 @@ func lanIPs() []net.IP {
 // Shutdown stops the mDNS advertiser.
 func (a *MDNSAdvertiser) Shutdown() error {
 	if a.cmd != nil {
-		return a.cmd.Process.Kill()
+		err := a.cmd.Process.Kill()
+		a.cmd.Wait() // reap zombie process
+		return err
 	}
 	if a.server != nil {
 		return a.server.Shutdown()

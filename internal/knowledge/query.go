@@ -351,13 +351,26 @@ type LineageEntry struct {
 // Lineage returns the derivation chain for a configuration (ancestors + descendants).
 func (s *Store) Lineage(ctx context.Context, configID string) ([]LineageEntry, error) {
 	query := `
-WITH RECURSIVE chain AS (
-    SELECT id, status, derived_from, 0 AS depth FROM configurations WHERE id = ?
+WITH RECURSIVE
+  ancestors AS (
+    SELECT id, status, derived_from, 0 AS depth FROM configurations WHERE id = ?1
     UNION ALL
-    SELECT c.id, c.status, c.derived_from, ch.depth + 1
-    FROM configurations c JOIN chain ch ON c.derived_from = ch.id
-    WHERE ch.depth < 10
-)
+    SELECT c.id, c.status, c.derived_from, a.depth - 1
+    FROM configurations c JOIN ancestors a ON a.derived_from = c.id
+    WHERE a.depth > -10
+  ),
+  descendants AS (
+    SELECT id, status, derived_from, 0 AS depth FROM configurations WHERE id = ?1
+    UNION ALL
+    SELECT c.id, c.status, c.derived_from, d.depth + 1
+    FROM configurations c JOIN descendants d ON c.derived_from = d.id
+    WHERE d.depth < 10
+  ),
+  chain AS (
+    SELECT id, status, depth FROM ancestors WHERE depth < 0
+    UNION ALL
+    SELECT id, status, depth FROM descendants
+  )
 SELECT
     chain.id, chain.status, chain.depth,
     COALESCE((SELECT MAX(b.throughput_tps) FROM benchmark_results b WHERE b.config_id = chain.id), 0)

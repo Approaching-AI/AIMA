@@ -100,13 +100,14 @@ func TestGeneratePod(t *testing.T) {
 
 func TestGeneratePodWithPartition(t *testing.T) {
 	resolved := &ResolvedConfig{
-		Engine:      "vllm",
-		EngineImage: "vllm/vllm-openai:latest",
-		ModelPath:   "/data/models/qwen3-8b",
-		ModelName:   "qwen3-8b",
-		Slot:        "primary",
-		Config:      map[string]any{"port": 8000},
-		Provenance:  map[string]string{"port": "L0"},
+		Engine:          "vllm",
+		EngineImage:     "vllm/vllm-openai:latest",
+		ModelPath:       "/data/models/qwen3-8b",
+		ModelName:       "qwen3-8b",
+		Slot:            "primary",
+		Config:          map[string]any{"port": 8000},
+		Provenance:      map[string]string{"port": "L0"},
+		GPUResourceName: "nvidia.com/gpu",
 		Partition: &PartitionSlot{
 			Name:            "primary",
 			GPUMemoryMiB:    10240,

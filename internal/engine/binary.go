@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"time"
 )
 
 // BinaryManager downloads and caches native engine binaries.
@@ -180,7 +181,8 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) er
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Minute}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -342,6 +344,13 @@ func extractTarGz(archivePath, destDir string) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			// Validate symlink target: must resolve within destDir
+			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(destPath), hdr.Linkname))
+			if !strings.HasPrefix(resolvedTarget, filepath.Clean(destDir)+string(filepath.Separator)) &&
+				resolvedTarget != filepath.Clean(destDir) {
+				slog.Warn("skipping symlink with target outside destDir", "link", destPath, "target", hdr.Linkname)
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 				return err
 			}

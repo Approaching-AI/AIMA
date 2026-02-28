@@ -77,7 +77,7 @@ func detectLinuxVersion(ctx context.Context, runner CommandRunner) string {
 	if out, err := runner.Run(ctx, "cat", "/etc/os-release"); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			if strings.HasPrefix(line, "VERSION_ID=") {
-				return strings.TrimPrefix(line, "VERSION_ID=")
+				return strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), `"`)
 			}
 		}
 	}

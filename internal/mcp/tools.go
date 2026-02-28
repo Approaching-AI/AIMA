@@ -105,9 +105,15 @@ func isCommandAllowed(command string) bool {
 		return len(parts) >= 2 && allowedKubectlSubcommands[parts[1]]
 	}
 
-	// Other commands: exact or prefix match
+	// Other commands: exact match or match with additional arguments.
+	// For multi-word entries (e.g. "cat /proc/cpuinfo"), ALL tokens must match —
+	// additional arguments after the pattern are rejected to prevent file read escalation.
 	for _, allowed := range allowedCommands {
-		if cmd == allowed || strings.HasPrefix(cmd, allowed+" ") {
+		if cmd == allowed {
+			return true
+		}
+		allowedParts := strings.Fields(allowed)
+		if len(allowedParts) == 1 && strings.HasPrefix(cmd, allowed+" ") {
 			return true
 		}
 	}
@@ -276,7 +282,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	s.RegisterTool(&Tool{
 		Name:        "model.remove",
 		Description: "Remove a model from the database",
-		InputSchema: schema(`"name":{"type":"string","description":"Model name to remove"}`, "name", `"delete_files":{"type":"boolean","description":"Delete model files from disk"}`, "delete_files"),
+		InputSchema: schema(`"name":{"type":"string","description":"Model name to remove"},"delete_files":{"type":"boolean","description":"Delete model files from disk"}`, "name"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RemoveModel == nil {
 				return ErrorResult("model.remove not implemented"), nil

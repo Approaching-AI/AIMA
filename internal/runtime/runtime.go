@@ -32,7 +32,9 @@ type DeployRequest struct {
 	Labels       map[string]string
 	BinarySource *engine.BinarySource // native: where to download the engine binary if missing
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
-	CPUArch      string         // "arm64", "amd64" — for platform-specific paths in Pod spec
+	CPUArch         string            // "arm64", "amd64" — for platform-specific paths in Pod spec
+	Env             map[string]string // extra env vars for the container (engine + hardware)
+	GPUResourceName string            // K8s GPU resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource)
 }
 
 // DeploymentStatus is the unified status across runtimes.

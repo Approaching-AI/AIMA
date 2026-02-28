@@ -214,14 +214,14 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, er
 }
 
 // findGPUResourceName looks up the K8s GPU resource name from hardware profiles.
-// Falls back to "nvidia.com/gpu" if not specified.
+// Returns "" if not specified — empty means no GPU resource request in pod spec.
 func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {
 	for _, hp := range c.HardwareProfiles {
 		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Hardware.GPU.ResourceName != "" {
 			return hp.Hardware.GPU.ResourceName
 		}
 	}
-	return "nvidia.com/gpu"
+	return ""
 }
 
 // findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.
@@ -477,6 +477,8 @@ func toFloat64(v any) float64 {
 	case float32:
 		return float64(x)
 	case int:
+		return float64(x)
+	case int64:
 		return float64(x)
 	default:
 		return 0

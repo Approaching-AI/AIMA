@@ -35,7 +35,7 @@ variants:
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.85
-      max_model_len: 128000
+      max_model_len: 262144
       dtype: auto
       enable_chunked_prefill: true
     expected_performance:

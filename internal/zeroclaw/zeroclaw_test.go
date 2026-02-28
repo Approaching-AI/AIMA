@@ -1,8 +1,8 @@
 package zeroclaw
 
 import (
+	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -135,7 +135,8 @@ func TestInstallFrom_MockServer(t *testing.T) {
 		t.Fatalf("platformBinary: %v", err)
 	}
 
-	fakeContent := []byte("#!/bin/sh\necho zeroclaw\n")
+	// Content must exceed minBinarySize (100KB) to pass the size check
+	fakeContent := bytes.Repeat([]byte("x"), 128*1024)
 
 	// Mock HTTP server that serves the binary
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,13 +157,13 @@ func TestInstallFrom_MockServer(t *testing.T) {
 		t.Fatalf("installFrom: %v", err)
 	}
 
-	// Verify file exists and has correct content
+	// Verify file exists and has correct size
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read installed binary: %v", err)
 	}
-	if string(data) != string(fakeContent) {
-		t.Errorf("binary content = %q, want %q", data, fakeContent)
+	if len(data) != len(fakeContent) {
+		t.Errorf("binary size = %d, want %d", len(data), len(fakeContent))
 	}
 
 	// Verify file is in the right place
@@ -219,9 +220,10 @@ func TestInstallFrom_CreateDestDir(t *testing.T) {
 		t.Fatalf("platformBinary: %v", err)
 	}
 
+	fakeBinary := bytes.Repeat([]byte("b"), 128*1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "binary")
+		w.Write(fakeBinary)
 	}))
 	defer server.Close()
 

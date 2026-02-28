@@ -67,10 +67,12 @@ func Download(ctx context.Context, opts DownloadOptions) error {
 
 	// Determine total size
 	var totalSize int64
-	if resp.StatusCode == http.StatusPartialContent {
+	if resp.StatusCode == http.StatusPartialContent && resp.ContentLength >= 0 {
 		totalSize = existingSize + resp.ContentLength
-	} else {
+	} else if resp.ContentLength >= 0 {
 		totalSize = resp.ContentLength
+	} else {
+		totalSize = -1 // unknown
 	}
 
 	// Ensure dest directory exists

@@ -102,8 +102,9 @@ func (s *Server) ListBackends() map[string]*Backend {
 // Start starts the HTTP server (blocking).
 func (s *Server) Start(ctx context.Context) error {
 	s.server = &http.Server{
-		Addr:    s.addr,
-		Handler: s.handler(),
+		Addr:              s.addr,
+		Handler:           s.handler(),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -165,7 +166,8 @@ func apiKeyMiddleware(key string, next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer "+key {
 			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintln(w, `{"error":"unauthorized"}`)
 			return
 		}
 		next.ServeHTTP(w, r)

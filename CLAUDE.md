@@ -19,7 +19,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | ID | User@Host | OS | Arch | Chip/GPU | RAM | Disk Free | K3S/Docker | SSH Auth | Role |
 |----|-----------|-----|------|----------|-----|-----------|------------|----------|------|
 | dev-win | **local** (Light-Salt) | Windows 11 | x86_64 | i9-13980HX + RTX 4060 8GB (Driver 566, CUDA) | 32 GB | 551 GB | no | local | Dev machine, `go build/test` runs here directly |
-| mac-m4 | `user@<REDACTED_IP>` | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
+| mac-m4 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
 | gb10 | `user@<REDACTED_IP>` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
 | linux-1 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
 | amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |

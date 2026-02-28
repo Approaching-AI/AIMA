@@ -32,8 +32,11 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			addr = svc.Host
 		}
 		if addr == "" {
+			slog.Debug("remote: skipping service with no address", "name", svc.Name)
 			continue
 		}
+
+		slog.Debug("remote: processing service", "name", svc.Name, "addr", addr, "port", svc.Port)
 
 		// Skip self: same port on a local interface address
 		if svc.Port == localPort && isLocalIP(addr) {

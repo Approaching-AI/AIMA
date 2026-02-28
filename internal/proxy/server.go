@@ -287,18 +287,9 @@ func (s *Server) resolveBackend(model string) *Backend {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Exact match
 	if b, ok := s.routes[model]; ok {
 		return b
 	}
-
-	// If exactly 1 backend registered, use as default
-	if len(s.routes) == 1 {
-		for _, b := range s.routes {
-			return b
-		}
-	}
-
 	return nil
 }
 

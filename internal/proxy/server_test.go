@@ -201,33 +201,25 @@ func TestChatCompletions_RoutesToCorrectBackend(t *testing.T) {
 	}
 }
 
-func TestChatCompletions_DefaultSingleBackend(t *testing.T) {
-	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"id":"chatcmpl-1","choices":[{"message":{"content":"default"}}]}`)
-	})
-	defer backend.Close()
-
+func TestChatCompletions_UnknownModelReturns404(t *testing.T) {
 	s := NewServer()
-	addr := strings.TrimPrefix(backend.URL, "http://")
 	s.RegisterBackend("qwen3-8b", &Backend{
 		ModelName:  "qwen3-8b",
 		EngineType: "vllm",
-		Address:    addr,
-		BasePath:   "",
+		Address:    "127.0.0.1:9999",
 		Ready:      true,
 	})
 
 	handler := s.handler()
-	// Request with unknown model, but only 1 backend registered
+	// Request with unknown model — should return 404 even if only 1 backend exists
 	body := `{"model":"unknown-model","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200 with single backend fallback, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown model, got %d", w.Code)
 	}
 }
 

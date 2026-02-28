@@ -21,11 +21,12 @@ import (
 
 func newServeCmd(app *App) *cobra.Command {
 	var (
-		addr        string
-		mcpAddr     string
-		mcpMod      bool
-		apiKey      string
-		mdnsEnabled bool
+		addr            string
+		mcpAddr         string
+		mcpMod          bool
+		apiKey          string
+		mdnsEnabled     bool
+		discoverEnabled bool
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +80,11 @@ func newServeCmd(app *App) *cobra.Command {
 				}
 			}
 
+			// Start remote discovery loop (find other aima instances via mDNS)
+			if discoverEnabled {
+				go proxy.StartRemoteDiscoveryLoop(ctx, app.Proxy, 10*time.Second)
+			}
+
 			// Start MCP server if requested (on a separate port)
 			if mcpMod {
 				go func() {
@@ -119,6 +125,7 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&mcpMod, "mcp", false, "Also serve MCP protocol over HTTP")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
 	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", true, "Discover remote inference services via mDNS")
 
 	return cmd
 }

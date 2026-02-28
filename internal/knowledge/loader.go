@@ -266,12 +266,14 @@ type StackSource struct {
 }
 
 type StackInstall struct {
-	Method   string            `yaml:"method"`
-	Daemon   bool              `yaml:"daemon,omitempty"`
-	Priority int               `yaml:"priority,omitempty"` // lower = installed first (default 0)
-	Args     []StackArg        `yaml:"args,omitempty"`
-	Env      map[string]string `yaml:"env,omitempty"`
-	Helm     *StackHelm        `yaml:"helm,omitempty"`
+	Method      string            `yaml:"method"`
+	Daemon      bool              `yaml:"daemon,omitempty"`
+	Subcommand  string            `yaml:"subcommand,omitempty"`   // daemon ExecStart subcommand (default "server")
+	ServiceType string            `yaml:"service_type,omitempty"` // systemd Type= (default "notify")
+	Priority    int               `yaml:"priority,omitempty"`     // lower = installed first (default 0)
+	Args        []StackArg        `yaml:"args,omitempty"`
+	Env         map[string]string `yaml:"env,omitempty"`
+	Helm        *StackHelm        `yaml:"helm,omitempty"`
 }
 
 type StackArg struct {

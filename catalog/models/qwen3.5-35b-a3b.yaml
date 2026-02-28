@@ -43,11 +43,20 @@ variants:
       dtype: bfloat16
       enable_chunked_prefill: false
     expected_performance:
-      tokens_per_second: [27, 30]        # measured: 29.6 tok/s steady-state
-      latency_first_token_ms: [96, 133]  # measured: TTFT 96~133ms (3-run avg)
+      tokens_per_second: [24, 30]        # decode 30 tok/s @1K → 24 tok/s @128K
+      latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms
       tpot_ms: [31, 34]                  # measured: TPOT 31.5~33.6ms
       vram_mib: 67100                    # measured: 65.53 GiB model load
       notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28"
+      context_scaling:                   # measured: 1-concurrency, 128-token output
+        # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        1024:   [0.498,  30.0, 2054]
+        2048:   [0.581,  29.9, 3527]
+        8192:   [1.268,  29.6, 6459]
+        16384:  [2.254,  29.2, 7269]   # prefill peak
+        32768:  [4.727,  28.4, 6931]
+        65536:  [11.954, 26.9, 5482]
+        131072: [34.015, 24.2, 3853]   # 128K full context verified
 
   # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
   # FP8 权重 ~36GB, TP=2 → 每 GPU 18GB, 24GB VRAM 充裕

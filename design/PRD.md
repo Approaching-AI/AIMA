@@ -120,7 +120,7 @@ AIMA 假设硬件已确定，在约束内做最优分配。但 AIMA 积累的知
    → 引擎选择: vLLM, gpu_mem_util=0.5    # [L2: Engine Asset]
    → 性能放大: FlashAttention + 最优配置  # [L2: 放大器选择]
    → Docker 拉起推理容器
-3. curl localhost:8080/v1/chat/completions  # OpenAI 兼容 API 立即可用
+3. curl localhost:6188/v1/chat/completions  # OpenAI 兼容 API 立即可用
 4. aima up whisper-large-v3               # 再部署一个 ASR 模型
    → 资源检查: 剩余 VRAM 足够             # [L2: 资源预算]
    → 引擎选择: whisper, gpu_mem_util=0.3
@@ -137,10 +137,12 @@ AIMA 假设硬件已确定，在约束内做最优分配。但 AIMA 积累的知
   → [L0] 硬件检测，生成能力向量 (含功耗上限)
   → [L2] 知识库匹配，找到 Recipe (引擎选择考虑启动时间和功耗)
   → [L2] 按 Recipe 部署推理服务
-  → [L0] mDNS 广播 "_aima._tcp" 服务
-  → 局域网应用自动发现并调用推理 API
+  → [L0] mDNS 广播 "_llm._tcp" 服务 (端口 6188)
+  → [L0] 远程发现: 自动扫描局域网其他 AIMA 实例的模型并注册为远程 backend
+  → 局域网应用写 localhost:6188 即可透明访问所有发现的推理模型
 
 全程零人工。即使 Agent 不可用，L2 知识库即可完成全部部署。
+无 GPU 的开发机只需 `aima serve --discover`，自动发现并路由到局域网 GPU 服务器。
 ```
 
 ### J3: Agent 自治运维 (v1.0)

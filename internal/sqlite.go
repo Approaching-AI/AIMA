@@ -952,6 +952,32 @@ func (d *DB) GetConfiguration(ctx context.Context, id string) (*Configuration, e
 	return c, nil
 }
 
+// FindConfigByHash returns a configuration matching the given config_hash, or nil if not found.
+func (d *DB) FindConfigByHash(ctx context.Context, hash string) (*Configuration, error) {
+	c := &Configuration{}
+	var tagsStr, derivedFrom sql.NullString
+	err := d.db.QueryRowContext(ctx,
+		`SELECT id, hardware_id, engine_id, model_id, COALESCE(partition_slot,''),
+		        config, config_hash, derived_from, COALESCE(status,'experiment'),
+		        COALESCE(tags,'[]'), COALESCE(source,'local'), COALESCE(device_id,''),
+		        created_at, updated_at
+		 FROM configurations WHERE config_hash = ?`, hash).Scan(
+		&c.ID, &c.HardwareID, &c.EngineID, &c.ModelID, &c.Slot,
+		&c.Config, &c.ConfigHash, &derivedFrom, &c.Status,
+		&tagsStr, &c.Source, &c.DeviceID, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find config by hash: %w", err)
+	}
+	if derivedFrom.Valid {
+		c.DerivedFrom = derivedFrom.String
+	}
+	_ = json.Unmarshal([]byte(tagsStr.String), &c.Tags)
+	return c, nil
+}
+
 func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,

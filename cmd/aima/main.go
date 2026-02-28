@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"time"
 
 	"github.com/jguan/aima/catalog"
 	"github.com/jguan/aima/internal/agent"
@@ -1004,6 +1006,98 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return nil, err
 			}
 			return json.Marshal(result)
+		},
+
+		// Benchmark
+		RecordBenchmark: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				Hardware       string         `json:"hardware"`
+				Engine         string         `json:"engine"`
+				Model          string         `json:"model"`
+				DeviceID       string         `json:"device_id"`
+				Config         map[string]any `json:"config"`
+				Concurrency    int            `json:"concurrency"`
+				InputLenBucket string         `json:"input_len_bucket"`
+				OutputLenBucket string        `json:"output_len_bucket"`
+				TTFTP50ms      float64        `json:"ttft_ms_p50"`
+				TTFTP95ms      float64        `json:"ttft_ms_p95"`
+				TPOTP50ms      float64        `json:"tpot_ms_p50"`
+				TPOTP95ms      float64        `json:"tpot_ms_p95"`
+				ThroughputTPS  float64        `json:"throughput_tps"`
+				QPS            float64        `json:"qps"`
+				VRAMUsageMiB   int            `json:"vram_usage_mib"`
+				SampleCount    int            `json:"sample_count"`
+				Stability      string         `json:"stability"`
+				Notes          string         `json:"notes"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse benchmark params: %w", err)
+			}
+			if p.Concurrency <= 0 {
+				p.Concurrency = 1
+			}
+
+			// Find or create configuration
+			configJSON, _ := json.Marshal(p.Config)
+			configHash := fmt.Sprintf("%x", sha256.Sum256(
+				[]byte(p.Hardware+"|"+p.Engine+"|"+p.Model+"|"+string(configJSON))))
+
+			cfg, err := db.FindConfigByHash(ctx, configHash)
+			if err != nil {
+				return nil, err
+			}
+			if cfg == nil {
+				cfg = &state.Configuration{
+					ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(configHash)))[:16],
+					HardwareID: p.Hardware,
+					EngineID:   p.Engine,
+					ModelID:    p.Model,
+					Config:     string(configJSON),
+					ConfigHash: configHash,
+					Status:     "experiment",
+					Source:     "benchmark",
+					DeviceID:   p.DeviceID,
+				}
+				if err := db.InsertConfiguration(ctx, cfg); err != nil {
+					return nil, fmt.Errorf("create configuration: %w", err)
+				}
+			}
+
+			// Insert benchmark result
+			benchID := fmt.Sprintf("%x", sha256.Sum256(
+				[]byte(cfg.ID+"|"+fmt.Sprintf("%d", time.Now().UnixNano()))))[:16]
+			br := &state.BenchmarkResult{
+				ID:              benchID,
+				ConfigID:        cfg.ID,
+				Concurrency:     p.Concurrency,
+				InputLenBucket:  p.InputLenBucket,
+				OutputLenBucket: p.OutputLenBucket,
+				Modality:        "text",
+				TTFTP50ms:       p.TTFTP50ms,
+				TTFTP95ms:       p.TTFTP95ms,
+				TPOTP50ms:       p.TPOTP50ms,
+				TPOTP95ms:       p.TPOTP95ms,
+				ThroughputTPS:   p.ThroughputTPS,
+				QPS:             p.QPS,
+				VRAMUsageMiB:    p.VRAMUsageMiB,
+				SampleCount:     p.SampleCount,
+				Stability:       p.Stability,
+				TestedAt:        time.Now(),
+				AgentModel:      "claude-opus-4.6",
+				Notes:           p.Notes,
+			}
+			if err := db.InsertBenchmarkResult(ctx, br); err != nil {
+				return nil, fmt.Errorf("insert benchmark: %w", err)
+			}
+
+			return json.Marshal(map[string]any{
+				"benchmark_id": benchID,
+				"config_id":    cfg.ID,
+				"status":       "recorded",
+				"hardware":     p.Hardware,
+				"engine":       p.Engine,
+				"model":        p.Model,
+			})
 		},
 
 		// Stack management

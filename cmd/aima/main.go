@@ -850,6 +850,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				Port:             port,
 				Config:           resolved.Config,
 				RuntimeClassName: resolved.RuntimeClassName,
+				CPUArch:          hwInfo.CPUArch,
 				Labels: map[string]string{
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,

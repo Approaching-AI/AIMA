@@ -954,7 +954,31 @@ func calculateDenseParams(hiddenSize, numLayers int) int64 {
 	return int64(12 * float64(numLayers) * float64(hiddenSize) * float64(hiddenSize))
 }
 
-// calculateDenseParamsFromConfig computes accurate parameter count for dense models
+// attnParamsPerLayer calculates GQA-aware attention parameter count per layer.
+// Returns 4*H² fallback when head counts are unavailable.
+func attnParamsPerLayer(config map[string]any) int64 {
+	H := int64(jsonInt(config, "hidden_size"))
+	if H == 0 {
+		return 0
+	}
+	numHeads := int64(jsonInt(config, "num_attention_heads"))
+	numKVHeads := int64(jsonInt(config, "num_key_value_heads"))
+	headDim := int64(jsonInt(config, "head_dim"))
+	if headDim == 0 && numHeads > 0 {
+		headDim = H / numHeads
+	}
+	if numHeads > 0 && headDim > 0 {
+		qDim := numHeads * headDim
+		kvDim := numKVHeads * headDim
+		if numKVHeads == 0 {
+			kvDim = qDim
+		}
+		return H * (qDim + 2*kvDim + qDim) // Q, K, V, O
+	}
+	return 4 * H * H
+}
+
+// calculateDenseParamsFromConfig computes parameter count for dense models
 // using actual FFN intermediate_size, GQA attention, and vocab embedding.
 func calculateDenseParamsFromConfig(archConfig, topConfig map[string]any) int64 {
 	H := int64(jsonInt(archConfig, "hidden_size"))
@@ -972,43 +996,19 @@ func calculateDenseParamsFromConfig(archConfig, topConfig map[string]any) int64 
 		ffnPerLayer = 8 * H * H // fallback: vanilla FFN 2*H*4H
 	}
 
-	// Attention per layer (GQA-aware)
-	numHeads := int64(jsonInt(archConfig, "num_attention_heads"))
-	numKVHeads := int64(jsonInt(archConfig, "num_key_value_heads"))
-	headDim := int64(jsonInt(archConfig, "head_dim"))
-	if headDim == 0 && numHeads > 0 {
-		headDim = H / numHeads
-	}
-	attnPerLayer := int64(0)
-	if numHeads > 0 && headDim > 0 {
-		qDim := numHeads * headDim
-		kvDim := numKVHeads * headDim
-		if numKVHeads == 0 {
-			kvDim = qDim
-		}
-		attnPerLayer = H * (qDim + 2*kvDim + qDim)
-	} else {
-		attnPerLayer = 4 * H * H
-	}
-
-	// Embedding
 	vocabSize := int64(jsonInt(archConfig, "vocab_size"))
-	embedding := vocabSize * H
-
-	return embedding + L*(attnPerLayer+ffnPerLayer)
+	return vocabSize*H + L*(attnParamsPerLayer(archConfig)+ffnPerLayer)
 }
 
 // calculateMOEParams estimates total and active parameters for MOE models.
 // archConfig contains architecture fields (may be text_config for VLMs).
 // topConfig is the original top-level config (for tie_word_embeddings etc.).
-// Falls back to rough estimation when intermediate sizes are unavailable.
 func calculateMOEParams(archConfig, topConfig map[string]any, baseParams int64) (total, active int64) {
-	config := archConfig
-	numExperts := jsonInt(config, "num_experts")
+	numExperts := jsonInt(archConfig, "num_experts")
 	if numExperts == 0 {
-		numExperts = jsonInt(config, "num_local_experts")
+		numExperts = jsonInt(archConfig, "num_local_experts")
 	}
-	expertsPerTok := jsonInt(config, "num_experts_per_tok")
+	expertsPerTok := jsonInt(archConfig, "num_experts_per_tok")
 	if expertsPerTok == 0 {
 		expertsPerTok = 2
 	}
@@ -1016,70 +1016,42 @@ func calculateMOEParams(archConfig, topConfig map[string]any, baseParams int64) 
 		return baseParams, baseParams
 	}
 
-	hiddenSize := jsonInt(config, "hidden_size")
-	numLayers := jsonInt(config, "num_hidden_layers")
+	H := int64(jsonInt(archConfig, "hidden_size"))
+	L := int64(jsonInt(archConfig, "num_hidden_layers"))
 
-	// Try to calculate from actual architecture fields
-	moeIntermediate := jsonInt(config, "moe_intermediate_size")
+	moeIntermediate := jsonInt(archConfig, "moe_intermediate_size")
 	if moeIntermediate == 0 {
-		moeIntermediate = jsonInt(config, "intermediate_size")
+		moeIntermediate = jsonInt(archConfig, "intermediate_size")
 	}
 
-	if hiddenSize > 0 && numLayers > 0 && moeIntermediate > 0 {
-		H := int64(hiddenSize)
-		L := int64(numLayers)
+	if H > 0 && L > 0 && moeIntermediate > 0 {
 		I := int64(moeIntermediate)
 		E := int64(numExperts)
 		A := int64(expertsPerTok)
 
-		// Per-expert MLP: gate + up + down projections = 3 * H * I
 		expertMLP := 3 * H * I
-		// Shared expert (if present)
-		sharedI := int64(jsonInt(config, "shared_expert_intermediate_size"))
+		sharedI := int64(jsonInt(archConfig, "shared_expert_intermediate_size"))
 		sharedMLP := int64(0)
 		if sharedI > 0 {
 			sharedMLP = 3 * H * sharedI
 		}
 
-		// Attention per layer (GQA-aware):
-		// Q: H * num_heads * head_dim, K: H * num_kv_heads * head_dim, V: same, O: same as Q
-		numHeads := int64(jsonInt(config, "num_attention_heads"))
-		numKVHeads := int64(jsonInt(config, "num_key_value_heads"))
-		headDim := int64(jsonInt(config, "head_dim"))
-		if headDim == 0 && numHeads > 0 {
-			headDim = H / numHeads
-		}
-		attnPerLayer := int64(0)
-		if numHeads > 0 && headDim > 0 {
-			qDim := numHeads * headDim
-			kvDim := numKVHeads * headDim
-			if numKVHeads == 0 {
-				kvDim = qDim
-			}
-			attnPerLayer = H * (qDim + 2*kvDim + qDim) // Q, K, V, O
-		} else {
-			attnPerLayer = 4 * H * H // fallback: standard MHA
-		}
-
-		// Router gate per layer: H * num_experts
 		routerPerLayer := H * E
 
-		// Embedding: vocab_size * hidden_size
-		vocabSize := int64(jsonInt(config, "vocab_size"))
+		vocabSize := int64(jsonInt(archConfig, "vocab_size"))
 		embedding := vocabSize * H
-		// LM head (if untied from embedding) — check top-level config
 		lmHead := int64(0)
 		if tied, ok := topConfig["tie_word_embeddings"].(bool); ok && !tied {
 			lmHead = vocabSize * H
 		}
 
-		sharedPerLayer := attnPerLayer + sharedMLP + routerPerLayer
-		total = embedding + lmHead + L*(sharedPerLayer+E*expertMLP)
-		active = embedding + lmHead + L*(sharedPerLayer+A*expertMLP)
+		shared := attnParamsPerLayer(archConfig) + sharedMLP + routerPerLayer
+		total = embedding + lmHead + L*(shared+E*expertMLP)
+		active = embedding + lmHead + L*(shared+A*expertMLP)
 		return
 	}
 
-	// Fallback: rough estimation
+	// Fallback: rough estimation when intermediate sizes unavailable
 	if baseParams > 0 {
 		E := int64(numExperts)
 		A := int64(expertsPerTok)

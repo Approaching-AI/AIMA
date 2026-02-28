@@ -165,7 +165,7 @@ func parseNvidiaGPULine(line string) *GPUInfo {
 		Name:               name,
 		VRAMMiB:            vram,
 		DriverVersion:      driverVersion,
-		ComputeCapability:  cc,
+		ComputeID:          cc,
 		Arch:               computeCapToArch(cc),
 		PowerDrawWatts:     powerDraw,
 		PowerLimitWatts:    powerLimit,
@@ -253,6 +253,8 @@ func enrichGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 	switch gpu.Vendor {
 	case "nvidia":
 		enrichNvidiaGPU(ctx, runner, gpu)
+	case "amd":
+		enrichAMDGPU(ctx, runner, gpu)
 	}
 }
 
@@ -265,11 +267,31 @@ func enrichNvidiaGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 	}
 	s := string(out)
 
-	if gpu.CUDAVersion == "" {
-		gpu.CUDAVersion = parseNvidiaCUDAVersion(s)
+	if gpu.SDKVersion == "" {
+		if ver := parseNvidiaCUDAVersion(s); ver != "" {
+			gpu.SDKVersion = "CUDA " + ver
+		}
 	}
 	if gpu.PowerLimitWatts == 0 {
 		gpu.PowerLimitWatts = parseNvidiaPowerCap(s)
+	}
+}
+
+// enrichAMDGPU supplements GPUInfo with SDK and driver version from system tools.
+func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	if gpu.SDKVersion == "" {
+		if out, err := runner.Run(ctx, "cat", "/opt/rocm/.info/version"); err == nil {
+			if ver := strings.TrimSpace(string(out)); ver != "" {
+				gpu.SDKVersion = "ROCm " + ver
+			}
+		}
+	}
+	if gpu.DriverVersion == "" {
+		if out, err := runner.Run(ctx, "modinfo", "-F", "version", "amdgpu"); err == nil {
+			if ver := strings.TrimSpace(string(out)); ver != "" {
+				gpu.DriverVersion = ver
+			}
+		}
 	}
 }
 
@@ -364,6 +386,7 @@ func parseAMDGPU(output string) *GPUInfo {
 	return &GPUInfo{
 		Name:               name,
 		Arch:               arch,
+		ComputeID:          jsonStr(firstCard, "GFX Version"),
 		VRAMMiB:            vram,
 		TemperatureCelsius: jsonFloat(firstCard, "Temperature (Sensor edge) (C)", "Temperature (Sensor junction) (C)"),
 		PowerDrawWatts:     jsonFloat(firstCard, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"),

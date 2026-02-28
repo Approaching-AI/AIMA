@@ -49,8 +49,8 @@ type HardwareSpec struct {
 type GPUSpec struct {
 	Arch              string `yaml:"arch"`
 	VRAMMiB           int    `yaml:"vram_mib"`
-	ComputeCapability string `yaml:"compute_capability"`
-	CUDACores         int    `yaml:"cuda_cores"`
+	ComputeID    string `yaml:"compute_id"`
+	ComputeUnits int    `yaml:"compute_units"`
 	ResourceName      string `yaml:"resource_name,omitempty"`     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
 	RuntimeClassName  string `yaml:"runtime_class_name,omitempty"` // K8s runtimeClassName for GPU containers, e.g. "nvidia"
 }
@@ -700,10 +700,10 @@ func LoadToSQLite(ctx context.Context, db *sql.DB, cat *Catalog) error {
 		rawYAML, _ := yaml.Marshal(hp)
 
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO hardware_profiles (id, name, gpu_arch, gpu_vram_mib, gpu_compute_cap, cpu_arch, cpu_cores, ram_mib, unified_memory, tdp_watts, power_modes, gpu_tools, raw_yaml)
+			`INSERT INTO hardware_profiles (id, name, gpu_arch, gpu_vram_mib, gpu_compute_id, cpu_arch, cpu_cores, ram_mib, unified_memory, tdp_watts, power_modes, gpu_tools, raw_yaml)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, hp.Metadata.Name, hp.Hardware.GPU.Arch, hp.Hardware.GPU.VRAMMiB,
-			hp.Hardware.GPU.ComputeCapability, hp.Hardware.CPU.Arch, hp.Hardware.CPU.Cores,
+			hp.Hardware.GPU.ComputeID, hp.Hardware.CPU.Arch, hp.Hardware.CPU.Cores,
 			hp.Hardware.RAM.TotalMiB, hp.Hardware.UnifiedMemory, hp.Constraints.TDPWatts,
 			string(powerJSON), string(toolsJSON), string(rawYAML))
 		if err != nil {

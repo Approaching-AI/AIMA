@@ -28,7 +28,7 @@ CREATE TABLE engines (id TEXT PRIMARY KEY, type TEXT NOT NULL, image TEXT NOT NU
 CREATE TABLE knowledge_notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT, hardware_profile TEXT, model TEXT, engine TEXT, content TEXT NOT NULL, confidence TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_type TEXT NOT NULL, tool_name TEXT NOT NULL, arguments TEXT, result_summary TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE hardware_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, gpu_arch TEXT NOT NULL, gpu_vram_mib INTEGER, gpu_compute_cap TEXT, cpu_arch TEXT, cpu_cores INTEGER, ram_mib INTEGER, unified_memory BOOLEAN DEFAULT FALSE, tdp_watts INTEGER, power_modes TEXT, gpu_tools TEXT, raw_yaml TEXT);
+CREATE TABLE hardware_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, gpu_arch TEXT NOT NULL, gpu_vram_mib INTEGER, gpu_compute_id TEXT, cpu_arch TEXT, cpu_cores INTEGER, ram_mib INTEGER, unified_memory BOOLEAN DEFAULT FALSE, tdp_watts INTEGER, power_modes TEXT, gpu_tools TEXT, raw_yaml TEXT);
 CREATE INDEX idx_hp_gpu ON hardware_profiles(gpu_arch);
 CREATE TABLE engine_assets (id TEXT PRIMARY KEY, type TEXT NOT NULL, version TEXT, image_name TEXT, image_tag TEXT, image_size_mb INTEGER, api_protocol TEXT, cold_start_s_min INTEGER, cold_start_s_max INTEGER, power_watts_min INTEGER, power_watts_max INTEGER, perf_gain_desc TEXT, raw_yaml TEXT);
 CREATE TABLE engine_features (engine_id TEXT NOT NULL REFERENCES engine_assets(id), feature TEXT NOT NULL, PRIMARY KEY (engine_id, feature));

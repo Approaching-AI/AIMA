@@ -6,8 +6,8 @@ hardware:
   gpu:
     arch: Apple
     vram_mib: 0
-    compute_capability: "metal3"
-    cuda_cores: 0
+    compute_id: "metal3"
+    compute_units: 10
     resource_name: ""
   cpu:
     arch: arm64

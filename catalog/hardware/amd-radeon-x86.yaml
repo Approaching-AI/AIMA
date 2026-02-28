@@ -6,8 +6,8 @@ hardware:
   gpu:
     arch: RDNA3.5
     vram_mib: 16384
-    compute_capability: "gfx12"
-    cuda_cores: 0
+    compute_id: "gfx1151"
+    compute_units: 2048
     resource_name: "amd.com/gpu"
   cpu:
     arch: x86_64

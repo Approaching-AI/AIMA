@@ -18,10 +18,10 @@ type GPUInfo struct {
 	Name               string  `json:"name"`
 	Arch               string  `json:"arch"`
 	VRAMMiB            int     `json:"vram_mib"`
-	ComputeCapability  string  `json:"compute_capability"`
-	CUDACores          int     `json:"cuda_cores,omitempty"`
+	ComputeID          string  `json:"compute_id"`
+	ComputeUnits       int     `json:"compute_units,omitempty"`
 	DriverVersion      string  `json:"driver_version"`
-	CUDAVersion        string  `json:"cuda_version"`
+	SDKVersion         string  `json:"sdk_version"`
 	PowerDrawWatts     float64 `json:"power_draw_watts,omitempty"`
 	PowerLimitWatts    float64 `json:"power_limit_watts,omitempty"`
 	TemperatureCelsius float64 `json:"temperature_celsius,omitempty"`

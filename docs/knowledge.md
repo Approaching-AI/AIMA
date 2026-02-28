@@ -86,8 +86,8 @@ hardware:
   gpu:
     arch: Blackwell
     vram_mib: 15360
-    compute_capability: "10.0"
-    cuda_cores: 2048
+    compute_id: "10.0"
+    compute_units: 2048
     resource_name: "nvidia.com/gpu"      # K8s GPU 资源名
   cpu:
     arch: arm64

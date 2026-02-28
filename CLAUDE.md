@@ -21,7 +21,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | dev-win | **local** (Light-Salt) | Windows 11 | x86_64 | i9-13980HX + RTX 4060 8GB (Driver 566, CUDA) | 32 GB | 551 GB | no | local | Dev machine, `go build/test` runs here directly |
 | mac-m4 | `guanjiawei@100.125.202.50` | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
 | gb10 | `qujing@100.105.58.16` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
-| linux-1 | `qujing@100.64.57.15` (Tailscale) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 550, CUDA) | 1 TB | 371 GB | Docker 28.0 | key | Dual-GPU inference validation |
+| linux-1 | `qujing@100.64.57.15` (Tailscale) / `qujing@192.168.109.6` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 550, CUDA) | 1 TB | 371 GB | Docker 28.0 | key | Dual-GPU inference validation |
 | amd395 | `quings@100.71.145.56` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
 
 > **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.

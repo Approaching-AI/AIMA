@@ -7,6 +7,16 @@ metadata:
 compatibility:
   aima_min: "0.1.0"
 
+# HAMi supports heterogeneous devices: NVIDIA, Ascend, HYGON DCU, Cambricon,
+# Iluvatar, Moore Threads, MetaX. Skip on unsupported hardware:
+#   - AMD Radeon RDNA: not in HAMi's supported device list (HYGON DCU ≠ AMD Radeon)
+#   - NVIDIA UMA devices: NVML returns NVML_ERROR_NOT_SUPPORTED (code 3),
+#     causing device-plugin CrashLoopBackOff (HAMi PR #1637 not yet released)
+conditions:
+  skip_profiles:
+    - Blackwell-arm64   # GB10: NVIDIA UMA, NVML memory query incompatible
+    - RDNA3.5-amd64     # AMD Radeon 8060S: RDNA not in HAMi supported devices
+
 source:
   chart: "hami-2.4.1.tgz"
   airgap: "hami-airgap-images.tar"
@@ -52,9 +62,7 @@ verify:
       min_ready: 1
 
 profiles:
-  Blackwell-arm64:
-    extra_env:
-      HAMI_DEVICE_MEMORY_SCALING: "1.0"
+  # Blackwell-arm64: excluded — see compatibility.exclude_gpu_arch
   nvidia-rtx4090-x86:
     extra_env:
       HAMI_DEVICE_MEMORY_SCALING: "1.0"
@@ -67,8 +75,13 @@ open_questions:
     hypothesis: "Yes, HAMi supports containerd as runtime"
     test_method: "Install HAMi on K3S, deploy GPU workload, verify nvidia-smi in container"
   - question: "GB10 UMA: NVML nvmlDeviceGetMemoryInfo returns NVML_ERROR_NOT_SUPPORTED (code 3)"
-    hypothesis: "HAMi PR #1637 (merged 2026-02-04) adds PreConfiguredDeviceMemory fallback, but not in any release yet (v2.8.0 is pre-PR). Even with fix, HAMi memory isolation effectiveness on UMA is uncertain."
-    test_method: "Wait for HAMi release with PR #1637, install on GB10, verify device-plugin starts and GPU allocation works"
+    status: confirmed_incompatible
+    finding: "HAMi v2.4.1 device-plugin enters CrashLoopBackOff on GB10 (160+ restarts). NVML cannot report unified memory. PR #1637 (merged 2026-02-04) not yet released. Workaround: exclude Blackwell from HAMi install, use engine-level memory management (gpu_memory_utilization) instead."
+    test_method: "Re-evaluate when HAMi ships a release containing PR #1637"
   - question: "Is engine-layer memory management sufficient for GB10 without HAMi?"
     hypothesis: "Yes — llama.cpp --ctx-size and vLLM gpu_memory_utilization work on UMA. 128GB unified memory bottleneck is bandwidth/compute, not capacity."
     test_method: "Deploy multi-model on GB10 with engine-level limits only, observe stability and throughput"
+  - question: "Should HAMi be skipped for AMD Radeon RDNA GPUs?"
+    status: confirmed
+    finding: "HAMi supports 7 heterogeneous device families (NVIDIA, Ascend, HYGON DCU, Cambricon, Iluvatar, Moore Threads, MetaX) but AMD Radeon RDNA is NOT among them. HYGON DCU is AMD-architecture but a different product line. On amd395 (RDNA3.5), HAMi device-plugin (configured with runtimeClassName:nvidia + nvidia.com/gpu) entered CrashLoopBackOff (380+ restarts) because no NVIDIA driver/NVML exists. Additionally, Strix Halo is UMA which may compound the issue (same as GB10). Manually deleted HAMi, added RDNA3.5-amd64 to skip_profiles."
+    test_method: "Any new AMD Radeon profile should be added to skip_profiles. Re-evaluate if HAMi adds AMD ROCm support in future."

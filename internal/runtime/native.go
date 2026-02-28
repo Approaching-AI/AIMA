@@ -13,10 +13,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jguan/aima/internal/engine"
 )
 
 // deploymentMeta is persisted to disk so deployments survive across CLI invocations.
@@ -50,7 +53,7 @@ type nativeProcess struct {
 
 // BinaryResolveFunc resolves a native engine binary, downloading if needed.
 // Returns the absolute path to the binary.
-type BinaryResolveFunc func(ctx context.Context, source *BinarySource) (string, error)
+type BinaryResolveFunc func(ctx context.Context, source *engine.BinarySource) (string, error)
 
 // NativeRuntime manages inference engines as direct OS processes.
 type NativeRuntime struct {
@@ -126,6 +129,23 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		command = append(command, "--port", strconv.Itoa(req.Port))
 	}
 
+	// Append other config values as CLI flags.
+	// Config keys use underscore (e.g. "gpu_memory_utilization") → "--gpu-memory-utilization".
+	// "port" is excluded since it is handled above.
+	if len(req.Config) > 0 {
+		keys := make([]string, 0, len(req.Config))
+		for k := range req.Config {
+			if k != "port" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			flag := "--" + strings.ReplaceAll(k, "_", "-")
+			command = append(command, flag, fmt.Sprintf("%v", req.Config[k]))
+		}
+	}
+
 	// Set up log file
 	if err := os.MkdirAll(r.logDir, 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
@@ -156,6 +176,19 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	cmd := exec.CommandContext(procCtx, command[0], command[1:]...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Ensure co-bundled shared libraries (.so/.dylib) next to the binary are found.
+	if r.distDir != "" {
+		ldVar := "LD_LIBRARY_PATH"
+		if goruntime.GOOS == "darwin" {
+			ldVar = "DYLD_LIBRARY_PATH"
+		}
+		existing := os.Getenv(ldVar)
+		newVal := r.distDir
+		if existing != "" {
+			newVal = r.distDir + ":" + existing
+		}
+		cmd.Env = append(os.Environ(), ldVar+"="+newVal)
+	}
 
 	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "))
 

@@ -1,0 +1,138 @@
+kind: model_asset
+metadata:
+  name: qwen3.5-35b-a3b
+  type: llm
+  family: qwen
+  parameter_count: "35B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    # BF16 全精度 ~72GB
+    - type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B
+      format: safetensors
+    # FP8 预量化 ~36GB
+    - type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B-FP8
+      format: safetensors
+    # GGUF 量化 (Q4_K_M=21GB, Q8_0=37GB)
+    - type: huggingface
+      repo: unsloth/Qwen3.5-35B-A3B-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen3.5-35B-A3B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # BF16 权重 ~72GB, 128GB unified 可容纳
+  # MoE 35B total / 3B active, 支持视觉 + 思考模式
+  # qwen3_5_moe 架构需要 vllm-nightly (stable vLLM 尚不支持)
+  - name: qwen3.5-35b-a3b-blackwell-vllm-nightly-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-nightly
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.9
+      max_model_len: 262144
+      dtype: bfloat16
+      enable_chunked_prefill: true
+    expected_performance:
+      tokens_per_second: [24, 30]        # decode 30 tok/s @1K → 24 tok/s @128K
+      latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms
+      tpot_ms: [31, 34]                  # measured: TPOT 31.5~33.6ms
+      vram_mib: 67100                    # measured: 65.53 GiB model load
+      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28"
+      context_scaling:                   # measured: 1-concurrency, 128-token output
+        # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        1024:   [0.498,  30.0, 2054]
+        2048:   [0.581,  29.9, 3527]
+        8192:   [1.268,  29.6, 6459]
+        16384:  [2.254,  29.2, 7269]   # prefill peak
+        32768:  [4.727,  28.4, 6931]
+        65536:  [11.954, 26.9, 5482]
+        131072: [34.015, 24.2, 3853]   # 128K full context verified
+      vision:                            # measured: chunked_prefill=true, gmu=0.9
+        tokens_per_image_1024: 1025      # 每张 1024x1024 ≈ 1025 tokens
+        max_single_resolution: 3424      # 3424x3424 OK, 3456x3456 OOM
+        max_images_1024: 255             # 255 × 1024x1024 = 261906 tokens
+        # resolution: [ttft_s, prompt_tokens]
+        single_image_scaling:
+          64:    [0.21,  85]
+          256:   [0.21,  85]
+          512:   [0.36,  350]
+          1024:  [0.66,  4117]
+          2048:  [9.78,  4117]
+          3072:  [9.30,  9237]
+          3424:  [10.80, 11467]
+        multi_image_1024:                # N × 1024x1024
+          1:   [0.40,  350]
+          8:   [0.96,  8233]
+          32:  [15.90, 32882]
+          128: [59.60, 131477]
+          255: [157.20, 261906]          # 逼近 262K context limit
+
+  # --- amd395 (RDNA3.5, 62GB unified, Docker) ---
+  # AWQ 4-bit 权重 ~24GB, 62GB unified 可容纳
+  # MoE 35B total / 3B active, triton flash attention
+  # vllm-rocm (TheRock gfx1151 build) 支持 AWQ 量化
+  - name: qwen3.5-35b-a3b-rdna35-vllm-awq
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 16384
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 32768
+      dtype: half
+      quantization: awq
+    expected_performance:
+      tokens_per_second: [5, 15]
+      latency_first_token_ms: [100, 500]
+      vram_mib: 24000
+      notes: "vLLM TheRock gfx1151, AWQ 4-bit, untested estimate"
+
+  # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
+  # FP8 权重 ~36GB, TP=2 → 每 GPU 18GB, 24GB VRAM 充裕
+  # vram_min_mib: 20480 → 排除 RTX 4060 (8GB), 仅 4090 (24GB) 匹配
+  - name: qwen3.5-35b-a3b-ada-vllm-fp8
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 20480
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.85
+      max_model_len: 4096
+      dtype: auto
+      tensor_parallel_size: 2
+    expected_performance:
+      tokens_per_second: [10, 25]
+      latency_first_token_ms: [40, 150]
+
+  # --- 所有设备通用 (llamacpp + GGUF Q4_K_M=21GB) ---
+  # amd395 (128GB unified) ✓, linux-1 fallback
+  # dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload
+  - name: qwen3.5-35b-a3b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [3, 15]
+      latency_first_token_ms: [80, 400]

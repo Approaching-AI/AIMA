@@ -1,0 +1,30 @@
+kind: stack_component
+metadata:
+  name: aima-serve
+  version: "0.1.0"
+  description: "AIMA inference proxy with mDNS LAN discovery"
+
+source:
+  binary: "aima"
+  platforms: [linux/amd64, linux/arm64]
+
+install:
+  method: binary
+  daemon: true
+  subcommand: "serve"
+  service_type: "simple"
+  priority: 30
+  args:
+    - flag: "--addr=0.0.0.0:6188"
+      rationale: "Listen on all interfaces for LAN access"
+      source: "design"
+      verified: true
+    - flag: "--mdns"
+      rationale: "Advertise via mDNS for auto-discovery"
+      source: "design"
+      verified: true
+
+verify:
+  command: "curl -sf http://localhost:6188/health"
+  ready_condition: "ok"
+  timeout_s: 10

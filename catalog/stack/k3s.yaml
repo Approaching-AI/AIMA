@@ -86,13 +86,22 @@ profiles:
         verified: false
 
 registries:
+  # K3S 按顺序尝试，第一个失败/慢时自动 fallback 到下一个
+  # 用户可通过 `aima init` 写入 /etc/rancher/k3s/registries.yaml
+  # 如遇限速，调整顺序或替换为可用的 mirror
   mirrors:
     docker.io:
       endpoint:
-        - "https://docker.m.daocloud.io"
+        - "https://docker.m.daocloud.io"    # DaoCloud — 稳定，国内首选
+        - "https://docker.1ms.run"           # 1ms.run — 备选
+        - "https://docker.nju.edu.cn"        # 南京大学 — 教育网快
+        - "https://docker.rainbond.cc"       # Rainbond — 备选
     ghcr.io:
       endpoint:
-        - "https://ghcr.nju.edu.cn"
+        - "https://ghcr.nju.edu.cn"          # 南京大学
+    nvcr.io:
+      endpoint:
+        - "https://nvcr.io"                  # NGC 无国内 mirror，直连
 
 open_questions:
   - question: "What kubelet reserved values work best for GB10 unified memory?"

@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// DefaultPort is the default listen port for the AIMA proxy server.
+const DefaultPort = 6188
+
 // Backend represents a running inference engine.
 type Backend struct {
 	ModelName  string `json:"model_name"`
@@ -23,6 +26,7 @@ type Backend struct {
 	Address    string `json:"address"`
 	BasePath   string `json:"base_path"`
 	Ready      bool   `json:"ready"`
+	Remote     bool   `json:"remote"` // true = discovered via mDNS, not a local deployment
 }
 
 // Server is the HTTP inference proxy.
@@ -45,6 +49,13 @@ func WithAPIKey(key string) Option {
 	return func(s *Server) { s.apiKey = key }
 }
 
+// SetAddr configures the listen address. Must be called before Start.
+func (s *Server) SetAddr(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addr = addr
+}
+
 // SetAPIKey configures API key authentication. Must be called before Start.
 func (s *Server) SetAPIKey(key string) {
 	s.mu.Lock()
@@ -54,7 +65,7 @@ func (s *Server) SetAPIKey(key string) {
 
 func NewServer(opts ...Option) *Server {
 	s := &Server{
-		addr:   ":8080",
+		addr:   fmt.Sprintf(":%d", DefaultPort),
 		routes: make(map[string]*Backend),
 	}
 	for _, o := range opts {
@@ -175,6 +186,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"engine_type": b.EngineType,
 			"address":     b.Address,
 			"ready":       b.Ready,
+			"remote":      b.Remote,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -275,18 +287,9 @@ func (s *Server) resolveBackend(model string) *Backend {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Exact match
 	if b, ok := s.routes[model]; ok {
 		return b
 	}
-
-	// If exactly 1 backend registered, use as default
-	if len(s.routes) == 1 {
-		for _, b := range s.routes {
-			return b
-		}
-	}
-
 	return nil
 }
 

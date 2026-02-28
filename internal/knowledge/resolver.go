@@ -2,16 +2,28 @@ package knowledge
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
 // HardwareInfo describes the detected hardware for config resolution.
+// Zero-valued fields mean "unknown" and are skipped during validation,
+// ensuring backward compatibility with callers that only set GPUArch/CPUArch.
 type HardwareInfo struct {
 	GPUArch         string
+	GPUVRAMMiB      int  // Total GPU VRAM (0 = unknown, skip VRAM checks)
+	GPUCount        int  // Number of GPUs
+	UnifiedMemory   bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
 	CPUArch         string
+	CPUCores        int // Physical CPU core count
+	RAMTotalMiB     int // Total system RAM
 	HardwareProfile string // Name of a matching HardwareProfile, if known
 	Platform        string // "linux/amd64", "darwin/arm64", etc.
 	RuntimeType     string // "k3s" or "native"
+	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
+	GPUMemUsedMiB int // Currently used GPU memory
+	GPUMemFreeMiB int // Currently free GPU memory
+	RAMAvailMiB   int // Currently available system RAM
 }
 
 // PartitionSlot holds the resource allocation for a single deployment slot.
@@ -37,7 +49,12 @@ type ResolvedConfig struct {
 	HealthCheck     *HealthCheck
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)
-	GPUResourceName string        // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
+	Env                   map[string]string // Extra env vars for the container (from engine YAML)
+	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource request)
+	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
+	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
+	CPUArch               string            // CPU architecture (e.g. "amd64", "arm64") — for platform-specific paths
+	Container             *ContainerAccess  // vendor-specific container access (devices, env, volumes, security) from hardware profile
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -57,7 +74,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		return nil, err
 	}
 
-	model, variant, err := c.findModelVariant(modelName, engineType, hw.GPUArch)
+	model, variant, err := c.findModelVariant(modelName, engineType, hw)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +99,11 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		}
 	}
 
-	// L1: User overrides
+	// L1: User overrides (model_path is handled separately via resolved.ModelPath)
 	for k, v := range userOverrides {
+		if k == "model_path" {
+			continue
+		}
 		config[k] = v
 		provenance[k] = "L1"
 	}
@@ -97,6 +117,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Provenance:  provenance,
 		Partition:   slot,
 		Command:     engine.Startup.Command,
+		Env:         engine.Startup.Env,
 		HealthCheck: &engine.Startup.HealthCheck,
 		Source:      engine.Source,
 	}
@@ -104,8 +125,18 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.Warmup = &engine.Startup.Warmup
 	}
 
-	// Set GPU resource name from hardware profile
+	// Set GPU resource name, runtimeClassName, CPU arch, and container access from hardware profile
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
+	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
+	resolved.CPUArch = hw.CPUArch
+	resolved.Container = c.findContainerAccess(hw)
+
+	// Set runtime recommendation from engine's platform_recommendations
+	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {
+		resolved.RuntimeRecommendation = rec
+	} else {
+		resolved.RuntimeRecommendation = engine.Runtime.Default
+	}
 
 	// Set ModelPath from user overrides or default pattern
 	if mp, ok := userOverrides["model_path"]; ok {
@@ -148,7 +179,8 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 }
 
 // InferEngineType picks the best engine for a model on the given hardware.
-// Priority: exact gpu_arch match first, then wildcard.
+// Priority: exact gpu_arch match first, then wildcard. Skips variants whose
+// VRAM requirements exceed the detected GPU VRAM.
 func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, error) {
 	for _, ma := range c.ModelAssets {
 		if ma.Metadata.Name != modelName {
@@ -156,34 +188,63 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, er
 		}
 		// First pass: exact gpu_arch match
 		for _, v := range ma.Variants {
-			if v.Hardware.GPUArch == hw.GPUArch {
-				if _, err := c.findEngine(v.Engine, hw); err == nil {
-					return v.Engine, nil
-				}
+			if v.Hardware.GPUArch != hw.GPUArch {
+				continue
+			}
+			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
+				continue
+			}
+			if _, err := c.findEngine(v.Engine, hw); err == nil {
+				return v.Engine, nil
 			}
 		}
 		// Second pass: wildcard variant
 		for _, v := range ma.Variants {
-			if v.Hardware.GPUArch == "*" {
-				if _, err := c.findEngine(v.Engine, hw); err == nil {
-					return v.Engine, nil
-				}
+			if v.Hardware.GPUArch != "*" {
+				continue
+			}
+			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
+				continue
+			}
+			if _, err := c.findEngine(v.Engine, hw); err == nil {
+				return v.Engine, nil
 			}
 		}
-		return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q", modelName, hw.GPUArch)
+		return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q (vram %d MiB)", modelName, hw.GPUArch, hw.GPUVRAMMiB)
 	}
 	return "", fmt.Errorf("model %q not found in catalog", modelName)
 }
 
 // findGPUResourceName looks up the K8s GPU resource name from hardware profiles.
-// Falls back to "nvidia.com/gpu" if not specified.
+// Returns "" if not specified (no GPU resource request in pod spec).
 func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {
 	for _, hp := range c.HardwareProfiles {
 		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Hardware.GPU.ResourceName != "" {
 			return hp.Hardware.GPU.ResourceName
 		}
 	}
-	return "nvidia.com/gpu"
+	return ""
+}
+
+// findContainerAccess looks up vendor-specific container access config from hardware profiles.
+func (c *Catalog) findContainerAccess(hw HardwareInfo) *ContainerAccess {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Container != nil {
+			return hp.Container
+		}
+	}
+	return nil
+}
+
+// findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.
+// Returns "" if not specified (no runtimeClassName in pod spec).
+func (c *Catalog) findRuntimeClassName(hw HardwareInfo) string {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch {
+			return hp.Hardware.GPU.RuntimeClassName
+		}
+	}
+	return ""
 }
 
 func platformInList(platform string, platforms []string) bool {
@@ -198,37 +259,53 @@ func platformInList(platform string, platforms []string) bool {
 	return false
 }
 
-func (c *Catalog) findModelVariant(modelName, engineType, gpuArch string) (*ModelAsset, *ModelVariant, error) {
+func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
 	for i := range c.ModelAssets {
 		ma := &c.ModelAssets[i]
 		if ma.Metadata.Name != modelName {
 			continue
 		}
-		// Find best variant: exact gpu_arch+engine match first, then wildcard
-		var wildcard *ModelVariant
+		// Find best variant: exact gpu_arch+engine match first, then wildcard.
+		// Filter by VRAM and unified_memory when hardware info is available.
+		var exactMatch, wildcardMatch *ModelVariant
 		for j := range ma.Variants {
 			v := &ma.Variants[j]
 			if v.Engine != engineType {
 				continue
 			}
-			if v.Hardware.GPUArch == gpuArch {
-				return ma, v, nil
+			// VRAM filter: skip variants requiring more VRAM than available
+			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
+				continue
 			}
-			if v.Hardware.GPUArch == "*" {
-				wildcard = v
+			// Unified memory filter: skip mismatched variants
+			if v.Hardware.UnifiedMemory != nil && hw.GPUVRAMMiB > 0 {
+				if *v.Hardware.UnifiedMemory != hw.UnifiedMemory {
+					continue
+				}
+			}
+			if v.Hardware.GPUArch == hw.GPUArch {
+				exactMatch = v
+				break // exact arch + passes filters = best possible
+			}
+			if v.Hardware.GPUArch == "*" && wildcardMatch == nil {
+				wildcardMatch = v
 			}
 		}
-		if wildcard != nil {
-			return ma, wildcard, nil
+		if exactMatch != nil {
+			return ma, exactMatch, nil
 		}
-		// Model found but no variant matches engine+arch
-		return nil, nil, fmt.Errorf("no variant of model %q for engine %q gpu_arch %q", modelName, engineType, gpuArch)
+		if wildcardMatch != nil {
+			return ma, wildcardMatch, nil
+		}
+		return nil, nil, fmt.Errorf("no variant of model %q for engine %q gpu_arch %q (vram %d MiB)", modelName, engineType, hw.GPUArch, hw.GPUVRAMMiB)
 	}
 	return nil, nil, fmt.Errorf("model %q not found in catalog", modelName)
 }
 
 func (c *Catalog) findPartition(hw HardwareInfo) *PartitionStrategy {
-	// Try specific hardware_profile match first, then wildcard
+	// Try specific hardware_profile match first, then wildcard.
+	// Only considers single_model strategies (or those with no workload_pattern) —
+	// dual_model and other non-default patterns must be requested explicitly.
 	var wildcard *PartitionStrategy
 	profileName := hw.HardwareProfile
 	if profileName == "" {
@@ -243,6 +320,10 @@ func (c *Catalog) findPartition(hw HardwareInfo) *PartitionStrategy {
 
 	for i := range c.PartitionStrategies {
 		ps := &c.PartitionStrategies[i]
+		// Skip strategies designed for non-default workload patterns (e.g. dual_model).
+		if ps.Target.WorkloadPattern != "" && ps.Target.WorkloadPattern != "single_model" {
+			continue
+		}
 		if ps.Target.HardwareProfile == profileName && profileName != "" {
 			return ps
 		}
@@ -351,4 +432,65 @@ func (c *Catalog) RegisterModel(ma ModelAsset) {
 		}
 	}
 	c.ModelAssets = append(c.ModelAssets, ma)
+}
+
+// FitReport describes how well a resolved config fits the actual hardware.
+type FitReport struct {
+	Fit         bool           // true if config can run (possibly with adjustments)
+	Warnings    []string       // non-fatal issues
+	Adjustments map[string]any // suggested config overrides (e.g. gpu_memory_utilization)
+	Reason      string         // if Fit==false, why
+}
+
+// CheckFit validates a resolved config against hardware capabilities and runtime state.
+// Static layer: VRAM sufficiency (already handled by variant filtering in findModelVariant).
+// Dynamic layer: adjusts gpu_memory_utilization based on available GPU memory.
+// Zero-valued hw fields are skipped (graceful degradation when metrics unavailable).
+func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
+	r := &FitReport{Fit: true, Adjustments: make(map[string]any)}
+
+	// Dynamic layer: adjust gpu_memory_utilization based on free GPU memory
+	if hw.GPUMemFreeMiB > 0 {
+		totalVRAM := hw.GPUVRAMMiB
+		if totalVRAM == 0 {
+			totalVRAM = hw.GPUMemFreeMiB + hw.GPUMemUsedMiB
+		}
+		if gmu, ok := resolved.Config["gpu_memory_utilization"]; ok && totalVRAM > 0 {
+			currentGMU := toFloat64(gmu)
+			const safetyMiB = 512
+			maxSafeGMU := float64(hw.GPUMemFreeMiB-safetyMiB) / float64(totalVRAM)
+			if maxSafeGMU < 0.1 {
+				r.Fit = false
+				r.Reason = fmt.Sprintf("GPU memory insufficient: %d MiB free, need > %d MiB", hw.GPUMemFreeMiB, safetyMiB)
+				return r
+			}
+			if currentGMU > maxSafeGMU {
+				adjusted := math.Floor(maxSafeGMU*100) / 100
+				r.Adjustments["gpu_memory_utilization"] = adjusted
+				r.Warnings = append(r.Warnings, fmt.Sprintf(
+					"gpu_memory_utilization: %.2f -> %.2f (GPU %d/%d MiB free)",
+					currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
+			}
+		}
+	}
+
+	// RAM check
+	if hw.RAMAvailMiB > 0 && hw.RAMAvailMiB < 2048 {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("low available RAM: %d MiB", hw.RAMAvailMiB))
+	}
+
+	return r
+}
+
+func toFloat64(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case float32:
+		return float64(x)
+	case int:
+		return float64(x)
+	default:
+		return 0
+	}
 }

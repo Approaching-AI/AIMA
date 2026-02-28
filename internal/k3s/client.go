@@ -25,13 +25,14 @@ func (e *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 
 // PodStatus represents the status of a K3S pod.
 type PodStatus struct {
-	Name      string            `json:"name"`
-	Phase     string            `json:"phase"`
-	Ready     bool              `json:"ready"`
-	IP        string            `json:"ip"`
-	Labels    map[string]string `json:"labels"`
-	StartTime string            `json:"start_time"`
-	Message   string            `json:"message,omitempty"`
+	Name          string            `json:"name"`
+	Phase         string            `json:"phase"`
+	Ready         bool              `json:"ready"`
+	IP            string            `json:"ip"`
+	Labels        map[string]string `json:"labels"`
+	StartTime     string            `json:"start_time"`
+	Message       string            `json:"message,omitempty"`
+	ContainerPort int               `json:"container_port,omitempty"`
 }
 
 // LogOptions configures log retrieval.
@@ -107,7 +108,7 @@ func (c *Client) Apply(ctx context.Context, yamlData []byte) error {
 	args := append(c.baseArgs(), "apply", "-f", "-")
 	out, err := c.runWithStdin(ctx, yamlData, args...)
 	if err != nil {
-		return fmt.Errorf("apply pod: %w", err)
+		return fmt.Errorf("apply pod: %w\nkubectl output: %s", err, strings.TrimSpace(string(out)))
 	}
 	slog.Info("kubectl apply", "output", string(out))
 	return nil
@@ -226,6 +227,13 @@ type kubePod struct {
 		Name   string            `json:"name"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
+	Spec struct {
+		Containers []struct {
+			Ports []struct {
+				ContainerPort int `json:"containerPort"`
+			} `json:"ports"`
+		} `json:"containers"`
+	} `json:"spec"`
 	Status struct {
 		Phase             string `json:"phase"`
 		PodIP             string `json:"podIP"`
@@ -263,14 +271,20 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 		}
 	}
 
+	containerPort := 0
+	if len(kp.Spec.Containers) > 0 && len(kp.Spec.Containers[0].Ports) > 0 {
+		containerPort = kp.Spec.Containers[0].Ports[0].ContainerPort
+	}
+
 	return &PodStatus{
-		Name:      kp.Metadata.Name,
-		Phase:     kp.Status.Phase,
-		Ready:     ready,
-		IP:        kp.Status.PodIP,
-		Labels:    kp.Metadata.Labels,
-		StartTime: kp.Status.StartTime,
-		Message:   msg,
+		Name:          kp.Metadata.Name,
+		Phase:         kp.Status.Phase,
+		Ready:         ready,
+		IP:            kp.Status.PodIP,
+		Labels:        kp.Metadata.Labels,
+		StartTime:     kp.Status.StartTime,
+		Message:       msg,
+		ContainerPort: containerPort,
 	}, nil
 }
 

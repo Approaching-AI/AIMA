@@ -75,8 +75,8 @@ func TestScanWithCrictl(t *testing.T) {
 		"llamacpp": {"ghcr.io/ggerganov/llama.cpp"},
 	}
 
-	results, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: engineAssets,
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: engineAssets,
 		Runner:       runner,
 	})
 	if err != nil {
@@ -140,8 +140,8 @@ func TestScanFallbackToDocker(t *testing.T) {
 		"vllm": {"vllm/vllm-openai"},
 	}
 
-	results, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: engineAssets,
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: engineAssets,
 		Runner:       runner,
 	})
 	if err != nil {
@@ -159,19 +159,24 @@ func TestScanFallbackToDocker(t *testing.T) {
 }
 
 func TestScanBothFail(t *testing.T) {
+	// ScanUnified gracefully degrades: if no container runtime is available
+	// it returns an empty list without error (native scan still runs).
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl images -o json":                                                    {err: fmt.Errorf("crictl not found")},
+			"crictl images -o json":                         {err: fmt.Errorf("crictl not found")},
 			"docker images --format {{json .}} --no-trunc": {err: fmt.Errorf("docker not found")},
 		},
 	}
 
-	_, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:       runner,
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
+		Runner:        runner,
 	})
-	if err == nil {
-		t.Error("expected error when both crictl and docker fail")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results when no runtime available, got %d", len(results))
 	}
 }
 
@@ -193,8 +198,8 @@ func TestScanNoMatchingImages(t *testing.T) {
 		},
 	}
 
-	results, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: map[string][]string{"vllm": {"vllm/vllm-openai"}},
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
 		Runner:       runner,
 	})
 	if err != nil {
@@ -205,7 +210,7 @@ func TestScanNoMatchingImages(t *testing.T) {
 	}
 }
 
-func TestScanEmptyEngineAssets(t *testing.T) {
+func TestScanEmptyAssetPatterns(t *testing.T) {
 	images := crictlImageList{
 		Images: []crictlImage{
 			{
@@ -223,8 +228,8 @@ func TestScanEmptyEngineAssets(t *testing.T) {
 		},
 	}
 
-	results, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: map[string][]string{},
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: map[string][]string{},
 		Runner:       runner,
 	})
 	if err != nil {
@@ -402,8 +407,8 @@ func TestScanContextCancellation(t *testing.T) {
 		},
 	}
 
-	_, err := Scan(ctx, ScanOptions{
-		EngineAssets: map[string][]string{"vllm": {"vllm/vllm-openai"}},
+	_, err := ScanUnified(ctx, ScanOptions{
+		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
 		Runner:       runner,
 	})
 	if err == nil {
@@ -434,8 +439,8 @@ func TestScanImageWithRegistry(t *testing.T) {
 		"vllm": {"vllm/vllm-openai", "registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai"},
 	}
 
-	results, err := Scan(context.Background(), ScanOptions{
-		EngineAssets: engineAssets,
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: engineAssets,
 		Runner:       runner,
 	})
 	if err != nil {

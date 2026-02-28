@@ -9,6 +9,7 @@ hardware:
     compute_capability: "10.0"
     cuda_cores: 2048
     resource_name: "nvidia.com/gpu"
+    runtime_class_name: "nvidia"
   cpu:
     arch: arm64
     cores: 12
@@ -24,3 +25,8 @@ constraints:
 partition:
   gpu_tools: [hami, engine_params]
   cpu_tools: [k3s_cgroups]
+container:
+  env:
+    NVIDIA_VISIBLE_DEVICES: "all"
+    NVIDIA_DRIVER_CAPABILITIES: "all"
+    LD_LIBRARY_PATH: "/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"

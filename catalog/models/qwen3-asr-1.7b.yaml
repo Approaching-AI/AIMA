@@ -1,0 +1,19 @@
+kind: model_asset
+metadata:
+  name: qwen3-asr-1.7b
+  type: asr
+  family: qwen
+  parameter_count: "1.7B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-ASR-1.7B
+      format: safetensors
+    - type: modelscope
+      repo: Qwen/Qwen3-ASR-1.7B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants: []

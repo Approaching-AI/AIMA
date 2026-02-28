@@ -1,28 +1,39 @@
 kind: engine_asset
 metadata:
-  name: vllm-0.8-blackwell
+  name: vllm-blackwell
   type: vllm
-  version: "0.8"
+  version: "26.01"
 image:
-  name: vllm/vllm-openai
-  tag: "latest"
-  size_approx_mb: 8500
-  platforms: [linux/amd64, linux/arm64]
+  # NGC official DGX Spark image, arm64 + Blackwell SM121
+  name: nvcr.io/nvidia/vllm
+  tag: "26.01-py3"
+  size_approx_mb: 12000
+  platforms: [linux/arm64]
   registries:
-    - docker.io/vllm/vllm-openai
-    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
+    - nvcr.io/nvidia/vllm
+patterns:
+  - "^vllm$"
+  - "^vllm-"
+  - "^vllm/"
+  - "-vllm"
+  - "vllm/"
+  - ":vllm"
+  - "nvidia/vllm"
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096
 startup:
-  command: ["vllm", "serve", "--model", "{{.ModelPath}}"]
+  command: ["vllm", "serve", "{{.ModelPath}}"]
+  env:
+    VLLM_ATTENTION_BACKEND: TRITON_ATTN
   default_args:
     port: 8000
     gpu_memory_utilization: 0.75
     max_model_len: 8192
+    served_model_name: "{{.ModelName}}"
   health_check:
     path: /health
-    timeout_s: 300
+    timeout_s: 600
   warmup:
     enabled: true
     prompt: "Hello"
@@ -36,7 +47,7 @@ amplifier:
     - paged_attention
     - continuous_batching
     - flash_attention
-  performance_gain: "2-4x throughput vs naive serving"
+  performance_gain: "2-4x throughput vs naive serving, Blackwell SM121 optimized"
   resource_expansion:
     cpu_offload: false
     ssd_offload: false
@@ -45,7 +56,11 @@ partition_hints:
   min_gpu_memory_mib: 4096
   recommended_gpu_cores_percent: 50
 time_constraints:
-  cold_start_s: [30, 60]
-  model_switch_s: [30, 60]
+  cold_start_s: [30, 90]
+  model_switch_s: [30, 90]
 power_constraints:
-  typical_draw_watts: [60, 80]
+  typical_draw_watts: [40, 80]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

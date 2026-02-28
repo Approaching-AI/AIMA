@@ -20,35 +20,47 @@ storage:
     - type: local_path
       path: ""
 variants:
-  - name: qwen3-8b-blackwell-vllm
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # FP16 weights ~16GB, GB10 unified memory 128GB
+  # gpu_memory_utilization 0.30 on 128GB ≈ 38.4GB → 充裕
+  - name: qwen3-8b-blackwell-vllm-bf16
     hardware:
       gpu_arch: Blackwell
       vram_min_mib: 6144
+      unified_memory: true
     engine: vllm
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.50
+      gpu_memory_utilization: 0.30
       max_model_len: 8192
       dtype: bfloat16
     expected_performance:
-      tokens_per_second: [15, 22]
-      latency_first_token_ms: [30, 80]
+      tokens_per_second: [25, 50]
+      latency_first_token_ms: [20, 60]
 
-  - name: qwen3-8b-ada-vllm
+  # --- RTX 4090 (Ada, 24GB discrete) ---
+  # FP16 weights ~16GB + KV cache ~2GB = ~18GB
+  # vram_min_mib: 16384 → 排除 RTX 4060 (8GB)，仅 4090 (24GB) 匹配
+  # gpu_memory_utilization 0.80 on 24GB = 19.2GB
+  - name: qwen3-8b-ada-vllm-fp16
     hardware:
       gpu_arch: Ada
-      vram_min_mib: 8192
+      vram_min_mib: 16384
+      unified_memory: false
     engine: vllm
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.40
+      gpu_memory_utilization: 0.80
       max_model_len: 4096
-      dtype: float16
+      dtype: auto
     expected_performance:
-      tokens_per_second: [18, 28]
-      latency_first_token_ms: [25, 60]
+      tokens_per_second: [30, 60]
+      latency_first_token_ms: [15, 40]
 
-  - name: qwen3-8b-universal-llamacpp
+  # --- 所有设备通用 (llamacpp + GGUF) ---
+  # Q4_K_M = 5.03GB → RTX 4060 (8GB) ✓, M4 (16GB) ✓
+  # Q8_0 = 8.71GB → RTX 4060 需部分 CPU offload
+  - name: qwen3-8b-universal-llamacpp-q4
     hardware:
       gpu_arch: "*"
       vram_min_mib: 0
@@ -58,5 +70,5 @@ variants:
       n_gpu_layers: 999
       ctx_size: 4096
     expected_performance:
-      tokens_per_second: [8, 15]
-      latency_first_token_ms: [50, 200]
+      tokens_per_second: [10, 40]
+      latency_first_token_ms: [30, 150]

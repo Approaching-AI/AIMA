@@ -15,6 +15,7 @@ func newEngineCmd(app *App) *cobra.Command {
 	cmd.AddCommand(
 		newEngineScanCmd(app),
 		newEngineListCmd(app),
+		newEngineInfoCmd(app),
 		newEnginePullCmd(app),
 		newEngineImportCmd(app),
 		newEngineRemoveCmd(app),
@@ -24,15 +25,45 @@ func newEngineCmd(app *App) *cobra.Command {
 }
 
 func newEngineScanCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	var runtime string
+	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan for locally available engine images",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			data, err := app.ToolDeps.ScanEngines(ctx)
+			if runtime == "" {
+				runtime = "auto"
+			}
+			if runtime != "auto" && runtime != "container" && runtime != "native" {
+				return fmt.Errorf("invalid runtime: %s (must be auto, container, or native)", runtime)
+			}
+
+			data, err := app.ToolDeps.ScanEngines(ctx, runtime)
 			if err != nil {
 				return fmt.Errorf("scan engines: %w", err)
+			}
+
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&runtime, "runtime", "auto", "Runtime filter: auto, container, or native")
+	return cmd
+}
+
+func newEngineInfoCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "info <name>",
+		Short: "Get full information about an engine (catalog knowledge + live availability)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			name := args[0]
+
+			data, err := app.ToolDeps.GetEngineInfo(ctx, name)
+			if err != nil {
+				return fmt.Errorf("engine info %s: %w", name, err)
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
@@ -61,12 +92,15 @@ func newEngineListCmd(app *App) *cobra.Command {
 
 func newEnginePullCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "pull <name>",
-		Short: "Pull an inference engine image",
-		Args:  cobra.ExactArgs(1),
+		Use:   "pull [name]",
+		Short: "Pull an inference engine (default: llamacpp fallback engine)",
+		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			name := args[0]
+			name := "llamacpp"
+			if len(args) > 0 {
+				name = args[0]
+			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Pulling engine %s...\n", name)
 			if err := app.ToolDeps.PullEngine(ctx, name); err != nil {

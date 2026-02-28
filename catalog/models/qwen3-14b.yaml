@@ -1,0 +1,73 @@
+kind: model_asset
+metadata:
+  name: qwen3-14b
+  type: llm
+  family: qwen
+  parameter_count: "14B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-14B
+      format: safetensors
+    - type: huggingface
+      repo: Qwen/Qwen3-14B-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen3-14B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # FP16 weights ~28GB, GB10 unified memory 128GB
+  # gpu_memory_utilization 0.40 on 128GB ≈ 51.2GB → 28GB 权重 + 23GB KV cache
+  - name: qwen3-14b-blackwell-vllm-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 10240
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.40
+      max_model_len: 4096
+      dtype: bfloat16
+    expected_performance:
+      tokens_per_second: [15, 30]
+      latency_first_token_ms: [30, 100]
+
+  # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
+  # FP16 weights ~28GB, TP=2 → 每 GPU 14GB，24GB VRAM 充裕
+  # vram_min_mib: 16384 → 排除 RTX 4060 (8GB), 仅 4090 (24GB) 匹配
+  - name: qwen3-14b-ada-vllm-bf16
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 16384
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.80
+      max_model_len: 4096
+      dtype: bfloat16
+      tensor_parallel_size: 2
+    expected_performance:
+      tokens_per_second: [12, 25]
+      latency_first_token_ms: [40, 150]
+
+  # --- 所有设备通用 (llamacpp + GGUF) ---
+  # Q4_K_M = 9GB → dev-win (8GB) 需 CPU offload, amd395 (128GB unified) / linux-1 可全 GPU
+  - name: qwen3-14b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [5, 25]
+      latency_first_token_ms: [50, 300]

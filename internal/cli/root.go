@@ -29,7 +29,8 @@ func NewRootCmd(app *App) *cobra.Command {
 		Use:   "aima",
 		Short: "AI-Inference-Managed-by-AI",
 		Long:  "AIMA manages AI inference on edge devices — hardware detection, knowledge-driven config, multi-model deployment.",
-		SilenceUsage: true,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	root.AddCommand(
@@ -40,9 +41,12 @@ func NewRootCmd(app *App) *cobra.Command {
 		newModelCmd(app),
 		newEngineCmd(app),
 		newKnowledgeCmd(app),
+		newBenchmarkCmd(app),
 		newAskCmd(app),
 		newAgentCmd(app),
 		newServeCmd(app),
+		newDiscoverCmd(app),
+		newVersionCmd(),
 	)
 
 	return root

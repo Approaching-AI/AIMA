@@ -31,20 +31,27 @@ type Model struct {
 	SizeBytes        int64
 	DetectedArch     string
 	DetectedParams   string
+	ModelClass       string
+	TotalParams      int64
+	ActiveParams     int64
+	Quantization     string
+	QuantSrc         string
 	Status           string
 	DownloadProgress float64
 	CreatedAt        time.Time
 }
 
 type Engine struct {
-	ID        string
-	Type      string
-	Image     string
-	Tag       string
-	SizeBytes int64
-	Platform  string
-	Available bool
-	CreatedAt time.Time
+	ID          string    `json:"id"`
+	Type        string    `json:"type"`
+	Image       string    `json:"image"`        // container image name (container engines) or empty (native)
+	Tag         string    `json:"tag"`          // container image tag (container engines) or empty (native)
+	SizeBytes   int64     `json:"size_bytes"`
+	Platform    string    `json:"platform"`
+	RuntimeType string    `json:"runtime_type"` // "container" or "native"
+	BinaryPath  string    `json:"binary_path"`  // path to native binary (native engines only)
+	Available   bool      `json:"available"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type KnowledgeNote struct {
@@ -151,6 +158,14 @@ func (d *DB) migrate(ctx context.Context) error {
 	}
 	// v2: knowledge architecture tables (static + dynamic)
 	if err := d.migrateV2(ctx); err != nil {
+		return err
+	}
+	// v3: enhanced model metadata
+	if err := d.migrateV3(ctx); err != nil {
+		return err
+	}
+	// v4: unified engine scan (container + native)
+	if err := d.migrateV4(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -411,6 +426,122 @@ CREATE TABLE perf_vectors (
 	return nil
 }
 
+func (d *DB) migrateV3(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 3 {
+		return nil
+	}
+
+	// Add new columns to models table for enhanced metadata
+	// Use ALTER TABLE with IF NOT EXISTS pattern by checking column existence first
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='model_class'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check model_class column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE models ADD COLUMN model_class TEXT DEFAULT ''`)
+		if err != nil {
+			return fmt.Errorf("add model_class column: %w", err)
+		}
+	}
+
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='total_params'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check total_params column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE models ADD COLUMN total_params INTEGER DEFAULT 0`)
+		if err != nil {
+			return fmt.Errorf("add total_params column: %w", err)
+		}
+	}
+
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='active_params'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check active_params column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE models ADD COLUMN active_params INTEGER DEFAULT 0`)
+		if err != nil {
+			return fmt.Errorf("add active_params column: %w", err)
+		}
+	}
+
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='quantization'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check quantization column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE models ADD COLUMN quantization TEXT DEFAULT ''`)
+		if err != nil {
+			return fmt.Errorf("add quantization column: %w", err)
+		}
+	}
+
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='quant_src'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check quant_src column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE models ADD COLUMN quant_src TEXT DEFAULT ''`)
+		if err != nil {
+			return fmt.Errorf("add quant_src column: %w", err)
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 3"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV4(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 4 {
+		return nil
+	}
+
+	// Add runtime_type column to engines table
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name='runtime_type'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check runtime_type column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE engines ADD COLUMN runtime_type TEXT DEFAULT 'container'`)
+		if err != nil {
+			return fmt.Errorf("add runtime_type column: %w", err)
+		}
+	}
+
+	// Add binary_path column to engines table
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name='binary_path'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check binary_path column: %w", err)
+	}
+	if count == 0 {
+		_, err = d.db.ExecContext(ctx, `ALTER TABLE engines ADD COLUMN binary_path TEXT`)
+		if err != nil {
+			return fmt.Errorf("add binary_path column: %w", err)
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
 // ClearStaticKnowledge deletes all rows from static knowledge tables.
 // Called on startup before reloading from go:embed YAML.
 func (d *DB) ClearStaticKnowledge(ctx context.Context) error {
@@ -445,9 +576,11 @@ func (d *DB) Analyze(ctx context.Context) error {
 
 func (d *DB) InsertModel(ctx context.Context, m *Model) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params, status, download_progress)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams, m.Status, m.DownloadProgress)
+		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params,
+		                    model_class, total_params, active_params, quantization, quant_src, status, download_progress)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams,
+		m.ModelClass, m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status, m.DownloadProgress)
 	if err != nil {
 		return fmt.Errorf("insert model %s: %w", m.ID, err)
 	}
@@ -455,16 +588,43 @@ func (d *DB) InsertModel(ctx context.Context, m *Model) error {
 }
 
 // UpsertScannedModel inserts a new model or updates metadata of an existing one.
-// Preserves status and download_progress of existing records.
+// If a model with the same path exists, update that record instead of creating a duplicate.
+// Status defaults to 'registered' if not set.
 func (d *DB) UpsertScannedModel(ctx context.Context, m *Model) error {
-	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'registered')
+	// First check if a model with this path already exists
+	var existingID string
+	var existingStatus string
+	err := d.db.QueryRowContext(ctx, `SELECT id, COALESCE(status,'registered') FROM models WHERE path = ?`, m.Path).Scan(&existingID, &existingStatus)
+	if err == nil {
+		// Existing model found with same path, use its ID for update
+		m.ID = existingID
+		// Preserve existing status if new status is empty
+		if m.Status == "" {
+			m.Status = existingStatus
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check existing model by path %s: %w", m.Path, err)
+	}
+	// else: no existing model, use the scanned hash ID
+
+	// Default status to 'registered' if not set
+	if m.Status == "" {
+		m.Status = "registered"
+	}
+
+	_, err = d.db.ExecContext(ctx,
+		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params,
+		                    model_class, total_params, active_params, quantization, quant_src, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, type=excluded.type, path=excluded.path,
 		   format=excluded.format, size_bytes=excluded.size_bytes,
-		   detected_arch=excluded.detected_arch, detected_params=excluded.detected_params`,
-		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams)
+		   detected_arch=excluded.detected_arch, detected_params=excluded.detected_params,
+		   model_class=excluded.model_class, total_params=excluded.total_params,
+		   active_params=excluded.active_params, quantization=excluded.quantization,
+		   quant_src=excluded.quant_src, status=excluded.status`,
+		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams,
+		m.ModelClass, m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status)
 	if err != nil {
 		return fmt.Errorf("upsert scanned model %s: %w", m.ID, err)
 	}
@@ -476,10 +636,15 @@ func (d *DB) GetModel(ctx context.Context, id string) (*Model, error) {
 	err := d.db.QueryRowContext(ctx,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
-		 FROM models WHERE id = ?`, id).Scan(
+		 FROM models WHERE id = ? OR name = ?
+		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+		 LIMIT 1`, id, id, id).Scan(
 		&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-		&m.DetectedArch, &m.DetectedParams, &m.Status, &m.DownloadProgress, &m.CreatedAt)
+		&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+		&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("model %s not found", id)
 	}
@@ -493,17 +658,20 @@ func (d *DB) ListModels(ctx context.Context) ([]*Model, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
 	defer rows.Close()
-	var models []*Model
+	models := make([]*Model, 0)
 	for rows.Next() {
 		m := &Model{}
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-			&m.DetectedArch, &m.DetectedParams, &m.Status, &m.DownloadProgress, &m.CreatedAt); err != nil {
+			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+			&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan model row: %w", err)
 		}
 		models = append(models, m)
@@ -529,14 +697,20 @@ func (d *DB) FindModelByName(ctx context.Context, name string) (*Model, error) {
 	queries := []string{
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE name = ?`,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE LOWER(name) = LOWER(?)`,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
+		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE LOWER(name) LIKE '%' || LOWER(?) || '%'`,
 	}
@@ -544,7 +718,8 @@ func (d *DB) FindModelByName(ctx context.Context, name string) (*Model, error) {
 		m := &Model{}
 		err := d.db.QueryRowContext(ctx, q, name).Scan(
 			&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-			&m.DetectedArch, &m.DetectedParams, &m.Status, &m.DownloadProgress, &m.CreatedAt)
+			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+			&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -572,9 +747,9 @@ func (d *DB) DeleteModel(ctx context.Context, id string) error {
 
 func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.Available)
+		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
 	if err != nil {
 		return fmt.Errorf("insert engine %s: %w", e.ID, err)
 	}
@@ -584,13 +759,14 @@ func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
 // UpsertScannedEngine inserts a new engine or updates an existing one.
 func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   type=excluded.type, image=excluded.image, tag=excluded.tag,
 		   size_bytes=excluded.size_bytes, platform=excluded.platform,
+		   runtime_type=excluded.runtime_type, binary_path=excluded.binary_path,
 		   available=excluded.available`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.Available)
+		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
 	if err != nil {
 		return fmt.Errorf("upsert scanned engine %s: %w", e.ID, err)
 	}
@@ -601,9 +777,11 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 	e := &Engine{}
 	err := d.db.QueryRowContext(ctx,
 		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
+		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
 		        available, created_at
 		 FROM engines WHERE id = ?`, id).Scan(
-		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform, &e.Available, &e.CreatedAt)
+		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform,
+		&e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("engine %s not found", id)
 	}
@@ -616,17 +794,18 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
+		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
 		        available, created_at
 		 FROM engines ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list engines: %w", err)
 	}
 	defer rows.Close()
-	var engines []*Engine
+	engines := make([]*Engine, 0)
 	for rows.Next() {
 		e := &Engine{}
 		if err := rows.Scan(&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes,
-			&e.Platform, &e.Available, &e.CreatedAt); err != nil {
+			&e.Platform, &e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan engine row: %w", err)
 		}
 		engines = append(engines, e)
@@ -690,7 +869,7 @@ func (d *DB) SearchNotes(ctx context.Context, filter NoteFilter) ([]*KnowledgeNo
 	}
 	defer rows.Close()
 
-	var notes []*KnowledgeNote
+	notes := make([]*KnowledgeNote, 0)
 	for rows.Next() {
 		n := &KnowledgeNote{}
 		var tagsStr string
@@ -765,6 +944,32 @@ func (d *DB) GetConfiguration(ctx context.Context, id string) (*Configuration, e
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get configuration %s: %w", id, err)
+	}
+	if derivedFrom.Valid {
+		c.DerivedFrom = derivedFrom.String
+	}
+	_ = json.Unmarshal([]byte(tagsStr.String), &c.Tags)
+	return c, nil
+}
+
+// FindConfigByHash returns a configuration matching the given config_hash, or nil if not found.
+func (d *DB) FindConfigByHash(ctx context.Context, hash string) (*Configuration, error) {
+	c := &Configuration{}
+	var tagsStr, derivedFrom sql.NullString
+	err := d.db.QueryRowContext(ctx,
+		`SELECT id, hardware_id, engine_id, model_id, COALESCE(partition_slot,''),
+		        config, config_hash, derived_from, COALESCE(status,'experiment'),
+		        COALESCE(tags,'[]'), COALESCE(source,'local'), COALESCE(device_id,''),
+		        created_at, updated_at
+		 FROM configurations WHERE config_hash = ?`, hash).Scan(
+		&c.ID, &c.HardwareID, &c.EngineID, &c.ModelID, &c.Slot,
+		&c.Config, &c.ConfigHash, &derivedFrom, &c.Status,
+		&tagsStr, &c.Source, &c.DeviceID, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find config by hash: %w", err)
 	}
 	if derivedFrom.Valid {
 		c.DerivedFrom = derivedFrom.String

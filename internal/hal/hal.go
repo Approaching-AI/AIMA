@@ -53,16 +53,29 @@ type RAMInfo struct {
 	AvailableMiB int `json:"available_mib"`
 }
 
-// StorageInfo describes disk space for the AIMA data directory.
+// StorageInfo describes disk space for the AIMA data directory and all volumes.
 type StorageInfo struct {
-	DataDirPath string `json:"data_dir_path"`
-	FreeMiB     int64  `json:"free_mib"`
+	DataDirPath string       `json:"data_dir_path"`
+	FreeMiB     int64        `json:"free_mib"`
+	TotalMiB    int64        `json:"total_mib"`
+	Volumes     []VolumeInfo `json:"volumes,omitempty"`
+}
+
+// VolumeInfo describes a mounted filesystem volume.
+type VolumeInfo struct {
+	MountPoint string `json:"mount_point"`
+	Device     string `json:"device,omitempty"`
+	TotalMiB   int64  `json:"total_mib"`
+	FreeMiB    int64  `json:"free_mib"`
 }
 
 // OSInfo describes the operating system.
 type OSInfo struct {
-	OS   string `json:"os"`
-	Arch string `json:"arch"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	Version         string `json:"version,omitempty"`       // OS version (e.g., "11", "22.04", "14.5")
+	Kernel          string `json:"kernel,omitempty"`      // Kernel version (Linux)
+	ContainerRuntime string `json:"container_runtime,omitempty"` // "k3s" | "docker" | "none"
 }
 
 // Metrics holds real-time utilization data.

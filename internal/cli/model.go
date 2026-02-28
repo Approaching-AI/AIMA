@@ -133,6 +133,7 @@ func newModelInfoCmd(app *App) *cobra.Command {
 }
 
 func newModelRemoveCmd(app *App) *cobra.Command {
+	var deleteFiles bool
 	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a model from the database",
@@ -145,14 +146,19 @@ func newModelRemoveCmd(app *App) *cobra.Command {
 			if app.ToolDeps.RemoveModel == nil {
 				return fmt.Errorf("model.remove not implemented")
 			}
-			if err := app.ToolDeps.RemoveModel(ctx, name); err != nil {
+			if err := app.ToolDeps.RemoveModel(ctx, name, deleteFiles); err != nil {
 				return fmt.Errorf("remove model %s: %w", name, err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Model %s removed\n", name)
+			if deleteFiles {
+				fmt.Fprintf(cmd.OutOrStdout(), "Model %s removed (files deleted)\n", name)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Model %s removed (database only)\n", name)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&deleteFiles, "delete-files", "f", false, "Delete model files from disk")
 
 	return cmd
 }

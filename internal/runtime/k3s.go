@@ -147,6 +147,21 @@ func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 		phase = "stopped"
 	}
 
+	// Detect persistent failure states that K8s may report under various phases.
+	// ImagePullBackOff keeps pods in "Pending"; CrashLoopBackOff keeps pods in "Running"
+	// with ready=false (container restarts forever). Both should show as "failed".
+	if pod.Message != "" && (phase == "starting" || (phase == "running" && !pod.Ready)) {
+		reason := pod.Message
+		if i := strings.Index(reason, ":"); i > 0 {
+			reason = reason[:i]
+		}
+		switch reason {
+		case "ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff",
+			"CreateContainerConfigError", "InvalidImageName":
+			phase = "failed"
+		}
+	}
+
 	return &DeploymentStatus{
 		Name:      pod.Name,
 		Phase:     phase,

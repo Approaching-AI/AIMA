@@ -462,7 +462,9 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
 			phase = "starting"
 		} else {
-			phase = "stopped"
+			// Port dead past health check timeout: process crashed or never started.
+			// Intentional stops go through Delete() which removes metadata entirely.
+			phase = "failed"
 		}
 	}
 

@@ -66,22 +66,25 @@ func run() error {
 		return fmt.Errorf("load catalog: %w", err)
 	}
 
-	// 3b. Merge L1 overlay catalog from disk (if present)
+	// 3b. Merge overlay catalog from disk (if present) with staleness detection
 	overlayDir := filepath.Join(dataDir, "catalog")
+	factoryDigests := knowledge.ComputeDigests(catalog.FS)
 	if info, e := os.Stat(overlayDir); e == nil && info.IsDir() {
-		overlayCat, e2 := knowledge.LoadCatalog(os.DirFS(overlayDir))
-		if e2 != nil {
-			slog.Warn("load catalog overlay failed, skipping", "dir", overlayDir, "error", e2)
-		} else {
-			before := len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
-			cat = knowledge.MergeCatalog(cat, overlayCat)
-			after := len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
-			slog.Info("catalog overlay merged",
-				"dir", overlayDir,
-				"overlay_assets", len(overlayCat.HardwareProfiles)+len(overlayCat.EngineAssets)+len(overlayCat.ModelAssets)+len(overlayCat.PartitionStrategies)+len(overlayCat.StackComponents),
-				"new_assets", after-before,
-			)
+		overlayFS := os.DirFS(overlayDir)
+		overlayCat, parseWarnings := knowledge.LoadCatalogLenient(overlayFS)
+		for _, w := range parseWarnings {
+			slog.Warn("overlay file skipped", "reason", w)
 		}
+		before := catalogSize(cat)
+		cat, staleWarnings := knowledge.MergeCatalogWithDigests(cat, overlayCat, factoryDigests, overlayFS)
+		for _, w := range staleWarnings {
+			slog.Warn(w)
+		}
+		slog.Info("catalog overlay merged",
+			"dir", overlayDir,
+			"overlay_assets", catalogSize(overlayCat),
+			"new_assets", catalogSize(cat)-before,
+		)
 	}
 
 	// 4. Load static knowledge into SQLite relational tables
@@ -109,7 +112,7 @@ func run() error {
 
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
-	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir)
+	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir, factoryDigests)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 9. Create agent (L3a Go Agent)
@@ -356,6 +359,10 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.
 	return nativeRt
 }
 
+func catalogSize(cat *knowledge.Catalog) int {
+	return len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
+}
+
 // buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
 // Missing data results in zero values, which downstream functions treat as "unknown" and skip.
@@ -432,7 +439,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
 // nativeRt is always provided so DeployApply can use it when the engine recommends native runtime.
-func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string) *mcp.ToolDeps {
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string, factoryDigests map[string]string) *mcp.ToolDeps {
 	scanEnginesImpl := func(ctx context.Context, runtimeFilter string) (json.RawMessage, error) {
 		assetPatterns := make(map[string][]string)
 		binaryAssets := make(map[string]string)
@@ -1241,6 +1248,83 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		SetConfig: func(ctx context.Context, key, value string) error {
 			return db.SetConfig(ctx, key, value)
+		},
+		CatalogOverride: func(ctx context.Context, kind, name, content string) (json.RawMessage, error) {
+			// Validate kind
+			dir := knowledge.KindToDir(kind)
+			if dir == "" {
+				return nil, fmt.Errorf("unknown kind %q", kind)
+			}
+			// Validate YAML parses as the correct kind
+			tmpCat := &knowledge.Catalog{}
+			if err := tmpCat.ParseAssetPublic([]byte(content), "input"); err != nil {
+				return nil, fmt.Errorf("invalid YAML: %w", err)
+			}
+			// Inject _base_digest if factory has this asset
+			finalContent := content
+			if digest, ok := factoryDigests[name]; ok {
+				finalContent = "_base_digest: " + digest + "\n" + content
+			}
+			// Write to overlay directory
+			overlaySubDir := filepath.Join(dataDir, "catalog", dir)
+			if err := os.MkdirAll(overlaySubDir, 0o755); err != nil {
+				return nil, fmt.Errorf("create overlay dir: %w", err)
+			}
+			outPath := filepath.Join(overlaySubDir, name+".yaml")
+			action := "created"
+			if _, err := os.Stat(outPath); err == nil {
+				action = "replaced"
+			}
+			if err := os.WriteFile(outPath, []byte(finalContent), 0o644); err != nil {
+				return nil, fmt.Errorf("write overlay: %w", err)
+			}
+			result := map[string]string{
+				"path":   outPath,
+				"action": action,
+			}
+			if _, ok := factoryDigests[name]; ok {
+				result["note"] = "overlay shadows factory asset, _base_digest injected"
+			}
+			return json.Marshal(result)
+		},
+		CatalogStatus: func(ctx context.Context) (json.RawMessage, error) {
+			factoryCat, _ := knowledge.LoadCatalog(catalog.FS)
+			overlayDir := filepath.Join(dataDir, "catalog")
+			var overlayCat *knowledge.Catalog
+			var parseWarnings []string
+			if info, e := os.Stat(overlayDir); e == nil && info.IsDir() {
+				overlayCat, parseWarnings = knowledge.LoadCatalogLenient(os.DirFS(overlayDir))
+			} else {
+				overlayCat = &knowledge.Catalog{}
+			}
+			// Find shadowed assets
+			factoryNames := knowledge.CollectNames(factoryCat)
+			overlayNames := knowledge.CollectNames(overlayCat)
+			type shadowEntry struct {
+				Name  string `json:"name"`
+				Kind  string `json:"kind"`
+				Stale bool   `json:"stale"`
+			}
+			var shadowed []shadowEntry
+			overlayDigests := knowledge.ExtractOverlayDigestsFromDir(overlayDir)
+			for name := range overlayNames {
+				if factoryNames[name] {
+					stale := false
+					if baseD, ok := overlayDigests[name]; ok {
+						if factD, ok2 := factoryDigests[name]; ok2 && baseD != factD {
+							stale = true
+						}
+					}
+					shadowed = append(shadowed, shadowEntry{Name: name, Stale: stale})
+				}
+			}
+			status := map[string]any{
+				"factory_assets": catalogSize(factoryCat),
+				"overlay_assets": catalogSize(overlayCat),
+				"shadowed":       shadowed,
+				"parse_warnings": parseWarnings,
+			}
+			return json.Marshal(status)
 		},
 	}
 }

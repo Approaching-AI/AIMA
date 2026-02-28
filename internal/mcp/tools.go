@@ -63,6 +63,10 @@ type ToolDeps struct {
 	// Discovery
 	DiscoverLAN func(ctx context.Context, timeoutS int) (json.RawMessage, error)
 
+	// Catalog overlay
+	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
+	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
+
 	// System
 	ExecShell func(ctx context.Context, command string) (json.RawMessage, error)
 	GetConfig func(ctx context.Context, key string) (string, error)
@@ -959,6 +963,51 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.DiscoverLAN(ctx, p.TimeoutS)
 			if err != nil {
 				return nil, fmt.Errorf("discover lan: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// catalog.override
+	s.RegisterTool(&Tool{
+		Name:        "catalog.override",
+		Description: "Write a YAML asset to the overlay catalog directory. Overrides the factory-embedded asset with the same metadata.name, or adds a new asset. Takes effect on next aima restart.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","enum":["engine_asset","model_asset","hardware_profile","partition_strategy","stack_component"],"description":"Asset kind"},"name":{"type":"string","description":"metadata.name of the asset"},"content":{"type":"string","description":"Full YAML content of the asset"}},"required":["kind","name","content"]}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.CatalogOverride == nil {
+				return ErrorResult("catalog.override not implemented"), nil
+			}
+			var p struct {
+				Kind    string `json:"kind"`
+				Name    string `json:"name"`
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Kind == "" || p.Name == "" || p.Content == "" {
+				return ErrorResult("kind, name, and content are required"), nil
+			}
+			data, err := deps.CatalogOverride(ctx, p.Kind, p.Name, p.Content)
+			if err != nil {
+				return nil, fmt.Errorf("catalog override: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// catalog.status
+	s.RegisterTool(&Tool{
+		Name:        "catalog.status",
+		Description: "Show catalog status: factory asset counts, overlay asset counts, and staleness warnings",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.CatalogStatus == nil {
+				return ErrorResult("catalog.status not implemented"), nil
+			}
+			data, err := deps.CatalogStatus(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("catalog status: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

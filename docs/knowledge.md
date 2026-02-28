@@ -158,9 +158,7 @@ slots:
 ConfigResolver 按优先级合并多层知识:
 
 ```
-L0: engine_asset.default_args                 (go:embed YAML, always available)
- ↓ merge (overlay 同名覆盖, 新名追加)
-L0b: ~/.aima/catalog/ overlay YAML            (磁盘热更新, 无需重编译)
+L0: YAML catalog (go:embed + ~/.aima/catalog/ overlay 合并, staleness digest 检测)
  ↓ merge (高层 override 低层)
 L1: 用户 CLI --config / --engine / --slot     (人类显式指定)
  ↓ merge

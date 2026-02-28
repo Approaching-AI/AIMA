@@ -59,9 +59,7 @@ L2:  知识库 ──── 确定性匹配 ────────────
   ^ override
 L1:  人类 CLI ── 手动指定参数 ──────────────────────── 指定解
   ^ override
-L0b: Overlay ─── 磁盘 YAML (~/.aima/catalog/) ─────── 热更新 (无需重编译)
-  ^ merge (同名覆盖, 新名追加)
-L0:  默认值 ──── go:embed YAML (编译时) ────────────── 可用解 (always)
+L0:  默认值 ──── YAML 知识 (go:embed + ~/.aima/catalog/ overlay 合并) ── 可用解 (always)
 ```
 
 每层独立可用。无 Agent、无网络、无知识库 → L0 仍能启动推理服务。

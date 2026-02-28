@@ -55,7 +55,7 @@ spec:
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: all
         - name: LD_LIBRARY_PATH
-          value: /lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+          value: {{ .LibDir }}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
         {{- end }}
         {{- range $k, $v := .ExtraEnv }}
         - name: {{ $k }}
@@ -131,6 +131,7 @@ type podData struct {
 	ModelHostPath          string
 	GPUResourceName        string
 	RuntimeClassName       string // e.g. "nvidia" for NVIDIA CUDA containers
+	LibDir                 string // platform-specific lib path, e.g. "/lib/x86_64-linux-gnu"
 }
 
 func (d podData) HasAnnotations() bool {
@@ -156,6 +157,16 @@ func (d podData) GPUVendorDomain() string {
 		return d.GPUResourceName[:i]
 	}
 	return d.GPUResourceName
+}
+
+// libDirForArch returns the platform-specific library directory path.
+func libDirForArch(cpuArch string) string {
+	switch cpuArch {
+	case "arm64", "aarch64":
+		return "/lib/aarch64-linux-gnu"
+	default:
+		return "/lib/x86_64-linux-gnu"
+	}
 }
 
 // GeneratePod generates K3S Pod YAML from a resolved configuration.
@@ -241,6 +252,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  gpuResource,
 		RuntimeClassName: resolved.RuntimeClassName,
+		LibDir:           libDirForArch(resolved.CPUArch),
 	}
 
 	if resolved.Partition != nil {

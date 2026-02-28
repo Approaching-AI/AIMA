@@ -4,12 +4,15 @@ metadata:
   type: vllm-nightly
   version: "nightly"
 image:
-  # vLLM nightly with CUDA 13.0 + arm64 for Blackwell SM121 (GB10)
-  # Required for newer model architectures (qwen3_5_moe, etc.) not yet in stable vLLM
+  # vLLM Qwen3.5 专用 build, CUDA 13.0, multi-arch (含 arm64)
+  # 备选 tag (按优先级):
+  #   1. qwen3_5-cu130          ← 当前使用，Qwen3.5 专用 build (2026-02-23)
+  #   2. cu130-nightly-aarch64  ← 滚动 nightly，不稳定但最新
+  #   3. v0.17.0-cu130          ← 待发布，将是首个稳定支持 qwen3_5_moe 的版本
   name: vllm/vllm-openai
-  tag: "cu130-nightly-aarch64"
+  tag: "qwen3_5-cu130"
   size_approx_mb: 8000
-  platforms: [linux/arm64]
+  platforms: [linux/arm64, linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
 patterns:

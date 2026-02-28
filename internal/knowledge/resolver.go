@@ -41,6 +41,7 @@ type ResolvedConfig struct {
 	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
 	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
 	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
+	CPUArch               string            // CPU architecture (e.g. "amd64", "arm64") — for platform-specific paths
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -111,9 +112,10 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.Warmup = &engine.Startup.Warmup
 	}
 
-	// Set GPU resource name and runtimeClassName from hardware profile
+	// Set GPU resource name, runtimeClassName, and CPU arch from hardware profile
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
 	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
+	resolved.CPUArch = hw.CPUArch
 
 	// Set runtime recommendation from engine's platform_recommendations
 	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {

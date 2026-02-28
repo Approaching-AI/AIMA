@@ -53,9 +53,9 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		}
 	}
 
-	// Remove backends that no longer have a deployment
-	for name := range s.ListBackends() {
-		if !active[name] {
+	// Remove local backends that no longer have a deployment (skip remote backends)
+	for name, b := range s.ListBackends() {
+		if !active[name] && !b.Remote {
 			slog.Info("sync: removing stale backend", "model", name)
 			s.RemoveBackend(name)
 		}

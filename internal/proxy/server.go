@@ -23,6 +23,7 @@ type Backend struct {
 	Address    string `json:"address"`
 	BasePath   string `json:"base_path"`
 	Ready      bool   `json:"ready"`
+	Remote     bool   `json:"remote"` // true = discovered via mDNS, not a local deployment
 }
 
 // Server is the HTTP inference proxy.
@@ -175,6 +176,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"engine_type": b.EngineType,
 			"address":     b.Address,
 			"ready":       b.Ready,
+			"remote":      b.Remote,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

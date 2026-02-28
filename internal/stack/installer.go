@@ -472,18 +472,31 @@ func (inst *Installer) installBinary(ctx context.Context, comp knowledge.StackCo
 		}
 	}()
 
-	// Resolve binary: local dist/ first, then PATH
+	// Resolve binary: local dist/ first, then PATH, then os.Executable() (self)
 	binary := comp.Source.Binary
 	localPath := filepath.Join(inst.distDir, binary)
 	if _, err := os.Stat(localPath); err == nil {
 		binary = localPath
 		slog.Info("using local binary", "path", localPath)
 	} else if _, err := exec.LookPath(comp.Source.Binary); err != nil {
-		return fmt.Errorf("%s not found: place binary at %s or add to PATH", comp.Source.Binary, localPath)
+		// Fallback: if the component binary name matches our own binary (e.g., "aima"),
+		// use os.Executable() to find ourselves.
+		selfPath, exeErr := os.Executable()
+		baseName := strings.TrimSuffix(filepath.Base(selfPath), ".exe")
+		if exeErr == nil && (baseName == comp.Source.Binary || filepath.Base(selfPath) == comp.Source.Binary) {
+			binary = selfPath
+			slog.Info("using self as binary", "path", selfPath)
+		} else {
+			return fmt.Errorf("%s not found: place binary at %s or add to PATH", comp.Source.Binary, localPath)
+		}
 	}
 
-	// Execute: component binary server <args>
-	cmdArgs := append([]string{"server"}, args...)
+	// Execute: component binary <subcommand> <args>
+	subcommand := comp.Install.Subcommand
+	if subcommand == "" {
+		subcommand = "server"
+	}
+	cmdArgs := append([]string{subcommand}, args...)
 
 	if comp.Install.Daemon {
 		if runtime.GOOS == "linux" {
@@ -530,8 +543,11 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 		absBinary = systemBinary
 	}
 
-	// Write env file: /etc/rancher/k3s/k3s.env
-	envDir := "/etc/rancher/k3s"
+	// Write env file: K3S uses /etc/rancher/k3s/, other daemons use /etc/aima/
+	envDir := "/etc/aima"
+	if name == "k3s" {
+		envDir = "/etc/rancher/k3s"
+	}
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return fmt.Errorf("create env dir %s: %w", envDir, err)
 	}
@@ -544,19 +560,27 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 		return fmt.Errorf("write env file %s: %w", envFile, err)
 	}
 
-	// Build ExecStart line: binary server <args>
-	execParts := []string{absBinary, "server"}
+	// Build ExecStart line: binary <subcommand> <args>
+	subcommand := comp.Install.Subcommand
+	if subcommand == "" {
+		subcommand = "server" // backward compat for K3S
+	}
+	execParts := []string{absBinary, subcommand}
 	execParts = append(execParts, args...)
 	execStart := strings.Join(execParts, " ")
 
 	// Generate systemd unit file
+	serviceType := comp.Install.ServiceType
+	if serviceType == "" {
+		serviceType = "notify" // backward compat for K3S
+	}
 	unit := fmt.Sprintf(`[Unit]
 Description=AIMA managed %s (%s)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=%s
 EnvironmentFile=%s
 ExecStart=%s
 Restart=always
@@ -567,7 +591,7 @@ LimitNPROC=infinity
 
 [Install]
 WantedBy=multi-user.target
-`, name, comp.Metadata.Version, envFile, execStart)
+`, name, comp.Metadata.Version, serviceType, envFile, execStart)
 
 	unitPath := "/etc/systemd/system/" + name + ".service"
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {

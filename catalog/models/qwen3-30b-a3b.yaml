@@ -1,0 +1,57 @@
+kind: model_asset
+metadata:
+  name: qwen3-30b-a3b
+  type: llm
+  family: qwen
+  parameter_count: "30B"
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-30B-A3B
+      format: safetensors
+    - type: huggingface
+      repo: Qwen/Qwen3-30B-A3B-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen3-30B-A3B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # MoE: 30B total / 3B active, BF16 weights ~60GB
+  # 虽然 active params 仅 3B，但所有 expert 权重必须驻留内存
+  # gpu_memory_utilization 0.55 on 128GB ≈ 70.4GB → 60GB 权重 + 10.4GB KV
+  - name: qwen3-30b-a3b-blackwell-vllm-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 20480
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.55
+      max_model_len: 4096
+      dtype: bfloat16
+    expected_performance:
+      tokens_per_second: [20, 40]
+      latency_first_token_ms: [30, 100]
+
+  # --- 所有设备通用 (llamacpp + GGUF) ---
+  # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
+  # 虽然文件大，但推理时仅激活 3B params，速度较快
+  # 不设 Ada-vllm: BF16 60GB >> 2×24GB=48GB TP=2，无官方 FP8 权重
+  - name: qwen3-30b-a3b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [8, 30]
+      latency_first_token_ms: [40, 200]

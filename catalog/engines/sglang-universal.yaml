@@ -2,15 +2,23 @@ kind: engine_asset
 metadata:
   name: sglang-universal
   type: sglang
-  version: "latest"
+  version: "0.5.7"
 image:
   name: lmsysorg/sglang
-  tag: "latest"
+  tag: "v0.5.7"
   size_approx_mb: 6000
   platforms: [linux/amd64, linux/arm64]
   registries:
     - docker.io/lmsysorg/sglang
     - registry.cn-hangzhou.aliyuncs.com/aima/sglang
+patterns:
+  - "^sglang$"
+  - "^sglang-"
+  - "^sglang/"
+  - "-sglang"
+  - "sglang"
+  - "sglang/"
+  - ":sglang"
 hardware:
   gpu_arch: "*"
   vram_min_mib: 4096
@@ -35,7 +43,7 @@ amplifier:
     - flash_infer
     - continuous_batching
     - radix_attention
-  performance_gain: "1.5-3x throughput, low-latency streaming"
+  performance_gain: "1.5-3x throughput, low-latency streaming, RadixAttention cache reuse"
   resource_expansion:
     cpu_offload: false
     ssd_offload: false
@@ -48,3 +56,8 @@ time_constraints:
   model_switch_s: [30, 90]
 power_constraints:
   typical_draw_watts: [60, 350]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"
+    linux/arm64: "container"

@@ -15,6 +15,19 @@ type PullOptions struct {
 	Runner     CommandRunner
 }
 
+// ImageExists reports whether a container image is already present in the local runtime.
+// Tries crictl first, then docker. Returns false on any error.
+func ImageExists(ctx context.Context, image, tag string, runner CommandRunner) bool {
+	ref := image + ":" + tag
+	if out, err := runner.Run(ctx, "crictl", "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return true
+	}
+	if out, err := runner.Run(ctx, "docker", "images", "-q", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return true
+	}
+	return false
+}
+
 // Pull downloads a container image, trying registries in order.
 // Falls back from crictl to docker if crictl fails.
 func Pull(ctx context.Context, opts PullOptions) error {
@@ -48,6 +61,28 @@ func Pull(ctx context.Context, opts PullOptions) error {
 	}
 
 	return fmt.Errorf("pull image %s:%s: all registries failed: %w", opts.Image, opts.Tag, lastErr)
+}
+
+// ImageExistsInDocker checks whether image exists in Docker store.
+func ImageExistsInDocker(ctx context.Context, image string, runner CommandRunner) bool {
+	ref := image
+	if !strings.Contains(ref, ":") {
+		ref += ":latest"
+	}
+	out, err := runner.Run(ctx, "docker", "images", "-q", ref)
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
+}
+
+// ImportDockerToContainerd pipes `docker save | k3s ctr -n k8s.io images import -`
+// to transfer an image from Docker store to K3S containerd.
+// Requires root privileges (containerd socket is root-owned).
+func ImportDockerToContainerd(ctx context.Context, image string, runner CommandRunner) error {
+	_, err := runner.Run(ctx, "sh", "-c",
+		fmt.Sprintf("docker save %q | k3s ctr -n k8s.io images import -", image))
+	if err != nil {
+		return fmt.Errorf("import %s from docker to containerd: %w", image, err)
+	}
+	return nil
 }
 
 // buildImageRef constructs a full image reference from registry, image name, and tag.

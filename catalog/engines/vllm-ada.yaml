@@ -1,25 +1,33 @@
 kind: engine_asset
 metadata:
-  name: vllm-0.8-ada
+  name: vllm-ada
   type: vllm
-  version: "0.8"
+  version: "0.8.5"
 image:
   name: vllm/vllm-openai
-  tag: "latest"
-  size_approx_mb: 8500
+  tag: "v0.8.5"
+  size_approx_mb: 9000
   platforms: [linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
     - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
+patterns:
+  - "^vllm$"
+  - "^vllm-"
+  - "^vllm/"
+  - "-vllm"
+  - "vllm/"
+  - ":vllm"
 hardware:
   gpu_arch: Ada
   vram_min_mib: 4096
 startup:
-  command: ["vllm", "serve", "--model", "{{.ModelPath}}"]
+  command: ["vllm", "serve", "{{.ModelPath}}"]
   default_args:
     port: 8000
     gpu_memory_utilization: 0.90
     max_model_len: 8192
+    served_model_name: "{{.ModelName}}"
   health_check:
     path: /health
     timeout_s: 300
@@ -49,3 +57,7 @@ time_constraints:
   model_switch_s: [30, 60]
 power_constraints:
   typical_draw_watts: [150, 350]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

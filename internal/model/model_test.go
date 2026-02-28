@@ -100,7 +100,7 @@ func TestScanHuggingFaceModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestScanGGUFModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestScanGGUFInvalidMagic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a fake GGUF file with wrong magic bytes
+	// Create a fake GGUF file with wrong magic bytes (tiny file, filtered by minModelSize)
 	ggufData := make([]byte, 64)
 	binary.LittleEndian.PutUint32(ggufData[0:4], 0xDEADBEEF)
 	if err := os.WriteFile(filepath.Join(modelDir, "model.gguf"), ggufData, 0o644); err != nil {
@@ -193,7 +193,7 @@ func TestScanGGUFInvalidMagic(t *testing.T) {
 func TestScanEmptyDirectory(t *testing.T) {
 	dir := t.TempDir()
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestScanMultipleModels(t *testing.T) {
 	binary.LittleEndian.PutUint32(ggufData[4:8], 3)
 	os.WriteFile(filepath.Join(m2Dir, "model.gguf"), ggufData, 0o644)
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestScanArchitectureDetection(t *testing.T) {
 			os.WriteFile(filepath.Join(modelDir, "config.json"), configBytes, 0o644)
 			os.WriteFile(filepath.Join(modelDir, "model.safetensors"), make([]byte, 100), 0o644)
 
-			models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+			models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 			if err != nil {
 				t.Fatalf("scan: %v", err)
 			}
@@ -321,7 +321,7 @@ func TestScanParameterEstimation(t *testing.T) {
 			os.WriteFile(filepath.Join(modelDir, "config.json"), configBytes, 0o644)
 			os.WriteFile(filepath.Join(modelDir, "model.safetensors"), make([]byte, 100), 0o644)
 
-			models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+			models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 			if err != nil {
 				t.Fatalf("scan: %v", err)
 			}
@@ -349,7 +349,7 @@ func TestScanContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := Scan(ctx, ScanOptions{Paths: []string{dir}})
+	_, err := Scan(ctx, ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err == nil {
 		t.Error("expected error from cancelled context")
 	}
@@ -587,7 +587,7 @@ func TestScanModelTypeDetection(t *testing.T) {
 	tokBytes, _ := json.Marshal(tokConfig)
 	os.WriteFile(filepath.Join(modelDir, "tokenizer_config.json"), tokBytes, 0o644)
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -706,7 +706,7 @@ func TestScanGGUFTopLevel(t *testing.T) {
 	binary.LittleEndian.PutUint32(ggufData[4:8], 3)
 	os.WriteFile(filepath.Join(dir, "model.gguf"), ggufData, 0o644)
 
-	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}})
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}

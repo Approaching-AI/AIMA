@@ -1,6 +1,11 @@
 package runtime
 
-import "context"
+import (
+	"context"
+
+	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/knowledge"
+)
 
 // Runtime abstracts deployment execution. K3S uses Pod YAML via kubectl;
 // Native uses direct process exec. MCP tools and CLI are unaware of which.
@@ -22,19 +27,16 @@ type DeployRequest struct {
 	ModelPath    string            // host path to model files
 	Port         int
 	Config       map[string]any
-	Partition    *PartitionRequest // resource limits (K3S+HAMi); native ignores
-	HealthCheck  *HealthCheckConfig
+	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
+	RuntimeClassName string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
+	HealthCheck      *HealthCheckConfig
 	Labels       map[string]string
-	BinarySource *BinarySource  // native: where to download the engine binary if missing
+	BinarySource *engine.BinarySource // native: where to download the engine binary if missing
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
-}
-
-// BinarySource describes where to download a native engine binary.
-type BinarySource struct {
-	Binary    string            // e.g. "llama-server"
-	Platforms []string          // e.g. ["linux/amd64", "darwin/arm64"]
-	Download  map[string]string // platform -> URL
-	Mirror    map[string]string // platform -> mirror URL
+	Env              map[string]string          // extra env vars (engine YAML + hardware YAML merged)
+	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S only)
+	GPUResourceName  string                     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	CPUArch          string                     // CPU arch for platform-specific paths
 }
 
 // DeploymentStatus is the unified status across runtimes.

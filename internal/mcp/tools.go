@@ -20,13 +20,14 @@ type ToolDeps struct {
 	PullModel   func(ctx context.Context, name string) error
 	ImportModel func(ctx context.Context, path string) (json.RawMessage, error)
 	GetModelInfo func(ctx context.Context, name string) (json.RawMessage, error)
-	RemoveModel func(ctx context.Context, name string) error
+	RemoveModel func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines  func(ctx context.Context) (json.RawMessage, error)
-	ListEngines  func(ctx context.Context) (json.RawMessage, error)
-	PullEngine   func(ctx context.Context, name string) error
-	ImportEngine func(ctx context.Context, path string) error
+	ScanEngines    func(ctx context.Context, runtime string) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
+	ListEngines    func(ctx context.Context) (json.RawMessage, error)
+	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
+	PullEngine     func(ctx context.Context, name string) error
+	ImportEngine   func(ctx context.Context, path string) error
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string) (json.RawMessage, error)
@@ -43,6 +44,9 @@ type ToolDeps struct {
 	ListProfiles     func(ctx context.Context) (json.RawMessage, error)
 	ListEngineAssets func(ctx context.Context) (json.RawMessage, error)
 
+	// Benchmark
+	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 	CompareConfigs    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -55,6 +59,9 @@ type ToolDeps struct {
 	StackPreflight func(ctx context.Context) (json.RawMessage, error)
 	StackInit      func(ctx context.Context, allowDownload bool) (json.RawMessage, error)
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
+
+	// Discovery
+	DiscoverLAN func(ctx context.Context, timeoutS int) (json.RawMessage, error)
 
 	// System
 	ExecShell func(ctx context.Context, command string) (json.RawMessage, error)
@@ -265,10 +272,65 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	s.RegisterTool(&Tool{
 		Name:        "model.remove",
 		Description: "Remove a model from the database",
-		InputSchema: schema(`"name":{"type":"string","description":"Model name to remove"}`, "name"),
+		InputSchema: schema(`"name":{"type":"string","description":"Model name to remove"}`, "name", `"delete_files":{"type":"boolean","description":"Delete model files from disk"}`, "delete_files"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RemoveModel == nil {
 				return ErrorResult("model.remove not implemented"), nil
+			}
+			var p struct {
+				Name        string `json:"name"`
+				DeleteFiles bool   `json:"delete_files"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			if err := deps.RemoveModel(ctx, p.Name, p.DeleteFiles); err != nil {
+				return nil, fmt.Errorf("remove model %s: %w", p.Name, err)
+			}
+			if p.DeleteFiles {
+				return TextResult(fmt.Sprintf("model %s removed (files deleted)", p.Name)), nil
+			}
+			return TextResult(fmt.Sprintf("model %s removed (database only)", p.Name)), nil
+		},
+	})
+
+	// engine.scan
+	s.RegisterTool(&Tool{
+		Name:        "engine.scan",
+		Description: "Scan for locally available inference engines (container and/or native)",
+		InputSchema: schema(`"runtime":{"type":"string","enum":["auto","container","native"],"description":"Runtime filter: auto (both), container only, or native only (default: auto)"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ScanEngines == nil {
+				return ErrorResult("engine.scan not implemented"), nil
+			}
+			var p struct {
+				Runtime string `json:"runtime"`
+			}
+			if len(params) > 0 {
+				json.Unmarshal(params, &p)
+			}
+			if p.Runtime == "" {
+				p.Runtime = "auto"
+			}
+			data, err := deps.ScanEngines(ctx, p.Runtime)
+			if err != nil {
+				return nil, fmt.Errorf("scan engines: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// engine.info
+	s.RegisterTool(&Tool{
+		Name:        "engine.info",
+		Description: "Get full information about an engine: live availability from DB plus complete knowledge from catalog (hardware requirements, startup config, API, features, constraints)",
+		InputSchema: schema(`"name":{"type":"string","description":"Engine type (e.g. llamacpp, vllm, sglang), image name, or engine ID"}`, "name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.GetEngineInfo == nil {
+				return ErrorResult("engine.info not implemented"), nil
 			}
 			var p struct{ Name string `json:"name"` }
 			if err := json.Unmarshal(params, &p); err != nil {
@@ -277,25 +339,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Name == "" {
 				return ErrorResult("name is required"), nil
 			}
-			if err := deps.RemoveModel(ctx, p.Name); err != nil {
-				return nil, fmt.Errorf("remove model %s: %w", p.Name, err)
-			}
-			return TextResult(fmt.Sprintf("model %s removed", p.Name)), nil
-		},
-	})
-
-	// engine.scan
-	s.RegisterTool(&Tool{
-		Name:        "engine.scan",
-		Description: "Scan for locally available inference engine images",
-		InputSchema: noParamsSchema(),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.ScanEngines == nil {
-				return ErrorResult("engine.scan not implemented"), nil
-			}
-			data, err := deps.ScanEngines(ctx)
+			data, err := deps.GetEngineInfo(ctx, p.Name)
 			if err != nil {
-				return nil, fmt.Errorf("scan engines: %w", err)
+				return nil, fmt.Errorf("engine info %s: %w", p.Name, err)
 			}
 			return TextResult(string(data)), nil
 		},
@@ -304,7 +350,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.list
 	s.RegisterTool(&Tool{
 		Name:        "engine.list",
-		Description: "List all known engine assets from the knowledge base",
+		Description: "List engines scanned and registered in the local database",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ListEngines == nil {
@@ -321,23 +367,24 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.pull
 	s.RegisterTool(&Tool{
 		Name:        "engine.pull",
-		Description: "Pull an inference engine image by name",
-		InputSchema: schema(`"name":{"type":"string","description":"Engine image name to pull"}`, "name"),
+		Description: "Pull an inference engine. Downloads native binary or container image depending on platform. Defaults to llamacpp (fallback engine) if name is omitted.",
+		InputSchema: schema(`"name":{"type":"string","description":"Engine type (llamacpp, vllm, etc). Defaults to llamacpp (fallback engine) if omitted"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.PullEngine == nil {
 				return ErrorResult("engine.pull not implemented"), nil
 			}
 			var p struct{ Name string `json:"name"` }
-			if err := json.Unmarshal(params, &p); err != nil {
-				return nil, fmt.Errorf("parse params: %w", err)
+			if len(params) > 0 {
+				json.Unmarshal(params, &p) //nolint:errcheck
 			}
-			if p.Name == "" {
-				return ErrorResult("name is required"), nil
+			name := p.Name
+			if name == "" {
+				name = "llamacpp"
 			}
-			if err := deps.PullEngine(ctx, p.Name); err != nil {
-				return nil, fmt.Errorf("pull engine %s: %w", p.Name, err)
+			if err := deps.PullEngine(ctx, name); err != nil {
+				return nil, fmt.Errorf("pull engine %s: %w", name, err)
 			}
-			return TextResult(fmt.Sprintf("engine %s pull started", p.Name)), nil
+			return TextResult(fmt.Sprintf("engine %s pulled successfully", name)), nil
 		},
 	})
 
@@ -850,6 +897,68 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.AggregateKnowledge(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("knowledge aggregate: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// benchmark.record
+	s.RegisterTool(&Tool{
+		Name:        "benchmark.record",
+		Description: "Record a benchmark result. Auto-creates a Configuration (Hardware×Engine×Model) if one doesn't exist. Returns the benchmark ID.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"hardware":{"type":"string","description":"Hardware profile ID (e.g. nvidia-gb10-arm64)"},
+			"engine":{"type":"string","description":"Engine type (e.g. vllm-nightly)"},
+			"model":{"type":"string","description":"Model name (e.g. qwen3.5-35b-a3b)"},
+			"device_id":{"type":"string","description":"Device ID from fleet (e.g. gb10)"},
+			"config":{"type":"object","description":"Engine config used (gpu_memory_utilization, max_model_len, etc.)"},
+			"concurrency":{"type":"integer","description":"Number of concurrent requests","default":1},
+			"input_len_bucket":{"type":"string","description":"Input length category (e.g. short, medium, long)"},
+			"output_len_bucket":{"type":"string","description":"Output length category"},
+			"ttft_ms_p50":{"type":"number","description":"Time-to-first-token p50 in ms"},
+			"ttft_ms_p95":{"type":"number","description":"Time-to-first-token p95 in ms"},
+			"tpot_ms_p50":{"type":"number","description":"Time-per-output-token p50 in ms"},
+			"tpot_ms_p95":{"type":"number","description":"Time-per-output-token p95 in ms"},
+			"throughput_tps":{"type":"number","description":"Tokens per second (single request)"},
+			"qps":{"type":"number","description":"Queries per second"},
+			"vram_usage_mib":{"type":"integer","description":"VRAM usage in MiB"},
+			"sample_count":{"type":"integer","description":"Number of samples in benchmark"},
+			"stability":{"type":"string","description":"Stability assessment (stable, fluctuating, unstable)"},
+			"notes":{"type":"string","description":"Free-form notes about the benchmark"}
+		},"required":["hardware","engine","model","throughput_tps"]}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RecordBenchmark == nil {
+				return ErrorResult("benchmark.record not implemented"), nil
+			}
+			data, err := deps.RecordBenchmark(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("record benchmark: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// discover.lan
+	s.RegisterTool(&Tool{
+		Name:        "discover.lan",
+		Description: "Discover LLM inference services on the local network via mDNS",
+		InputSchema: schema(`"timeout_s":{"type":"integer","description":"Scan timeout in seconds (default 3)"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DiscoverLAN == nil {
+				return ErrorResult("discover.lan not implemented"), nil
+			}
+			var p struct {
+				TimeoutS int `json:"timeout_s"`
+			}
+			if len(params) > 0 {
+				json.Unmarshal(params, &p)
+			}
+			if p.TimeoutS <= 0 {
+				p.TimeoutS = 3
+			}
+			data, err := deps.DiscoverLAN(ctx, p.TimeoutS)
+			if err != nil {
+				return nil, fmt.Errorf("discover lan: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

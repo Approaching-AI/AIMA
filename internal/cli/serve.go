@@ -2,23 +2,31 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jguan/aima/internal/proxy"
 )
 
 func newServeCmd(app *App) *cobra.Command {
 	var (
-		addr    string
-		mcpAddr string
-		mcpMod  bool
-		apiKey  string
+		addr            string
+		mcpAddr         string
+		mcpMod          bool
+		apiKey          string
+		mdnsEnabled     bool
+		discoverEnabled bool
 	)
 
 	cmd := &cobra.Command{
@@ -29,10 +37,29 @@ func newServeCmd(app *App) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			// Apply listen address from flag
+			app.Proxy.SetAddr(addr)
+
 			// Apply API key authentication if configured
 			if apiKey != "" {
 				app.Proxy.SetAPIKey(apiKey)
 				slog.Info("API key authentication enabled")
+			}
+
+			// Start backend sync loop (reconcile proxy routes with deployments)
+			if app.ToolDeps != nil && app.ToolDeps.DeployList != nil {
+				listFn := func(ctx context.Context) ([]*proxy.DeploymentInfo, error) {
+					raw, err := app.ToolDeps.DeployList(ctx)
+					if err != nil {
+						return nil, err
+					}
+					var deps []*proxy.DeploymentInfo
+					if err := json.Unmarshal(raw, &deps); err != nil {
+						return nil, fmt.Errorf("unmarshal deployments: %w", err)
+					}
+					return deps, nil
+				}
+				go proxy.StartSyncLoop(ctx, app.Proxy, listFn, 5*time.Second)
 			}
 
 			errCh := make(chan error, 2)
@@ -42,6 +69,24 @@ func newServeCmd(app *App) *cobra.Command {
 				slog.Info("starting proxy server", "addr", addr)
 				errCh <- app.Proxy.Start(ctx)
 			}()
+
+			// Start mDNS advertiser (non-fatal on failure)
+			if mdnsEnabled {
+				port := parsePort(addr)
+				models := backendModelNames(app.Proxy)
+				adv, err := proxy.StartMDNS(proxy.MDNSConfig{Port: port, Models: models})
+				if err != nil {
+					slog.Warn("mDNS broadcast failed (non-fatal)", "error", err)
+				} else {
+					slog.Info("mDNS broadcasting", "service", "_llm._tcp", "port", port)
+					defer adv.Shutdown()
+				}
+			}
+
+			// Start remote discovery loop (find other aima instances via mDNS)
+			if discoverEnabled {
+				go proxy.StartRemoteDiscoveryLoop(ctx, app.Proxy, 10*time.Second, parsePort(addr))
+			}
 
 			// Start MCP server if requested (on a separate port)
 			if mcpMod {
@@ -78,12 +123,37 @@ func newServeCmd(app *App) *cobra.Command {
 	}
 
 	defaultKey := os.Getenv("AIMA_API_KEY")
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "Proxy server listen address")
+	cmd.Flags().StringVar(&addr, "addr", fmt.Sprintf(":%d", proxy.DefaultPort), "Proxy server listen address")
 	cmd.Flags().StringVar(&mcpAddr, "mcp-addr", ":9090", "MCP server listen address")
 	cmd.Flags().BoolVar(&mcpMod, "mcp", false, "Also serve MCP protocol over HTTP")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
+	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", true, "Discover remote inference services via mDNS")
 
 	return cmd
+}
+
+// parsePort extracts the port number from an address like ":6188" or "0.0.0.0:6188".
+func parsePort(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return proxy.DefaultPort
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return proxy.DefaultPort
+	}
+	return port
+}
+
+// backendModelNames returns the list of currently registered model names.
+func backendModelNames(s *proxy.Server) []string {
+	backends := s.ListBackends()
+	names := make([]string, 0, len(backends))
+	for name := range backends {
+		names = append(names, name)
+	}
+	return names
 }
 
 // apiKeyAuth wraps an HTTP handler with Bearer token authentication.

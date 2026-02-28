@@ -1,10 +1,10 @@
 kind: hardware_profile
 metadata:
   name: amd-radeon-8060s-x86
-  description: "AMD Radeon 8060S (RDNA 4), x86_64, shared memory with Ryzen AI MAX+ 395"
+  description: "AMD Radeon 8060S (RDNA 3.5), x86_64, shared memory with Ryzen AI MAX+ 395"
 hardware:
   gpu:
-    arch: RDNA4
+    arch: RDNA3.5
     vram_mib: 16384
     compute_capability: "gfx12"
     cuda_cores: 0
@@ -14,7 +14,7 @@ hardware:
     cores: 16
     freq_ghz: 4.0
   ram:
-    total_mib: 63488
+    total_mib: 131072
     bandwidth_gbps: 60
   unified_memory: true
 constraints:
@@ -24,3 +24,11 @@ constraints:
 partition:
   gpu_tools: [engine_params]
   cpu_tools: [cgroups]
+container:
+  devices:
+    - /dev/kfd
+    - /dev/dri
+  env:
+    LD_PRELOAD: "/opt/rocm/lib/librocm_smi64.so"
+  security:
+    supplemental_groups: [44, 110]

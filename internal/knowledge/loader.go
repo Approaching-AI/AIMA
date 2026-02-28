@@ -23,11 +23,12 @@ type Catalog struct {
 // --- Hardware Profile ---
 
 type HardwareProfile struct {
-	Kind     string              `yaml:"kind"`
-	Metadata HardwareMetadata    `yaml:"metadata"`
-	Hardware HardwareSpec        `yaml:"hardware"`
+	Kind        string              `yaml:"kind"`
+	Metadata    HardwareMetadata    `yaml:"metadata"`
+	Hardware    HardwareSpec        `yaml:"hardware"`
 	Constraints HardwareConstraints `yaml:"constraints"`
-	Partition HardwarePartition   `yaml:"partition"`
+	Partition   HardwarePartition   `yaml:"partition"`
+	Container   *ContainerAccess    `yaml:"container,omitempty"`
 }
 
 type HardwareMetadata struct {
@@ -47,7 +48,8 @@ type GPUSpec struct {
 	VRAMMiB           int    `yaml:"vram_mib"`
 	ComputeCapability string `yaml:"compute_capability"`
 	CUDACores         int    `yaml:"cuda_cores"`
-	ResourceName      string `yaml:"resource_name,omitempty"` // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	ResourceName      string `yaml:"resource_name,omitempty"`     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	RuntimeClassName  string `yaml:"runtime_class_name,omitempty"` // K8s runtimeClassName for GPU containers, e.g. "nvidia"
 }
 
 type CPUSpec struct {
@@ -72,92 +74,134 @@ type HardwarePartition struct {
 	CPUTools []string `yaml:"cpu_tools"`
 }
 
+// ContainerAccess describes vendor-specific container access requirements
+// (devices, env vars, volumes, security) for GPU containers. Lives in
+// hardware profile YAML so adding a new GPU vendor = YAML only, no Go code.
+type ContainerAccess struct {
+	Devices  []string          `yaml:"devices,omitempty"`
+	Env      map[string]string `yaml:"env,omitempty"`
+	Volumes  []ContainerVolume `yaml:"volumes,omitempty"`
+	Security *ContainerSecurity `yaml:"security,omitempty"`
+}
+
+type ContainerVolume struct {
+	Name      string `yaml:"name"`
+	HostPath  string `yaml:"host_path"`
+	MountPath string `yaml:"mount_path"`
+	ReadOnly  bool   `yaml:"read_only,omitempty"`
+}
+
+type ContainerSecurity struct {
+	Privileged         bool  `yaml:"privileged,omitempty"`
+	RunAsUser          *int  `yaml:"run_as_user,omitempty"`
+	SupplementalGroups []int `yaml:"supplemental_groups,omitempty"`
+}
+
 // --- Engine Asset ---
 
 // EngineSource describes how to obtain an engine binary for native runtime.
 type EngineSource struct {
-	Binary    string            `yaml:"binary,omitempty"`
-	Platforms []string          `yaml:"platforms,omitempty"`
-	Download  map[string]string `yaml:"download,omitempty"`
-	Mirror    map[string]string `yaml:"mirror,omitempty"`
+	Binary    string            `yaml:"binary,omitempty"    json:"binary,omitempty"`
+	Platforms []string          `yaml:"platforms,omitempty" json:"platforms,omitempty"`
+	Download  map[string]string `yaml:"download,omitempty"  json:"download,omitempty"`
+	Mirror    map[string]string `yaml:"mirror,omitempty"    json:"mirror,omitempty"`
+}
+
+// Supports reports whether this source supports the given platform (e.g. "linux/amd64").
+func (s *EngineSource) Supports(platform string) bool {
+	for _, p := range s.Platforms {
+		if p == platform {
+			return true
+		}
+	}
+	return false
+}
+
+// EngineRuntime provides runtime selection guidance for engine deployment.
+type EngineRuntime struct {
+	Default                 string            `yaml:"default,omitempty"                  json:"default,omitempty"`
+	PlatformRecommendations map[string]string `yaml:"platform_recommendations,omitempty" json:"platform_recommendations,omitempty"`
 }
 
 type EngineAsset struct {
-	Kind     string         `yaml:"kind"`
-	Metadata EngineMetadata `yaml:"metadata"`
-	Image    EngineImage    `yaml:"image"`
-	Hardware EngineHardware `yaml:"hardware"`
-	Startup  EngineStartup  `yaml:"startup"`
-	API      EngineAPI      `yaml:"api"`
-	Amplifier    EngineAmplifier    `yaml:"amplifier"`
-	PartitionHints PartitionHints   `yaml:"partition_hints"`
-	TimeConstraints TimeConstraints `yaml:"time_constraints"`
-	PowerConstraints PowerConstraints `yaml:"power_constraints"`
-	Source   *EngineSource  `yaml:"source,omitempty"` // native runtime: binary source info
+	Kind             string           `yaml:"kind"              json:"kind"`
+	Metadata         EngineMetadata   `yaml:"metadata"          json:"metadata"`
+	Image            EngineImage      `yaml:"image"             json:"image"`
+	Hardware         EngineHardware   `yaml:"hardware"          json:"hardware"`
+	Startup          EngineStartup    `yaml:"startup"           json:"startup"`
+	API              EngineAPI        `yaml:"api"               json:"api"`
+	Amplifier        EngineAmplifier  `yaml:"amplifier"         json:"amplifier"`
+	PartitionHints   PartitionHints   `yaml:"partition_hints"   json:"partition_hints"`
+	TimeConstraints  TimeConstraints  `yaml:"time_constraints"  json:"time_constraints"`
+	PowerConstraints PowerConstraints `yaml:"power_constraints" json:"power_constraints"`
+	Runtime          EngineRuntime    `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	Patterns         []string         `yaml:"patterns,omitempty" json:"patterns,omitempty"`
+	Source           *EngineSource    `yaml:"source,omitempty"  json:"source,omitempty"`
 }
 
 type EngineMetadata struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type"`
-	Version string `yaml:"version"`
+	Name    string `yaml:"name"    json:"name"`
+	Type    string `yaml:"type"    json:"type"`
+	Version string `yaml:"version" json:"version"`
 }
 
 type EngineImage struct {
-	Name        string   `yaml:"name"`
-	Tag         string   `yaml:"tag"`
-	SizeApproxMB int    `yaml:"size_approx_mb"`
-	Platforms   []string `yaml:"platforms"`
-	Registries  []string `yaml:"registries"`
+	Name         string   `yaml:"name"           json:"name"`
+	Tag          string   `yaml:"tag"            json:"tag"`
+	SizeApproxMB int      `yaml:"size_approx_mb" json:"size_approx_mb"`
+	Platforms    []string `yaml:"platforms"      json:"platforms"`
+	Registries   []string `yaml:"registries"     json:"registries"`
 }
 
 type EngineHardware struct {
-	GPUArch    string `yaml:"gpu_arch"`
-	VRAMMinMiB int    `yaml:"vram_min_mib"`
+	GPUArch    string `yaml:"gpu_arch"     json:"gpu_arch"`
+	VRAMMinMiB int    `yaml:"vram_min_mib" json:"vram_min_mib"`
 }
 
 type EngineStartup struct {
-	Command     []string       `yaml:"command"`
-	DefaultArgs map[string]any `yaml:"default_args"`
-	HealthCheck HealthCheck    `yaml:"health_check"`
-	Warmup      WarmupConfig   `yaml:"warmup"`
+	Command     []string          `yaml:"command"      json:"command"`
+	Env         map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	DefaultArgs map[string]any    `yaml:"default_args" json:"default_args"`
+	HealthCheck HealthCheck       `yaml:"health_check" json:"health_check"`
+	Warmup      WarmupConfig      `yaml:"warmup"       json:"warmup"`
 }
 
 type HealthCheck struct {
-	Path     string `yaml:"path"`
-	TimeoutS int    `yaml:"timeout_s"`
+	Path     string `yaml:"path"      json:"path"`
+	TimeoutS int    `yaml:"timeout_s" json:"timeout_s"`
 }
 
 // WarmupConfig describes how to warm up an engine after health check passes.
 type WarmupConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Prompt    string `yaml:"prompt"`
-	MaxTokens int    `yaml:"max_tokens"`
-	TimeoutS  int    `yaml:"timeout_s"`
+	Enabled   bool   `yaml:"enabled"    json:"enabled"`
+	Prompt    string `yaml:"prompt"     json:"prompt"`
+	MaxTokens int    `yaml:"max_tokens" json:"max_tokens"`
+	TimeoutS  int    `yaml:"timeout_s"  json:"timeout_s"`
 }
 
 type EngineAPI struct {
-	Protocol string `yaml:"protocol"`
-	BasePath string `yaml:"base_path"`
+	Protocol string `yaml:"protocol"  json:"protocol"`
+	BasePath string `yaml:"base_path" json:"base_path"`
 }
 
 type EngineAmplifier struct {
-	Features         []string          `yaml:"features"`
-	PerformanceGain  string            `yaml:"performance_gain"`
-	ResourceExpansion map[string]bool   `yaml:"resource_expansion"`
+	Features          []string        `yaml:"features"           json:"features"`
+	PerformanceGain   string          `yaml:"performance_gain"   json:"performance_gain"`
+	ResourceExpansion map[string]bool `yaml:"resource_expansion" json:"resource_expansion"`
 }
 
 type PartitionHints struct {
-	MinGPUMemoryMiB          int `yaml:"min_gpu_memory_mib"`
-	RecommendedGPUCoresPercent int `yaml:"recommended_gpu_cores_percent"`
+	MinGPUMemoryMiB            int `yaml:"min_gpu_memory_mib"           json:"min_gpu_memory_mib"`
+	RecommendedGPUCoresPercent int `yaml:"recommended_gpu_cores_percent" json:"recommended_gpu_cores_percent"`
 }
 
 type TimeConstraints struct {
-	ColdStartS    []int `yaml:"cold_start_s"`
-	ModelSwitchS  []int `yaml:"model_switch_s"`
+	ColdStartS   []int `yaml:"cold_start_s"   json:"cold_start_s"`
+	ModelSwitchS []int `yaml:"model_switch_s" json:"model_switch_s"`
 }
 
 type PowerConstraints struct {
-	TypicalDrawWatts []int `yaml:"typical_draw_watts"`
+	TypicalDrawWatts []int `yaml:"typical_draw_watts" json:"typical_draw_watts"`
 }
 
 // --- Model Asset ---
@@ -194,6 +238,7 @@ type ModelVariant struct {
 	Hardware ModelVariantHardware `yaml:"hardware"`
 	Engine   string              `yaml:"engine"`
 	Format   string              `yaml:"format"`
+	Source   *ModelSource        `yaml:"source,omitempty"` // variant-specific download source; overrides global sources when present
 	DefaultConfig map[string]any `yaml:"default_config"`
 	ExpectedPerformance map[string]any `yaml:"expected_performance"`
 }
@@ -246,12 +291,14 @@ type StackSource struct {
 }
 
 type StackInstall struct {
-	Method   string            `yaml:"method"`
-	Daemon   bool              `yaml:"daemon,omitempty"`
-	Priority int               `yaml:"priority,omitempty"` // lower = installed first (default 0)
-	Args     []StackArg        `yaml:"args,omitempty"`
-	Env      map[string]string `yaml:"env,omitempty"`
-	Helm     *StackHelm        `yaml:"helm,omitempty"`
+	Method      string            `yaml:"method"`
+	Daemon      bool              `yaml:"daemon,omitempty"`
+	Subcommand  string            `yaml:"subcommand,omitempty"`   // daemon ExecStart subcommand (default "server")
+	ServiceType string            `yaml:"service_type,omitempty"` // systemd Type= (default "notify")
+	Priority    int               `yaml:"priority,omitempty"`     // lower = installed first (default 0)
+	Args        []StackArg        `yaml:"args,omitempty"`
+	Env         map[string]string `yaml:"env,omitempty"`
+	Helm        *StackHelm        `yaml:"helm,omitempty"`
 }
 
 type StackArg struct {

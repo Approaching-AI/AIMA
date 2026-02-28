@@ -214,6 +214,7 @@ type ModelVariant struct {
 	Hardware ModelVariantHardware `yaml:"hardware"`
 	Engine   string              `yaml:"engine"`
 	Format   string              `yaml:"format"`
+	Source   *ModelSource        `yaml:"source,omitempty"` // variant-specific download source; overrides global sources when present
 	DefaultConfig map[string]any `yaml:"default_config"`
 	ExpectedPerformance map[string]any `yaml:"expected_performance"`
 }

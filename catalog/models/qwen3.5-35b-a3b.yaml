@@ -58,6 +58,31 @@ variants:
         65536:  [11.954, 26.9, 5482]
         131072: [34.015, 24.2, 3853]   # 128K full context verified
 
+  # --- amd395 (RDNA3.5, 62GB unified, Docker) ---
+  # AWQ 4-bit 权重 ~24GB, 62GB unified 可容纳
+  # MoE 35B total / 3B active, triton flash attention
+  # vllm-rocm (TheRock gfx1151 build) 支持 AWQ 量化
+  - name: qwen3.5-35b-a3b-rdna35-vllm-awq
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 16384
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 32768
+      dtype: half
+      quantization: awq
+    expected_performance:
+      tokens_per_second: [5, 15]
+      latency_first_token_ms: [100, 500]
+      vram_mib: 24000
+      notes: "vLLM TheRock gfx1151, AWQ 4-bit, untested estimate"
+
   # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
   # FP8 权重 ~36GB, TP=2 → 每 GPU 18GB, 24GB VRAM 充裕
   # vram_min_mib: 20480 → 排除 RTX 4060 (8GB), 仅 4090 (24GB) 匹配

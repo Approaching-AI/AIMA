@@ -157,6 +157,53 @@ func findModelAsset(cat *knowledge.Catalog, name string) (*knowledge.ModelAsset,
 	return nil, nil
 }
 
+// findModelAssetOrVariant resolves a name to a model asset, optionally via variant name.
+// Priority: model name (via findModelAsset) → variant name match.
+// When matched by variant name, the returned variant pointer is non-nil.
+func findModelAssetOrVariant(cat *knowledge.Catalog, name string) (*knowledge.ModelAsset, *knowledge.ModelVariant) {
+	// First try as model name
+	if ma, _ := findModelAsset(cat, name); ma != nil {
+		return ma, nil
+	}
+	// Then try as variant name
+	lower := strings.ToLower(name)
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		for j := range ma.Variants {
+			if strings.ToLower(ma.Variants[j].Name) == lower {
+				return ma, &ma.Variants[j]
+			}
+		}
+	}
+	return nil, nil
+}
+
+// registerPulledModel scans and registers a downloaded model in the database.
+func registerPulledModel(ctx context.Context, destPath, dataDir string, db *state.DB) error {
+	modelsDir := filepath.Join(dataDir, "models")
+	info, err := model.Import(ctx, destPath, modelsDir)
+	if err != nil {
+		slog.Warn("model downloaded but scan/register failed", "path", destPath, "err", err)
+		return nil // download succeeded; registration failure is non-fatal
+	}
+	return db.UpsertScannedModel(ctx, &state.Model{
+		ID:             info.ID,
+		Name:           info.Name,
+		Type:           info.Type,
+		Path:           info.Path,
+		Format:         info.Format,
+		SizeBytes:      info.SizeBytes,
+		DetectedArch:   info.DetectedArch,
+		DetectedParams: info.DetectedParams,
+		ModelClass:     info.ModelClass,
+		TotalParams:    info.TotalParams,
+		ActiveParams:   info.ActiveParams,
+		Quantization:   info.Quantization,
+		QuantSrc:       info.QuantSrc,
+		Status:         "registered",
+	})
+}
+
 // catalogModelNames returns a comma-separated list of available model names.
 func catalogModelNames(cat *knowledge.Catalog) string {
 	names := make([]string, 0, len(cat.ModelAssets))
@@ -461,31 +508,56 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			ma, _ := findModelAsset(cat, name)
+			// Try model name first, then variant name
+			ma, matchedVariant := findModelAssetOrVariant(cat, name)
 			if ma == nil {
 				return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
 			}
 
+			// If matched by variant name, use variant's source directly if available
+			if matchedVariant != nil && matchedVariant.Source != nil {
+				slog.Info("model pull: using variant source", "variant", matchedVariant.Name, "repo", matchedVariant.Source.Repo)
+				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+				sources := []model.Source{{Type: matchedVariant.Source.Type, Repo: matchedVariant.Source.Repo}}
+				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+					return err
+				}
+				return registerPulledModel(ctx, destPath, dataDir, db)
+			}
+
 			// Determine required format: resolve what engine this hardware would use
 			requiredFormat := ""
+			var resolvedVariant *knowledge.ModelVariant
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			if engineType, err := cat.InferEngineType(ma.Metadata.Name, hwInfo); err == nil {
-				for _, v := range ma.Variants {
+				for i, v := range ma.Variants {
 					if v.Engine == engineType {
 						requiredFormat = v.Format
+						resolvedVariant = &ma.Variants[i]
 						break
 					}
 				}
 				slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat)
 			}
 
+			// If resolved variant has its own source, use it directly
+			if resolvedVariant != nil && resolvedVariant.Source != nil {
+				slog.Info("model pull: using variant source", "variant", resolvedVariant.Name, "repo", resolvedVariant.Source.Repo)
+				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+				sources := []model.Source{{Type: resolvedVariant.Source.Type, Repo: resolvedVariant.Source.Repo}}
+				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+					return err
+				}
+				return registerPulledModel(ctx, destPath, dataDir, db)
+			}
+
+			// Fallback: filter global sources by format
 			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
 			var sources []model.Source
 			for _, s := range ma.Storage.Sources {
 				if s.Type == "local_path" {
 					continue
 				}
-				// Skip sources that don't match the required format
 				if requiredFormat != "" && s.Format != "" && s.Format != requiredFormat {
 					continue
 				}
@@ -497,29 +569,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
 				return err
 			}
-			// Auto-register in database so `model list` and `deploy` can find it immediately.
-			modelsDir := filepath.Join(dataDir, "models")
-			info, err := model.Import(ctx, destPath, modelsDir)
-			if err != nil {
-				slog.Warn("model downloaded but scan/register failed", "model", name, "err", err)
-				return nil // download succeeded; registration failure is non-fatal
-			}
-			return db.UpsertScannedModel(ctx, &state.Model{
-				ID:             info.ID,
-				Name:           info.Name,
-				Type:           info.Type,
-				Path:           info.Path,
-				Format:         info.Format,
-				SizeBytes:      info.SizeBytes,
-				DetectedArch:   info.DetectedArch,
-				DetectedParams: info.DetectedParams,
-				ModelClass:     info.ModelClass,
-				TotalParams:    info.TotalParams,
-				ActiveParams:   info.ActiveParams,
-				Quantization:   info.Quantization,
-				QuantSrc:       info.QuantSrc,
-				Status:         "registered",
-			})
+			return registerPulledModel(ctx, destPath, dataDir, db)
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")

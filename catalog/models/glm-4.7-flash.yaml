@@ -1,0 +1,64 @@
+kind: model_asset
+metadata:
+  name: glm-4.7-flash
+  type: llm
+  family: glm
+  parameter_count: "30B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: THUDM/GLM-4.7-Flash
+      format: safetensors
+    - type: modelscope
+      repo: ZhipuAI/GLM-4.7-Flash
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # BF16 ~59GB, 128GB unified memory 可容纳
+  # Glm4MoeLiteForCausalLM 架构 (glm4_moe_lite model_type)
+  # 需要 Transformers 5.0+ → vllm-nightly/vllm-blackwell 不支持
+  # 必须用 vllm-spark (spark-vllm-docker, 内置 Transformers 5)
+  # 30B total / ~3.6B active per token (MoE), max context 64K (128K OOM on GB10)
+  - name: glm-4.7-flash-blackwell-vllm-spark-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-spark
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.85
+      max_model_len: 65536
+      dtype: auto
+      enable_chunked_prefill: true
+    expected_performance:
+      tokens_per_second: [14.5, 25.8]     # decode 25.8 tok/s @1K → 14.5 tok/s @64K
+      latency_first_token_ms: [71, 10266]  # TTFT 71ms @2K → 10.27s @64K
+      tpot_ms: [39.0, 69.3]               # TPOT 39ms @1K → 69.3ms @64K
+      vram_mib: 60400                      # ~59 GiB model load
+      max_context_tokens: 65536            # 128K OOM on GB10 (model 59GB + KV cache exceeds 128GB)
+      notes: "spark-vllm-docker vLLM v0.16.1rc1 (FlashInfer + Transformers 5), 2026-03-01. 128K causes OOM crash."
+      context_scaling:                     # measured: 1-concurrency, 128-token output
+        # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        1024:   [0.135,  25.8, 7392]
+        2048:   [0.071,  25.5, 28283]
+        4096:   [0.179,  24.9, 22305]
+        8192:   [0.229,  23.8, 35010]
+        16384:  [1.157,  21.8, 13832]
+        32768:  [3.170,  18.7, 10095]
+        65536:  [10.266, 14.5, 0]          # 64K max stable context on GB10
+      concurrency_1k:
+        # concurrency: [total_tok_s, wall_s, tpot_ms]
+        1: [25.9, 5.0, 38.7]
+        2: [43.1, 5.9, 46.4]
+        4: [63.1, 8.1, 63.2]
+        8: [87.4, 11.7, 91.5]
+      engine_compatibility:
+        vllm-spark: "supported (vLLM v0.16.1rc1, Transformers 5 built-in)"
+        vllm-nightly-qwen3_5-cu130: "NOT supported (Transformers <5, glm4_moe_lite unrecognized)"
+        aima-vllm-qwen3-omni: "NOT supported (vLLM v0.14.0, same Transformers issue)"
+        vllm-blackwell-ngc-26.01: "NOT supported (vLLM too old, no Glm4MoeLite model code)"

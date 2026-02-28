@@ -48,10 +48,11 @@ variants:
       # --- Engine A: aima-vllm-qwen3-omni (custom build, best prefill) ---
       engine_comparison:
         aima-vllm-qwen3-omni:
-          version: "v0.1.dev1+g6a3c7ede8"
+          version: "vLLM v0.14.0 (scitrera.ai build, CUDA 13.1, PyTorch 2.10, FlashInfer 0.6.1)"
           attention: FLASH_ATTN
           prefill_peak_tps: 9937            # @16K, 2.2x faster than official nightly
-          notes: "Custom build with qwen3_next optimized kernels. Recommended for long-context."
+          supported_archs: [Qwen3NextForCausalLM]  # does NOT support Qwen3_5MoeForConditionalGeneration
+          notes: "scitrera.ai community build, SM121 (Blackwell) optimized. Recommended for long-context code gen."
           context_scaling:
             1024:   [0.239,  42.5, 4280]
             2048:   [0.301,  38.4, 6801]
@@ -68,9 +69,10 @@ variants:
             8: [126.5, 910,  55.6]
         # --- Engine B: vllm/vllm-openai:qwen3_5-cu130 (official nightly) ---
         qwen3_5-cu130:
-          version: "v0.16.0rc2.dev376"
+          version: "vLLM v0.16.0rc2.dev376 (official nightly, CUDA 13.0)"
           attention: TRITON_ATTN
           prefill_peak_tps: 4745            # @8K, 2.1x slower than custom
+          supported_archs: [Qwen3NextForCausalLM, Qwen3_5MoeForConditionalGeneration]
           notes: "Official nightly. Better concurrency scaling (+21% @8-way). max_model_len=262144 verified."
           context_scaling:
             1024:   [0.280,  41.1, 3570]

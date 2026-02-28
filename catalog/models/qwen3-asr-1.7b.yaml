@@ -16,4 +16,22 @@ storage:
       format: safetensors
     - type: local_path
       path: ""
-variants: []
+variants:
+  # --- GB10 (Blackwell, 128GB unified, K3S) ---
+  # BF16 权重 ~3.4GB, 128GB unified 余量充足
+  # 复用 vllm-nightly (qwen3_5-cu130 镜像), gmu=0.05 最小化显存占用
+  - name: qwen3-asr-1.7b-blackwell-vllm-nightly-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 4096
+      unified_memory: true
+    engine: vllm-nightly
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.05
+      max_model_len: 8192
+      dtype: bfloat16
+      trust_remote_code: true
+    expected_performance:
+      vram_mib: 3400
+      notes: "1.7B bf16 ≈ 3.4GB, ASR 短 context, 与 LLM 共享 GPU 内存"

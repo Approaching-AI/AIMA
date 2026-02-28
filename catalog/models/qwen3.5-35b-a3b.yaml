@@ -47,7 +47,7 @@ variants:
       latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms
       tpot_ms: [31, 34]                  # measured: TPOT 31.5~33.6ms
       vram_mib: 67100                    # measured: 65.53 GiB model load
-      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28. Qwen3_5MoeForConditionalGeneration arch requires qwen3_5-cu130; aima-vllm-qwen3-omni (v0.1.dev1) does NOT support this arch."
+      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28. Qwen3_5MoeForConditionalGeneration arch requires qwen3_5-cu130; aima-vllm-qwen3-omni (vLLM v0.14.0, scitrera.ai build) does NOT support this arch."
       context_scaling:                   # measured: 1-concurrency, 128-token output
         # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
         1024:   [0.498,  30.0, 2054]

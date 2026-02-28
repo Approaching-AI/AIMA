@@ -430,6 +430,37 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 	return nil
 }
 
+// MergeCatalog merges overlay into base. Overlay assets with the same
+// metadata.name replace the base asset; new names are appended.
+// Returns the mutated base catalog.
+func MergeCatalog(base, overlay *Catalog) *Catalog {
+	base.HardwareProfiles = mergeSlice(base.HardwareProfiles, overlay.HardwareProfiles, func(v HardwareProfile) string { return v.Metadata.Name })
+	base.EngineAssets = mergeSlice(base.EngineAssets, overlay.EngineAssets, func(v EngineAsset) string { return v.Metadata.Name })
+	base.ModelAssets = mergeSlice(base.ModelAssets, overlay.ModelAssets, func(v ModelAsset) string { return v.Metadata.Name })
+	base.PartitionStrategies = mergeSlice(base.PartitionStrategies, overlay.PartitionStrategies, func(v PartitionStrategy) string { return v.Metadata.Name })
+	base.StackComponents = mergeSlice(base.StackComponents, overlay.StackComponents, func(v StackComponent) string { return v.Metadata.Name })
+	return base
+}
+
+// mergeSlice merges overlay items into base by key. Same key = replace, new key = append.
+func mergeSlice[T any](base, overlay []T, key func(T) string) []T {
+	if len(overlay) == 0 {
+		return base
+	}
+	idx := make(map[string]int, len(base))
+	for i, v := range base {
+		idx[key(v)] = i
+	}
+	for _, v := range overlay {
+		if i, ok := idx[key(v)]; ok {
+			base[i] = v // replace
+		} else {
+			base = append(base, v)
+		}
+	}
+	return base
+}
+
 // LoadToSQLite loads a parsed Catalog into SQLite relational tables.
 // It clears all static knowledge tables first, then inserts fresh data.
 // Dynamic tables (configurations, benchmark_results, etc.) are untouched.

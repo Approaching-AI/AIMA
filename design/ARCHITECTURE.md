@@ -59,7 +59,9 @@ L2:  知识库 ──── 确定性匹配 ────────────
   ^ override
 L1:  人类 CLI ── 手动指定参数 ──────────────────────── 指定解
   ^ override
-L0:  默认值 ──── 硬编码保守配置 ────────────────────── 可用解 (always)
+L0b: Overlay ─── 磁盘 YAML (~/.aima/catalog/) ─────── 热更新 (无需重编译)
+  ^ merge (同名覆盖, 新名追加)
+L0:  默认值 ──── go:embed YAML (编译时) ────────────── 可用解 (always)
 ```
 
 每层独立可用。无 Agent、无网络、无知识库 → L0 仍能启动推理服务。
@@ -95,7 +97,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   L3a: Go Agent (内置轻量) │ L3b: ZeroClaw (Sidecar)         │
 ├───────────────────────────────────────────────────────────────┤
 │   Knowledge Layer (知识层)                                     │
-│   5 种知识资产 (YAML) + SQLite 关系查询引擎                    │
+│   5 种知识资产 (go:embed YAML + 磁盘 overlay) + SQLite 查询    │
 ├───────────────────────────────────────────────────────────────┤
 │   Orchestration Layer (编排层)                                 │
 │   K3S (轻量 Kubernetes) + HAMi (GPU 虚拟化中间件)              │

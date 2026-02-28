@@ -44,11 +44,11 @@
 | 受众 | 人类、git、go:embed | Agent、MCP 工具 |
 | 优势 | 可读、可 diff、可版本管理 | 可查询、可 JOIN、可聚合 |
 | 内容 | 静态知识资产定义 | 静态知识 + 动态实验数据 |
-| 变更 | PR/编辑 → 重编译或 sync | Agent 探索 → 直接写入 |
+| 变更 | go:embed 需重编译; overlay 目录 (`~/.aima/catalog/`) 免编译热更新 | Agent 探索 → 直接写入 |
 
 ### SQLite 表结构
 
-**静态知识表** (7 张, 启动时从 go:embed YAML 重建):
+**静态知识表** (7 张, 启动时从 go:embed YAML + overlay 目录合并后重建):
 - `hardware_profiles` - 硬件能力向量
 - `engine_assets` - 引擎定义
 - `engine_features` - 引擎特性 (一对多)
@@ -159,6 +159,8 @@ ConfigResolver 按优先级合并多层知识:
 
 ```
 L0: engine_asset.default_args                 (go:embed YAML, always available)
+ ↓ merge (overlay 同名覆盖, 新名追加)
+L0b: ~/.aima/catalog/ overlay YAML            (磁盘热更新, 无需重编译)
  ↓ merge (高层 override 低层)
 L1: 用户 CLI --config / --engine / --slot     (人类显式指定)
  ↓ merge

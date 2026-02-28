@@ -180,13 +180,15 @@ internal/
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
-catalog/                      # Knowledge assets (go:embed)
+catalog/                      # Knowledge assets (go:embed, 编译时嵌入)
   embed.go
   hardware/                   # Hardware Profile YAML (incl. gpu.resource_name)
   engines/                    # Engine Asset YAML (incl. source, warmup)
   models/                     # Model Asset YAML
   partitions/                 # Partition Strategy YAML
   stack/                      # Stack Component YAML (K3S, HAMi — install config + airgap sources)
+# Runtime overlay: ~/.aima/catalog/{hardware,engines,models,partitions,stack}/*.yaml
+#   同名 metadata.name 覆盖 go:embed, 新名追加。无需重编译。
 ```
 
 ## Key Commands

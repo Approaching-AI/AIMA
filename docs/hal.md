@@ -116,6 +116,31 @@ Detect()
 
 ---
 
+## 配置解析桥接
+
+HAL 检测的数据通过 `buildHardwareInfo()` 映射到 `knowledge.HardwareInfo`，用于配置解析：
+
+```
+hal.Detect()                             knowledge.HardwareInfo
+  GPU.Arch          ──→                    GPUArch
+  GPU.VRAMMiB       ──→                    GPUVRAMMiB        (静态层: VRAM 过滤)
+  GPU.Count         ──→                    GPUCount
+  GPU.UnifiedMemory ──→                    UnifiedMemory     (静态层: 统一显存过滤)
+  CPU.Arch          ──→                    CPUArch
+  CPU.Cores         ──→                    CPUCores
+  RAM.TotalMiB      ──→                    RAMTotalMiB
+  RAM.AvailableMiB  ──→                    RAMAvailMiB
+
+hal.CollectMetrics()
+  GPU.MemoryUsedMiB ──→                    GPUMemUsedMiB     (动态层: CheckFit)
+  GPU.MemoryTotalMiB - MemoryUsedMiB ──→   GPUMemFreeMiB     (动态层: CheckFit)
+```
+
+所有新字段零值 = "未知" = 跳过检查（graceful degradation）。
+`hal.Detect()` 或 `hal.CollectMetrics()` 失败时不阻止部署，仅降级到 gpu_arch-only 匹配。
+
+---
+
 ## 实时监控
 
 ### nvidia-smi 解析
@@ -210,4 +235,4 @@ constraints:
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

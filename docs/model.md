@@ -61,6 +61,21 @@ type ModelInfo struct {
 
 ---
 
+## 硬件感知 Variant 匹配
+
+Model Asset YAML 中的 variant 可声明硬件约束，配置解析器在选择 variant 时会强制检查：
+
+| YAML 字段 | 类型 | 含义 | 过滤行为 |
+|-----------|------|------|---------|
+| `hardware.gpu_arch` | string | GPU 架构匹配 | 精确匹配 > 通配 `*` |
+| `hardware.vram_min_mib` | int | 最小显存要求 | 硬件显存不足时跳过该 variant |
+| `hardware.unified_memory` | *bool | 是否要求统一显存 | 不匹配时跳过该 variant |
+
+当硬件信息未知（零值）时跳过所有过滤，确保向后兼容。
+详见 [knowledge.md](knowledge.md) 的"硬件感知 Variant 选择"章节。
+
+---
+
 ## 核心算法
 
 ### 1. 模型类别检测
@@ -182,4 +197,4 @@ ALTER TABLE models ADD COLUMN quant_src TEXT DEFAULT '';
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

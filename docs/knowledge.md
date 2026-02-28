@@ -170,6 +170,45 @@ L3a: Go Agent 实时决策 (无状态工具循环)        (简单动态优化)
 L3b: ZeroClaw 实时决策 (持久记忆+跨会话)       (复杂动态优化)
 ```
 
+### 硬件感知 Variant 选择
+
+`findModelVariant()` 在 gpu_arch 匹配的基础上，增加了两层硬件过滤：
+
+```
+findModelVariant(modelName, engineType, hw HardwareInfo)
+  │
+  for each variant:
+  │  ├── engine 不匹配 → skip
+  │  ├── VRAM 过滤: hw.GPUVRAMMiB > 0 && variant.VRAMMinMiB > hw.GPUVRAMMiB → skip
+  │  ├── 统一显存过滤: variant.UnifiedMemory != nil && *variant.UnifiedMemory != hw.UnifiedMemory → skip
+  │  ├── gpu_arch 精确匹配 → exactMatch
+  │  └── gpu_arch == "*" → wildcardMatch
+  │
+  return exactMatch > wildcardMatch > error
+```
+
+`InferEngineType()` 同样在两轮扫描（精确 + 通配）中增加 VRAM 过滤，
+跳过硬件显存不足的 variant 对应的引擎。
+
+**零值 = 未知 = 跳过**：当 `HardwareInfo` 的 GPUVRAMMiB 为 0 时，不做任何过滤（向后兼容）。
+
+### CheckFit — 部署前硬件适配性检查
+
+在 Resolve 产出 `ResolvedConfig` 之后、部署之前，`CheckFit()` 根据运行时状态做动态调整：
+
+```
+CheckFit(resolved, hw) → FitReport { Fit, Warnings, Adjustments, Reason }
+  │
+  ├── 动态层: GPUMemFreeMiB > 0?
+  │     ├── maxSafeGMU = (GPUMemFreeMiB - 512) / totalVRAM
+  │     ├── maxSafeGMU < 0.1 → Fit=false, Reason="GPU memory insufficient"
+  │     └── currentGMU > maxSafeGMU → Adjustments["gpu_memory_utilization"] = maxSafeGMU
+  │
+  └── RAM 检查: RAMAvailMiB > 0 && RAMAvailMiB < 2048 → Warning
+```
+
+调整后的参数标记来源为 `L0-auto`。采集失败（零值）时不做任何调整（graceful degradation）。
+
 ### Auto-Resolve 兜底
 
 当模型不在 YAML catalog 中时，自动从 `models` 表构建"合成 ModelAsset"：
@@ -281,7 +320,7 @@ Agent 探索 (L3a/L3b)
 ## 相关文件
 
 - `internal/knowledge/loader.go` - YAML 加载+解析
-- `internal/knowledge/resolver.go` - L0→L3 配置解析
+- `internal/knowledge/resolver.go` - L0→L3 配置解析 + 硬件感知 variant 选择 + CheckFit
 - `internal/knowledge/query.go` - 知识查询引擎
 - `internal/knowledge/similarity.go` - 向量相似度
 - `internal/knowledge/podgen.go` - Pod YAML 生成
@@ -289,4 +328,4 @@ Agent 探索 (L3a/L3b)
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

@@ -289,7 +289,9 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.
 	return nativeRt
 }
 
-// buildHardwareInfo creates a HardwareInfo with platform and runtime awareness.
+// buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
+// Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
+// Missing data results in zero values, which downstream functions treat as "unknown" and skip.
 func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInfo {
 	hwInfo := knowledge.HardwareInfo{
 		Platform:    goruntime.GOOS + "/" + goruntime.GOARCH,
@@ -298,8 +300,19 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 	if hw, err := hal.Detect(ctx); err == nil {
 		if hw.GPU != nil {
 			hwInfo.GPUArch = hw.GPU.Arch
+			hwInfo.GPUVRAMMiB = hw.GPU.VRAMMiB
+			hwInfo.GPUCount = hw.GPU.Count
+			hwInfo.UnifiedMemory = hw.GPU.UnifiedMemory
 		}
 		hwInfo.CPUArch = hw.CPU.Arch
+		hwInfo.CPUCores = hw.CPU.Cores
+		hwInfo.RAMTotalMiB = hw.RAM.TotalMiB
+		hwInfo.RAMAvailMiB = hw.RAM.AvailableMiB
+	}
+	// Dynamic layer: collect runtime GPU metrics (failure is non-fatal)
+	if m, err := hal.CollectMetrics(ctx); err == nil && m.GPU != nil {
+		hwInfo.GPUMemUsedMiB = m.GPU.MemoryUsedMiB
+		hwInfo.GPUMemFreeMiB = m.GPU.MemoryTotalMiB - m.GPU.MemoryUsedMiB
 	}
 	return hwInfo
 }
@@ -701,6 +714,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return nil, err
 			}
 			modelName = canonicalName
+
+			// Hardware fitness check: validate and auto-adjust config
+			fit := knowledge.CheckFit(resolved, hwInfo)
+			if !fit.Fit {
+				return nil, fmt.Errorf("hardware check: %s", fit.Reason)
+			}
+			for _, w := range fit.Warnings {
+				slog.Warn("deploy fitness", "warning", w)
+			}
+			for k, v := range fit.Adjustments {
+				resolved.Config[k] = v
+				resolved.Provenance[k] = "L0-auto"
+			}
 
 			port := 8000
 			if p, ok := resolved.Config["port"]; ok {

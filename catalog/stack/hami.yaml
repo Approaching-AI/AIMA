@@ -7,12 +7,15 @@ metadata:
 compatibility:
   aima_min: "0.1.0"
 
-# HAMi depends on NVML for GPU memory reporting; devices with unified memory
-# return NVML_ERROR_NOT_SUPPORTED (code 3), causing device-plugin CrashLoopBackOff.
-# Skip installation on these hardware profiles until HAMi PR #1637 ships in a release.
+# HAMi supports heterogeneous devices: NVIDIA, Ascend, HYGON DCU, Cambricon,
+# Iluvatar, Moore Threads, MetaX. Skip on unsupported hardware:
+#   - AMD Radeon RDNA: not in HAMi's supported device list (HYGON DCU ≠ AMD Radeon)
+#   - NVIDIA UMA devices: NVML returns NVML_ERROR_NOT_SUPPORTED (code 3),
+#     causing device-plugin CrashLoopBackOff (HAMi PR #1637 not yet released)
 conditions:
   skip_profiles:
-    - Blackwell-arm64   # GB10: unified memory, NVML incompatible
+    - Blackwell-arm64   # GB10: NVIDIA UMA, NVML memory query incompatible
+    - RDNA3.5-amd64     # AMD Radeon 8060S: RDNA not in HAMi supported devices
 
 source:
   chart: "hami-2.4.1.tgz"
@@ -78,3 +81,7 @@ open_questions:
   - question: "Is engine-layer memory management sufficient for GB10 without HAMi?"
     hypothesis: "Yes — llama.cpp --ctx-size and vLLM gpu_memory_utilization work on UMA. 128GB unified memory bottleneck is bandwidth/compute, not capacity."
     test_method: "Deploy multi-model on GB10 with engine-level limits only, observe stability and throughput"
+  - question: "Should HAMi be skipped for AMD Radeon RDNA GPUs?"
+    status: confirmed
+    finding: "HAMi supports 7 heterogeneous device families (NVIDIA, Ascend, HYGON DCU, Cambricon, Iluvatar, Moore Threads, MetaX) but AMD Radeon RDNA is NOT among them. HYGON DCU is AMD-architecture but a different product line. On amd395 (RDNA3.5), HAMi device-plugin (configured with runtimeClassName:nvidia + nvidia.com/gpu) entered CrashLoopBackOff (380+ restarts) because no NVIDIA driver/NVML exists. Additionally, Strix Halo is UMA which may compound the issue (same as GB10). Manually deleted HAMi, added RDNA3.5-amd64 to skip_profiles."
+    test_method: "Any new AMD Radeon profile should be added to skip_profiles. Re-evaluate if HAMi adds AMD ROCm support in future."

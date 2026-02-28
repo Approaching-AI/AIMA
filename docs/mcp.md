@@ -80,7 +80,7 @@ Go Agent (直接调用)，保证行为一致。
 
 | 工具 | 功能 |
 |------|------|
-| `deploy.apply` | 生成并提交 Pod YAML 到 K3S |
+| `deploy.apply` | 硬件适配性检查 + 生成并提交 Pod YAML 到 K3S |
 | `deploy.delete` | 删除部署 |
 | `deploy.status` | 查询 Pod 状态 + 容器日志 |
 | `deploy.list` | 列出所有部署及资源使用 |
@@ -100,7 +100,7 @@ Go Agent (直接调用)，保证行为一致。
 |------|------|
 | `knowledge.search` | 搜索知识 (by hardware / model / engine / tags) |
 | `knowledge.save` | 保存 Knowledge Note |
-| `knowledge.resolve` | 解析最优配置 (L0→L2 多层合并) |
+| `knowledge.resolve` | 解析最优配置 (L0→L2 多层合并 + VRAM/统一显存过滤) |
 | `knowledge.list_engines` | 列出可用引擎定义 (从 SQLite 查询) |
 | `knowledge.list_profiles` | 列出硬件 Profile (从 SQLite 查询) |
 | `knowledge.generate_pod` | 从知识资产生成 Pod YAML |
@@ -129,6 +129,11 @@ Go Agent (直接调用)，保证行为一致。
 
 ### deploy.apply
 
+部署前自动执行硬件适配性检查（`CheckFit`）：
+- 根据实时 GPU 显存占用自动调低 `gpu_memory_utilization`
+- GPU 空闲显存不足时拒绝部署并返回原因
+- 采集失败时不阻止部署（graceful degradation）
+
 ```go
 {
     "name": "deploy.apply",
@@ -147,10 +152,14 @@ Go Agent (直接调用)，保证行为一致。
 
 ### knowledge.resolve
 
+Variant 选择阶段会根据 `HardwareInfo` 中的显存和统一显存信息过滤不可行方案：
+- `vram_min_mib` > 硬件显存 → 跳过该 variant
+- `unified_memory` 不匹配 → 跳过该 variant
+
 ```go
 {
     "name": "knowledge.resolve",
-    "description": "Resolve optimal configuration (L0→L3 multi-layer merge)",
+    "description": "Resolve optimal configuration (L0→L3 multi-layer merge, VRAM-aware variant filtering)",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -219,4 +228,4 @@ Go Agent (直接调用)，保证行为一致。
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

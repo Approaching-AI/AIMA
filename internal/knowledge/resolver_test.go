@@ -3,6 +3,7 @@ package knowledge
 import (
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestResolveBasic(t *testing.T) {
@@ -292,5 +293,252 @@ func TestResolveSyntheticModel(t *testing.T) {
 	}
 	if resolved.Config["ctx_size"] != 4096 {
 		t.Errorf("Config[ctx_size] = %v, want 4096 (universal engine default)", resolved.Config["ctx_size"])
+	}
+}
+
+// --- Hardware-aware resolution tests ---
+
+func TestResolveVRAMFiltering(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// test-model-8b TestArch variant requires vram_min_mib: 4096.
+	// With only 2048 MiB VRAM, the TestArch variant should be filtered out,
+	// falling back to the universal wildcard variant.
+	hw := HardwareInfo{
+		GPUArch:    "TestArch",
+		CPUArch:    "x86_64",
+		GPUVRAMMiB: 2048, // Less than variant's vram_min_mib: 4096
+	}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil)
+	if err == nil {
+		t.Fatalf("expected error (TestArch testengine variant needs 4096 MiB, only 2048 available), got engine=%q", resolved.Engine)
+	}
+
+	// But auto-engine inference should fall through to universal
+	resolved, err = cat.Resolve(hw, "test-model-8b", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve with auto-engine: %v", err)
+	}
+	if resolved.Engine != "universal" {
+		t.Errorf("Engine = %q, want universal (VRAM too low for testengine)", resolved.Engine)
+	}
+}
+
+func TestResolveVRAMSufficient(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// With enough VRAM, the exact TestArch variant should be selected
+	hw := HardwareInfo{
+		GPUArch:    "TestArch",
+		CPUArch:    "x86_64",
+		GPUVRAMMiB: 8192, // More than variant's vram_min_mib: 4096
+	}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "testengine" {
+		t.Errorf("Engine = %q, want testengine", resolved.Engine)
+	}
+	if resolved.Config["dtype"] != "float16" {
+		t.Errorf("Config[dtype] = %v, want float16 (TestArch variant)", resolved.Config["dtype"])
+	}
+}
+
+func TestResolveVRAMZeroSkipsFilter(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// GPUVRAMMiB=0 means "unknown" — should NOT filter by VRAM (backward compat)
+	hw := HardwareInfo{
+		GPUArch: "TestArch",
+		CPUArch: "x86_64",
+		// GPUVRAMMiB: 0 (default, unknown)
+	}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "testengine" {
+		t.Errorf("Engine = %q, want testengine (zero VRAM = skip filter)", resolved.Engine)
+	}
+}
+
+func TestResolveUnifiedMemoryFilter(t *testing.T) {
+	unified := true
+	discrete := false
+
+	// Build a catalog with two variants: one unified-only, one discrete-only
+	fs := fstest.MapFS{
+		"engines/eng.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+metadata:
+  name: eng-1
+  type: eng
+  version: "1.0"
+image:
+  name: test/eng
+  tag: "v1"
+  platforms: [linux/amd64]
+hardware:
+  gpu_arch: TestArch
+startup:
+  command: ["serve", "{{.ModelPath}}"]
+  default_args:
+    port: 8000
+  health_check:
+    path: /health
+    timeout_s: 60
+`)},
+		"models/m.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: test-unified-model
+  type: llm
+  family: test
+  parameter_count: "8B"
+storage:
+  formats: [safetensors]
+variants:
+  - name: unified-variant
+    hardware:
+      gpu_arch: TestArch
+      vram_min_mib: 1024
+      unified_memory: true
+    engine: eng
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.30
+  - name: discrete-variant
+    hardware:
+      gpu_arch: TestArch
+      vram_min_mib: 1024
+      unified_memory: false
+    engine: eng
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.90
+`)},
+	}
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	t.Run("unified memory selects unified variant", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, UnifiedMemory: true}
+		resolved, err := cat.Resolve(hw, "test-unified-model", "eng", nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		gmu := toFloat64(resolved.Config["gpu_memory_utilization"])
+		if gmu != 0.30 {
+			t.Errorf("gpu_memory_utilization = %.2f, want 0.30 (unified variant)", gmu)
+		}
+		_ = unified
+	})
+
+	t.Run("discrete memory selects discrete variant", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, UnifiedMemory: false}
+		resolved, err := cat.Resolve(hw, "test-unified-model", "eng", nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		gmu := toFloat64(resolved.Config["gpu_memory_utilization"])
+		if gmu != 0.90 {
+			t.Errorf("gpu_memory_utilization = %.2f, want 0.90 (discrete variant)", gmu)
+		}
+		_ = discrete
+	})
+}
+
+func TestCheckFitAdjustsGMU(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Config:     map[string]any{"gpu_memory_utilization": 0.90},
+		Provenance: map[string]string{"gpu_memory_utilization": "L0"},
+	}
+
+	// GPU has 10240 MiB total but 4096 used, so 6144 free.
+	// maxSafeGMU = (6144 - 512) / 10240 ≈ 0.55
+	hw := HardwareInfo{
+		GPUVRAMMiB:    10240,
+		GPUMemUsedMiB: 4096,
+		GPUMemFreeMiB: 6144,
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true, got Reason=%q", fit.Reason)
+	}
+	if len(fit.Warnings) == 0 {
+		t.Fatal("expected warnings about GMU adjustment")
+	}
+	adj, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok {
+		t.Fatal("expected gpu_memory_utilization adjustment")
+	}
+	adjVal := toFloat64(adj)
+	if adjVal < 0.50 || adjVal > 0.56 {
+		t.Errorf("adjusted gpu_memory_utilization = %.2f, want ~0.55", adjVal)
+	}
+}
+
+func TestCheckFitInsufficientGPU(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.90},
+	}
+
+	// GPU almost full: only 256 MiB free (below 512 safety margin)
+	hw := HardwareInfo{
+		GPUVRAMMiB:    8192,
+		GPUMemUsedMiB: 7936,
+		GPUMemFreeMiB: 256,
+	}
+
+	fit := CheckFit(resolved, hw)
+	if fit.Fit {
+		t.Fatal("expected Fit=false for nearly-full GPU")
+	}
+	if !strings.Contains(fit.Reason, "insufficient") {
+		t.Errorf("Reason = %q, want substring 'insufficient'", fit.Reason)
+	}
+}
+
+func TestCheckFitGracefulDegradation(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.90},
+	}
+
+	// No dynamic metrics (zero values) — should pass without adjustments
+	hw := HardwareInfo{}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true with no metrics, got Reason=%q", fit.Reason)
+	}
+	if len(fit.Adjustments) != 0 {
+		t.Errorf("expected no adjustments with no metrics, got %v", fit.Adjustments)
+	}
+	if len(fit.Warnings) != 0 {
+		t.Errorf("expected no warnings with no metrics, got %v", fit.Warnings)
+	}
+}
+
+func TestCheckFitLowRAMWarning(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Config: map[string]any{},
+	}
+
+	hw := HardwareInfo{RAMAvailMiB: 1024}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatal("expected Fit=true for low RAM (warning only)")
+	}
+	if len(fit.Warnings) == 0 {
+		t.Fatal("expected low RAM warning")
+	}
+	if !strings.Contains(fit.Warnings[0], "low available RAM") {
+		t.Errorf("warning = %q, want substring 'low available RAM'", fit.Warnings[0])
 	}
 }

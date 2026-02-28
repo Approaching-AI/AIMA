@@ -309,6 +309,13 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string) (*knowledge.ResolvedConfig, string, error) {
 	resolved, err := cat.Resolve(hw, modelName, engineType, overrides)
 	if err == nil {
+		// Catalog hit — but ModelPath may be empty if no override was given.
+		// Look up DB for the actual registered path from scan/import.
+		if resolved.ModelPath == "" {
+			if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
+				resolved.ModelPath = dbModel.Path
+			}
+		}
 		return resolved, modelName, nil
 	}
 	if !strings.Contains(err.Error(), "not found in catalog") {

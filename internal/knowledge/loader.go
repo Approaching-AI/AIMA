@@ -23,11 +23,12 @@ type Catalog struct {
 // --- Hardware Profile ---
 
 type HardwareProfile struct {
-	Kind     string              `yaml:"kind"`
-	Metadata HardwareMetadata    `yaml:"metadata"`
-	Hardware HardwareSpec        `yaml:"hardware"`
+	Kind        string              `yaml:"kind"`
+	Metadata    HardwareMetadata    `yaml:"metadata"`
+	Hardware    HardwareSpec        `yaml:"hardware"`
 	Constraints HardwareConstraints `yaml:"constraints"`
-	Partition HardwarePartition   `yaml:"partition"`
+	Partition   HardwarePartition   `yaml:"partition"`
+	Container   *ContainerAccess    `yaml:"container,omitempty"`
 }
 
 type HardwareMetadata struct {
@@ -71,6 +72,29 @@ type HardwareConstraints struct {
 type HardwarePartition struct {
 	GPUTools []string `yaml:"gpu_tools"`
 	CPUTools []string `yaml:"cpu_tools"`
+}
+
+// ContainerAccess describes vendor-specific container access requirements
+// (devices, env vars, volumes, security) for GPU containers. Lives in
+// hardware profile YAML so adding a new GPU vendor = YAML only, no Go code.
+type ContainerAccess struct {
+	Devices  []string          `yaml:"devices,omitempty"`
+	Env      map[string]string `yaml:"env,omitempty"`
+	Volumes  []ContainerVolume `yaml:"volumes,omitempty"`
+	Security *ContainerSecurity `yaml:"security,omitempty"`
+}
+
+type ContainerVolume struct {
+	Name      string `yaml:"name"`
+	HostPath  string `yaml:"host_path"`
+	MountPath string `yaml:"mount_path"`
+	ReadOnly  bool   `yaml:"read_only,omitempty"`
+}
+
+type ContainerSecurity struct {
+	Privileged         bool  `yaml:"privileged,omitempty"`
+	RunAsUser          *int  `yaml:"run_as_user,omitempty"`
+	SupplementalGroups []int `yaml:"supplemental_groups,omitempty"`
 }
 
 // --- Engine Asset ---

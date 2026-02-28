@@ -24,3 +24,11 @@ constraints:
 partition:
   gpu_tools: [engine_params]
   cpu_tools: [cgroups]
+container:
+  devices:
+    - /dev/kfd
+    - /dev/dri
+  env:
+    LD_PRELOAD: "/opt/rocm/lib/librocm_smi64.so"
+  security:
+    supplemental_groups: [44, 110]

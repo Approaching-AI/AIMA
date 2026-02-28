@@ -821,6 +821,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				Port:             port,
 				Config:           resolved.Config,
 				RuntimeClassName: resolved.RuntimeClassName,
+				Env:              resolved.Env,
+				Container:        resolved.Container,
+				GPUResourceName:  resolved.GPUResourceName,
+				CPUArch:          resolved.CPUArch,
 				Labels: map[string]string{
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,

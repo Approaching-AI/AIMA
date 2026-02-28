@@ -96,6 +96,10 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 		Config:           config,
 		Command:          req.Command,
 		RuntimeClassName: req.RuntimeClassName,
+		Env:              req.Env,
+		Container:        req.Container,
+		GPUResourceName:  req.GPUResourceName,
+		CPUArch:          req.CPUArch,
 	}
 
 	if req.HealthCheck != nil {

@@ -89,6 +89,7 @@ hardware:
     compute_capability: "10.0"
     cuda_cores: 2048
     resource_name: "nvidia.com/gpu"      # K8s GPU 资源名
+    runtime_class_name: "nvidia"         # K8s runtimeClassName (可选)
   cpu:
     arch: arm64
     cores: 12
@@ -104,7 +105,39 @@ constraints:
 partition:
   gpu_tools: [hami, engine_params]
   cpu_tools: [k3s_cgroups]
+container:                               # 厂商特定容器访问配置（K3S Pod 生成使用）
+  env:                                   # 注入到容器的环境变量
+    NVIDIA_VISIBLE_DEVICES: "all"
+    NVIDIA_DRIVER_CAPABILITIES: "all"
+    LD_LIBRARY_PATH: "/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
 ```
+
+#### container 字段说明
+
+`container` 是 Hardware Profile 的可选字段，描述该硬件在 K3S 容器中运行推理时需要的厂商特定配置。
+Pod 生成器（`podgen.go`）读取此字段，无需在 Go 代码中硬编码任何厂商逻辑。
+
+| 子字段 | 类型 | 说明 | 示例 |
+|--------|------|------|------|
+| `devices` | `[]string` | 需要挂载到容器的宿主机设备 | `["/dev/kfd", "/dev/dri"]` (AMD ROCm) |
+| `env` | `map[string]string` | 注入到容器的环境变量 | NVIDIA: `NVIDIA_VISIBLE_DEVICES`, AMD: `LD_PRELOAD` |
+| `volumes` | `[]ContainerVolume` | 额外的 hostPath 挂载 | 自定义 lib 目录等 |
+| `security` | `ContainerSecurity` | securityContext 配置 | `supplemental_groups: [44, 110]` (video+render) |
+
+**AMD 硬件 Profile 示例**：
+```yaml
+container:
+  devices:
+    - /dev/kfd           # ROCm 内核融合驱动
+    - /dev/dri           # DRM 渲染设备
+  env:
+    LD_PRELOAD: "/opt/rocm/lib/librocm_smi64.so"
+  security:
+    supplemental_groups: [44, 110]   # video (44) + render (110) 用户组
+```
+
+**设计原则**：所有厂商特定的容器行为（设备挂载、环境变量、安全上下文）定义在 YAML 中，
+Go 代码只做通用渲染。添加新 GPU 厂商支持 = 写 Hardware Profile YAML，零 Go 代码修改。
 
 ### 2. Partition Strategy
 
@@ -323,7 +356,7 @@ Agent 探索 (L3a/L3b)
 - `internal/knowledge/resolver.go` - L0→L3 配置解析 + 硬件感知 variant 选择 + CheckFit
 - `internal/knowledge/query.go` - 知识查询引擎
 - `internal/knowledge/similarity.go` - 向量相似度
-- `internal/knowledge/podgen.go` - Pod YAML 生成
+- `internal/knowledge/podgen.go` - Pod YAML 生成（厂商无关模板）
 - `catalog/embed.go` - go:embed 入口
 
 ---

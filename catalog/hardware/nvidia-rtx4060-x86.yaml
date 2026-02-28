@@ -25,3 +25,8 @@ constraints:
 partition:
   gpu_tools: [hami, engine_params]
   cpu_tools: [k3s_cgroups]
+container:
+  env:
+    NVIDIA_VISIBLE_DEVICES: "all"
+    NVIDIA_DRIVER_CAPABILITIES: "all"
+    LD_LIBRARY_PATH: "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"

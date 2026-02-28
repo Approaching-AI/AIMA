@@ -50,10 +50,11 @@ type ResolvedConfig struct {
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)
 	Env                   map[string]string // Extra env vars for the container (from engine YAML)
-	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (default if empty)
+	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource request)
 	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
 	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
 	CPUArch               string            // CPU architecture (e.g. "amd64", "arm64") — for platform-specific paths
+	Container             *ContainerAccess  // vendor-specific container access (devices, env, volumes, security) from hardware profile
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -124,10 +125,11 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.Warmup = &engine.Startup.Warmup
 	}
 
-	// Set GPU resource name, runtimeClassName, and CPU arch from hardware profile
+	// Set GPU resource name, runtimeClassName, CPU arch, and container access from hardware profile
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
 	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
 	resolved.CPUArch = hw.CPUArch
+	resolved.Container = c.findContainerAccess(hw)
 
 	// Set runtime recommendation from engine's platform_recommendations
 	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {
@@ -214,14 +216,24 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, er
 }
 
 // findGPUResourceName looks up the K8s GPU resource name from hardware profiles.
-// Falls back to "nvidia.com/gpu" if not specified.
+// Returns "" if not specified (no GPU resource request in pod spec).
 func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {
 	for _, hp := range c.HardwareProfiles {
 		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Hardware.GPU.ResourceName != "" {
 			return hp.Hardware.GPU.ResourceName
 		}
 	}
-	return "nvidia.com/gpu"
+	return ""
+}
+
+// findContainerAccess looks up vendor-specific container access config from hardware profiles.
+func (c *Catalog) findContainerAccess(hw HardwareInfo) *ContainerAccess {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch && hp.Container != nil {
+			return hp.Container
+		}
+	}
+	return nil
 }
 
 // findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.

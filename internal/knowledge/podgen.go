@@ -11,7 +11,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var podTemplate = template.Must(template.New("pod").Parse(`apiVersion: v1
+var podTemplate = template.Must(template.New("pod").Funcs(template.FuncMap{
+	"deviceVolName": deviceVolName,
+}).Parse(`apiVersion: v1
 kind: Pod
 metadata:
   name: {{ .PodName }}
@@ -35,6 +37,15 @@ spec:
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
   {{- end }}
+  {{- if .HasSecurityContext }}
+  securityContext:
+    {{- if .Security.SupplementalGroups }}
+    supplementalGroups:
+      {{- range .Security.SupplementalGroups }}
+      - {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
   containers:
     - name: inference
       image: {{ .EngineImage }}
@@ -48,20 +59,16 @@ spec:
       ports:
         - containerPort: {{ .Port }}
           name: http
-      {{- if or .RuntimeClassName .ExtraEnv }}
+      {{- if .ExtraEnv }}
       env:
-        {{- if .RuntimeClassName }}
-        - name: NVIDIA_VISIBLE_DEVICES
-          value: all
-        - name: NVIDIA_DRIVER_CAPABILITIES
-          value: all
-        - name: LD_LIBRARY_PATH
-          value: {{ .LibDir }}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
-        {{- end }}
         {{- range $k, $v := .ExtraEnv }}
         - name: {{ $k }}
           value: "{{ $v }}"
         {{- end }}
+      {{- end }}
+      {{- if .HasContainerSecurity }}
+      securityContext:
+        privileged: true
       {{- end }}
       {{- if or .HasGPUResource .HasComputeResources }}
       resources:
@@ -104,6 +111,17 @@ spec:
           readOnly: true
         - name: dshm
           mountPath: /dev/shm
+        {{- range .Devices }}
+        - name: {{ deviceVolName . }}
+          mountPath: {{ . }}
+        {{- end }}
+        {{- range .ExtraVolumes }}
+        - name: {{ .Name }}
+          mountPath: {{ .MountPath }}
+          {{- if .ReadOnly }}
+          readOnly: true
+          {{- end }}
+        {{- end }}
   volumes:
     - name: model-data
       hostPath:
@@ -112,7 +130,24 @@ spec:
     - name: dshm
       emptyDir:
         medium: Memory
+    {{- range .Devices }}
+    - name: {{ deviceVolName . }}
+      hostPath:
+        path: {{ . }}
+    {{- end }}
+    {{- range .ExtraVolumes }}
+    - name: {{ .Name }}
+      hostPath:
+        path: {{ .HostPath }}
+    {{- end }}
 `))
+
+// deviceVolName converts a device path like "/dev/kfd" to a K8s-safe volume name like "dev-kfd".
+func deviceVolName(path string) string {
+	name := strings.TrimPrefix(path, "/")
+	name = strings.ReplaceAll(name, "/", "-")
+	return name
+}
 
 type podData struct {
 	PodName          string
@@ -121,34 +156,45 @@ type podData struct {
 	ModelName        string
 	Slot             string
 	Port             int
-	Args             []string // command arguments (excluding binary name — image entrypoint is used)
-	ExtraEnv         map[string]string // additional env vars from engine YAML
+	Args             []string          // command arguments
+	ExtraEnv         map[string]string // merged: hardware container env (base) + engine env (override)
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
 	RAMMiB           int
 	HealthCheckPath        string
-	HealthCheckInitDelaySec int // initialDelaySeconds for liveness probe — use health_check.timeout_s
+	HealthCheckInitDelaySec int
 	ModelHostPath          string
 	GPUResourceName        string
-	RuntimeClassName       string // e.g. "nvidia" for NVIDIA CUDA containers
-	LibDir                 string // platform-specific lib path, e.g. "/lib/x86_64-linux-gnu"
+	RuntimeClassName       string
+	Devices                []string           // device paths to mount, e.g. ["/dev/kfd", "/dev/dri"]
+	ExtraVolumes           []ContainerVolume  // additional host mounts
+	Security               *ContainerSecurity // pod-level securityContext
 }
 
 func (d podData) HasAnnotations() bool {
-	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
+	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
 }
 
 // HasGPUResource reports whether a device-plugin GPU resource request should be added.
-// True only when there is explicit GPU partitioning (HAMi-style); false when using
-// runtimeClassName for GPU access without a device plugin.
+// True only when there is a GPU resource name AND explicit GPU partitioning (HAMi-style).
 func (d podData) HasGPUResource() bool {
-	return d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0
+	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
 }
 
 // HasComputeResources reports whether CPU or RAM limits should be set.
 func (d podData) HasComputeResources() bool {
 	return d.CPUCores > 0 || d.RAMMiB > 0
+}
+
+// HasSecurityContext reports whether pod-level securityContext should be rendered.
+func (d podData) HasSecurityContext() bool {
+	return d.Security != nil && len(d.Security.SupplementalGroups) > 0
+}
+
+// HasContainerSecurity reports whether container-level securityContext (privileged) should be rendered.
+func (d podData) HasContainerSecurity() bool {
+	return d.Security != nil && d.Security.Privileged
 }
 
 // GPUVendorDomain extracts the vendor domain from the GPU resource name.
@@ -158,16 +204,6 @@ func (d podData) GPUVendorDomain() string {
 		return d.GPUResourceName[:i]
 	}
 	return d.GPUResourceName
-}
-
-// libDirForArch returns the platform-specific library directory path.
-func libDirForArch(cpuArch string) string {
-	switch cpuArch {
-	case "arm64", "aarch64":
-		return "/lib/aarch64-linux-gnu"
-	default:
-		return "/lib/x86_64-linux-gnu"
-	}
 }
 
 // GeneratePod generates K3S Pod YAML from a resolved configuration.
@@ -241,10 +277,8 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		}
 	}
 
-	gpuResource := resolved.GPUResourceName
-	if gpuResource == "" {
-		gpuResource = "nvidia.com/gpu"
-	}
+	// Merge env: hardware container env (base) + engine env (override on conflict).
+	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
 
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
@@ -254,11 +288,17 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Slot:             resolved.Slot,
 		Port:             port,
 		Args:             args,
-		ExtraEnv:         resolved.Env,
+		ExtraEnv:         mergedEnv,
 		ModelHostPath:    modelHostPath,
-		GPUResourceName:  gpuResource,
+		GPUResourceName:  resolved.GPUResourceName,
 		RuntimeClassName: resolved.RuntimeClassName,
-		LibDir:           libDirForArch(resolved.CPUArch),
+	}
+
+	// Populate vendor-specific container access fields from hardware profile.
+	if resolved.Container != nil {
+		data.Devices = resolved.Container.Devices
+		data.ExtraVolumes = resolved.Container.Volumes
+		data.Security = resolved.Container.Security
 	}
 
 	if resolved.Partition != nil {
@@ -289,6 +329,29 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// mergeEnv merges hardware container env (base) with engine env (override).
+// Engine env wins on conflict. Returns nil if both are empty.
+func mergeEnv(container *ContainerAccess, engineEnv map[string]string) map[string]string {
+	hwEnv := 0
+	if container != nil {
+		hwEnv = len(container.Env)
+	}
+	if hwEnv == 0 && len(engineEnv) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, hwEnv+len(engineEnv))
+	if container != nil {
+		for k, v := range container.Env {
+			merged[k] = v
+		}
+	}
+	// Engine env overrides hardware env on conflict
+	for k, v := range engineEnv {
+		merged[k] = v
+	}
+	return merged
 }
 
 // SanitizePodName is the exported version for use by other packages.

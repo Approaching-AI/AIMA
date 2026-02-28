@@ -311,7 +311,7 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: 30 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)

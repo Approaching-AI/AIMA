@@ -5,10 +5,7 @@ metadata:
   version: "nightly"
 image:
   # vLLM Qwen3.5 专用 build, CUDA 13.0, multi-arch (含 arm64)
-  # 备选 tag (按优先级):
-  #   1. qwen3_5-cu130          ← 当前使用，Qwen3.5 专用 build (2026-02-23)
-  #   2. cu130-nightly-aarch64  ← 滚动 nightly，不稳定但最新
-  #   3. v0.17.0-cu130          ← 待发布，将是首个稳定支持 qwen3_5_moe 的版本
+  # 支持 qwen3_5_moe + qwen3_next 等新架构
   name: vllm/vllm-openai
   tag: "qwen3_5-cu130"
   size_approx_mb: 8000
@@ -18,6 +15,7 @@ image:
 patterns:
   - "^vllm-nightly$"
   - "vllm-nightly"
+  - "vllm/vllm-openai:qwen3_5"
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

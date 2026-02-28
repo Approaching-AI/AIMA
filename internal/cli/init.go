@@ -4,10 +4,20 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+// isTTY returns true if stdin is a terminal (not piped or redirected).
+func isTTY() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
 
 func newInitCmd(app *App) *cobra.Command {
 	var yesFlag bool
@@ -15,7 +25,7 @@ func newInitCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Install and configure infrastructure stack (K3S, HAMi)",
-		Long:  "Detect hardware, install K3S and HAMi with AIMA-optimized defaults, and verify readiness. Missing files are auto-downloaded with confirmation.",
+		Long:  "Detect hardware, install K3S and HAMi with AIMA-optimized defaults, and verify readiness. Missing files are auto-downloaded (use --no-download to skip).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			allowDownload := false
@@ -38,7 +48,8 @@ func newInitCmd(app *App) *cobra.Command {
 						fmt.Fprintf(cmd.ErrOrStderr(), "  %s (%s)\n    %s\n", d.Name, d.FileName, d.URL)
 					}
 
-					if yesFlag {
+					if yesFlag || !isTTY() {
+						// Auto-download when --yes is set or stdin is not a terminal
 						allowDownload = true
 					} else {
 						fmt.Fprintf(cmd.ErrOrStderr(), "\nDownload these files? [Y/n] ")

@@ -458,9 +458,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return nil, err
 		}
 		filtered := make([]*engine.EngineImage, 0)
+		var scannedIDs []string
 		for _, img := range images {
 			if runtimeFilter == "auto" || img.RuntimeType == runtimeFilter {
 				filtered = append(filtered, img)
+				scannedIDs = append(scannedIDs, img.ID)
 				_ = db.UpsertScannedEngine(ctx, &state.Engine{
 					ID:          img.ID,
 					Type:        img.Type,
@@ -474,6 +476,8 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				})
 			}
 		}
+		// Mark engines not found in this scan as unavailable (handles renamed/deleted images)
+		_ = db.MarkEnginesUnavailableExcept(ctx, scannedIDs)
 		return json.Marshal(filtered)
 	}
 	return &mcp.ToolDeps{

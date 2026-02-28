@@ -259,8 +259,18 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 	return allImages, nil
 }
 
+// runCrictl tries standalone crictl, then K3S-embedded crictl as fallback.
+// K3S bundles crictl as a subcommand (k3s crictl) — standalone crictl may not exist.
+func runCrictl(ctx context.Context, runner CommandRunner, args ...string) ([]byte, error) {
+	if out, err := runner.Run(ctx, "crictl", args...); err == nil {
+		return out, nil
+	}
+	k3sArgs := append([]string{"crictl"}, args...)
+	return runner.Run(ctx, "k3s", k3sArgs...)
+}
+
 func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
-	output, err := runner.Run(ctx, "crictl", "images", "-o", "json")
+	output, err := runCrictl(ctx, runner, "images", "-o", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -328,15 +338,23 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 
 // matchImages matches images to engine types using YAML knowledge.
 // Knowledge-driven: patterns come from Engine Asset YAMLs, not hardcoded.
+// Tag-aware: patterns containing ":" match against "repo:tag"; others match repo only.
+// Tag-aware patterns take priority over repo-only patterns.
 func matchImages(images []imageInfo, assetPatterns map[string][]string) []*EngineImage {
 	var matched []*EngineImage
 	seen := make(map[string]bool)
 
-	// Compile pattern lookup: pattern -> engine type
-	patternToEngine := make(map[string]string)
+	// Split patterns: tag-aware (contain ":") vs repo-only
+	tagPatterns := make(map[string]string)
+	repoPatterns := make(map[string]string)
 	for engineType, patterns := range assetPatterns {
 		for _, pattern := range patterns {
-			patternToEngine[pattern] = engineType
+			clean := strings.TrimPrefix(strings.TrimSuffix(pattern, "$"), "^")
+			if strings.Contains(clean, ":") {
+				tagPatterns[pattern] = engineType
+			} else {
+				repoPatterns[pattern] = engineType
+			}
 		}
 	}
 
@@ -345,47 +363,19 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 			continue
 		}
 
-		// Check patterns: exact, prefix, suffix, or contains match
-		hit := false
-		matchedEngineType := ""
+		searchRef := strings.ToLower(img.repo + ":" + img.tag)
 		searchName := strings.ToLower(img.repo)
 
-		for pattern, engineType := range patternToEngine {
-			lowerPattern := strings.ToLower(pattern)
-
-			// Exact match
-			if searchName == lowerPattern {
-				hit = true
-				matchedEngineType = engineType
-				break
-			}
-
-			// Prefix match (^pattern)
-			if strings.HasPrefix(pattern, "^") && strings.HasPrefix(searchName, lowerPattern[1:]) {
-				hit = true
-				matchedEngineType = engineType
-				break
-			}
-
-			// Suffix match (pattern$)
-			if strings.HasSuffix(pattern, "$") && strings.HasSuffix(searchName, lowerPattern[:len(pattern)-1]) {
-				hit = true
-				matchedEngineType = engineType
-				break
-			}
-
-			// Contains match (default)
-			if !hit && strings.Contains(searchName, lowerPattern) {
-				hit = true
-				matchedEngineType = engineType
-				break
-			}
+		// Tag-aware patterns take priority (match against repo:tag)
+		engineType := patternMatch(searchRef, tagPatterns)
+		if engineType == "" {
+			engineType = patternMatch(searchName, repoPatterns)
 		}
 
-		if hit {
+		if engineType != "" {
 			matched = append(matched, &EngineImage{
 				ID:         img.id,
-				Type:       matchedEngineType,
+				Type:       engineType,
 				Image:      img.repo,
 				Tag:        img.tag,
 				SizeBytes:  img.size,
@@ -397,6 +387,44 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 	}
 
 	return matched
+}
+
+// patternMatch checks search string against a set of patterns.
+// Supports anchors: ^pattern (prefix), pattern$ (suffix), ^pattern$ (exact).
+func patternMatch(search string, patterns map[string]string) string {
+	for pattern, engineType := range patterns {
+		lower := strings.ToLower(pattern)
+		// Strip anchors
+		cmp := lower
+		hasPrefix := strings.HasPrefix(cmp, "^")
+		hasSuffix := strings.HasSuffix(cmp, "$")
+		if hasPrefix {
+			cmp = cmp[1:]
+		}
+		if hasSuffix {
+			cmp = cmp[:len(cmp)-1]
+		}
+
+		switch {
+		case hasPrefix && hasSuffix:
+			if search == cmp {
+				return engineType
+			}
+		case hasPrefix:
+			if strings.HasPrefix(search, cmp) {
+				return engineType
+			}
+		case hasSuffix:
+			if strings.HasSuffix(search, cmp) {
+				return engineType
+			}
+		default:
+			if search == cmp || strings.Contains(search, cmp) {
+				return engineType
+			}
+		}
+	}
+	return ""
 }
 
 func splitImageTag(ref string) (repo, tag string) {

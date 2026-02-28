@@ -796,7 +796,7 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
 		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
 		        available, created_at
-		 FROM engines ORDER BY created_at DESC`)
+		 FROM engines WHERE available = 1 ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list engines: %w", err)
 	}
@@ -811,6 +811,28 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 		engines = append(engines, e)
 	}
 	return engines, rows.Err()
+}
+
+// MarkEnginesUnavailableExcept sets available=false for all engines whose ID is not in keepIDs.
+// Called after a full scan to clean stale entries (deleted images, renamed patterns, etc.).
+func (d *DB) MarkEnginesUnavailableExcept(ctx context.Context, keepIDs []string) error {
+	if len(keepIDs) == 0 {
+		// No scan results — don't wipe everything (might be a permission issue)
+		return nil
+	}
+	placeholders := make([]string, len(keepIDs))
+	args := make([]any, len(keepIDs))
+	for i, id := range keepIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`UPDATE engines SET available = 0 WHERE id NOT IN (%s)`,
+		strings.Join(placeholders, ","))
+	_, err := d.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("mark stale engines unavailable: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) DeleteEngine(ctx context.Context, id string) error {

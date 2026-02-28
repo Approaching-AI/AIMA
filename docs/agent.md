@@ -43,7 +43,7 @@ Go Agent Loop (最多 30 轮):
 ### LLM Provider 检测优先级
 
 ```
-1. AIMA 自身部署的本地模型 (localhost:8080/v1)  → 零网络依赖
+1. AIMA 自身部署的本地模型 (localhost:6188/v1)  → 零网络依赖
 2. 用户配置的 API Key (Anthropic/OpenAI/...)    → 需联网
 3. 不可用 → 降级到 L2 知识解析 (无 Agent)
 ```
@@ -88,7 +88,7 @@ AIMA Go Binary
   │     └── 启动 ZeroClaw 二进制:
   │           --channel stdio              (接收任务)
   │           --provider openai            (LLM 后端)
-  │           --provider-base-url localhost:8080/v1  (AIMA 自己的推理)
+  │           --provider-base-url localhost:6188/v1  (AIMA 自己的推理)
   │           --tool-mcp stdio:aima        (连回 AIMA MCP Server)
   │           --memory-path ~/.aima/zeroclaw.db
   │           --identity ~/.aima/zeroclaw-identity.md
@@ -147,4 +147,4 @@ aima ask --session abc "..."  # 继续 ZeroClaw 会话 (跨对话记忆)
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

@@ -2,10 +2,14 @@ package knowledge
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -430,6 +434,93 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 	return nil
 }
 
+// ParseAssetPublic is an exported wrapper around parseAsset for validation.
+func (cat *Catalog) ParseAssetPublic(data []byte, path string) error {
+	return cat.parseAsset(data, path)
+}
+
+// LoadCatalogLenient loads YAML assets like LoadCatalog but continues on
+// per-file errors instead of failing the entire load. Returns successfully
+// parsed assets plus a list of warning messages for files that failed.
+func LoadCatalogLenient(fsys fs.FS) (*Catalog, []string) {
+	cat := &Catalog{}
+	var warnings []string
+
+	dirs := []string{"hardware", "engines", "models", "partitions", "stack"}
+	for _, dir := range dirs {
+		entries, err := fs.ReadDir(fsys, dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+				continue
+			}
+			path := dir + "/" + entry.Name()
+			data, err := fs.ReadFile(fsys, path)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("read %s: %v", path, err))
+				continue
+			}
+			if err := cat.parseAsset(data, path); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%v", err))
+				continue
+			}
+		}
+	}
+	return cat, warnings
+}
+
+// overlayProbe extracts _base_digest from an overlay YAML before full parsing.
+type overlayProbe struct {
+	Kind       string `yaml:"kind"`
+	BaseDigest string `yaml:"_base_digest"`
+}
+
+// ComputeDigests walks an fs.FS and computes SHA256 digests of each YAML file,
+// keyed by the asset's metadata.name. Used to detect overlay staleness.
+func ComputeDigests(fsys fs.FS) map[string]string {
+	digests := make(map[string]string)
+	dirs := []string{"hardware", "engines", "models", "partitions", "stack"}
+	for _, dir := range dirs {
+		entries, err := fs.ReadDir(fsys, dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+				continue
+			}
+			data, err := fs.ReadFile(fsys, dir+"/"+entry.Name())
+			if err != nil {
+				continue
+			}
+			name := extractName(data)
+			if name == "" {
+				continue
+			}
+			h := sha256.Sum256(data)
+			digests[name] = "sha256:" + hex.EncodeToString(h[:])
+		}
+	}
+	return digests
+}
+
+// nameProbe extracts just the metadata.name from YAML.
+type nameProbe struct {
+	Metadata struct {
+		Name string `yaml:"name"`
+	} `yaml:"metadata"`
+}
+
+func extractName(data []byte) string {
+	var p nameProbe
+	if err := yaml.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	return p.Metadata.Name
+}
+
 // MergeCatalog merges overlay into base. Overlay assets with the same
 // metadata.name replace the base asset; new names are appended.
 // Returns the mutated base catalog.
@@ -440,6 +531,102 @@ func MergeCatalog(base, overlay *Catalog) *Catalog {
 	base.PartitionStrategies = mergeSlice(base.PartitionStrategies, overlay.PartitionStrategies, func(v PartitionStrategy) string { return v.Metadata.Name })
 	base.StackComponents = mergeSlice(base.StackComponents, overlay.StackComponents, func(v StackComponent) string { return v.Metadata.Name })
 	return base
+}
+
+// MergeCatalogWithDigests merges overlay into base and checks for staleness.
+// factoryDigests maps asset metadata.name → SHA256 digest of the factory YAML.
+// overlayFS is the overlay filesystem used to extract _base_digest from overlay files.
+// Returns the merged catalog and any staleness warnings.
+func MergeCatalogWithDigests(base, overlay *Catalog, factoryDigests map[string]string, overlayFS fs.FS) (*Catalog, []string) {
+	// Collect overlay _base_digest values from the raw YAML files
+	overlayDigests := extractOverlayDigests(overlayFS)
+
+	// Collect overlay asset names (before merge) to check staleness
+	overlayNames := CollectNames(overlay)
+
+	// Merge
+	base = MergeCatalog(base, overlay)
+
+	// Check staleness for each overlay asset that shadows a factory asset
+	var warnings []string
+	for name := range overlayNames {
+		factoryD, inFactory := factoryDigests[name]
+		if !inFactory {
+			continue // new asset, no staleness concern
+		}
+		overlayBaseD, hasBaseDigest := overlayDigests[name]
+		if !hasBaseDigest {
+			slog.Info("overlay shadows factory asset (no _base_digest, staleness unknown)", "asset", name)
+			continue
+		}
+		if overlayBaseD != factoryD {
+			w := fmt.Sprintf("overlay %q is stale: factory YAML changed (overlay base_digest=%s, factory=%s) — review recommended", name, overlayBaseD, factoryD)
+			warnings = append(warnings, w)
+		}
+	}
+	return base, warnings
+}
+
+// CollectNames returns a set of all metadata.name values in the catalog.
+func CollectNames(cat *Catalog) map[string]bool {
+	names := make(map[string]bool)
+	for _, v := range cat.HardwareProfiles {
+		names[v.Metadata.Name] = true
+	}
+	for _, v := range cat.EngineAssets {
+		names[v.Metadata.Name] = true
+	}
+	for _, v := range cat.ModelAssets {
+		names[v.Metadata.Name] = true
+	}
+	for _, v := range cat.PartitionStrategies {
+		names[v.Metadata.Name] = true
+	}
+	for _, v := range cat.StackComponents {
+		names[v.Metadata.Name] = true
+	}
+	return names
+}
+
+func extractOverlayDigests(fsys fs.FS) map[string]string {
+	if fsys == nil {
+		return nil
+	}
+	digests := make(map[string]string)
+	dirs := []string{"hardware", "engines", "models", "partitions", "stack"}
+	for _, dir := range dirs {
+		entries, err := fs.ReadDir(fsys, dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+				continue
+			}
+			data, err := fs.ReadFile(fsys, dir+"/"+entry.Name())
+			if err != nil {
+				continue
+			}
+			var probe overlayProbe
+			if err := yaml.Unmarshal(data, &probe); err != nil {
+				continue
+			}
+			name := extractName(data)
+			if name != "" && probe.BaseDigest != "" {
+				digests[name] = probe.BaseDigest
+			}
+		}
+	}
+	return digests
+}
+
+// ExtractOverlayDigestsFromDir reads overlay _base_digest values from a directory path.
+func ExtractOverlayDigestsFromDir(dir string) map[string]string {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	return extractOverlayDigests(os.DirFS(dir))
 }
 
 // mergeSlice merges overlay items into base by key. Same key = replace, new key = append.
@@ -459,6 +646,24 @@ func mergeSlice[T any](base, overlay []T, key func(T) string) []T {
 		}
 	}
 	return base
+}
+
+// KindToDir maps YAML kind values to catalog subdirectory names.
+func KindToDir(kind string) string {
+	switch kind {
+	case "engine_asset":
+		return "engines"
+	case "model_asset":
+		return "models"
+	case "hardware_profile":
+		return "hardware"
+	case "partition_strategy":
+		return "partitions"
+	case "stack_component":
+		return "stack"
+	default:
+		return ""
+	}
 }
 
 // LoadToSQLite loads a parsed Catalog into SQLite relational tables.

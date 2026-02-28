@@ -377,3 +377,190 @@ func TestMergeCatalogEmpty(t *testing.T) {
 		t.Errorf("ModelAssets changed: %d → %d", origMA, len(merged.ModelAssets))
 	}
 }
+
+func TestLoadCatalogLenient(t *testing.T) {
+	fs := fstest.MapFS{
+		"hardware/good.yaml": &fstest.MapFile{Data: []byte(`kind: hardware_profile
+metadata:
+  name: good-hw
+  description: "Good"
+hardware:
+  gpu:
+    arch: Test
+    vram_mib: 1024
+  cpu:
+    arch: x86_64
+    cores: 4
+    freq_ghz: 3.0
+  ram:
+    total_mib: 8192
+    bandwidth_gbps: 50
+constraints:
+  tdp_watts: 100
+  power_modes: [100]
+  cooling: active
+partition:
+  gpu_tools: []
+  cpu_tools: []
+`)},
+		"hardware/bad.yaml": &fstest.MapFile{Data: []byte("not: valid: yaml: [")},
+	}
+	cat, warnings := LoadCatalogLenient(fs)
+	if len(cat.HardwareProfiles) != 1 {
+		t.Fatalf("expected 1 good profile, got %d", len(cat.HardwareProfiles))
+	}
+	if cat.HardwareProfiles[0].Metadata.Name != "good-hw" {
+		t.Errorf("expected good-hw, got %q", cat.HardwareProfiles[0].Metadata.Name)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for bad.yaml, got %d", len(warnings))
+	}
+}
+
+func TestComputeDigests(t *testing.T) {
+	fs := testFS()
+	digests := ComputeDigests(fs)
+
+	if _, ok := digests["test-gpu"]; !ok {
+		t.Error("expected digest for test-gpu")
+	}
+	if _, ok := digests["testengine-1.0"]; !ok {
+		t.Error("expected digest for testengine-1.0")
+	}
+	if _, ok := digests["test-model-8b"]; !ok {
+		t.Error("expected digest for test-model-8b")
+	}
+	// Digest should be sha256: prefixed
+	for name, d := range digests {
+		if len(d) < 10 || d[:7] != "sha256:" {
+			t.Errorf("digest for %s doesn't have sha256: prefix: %s", name, d)
+		}
+	}
+}
+
+func TestStalenessDetection(t *testing.T) {
+	base := mustLoadCatalog(t)
+	factoryDigests := ComputeDigests(testFS())
+
+	t.Run("matching digest = no warning", func(t *testing.T) {
+		overlayFS := fstest.MapFS{
+			"hardware/test.yaml": &fstest.MapFile{Data: []byte(`_base_digest: ` + factoryDigests["test-gpu"] + `
+kind: hardware_profile
+metadata:
+  name: test-gpu
+  description: "Overlay"
+hardware:
+  gpu:
+    arch: TestArch
+    vram_mib: 32768
+  cpu:
+    arch: x86_64
+    cores: 16
+    freq_ghz: 4.0
+  ram:
+    total_mib: 65536
+    bandwidth_gbps: 100
+constraints:
+  tdp_watts: 200
+  power_modes: [200]
+  cooling: active
+partition:
+  gpu_tools: []
+  cpu_tools: []
+`)},
+		}
+		overlayCat, _ := LoadCatalogLenient(overlayFS)
+		baseCopy := mustLoadCatalog(t)
+		_, warnings := MergeCatalogWithDigests(baseCopy, overlayCat, factoryDigests, overlayFS)
+		if len(warnings) != 0 {
+			t.Errorf("expected 0 warnings for matching digest, got %d: %v", len(warnings), warnings)
+		}
+	})
+
+	t.Run("mismatched digest = warning", func(t *testing.T) {
+		overlayFS := fstest.MapFS{
+			"hardware/test.yaml": &fstest.MapFile{Data: []byte(`_base_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+kind: hardware_profile
+metadata:
+  name: test-gpu
+  description: "Stale overlay"
+hardware:
+  gpu:
+    arch: TestArch
+    vram_mib: 32768
+  cpu:
+    arch: x86_64
+    cores: 16
+    freq_ghz: 4.0
+  ram:
+    total_mib: 65536
+    bandwidth_gbps: 100
+constraints:
+  tdp_watts: 200
+  power_modes: [200]
+  cooling: active
+partition:
+  gpu_tools: []
+  cpu_tools: []
+`)},
+		}
+		overlayCat, _ := LoadCatalogLenient(overlayFS)
+		baseCopy := mustLoadCatalog(t)
+		_, warnings := MergeCatalogWithDigests(baseCopy, overlayCat, factoryDigests, overlayFS)
+		if len(warnings) != 1 {
+			t.Fatalf("expected 1 staleness warning, got %d: %v", len(warnings), warnings)
+		}
+	})
+
+	t.Run("no base_digest = no warning", func(t *testing.T) {
+		overlayFS := fstest.MapFS{
+			"hardware/test.yaml": &fstest.MapFile{Data: []byte(`kind: hardware_profile
+metadata:
+  name: test-gpu
+  description: "No digest"
+hardware:
+  gpu:
+    arch: TestArch
+    vram_mib: 32768
+  cpu:
+    arch: x86_64
+    cores: 16
+    freq_ghz: 4.0
+  ram:
+    total_mib: 65536
+    bandwidth_gbps: 100
+constraints:
+  tdp_watts: 200
+  power_modes: [200]
+  cooling: active
+partition:
+  gpu_tools: []
+  cpu_tools: []
+`)},
+		}
+		overlayCat, _ := LoadCatalogLenient(overlayFS)
+		baseCopy := mustLoadCatalog(t)
+		_, warnings := MergeCatalogWithDigests(baseCopy, overlayCat, factoryDigests, overlayFS)
+		if len(warnings) != 0 {
+			t.Errorf("expected 0 warnings for no digest, got %d: %v", len(warnings), warnings)
+		}
+	})
+
+	_ = base // used for reference
+}
+
+func TestKindToDir(t *testing.T) {
+	tests := []struct{ kind, dir string }{
+		{"engine_asset", "engines"},
+		{"model_asset", "models"},
+		{"hardware_profile", "hardware"},
+		{"partition_strategy", "partitions"},
+		{"stack_component", "stack"},
+		{"unknown", ""},
+	}
+	for _, tt := range tests {
+		if got := KindToDir(tt.kind); got != tt.dir {
+			t.Errorf("KindToDir(%q) = %q, want %q", tt.kind, got, tt.dir)
+		}
+	}
+}

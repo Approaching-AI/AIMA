@@ -47,7 +47,7 @@ variants:
       latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms
       tpot_ms: [31, 34]                  # measured: TPOT 31.5~33.6ms
       vram_mib: 67100                    # measured: 65.53 GiB model load
-      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28"
+      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), FLASH_ATTN backend, 2026-02-28. Qwen3_5MoeForConditionalGeneration arch requires qwen3_5-cu130; aima-vllm-qwen3-omni (v0.1.dev1) does NOT support this arch."
       context_scaling:                   # measured: 1-concurrency, 128-token output
         # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
         1024:   [0.498,  30.0, 2054]
@@ -77,30 +77,30 @@ variants:
           128: [59.60, 131477]
           255: [157.20, 261906]          # 逼近 262K context limit
 
-  # --- amd395 (RDNA3.5, 62GB unified, Docker) ---
-  # AWQ 4-bit 权重 ~24GB, 62GB unified 可容纳
-  # MoE 35B total / 3B active, triton flash attention
-  # vllm-rocm (TheRock gfx1151 build) 支持 AWQ 量化
-  - name: qwen3.5-35b-a3b-rdna35-vllm-awq
+  # --- amd395 (RDNA3.5, 62GB unified, native Vulkan) ---
+  # GGUF Q4_K_M ~22GB, 62GB unified 余量充足 (40GB for KV cache + system)
+  # MoE 35B total / 3B active, Vulkan GPU acceleration
+  # llamacpp b8148+ 支持 qwen3_5_moe 架构 (当前 b8157)
+  # 带宽 ~120 GB/s LPDDR5X, 3B active → 预估 15-30 tok/s decode
+  # vllm-rocm 路径不可用: vLLM 官方不支持 gfx1151, ROCm 性能远逊 Vulkan
+  - name: qwen3.5-35b-a3b-rdna35-llamacpp-q4
     hardware:
       gpu_arch: RDNA3.5
-      vram_min_mib: 16384
+      vram_min_mib: 0
       unified_memory: true
-    engine: vllm
-    format: safetensors
+    engine: llamacpp-vulkan
+    format: gguf
     source:
       type: huggingface
-      repo: cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit
+      repo: unsloth/Qwen3.5-35B-A3B-GGUF
     default_config:
-      gpu_memory_utilization: 0.90
-      max_model_len: 32768
-      dtype: half
-      quantization: awq
+      n_gpu_layers: 999
+      ctx_size: 16384
     expected_performance:
-      tokens_per_second: [5, 15]
-      latency_first_token_ms: [100, 500]
-      vram_mib: 24000
-      notes: "vLLM TheRock gfx1151, AWQ 4-bit, untested estimate"
+      tokens_per_second: [15, 30]
+      latency_first_token_ms: [50, 200]
+      vram_mib: 22000
+      notes: "llamacpp-vulkan b8157, GGUF Q4_K_M, untested estimate, 62GB unified LPDDR5X"
 
   # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
   # FP8 权重 ~36GB, TP=2 → 每 GPU 18GB, 24GB VRAM 充裕
@@ -122,8 +122,8 @@ variants:
       latency_first_token_ms: [40, 150]
 
   # --- 所有设备通用 (llamacpp + GGUF Q4_K_M=21GB) ---
-  # amd395 (128GB unified) ✓, linux-1 fallback
-  # dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload
+  # linux-1 fallback, dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload
+  # amd395 已有专属 RDNA3.5 变体 (上方), 此为其他设备 fallback
   - name: qwen3.5-35b-a3b-universal-llamacpp-q4
     hardware:
       gpu_arch: "*"

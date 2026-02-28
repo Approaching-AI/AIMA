@@ -39,44 +39,58 @@ variants:
       dtype: auto
       enable_chunked_prefill: true
     expected_performance:
-      tokens_per_second: [6.8, 42.5]       # decode 42.5 tok/s @1K → 6.8 tok/s @128K
-      latency_first_token_ms: [239, 15890]  # TTFT 239ms @1K → 15890ms @128K
-      tpot_ms: [22.4, 28.7]                # measured: TPOT 22.4~28.7ms
-      vram_mib: 113691                      # measured: 110.8 GiB model load (unified mem)
-      notes: "vLLM v0.1.dev1+g6a3c7ede8 (aima-vllm-qwen3-omni), FLASH_ATTN backend, 2026-02-28"
-      context_scaling:                      # measured: 1-concurrency, 128-200 token output
-        # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
-        1024:   [0.239,  42.5, 4280]
-        2048:   [0.301,  38.4, 6801]
-        4096:   [0.466,  40.3, 8795]
-        8192:   [0.853,  37.0, 9602]
-        16384:  [1.649,  31.9, 9937]        # prefill peak
-        32768:  [3.347,  24.5, 9791]
-        65536:  [7.067,  16.5, 9274]
-        128000: [15.890, 6.8,  8055]        # 128K full context verified
-      concurrency:                          # measured: 128-token output
-        # context_len: {concurrency: [total_tok_s, avg_ttft_ms, avg_tpot_ms]}
-        1024:
-          1: [41.4,  242,  22.4]
-          2: [65.3,  286,  28.6]
-          4: [96.3,  548,  37.5]
-          8: [126.5, 910,  55.6]
-        4096:
-          1: [38.4,  448,  22.7]
-          2: [57.1,  796,  28.9]
-          4: [74.3, 1338,  43.4]
-          8: [96.7, 2316,  64.0]
-        16384:
-          1: [27.1, 1646,  23.7]
-          2: [36.2, 2705,  34.0]
-          4: [43.0, 4471,  57.2]
-        32768:
-          1: [15.5, 3345,  24.4]
-          2: [23.9, 5293,  41.9]
-          4: [26.4, 8792,  80.5]
-      kv_cache:
-        total_tokens: 249696
-        max_concurrent_128k: 7.68           # vLLM reported
+      tokens_per_second: [0.2, 42.5]       # decode 42.5 tok/s @1K → 0.2 tok/s @262K
+      latency_first_token_ms: [239, 141200] # TTFT 239ms @1K → 141.2s @262K
+      tpot_ms: [22.3, 46.6]               # measured: TPOT 22.3~46.6ms
+      vram_mib: 113691                     # measured: 110.8 GiB model load (unified mem)
+      max_context_tokens: 262144           # model max_position_embeddings, GB10 verified stable
+      notes: "Two engines tested; aima-vllm-qwen3-omni (custom) has 2-3x better prefill than qwen3_5-cu130 (official nightly). Note: aima-vllm-qwen3-omni supports Qwen3NextForCausalLM only; qwen3_5-cu130 supports both Qwen3NextForCausalLM + Qwen3_5MoeForConditionalGeneration."
+      # --- Engine A: aima-vllm-qwen3-omni (custom build, best prefill) ---
+      engine_comparison:
+        aima-vllm-qwen3-omni:
+          version: "v0.1.dev1+g6a3c7ede8"
+          attention: FLASH_ATTN
+          prefill_peak_tps: 9937            # @16K, 2.2x faster than official nightly
+          notes: "Custom build with qwen3_next optimized kernels. Recommended for long-context."
+          context_scaling:
+            1024:   [0.239,  42.5, 4280]
+            2048:   [0.301,  38.4, 6801]
+            4096:   [0.466,  40.3, 8795]
+            8192:   [0.853,  37.0, 9602]
+            16384:  [1.649,  31.9, 9937]    # prefill peak
+            32768:  [3.347,  24.5, 9791]
+            65536:  [7.067,  16.5, 9274]
+            128000: [15.890, 6.8,  8055]
+          concurrency_1k:
+            1: [41.4,  242,  22.4]
+            2: [65.3,  286,  28.6]
+            4: [96.3,  548,  37.5]
+            8: [126.5, 910,  55.6]
+        # --- Engine B: vllm/vllm-openai:qwen3_5-cu130 (official nightly) ---
+        qwen3_5-cu130:
+          version: "v0.16.0rc2.dev376"
+          attention: TRITON_ATTN
+          prefill_peak_tps: 4745            # @8K, 2.1x slower than custom
+          notes: "Official nightly. Better concurrency scaling (+21% @8-way). max_model_len=262144 verified."
+          context_scaling:
+            1024:   [0.280,  41.1, 3570]
+            2048:   [0.451,  38.7, 4433]
+            4096:   [0.859,  34.3, 4658]
+            8192:   [1.686,  27.8, 4745]
+            16384:  [3.514,  19.5, 4610]
+            32768:  [7.624,  11.8, 4276]
+            65536:  [18.079, 5.9,  3617]
+            128000: [47.635, 2.5,  2750]
+            192000: [85.6,   0.4,  2244]
+            220000: [106.4,  0.3,  2068]
+            240000: [122.7,  0.2,  1956]
+            256000: [135.6,  0.2,  1888]
+            262000: [141.2,  0.2,  1855]    # max context, stable
+          concurrency_1k:
+            1: [42.6,  174,  22.3]
+            2: [68.5,  219,  27.7]
+            4: [104.1, 362,  35.8]
+            8: [145.6, 530,  51.1]
 
   # --- 通用 llamacpp (GGUF Q4_K_M=48GB) ---
   # amd395 (128GB unified) ✓, linux-1 (24GB/GPU + 1TB RAM, GPU+CPU offload) ✓

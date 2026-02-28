@@ -44,6 +44,9 @@ type ToolDeps struct {
 	ListProfiles     func(ctx context.Context) (json.RawMessage, error)
 	ListEngineAssets func(ctx context.Context) (json.RawMessage, error)
 
+	// Benchmark
+	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 	CompareConfigs    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -891,6 +894,42 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.AggregateKnowledge(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("knowledge aggregate: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// benchmark.record
+	s.RegisterTool(&Tool{
+		Name:        "benchmark.record",
+		Description: "Record a benchmark result. Auto-creates a Configuration (Hardware×Engine×Model) if one doesn't exist. Returns the benchmark ID.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"hardware":{"type":"string","description":"Hardware profile ID (e.g. nvidia-gb10-arm64)"},
+			"engine":{"type":"string","description":"Engine type (e.g. vllm-nightly)"},
+			"model":{"type":"string","description":"Model name (e.g. qwen3.5-35b-a3b)"},
+			"device_id":{"type":"string","description":"Device ID from fleet (e.g. gb10)"},
+			"config":{"type":"object","description":"Engine config used (gpu_memory_utilization, max_model_len, etc.)"},
+			"concurrency":{"type":"integer","description":"Number of concurrent requests","default":1},
+			"input_len_bucket":{"type":"string","description":"Input length category (e.g. short, medium, long)"},
+			"output_len_bucket":{"type":"string","description":"Output length category"},
+			"ttft_ms_p50":{"type":"number","description":"Time-to-first-token p50 in ms"},
+			"ttft_ms_p95":{"type":"number","description":"Time-to-first-token p95 in ms"},
+			"tpot_ms_p50":{"type":"number","description":"Time-per-output-token p50 in ms"},
+			"tpot_ms_p95":{"type":"number","description":"Time-per-output-token p95 in ms"},
+			"throughput_tps":{"type":"number","description":"Tokens per second (single request)"},
+			"qps":{"type":"number","description":"Queries per second"},
+			"vram_usage_mib":{"type":"integer","description":"VRAM usage in MiB"},
+			"sample_count":{"type":"integer","description":"Number of samples in benchmark"},
+			"stability":{"type":"string","description":"Stability assessment (stable, fluctuating, unstable)"},
+			"notes":{"type":"string","description":"Free-form notes about the benchmark"}
+		},"required":["hardware","engine","model","throughput_tps"]}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RecordBenchmark == nil {
+				return ErrorResult("benchmark.record not implemented"), nil
+			}
+			data, err := deps.RecordBenchmark(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("record benchmark: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

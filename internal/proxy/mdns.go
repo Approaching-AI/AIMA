@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -36,7 +37,7 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 		txt = append(txt, "models="+strings.Join(cfg.Models, ","))
 	}
 
-	service, err := mdns.NewMDNSService(hostname, "_llm._tcp", "", "", cfg.Port, nil, txt)
+	service, err := mdns.NewMDNSService(hostname, "_llm._tcp", "", "", cfg.Port, lanIPs(), txt)
 	if err != nil {
 		return nil, fmt.Errorf("mdns service: %w", err)
 	}
@@ -47,6 +48,42 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 	}
 
 	return &MDNSAdvertiser{server: server}, nil
+}
+
+// lanIPs returns non-loopback, non-virtual IPv4 addresses for mDNS advertisement.
+// It skips container/overlay networks (10.x, 172.16-31.x) to advertise the real LAN IP.
+func lanIPs() []net.IP {
+	var ips []net.IP
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range ifaces {
+		// Skip down, loopback, and common virtual interfaces
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() {
+				continue
+			}
+			// Skip container/overlay networks: 10.0.0.0/8, 172.16.0.0/12
+			if ip4[0] == 10 || (ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) {
+				continue
+			}
+			ips = append(ips, ip4)
+		}
+	}
+	return ips
 }
 
 // Shutdown stops the mDNS advertiser.

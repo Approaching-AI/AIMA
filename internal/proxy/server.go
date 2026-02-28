@@ -46,6 +46,13 @@ func WithAPIKey(key string) Option {
 	return func(s *Server) { s.apiKey = key }
 }
 
+// SetAddr configures the listen address. Must be called before Start.
+func (s *Server) SetAddr(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addr = addr
+}
+
 // SetAPIKey configures API key authentication. Must be called before Start.
 func (s *Server) SetAPIKey(key string) {
 	s.mu.Lock()

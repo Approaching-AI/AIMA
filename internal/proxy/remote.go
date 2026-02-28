@@ -5,14 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
 
 // SyncRemoteBackends discovers remote aima instances and registers their models.
 // Local backends (Remote==false) always take priority — remote models with the
-// same name are skipped.
-func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredService) {
+// same name are skipped. localPort is the proxy's own listen port; services
+// on a local IP with the same port are skipped to prevent self-discovery loops.
+func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredService, localPort int) {
 	// Collect local model names (Remote==false)
 	localModels := make(map[string]bool)
 	for name, b := range s.ListBackends() {
@@ -30,6 +32,12 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			addr = svc.Host
 		}
 		if addr == "" {
+			continue
+		}
+
+		// Skip self: same port on a local interface address
+		if svc.Port == localPort && isLocalIP(addr) {
+			slog.Debug("remote: skipping self", "addr", addr, "port", svc.Port)
 			continue
 		}
 
@@ -64,8 +72,9 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 }
 
 // StartRemoteDiscoveryLoop periodically discovers remote aima instances
-// and syncs their models into the local proxy.
-func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Duration) {
+// and syncs their models into the local proxy. localPort is the proxy's
+// own listen port, used to filter out self-discovery.
+func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Duration, localPort int) {
 	doSync := func() {
 		services, err := Discover(ctx, 3*time.Second)
 		if err != nil {
@@ -75,7 +84,7 @@ func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Dura
 		if len(services) > 0 {
 			slog.Info("remote: discovered services", "count", len(services))
 		}
-		SyncRemoteBackends(ctx, s, services)
+		SyncRemoteBackends(ctx, s, services, localPort)
 	}
 
 	// Immediate first sync
@@ -135,4 +144,29 @@ func queryRemoteModels(ctx context.Context, addr string, port int) []string {
 		}
 	}
 	return models
+}
+
+// isLocalIP checks if addr belongs to the local machine.
+func isLocalIP(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipnet.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

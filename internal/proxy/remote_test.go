@@ -29,7 +29,7 @@ func TestSyncRemoteBackends_SkipsLocalModels(t *testing.T) {
 		{Name: "remote-gpu", AddrV4: addr, Port: port},
 	}
 
-	SyncRemoteBackends(context.Background(), s, services)
+	SyncRemoteBackends(context.Background(), s, services, 0)
 
 	backends := s.ListBackends()
 
@@ -66,7 +66,7 @@ func TestSyncRemoteBackends_RegistersRemote(t *testing.T) {
 		{Name: "gpu-server", AddrV4: addr, Port: port},
 	}
 
-	SyncRemoteBackends(context.Background(), s, services)
+	SyncRemoteBackends(context.Background(), s, services, 0)
 
 	backends := s.ListBackends()
 	if len(backends) != 2 {
@@ -112,7 +112,7 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 	addr, port := splitHostPort(t, ts)
 	SyncRemoteBackends(context.Background(), s, []DiscoveredService{
 		{Name: "new-server", AddrV4: addr, Port: port},
-	})
+	}, 0)
 
 	backends := s.ListBackends()
 
@@ -156,6 +156,26 @@ func TestQueryRemoteModels_Unreachable(t *testing.T) {
 	models := queryRemoteModels(context.Background(), "127.0.0.1", 1)
 	if models != nil {
 		t.Errorf("expected nil for unreachable host, got %v", models)
+	}
+}
+
+func TestSyncRemoteBackends_SkipsSelf(t *testing.T) {
+	s := NewServer()
+
+	ts := newModelServer(t, []string{"qwen3-8b"})
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	services := []DiscoveredService{
+		{Name: "self", AddrV4: addr, Port: port},
+	}
+
+	// Pass localPort == port so the service is recognized as self
+	SyncRemoteBackends(context.Background(), s, services, port)
+
+	backends := s.ListBackends()
+	if len(backends) != 0 {
+		t.Fatalf("expected 0 backends (self filtered), got %d", len(backends))
 	}
 }
 

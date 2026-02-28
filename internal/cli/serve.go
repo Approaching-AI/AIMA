@@ -37,6 +37,9 @@ func newServeCmd(app *App) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			// Apply listen address from flag
+			app.Proxy.SetAddr(addr)
+
 			// Apply API key authentication if configured
 			if apiKey != "" {
 				app.Proxy.SetAPIKey(apiKey)
@@ -82,7 +85,7 @@ func newServeCmd(app *App) *cobra.Command {
 
 			// Start remote discovery loop (find other aima instances via mDNS)
 			if discoverEnabled {
-				go proxy.StartRemoteDiscoveryLoop(ctx, app.Proxy, 10*time.Second)
+				go proxy.StartRemoteDiscoveryLoop(ctx, app.Proxy, 10*time.Second, parsePort(addr))
 			}
 
 			// Start MCP server if requested (on a separate port)

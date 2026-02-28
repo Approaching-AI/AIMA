@@ -30,6 +30,7 @@ startup:
     gpu_memory_utilization: 0.8
     max_model_len: 128000
     enable_chunked_prefill: false
+    served_model_name: "{{.ModelName}}"
   health_check:
     path: /health
     timeout_s: 600

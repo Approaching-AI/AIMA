@@ -581,6 +581,7 @@ Wants=network-online.target
 
 [Service]
 Type=%s
+Environment=HOME=/root
 EnvironmentFile=%s
 ExecStart=%s
 Restart=always

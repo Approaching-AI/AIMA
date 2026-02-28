@@ -212,6 +212,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	// Append resolved config values as CLI flags.
 	// Config keys use underscore (e.g. "gpu_memory_utilization") → "--gpu-memory-utilization".
 	// "port" is excluded: it is mapped to containerPort in the pod spec.
+	// String values support {{.ModelName}} and {{.ModelPath}} templates.
 	if len(resolved.Config) > 0 {
 		keys := make([]string, 0, len(resolved.Config))
 		for k := range resolved.Config {
@@ -229,6 +230,10 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 				} else {
 					args = append(args, "--no-"+flagName)
 				}
+			case string:
+				expanded := strings.ReplaceAll(v, "{{.ModelName}}", resolved.ModelName)
+				expanded = strings.ReplaceAll(expanded, "{{.ModelPath}}", containerModelPath)
+				args = append(args, "--"+flagName, expanded)
 			default:
 				args = append(args, "--"+flagName, fmt.Sprintf("%v", v))
 			}

@@ -228,6 +228,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err := d.migrateV5(ctx); err != nil {
 		return fmt.Errorf("migrate v5: %w", err)
 	}
+	// v6: rollback snapshots for agent safety guardrails
+	if err := d.migrateV6(ctx); err != nil {
+		return fmt.Errorf("migrate v6: %w", err)
+	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}
@@ -631,6 +635,90 @@ func (d *DB) migrateV5(ctx context.Context) error {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
+}
+
+func (d *DB) migrateV6(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 6 {
+		return nil
+	}
+
+	ddl := `CREATE TABLE IF NOT EXISTS rollback_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("create rollback_snapshots table: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 6"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+// RollbackSnapshot stores pre-deletion state for agent safety recovery.
+type RollbackSnapshot struct {
+	ID           int64     `json:"id"`
+	ToolName     string    `json:"tool_name"`
+	ResourceType string    `json:"resource_type"`
+	ResourceName string    `json:"resource_name"`
+	Snapshot     string    `json:"snapshot"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// SaveSnapshot writes a rollback snapshot and prunes old entries (keeps last 10).
+func (d *DB) SaveSnapshot(ctx context.Context, s *RollbackSnapshot) error {
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO rollback_snapshots (tool_name, resource_type, resource_name, snapshot) VALUES (?, ?, ?, ?)`,
+		s.ToolName, s.ResourceType, s.ResourceName, s.Snapshot)
+	if err != nil {
+		return fmt.Errorf("save snapshot for %s: %w", s.ResourceName, err)
+	}
+	// Prune: keep only the 10 most recent
+	_, _ = d.db.ExecContext(ctx,
+		`DELETE FROM rollback_snapshots WHERE id NOT IN (SELECT id FROM rollback_snapshots ORDER BY id DESC LIMIT 10)`)
+	return nil
+}
+
+// ListSnapshots returns the most recent rollback snapshots (up to 10).
+func (d *DB) ListSnapshots(ctx context.Context) ([]*RollbackSnapshot, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, tool_name, resource_type, resource_name, snapshot, created_at
+		 FROM rollback_snapshots ORDER BY id DESC LIMIT 10`)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", err)
+	}
+	defer rows.Close()
+	var snapshots []*RollbackSnapshot
+	for rows.Next() {
+		s := &RollbackSnapshot{}
+		if err := rows.Scan(&s.ID, &s.ToolName, &s.ResourceType, &s.ResourceName, &s.Snapshot, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan snapshot row: %w", err)
+		}
+		snapshots = append(snapshots, s)
+	}
+	return snapshots, rows.Err()
+}
+
+// GetSnapshot returns a single rollback snapshot by ID.
+func (d *DB) GetSnapshot(ctx context.Context, id int64) (*RollbackSnapshot, error) {
+	s := &RollbackSnapshot{}
+	err := d.db.QueryRowContext(ctx,
+		`SELECT id, tool_name, resource_type, resource_name, snapshot, created_at
+		 FROM rollback_snapshots WHERE id = ?`, id).Scan(
+		&s.ID, &s.ToolName, &s.ResourceType, &s.ResourceName, &s.Snapshot, &s.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("snapshot %d not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get snapshot %d: %w", id, err)
+	}
+	return s, nil
 }
 
 // ClearStaticKnowledge deletes all rows from static knowledge tables.

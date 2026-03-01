@@ -117,7 +117,7 @@ func run() error {
 	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir, factoryDigests)
 
 	// 9. Create agent (L3a Go Agent)
-	toolAdapter := &mcpToolAdapter{server: mcpServer}
+	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db}
 	llmClient := buildLLMClient()
 	goAgent := agent.NewAgent(llmClient, toolAdapter)
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
@@ -144,7 +144,60 @@ func run() error {
 		})
 	}
 
-	// 9c. Register all tools (after all deps are fully wired)
+	// 9c. Wire rollback tools
+	deps.RollbackList = func(ctx context.Context) (json.RawMessage, error) {
+		snapshots, err := db.ListSnapshots(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(snapshots)
+	}
+	deps.RollbackRestore = func(ctx context.Context, id int64) (json.RawMessage, error) {
+		snap, err := db.GetSnapshot(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		switch snap.ResourceType {
+		case "model":
+			var m state.Model
+			if err := json.Unmarshal([]byte(snap.Snapshot), &m); err != nil {
+				return nil, fmt.Errorf("unmarshal model snapshot: %w", err)
+			}
+			if err := db.UpsertScannedModel(ctx, &m); err != nil {
+				return nil, fmt.Errorf("restore model %s: %w", m.Name, err)
+			}
+			return json.Marshal(map[string]string{"restored": "model", "name": m.Name, "note": "DB record restored; if files were deleted, re-import or re-pull the model"})
+		case "engine":
+			var e state.Engine
+			if err := json.Unmarshal([]byte(snap.Snapshot), &e); err != nil {
+				return nil, fmt.Errorf("unmarshal engine snapshot: %w", err)
+			}
+			if err := db.UpsertScannedEngine(ctx, &e); err != nil {
+				return nil, fmt.Errorf("restore engine %s: %w", e.ID, err)
+			}
+			return json.Marshal(map[string]string{"restored": "engine", "name": e.ID, "note": "DB record restored; if image was removed, re-pull or re-import"})
+		case "deployment":
+			var d map[string]any
+			if err := json.Unmarshal([]byte(snap.Snapshot), &d); err != nil {
+				return nil, fmt.Errorf("unmarshal deployment snapshot: %w", err)
+			}
+			labels, _ := d["labels"].(map[string]any)
+			modelName, _ := labels["aima.dev/model"].(string)
+			engineType, _ := labels["aima.dev/engine"].(string)
+			if modelName == "" {
+				return nil, fmt.Errorf("snapshot missing model label, cannot redeploy")
+			}
+			result, err := deps.DeployApply(ctx, engineType, modelName, "", nil)
+			if err != nil {
+				return nil, fmt.Errorf("redeploy %s: %w", modelName, err)
+			}
+			return result, nil
+		default:
+			return nil, fmt.Errorf("unknown resource type %q", snap.ResourceType)
+		}
+	}
+
+	// 9d. Register all tools (after all deps are fully wired)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 10. Build App and run CLI
@@ -257,14 +310,30 @@ func catalogModelNames(cat *knowledge.Catalog) string {
 	return strings.Join(names, ", ")
 }
 
+// destructiveTools lists MCP tools that the Agent must not call directly.
+// These are blocked at the adapter level; users can still invoke them via CLI.
+var destructiveTools = map[string]bool{
+	"model.remove": true, "engine.remove": true, "deploy.delete": true,
+}
+
 // mcpToolAdapter bridges mcp.Server to agent.ToolExecutor interface.
+// It also enforces agent safety guardrails: destructive-op blocking and audit logging.
 type mcpToolAdapter struct {
 	server *mcp.Server
+	db     *state.DB
 }
 
 func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
+	// Gap 1: Block destructive operations from the Agent
+	if destructiveTools[name] {
+		msg := fmt.Sprintf("BLOCKED: %s is a destructive operation and cannot be called by the Agent. Ask the user to run it via CLI instead.", name)
+		a.audit(ctx, name, string(arguments), "BLOCKED")
+		return &agent.ToolResult{Content: msg, IsError: true}, nil
+	}
+
 	result, err := a.server.ExecuteTool(ctx, name, arguments)
 	if err != nil {
+		a.audit(ctx, name, string(arguments), "ERROR: "+err.Error())
 		return nil, err
 	}
 	// Convert mcp.ToolResult to agent.ToolResult
@@ -272,10 +341,39 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 	for _, c := range result.Content {
 		text += c.Text
 	}
+	// Gap 2: Audit log every agent tool call
+	summary := text
+	if result.IsError {
+		summary = "ERROR: " + text
+	}
+	a.audit(ctx, name, string(arguments), truncateStr(summary, 500))
 	return &agent.ToolResult{
 		Content: text,
 		IsError: result.IsError,
 	}, nil
+}
+
+// audit writes to audit_log. Failures are logged but do not block the tool call.
+func (a *mcpToolAdapter) audit(ctx context.Context, tool, args, result string) {
+	if a.db == nil {
+		return
+	}
+	if err := a.db.LogAction(ctx, &state.AuditEntry{
+		AgentType:     "L3a",
+		ToolName:      tool,
+		Arguments:     truncateStr(args, 500),
+		ResultSummary: result,
+	}); err != nil {
+		slog.Warn("audit log write failed", "tool", tool, "error", err)
+	}
+}
+
+// truncateStr truncates s to maxLen bytes, appending "…" if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
@@ -800,6 +898,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err != nil {
 				return fmt.Errorf("find model %s: %w", name, err)
 			}
+			// Gap 3: Save rollback snapshot before deletion
+			if snap, snapErr := json.Marshal(m); snapErr == nil {
+				_ = db.SaveSnapshot(ctx, &state.RollbackSnapshot{
+					ToolName: "model.remove", ResourceType: "model", ResourceName: m.Name, Snapshot: string(snap),
+				})
+			}
 			// Delete from database
 			if err := db.DeleteModel(ctx, m.ID); err != nil {
 				return fmt.Errorf("delete model %s from database: %w", name, err)
@@ -918,6 +1022,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return nil
 		},
 		RemoveEngine: func(ctx context.Context, name string) error {
+			// Gap 3: Save rollback snapshot before deletion
+			if e, getErr := db.GetEngine(ctx, name); getErr == nil {
+				if snap, snapErr := json.Marshal(e); snapErr == nil {
+					_ = db.SaveSnapshot(ctx, &state.RollbackSnapshot{
+						ToolName: "engine.remove", ResourceType: "engine", ResourceName: name, Snapshot: string(snap),
+					})
+				}
+			}
 			return db.DeleteEngine(ctx, name)
 		},
 
@@ -1081,6 +1193,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(result)
 		},
 		DeployDelete: func(ctx context.Context, name string) error {
+			// Gap 3: Save rollback snapshot before deletion (capture deployment state)
+			if deployments, listErr := rt.List(ctx); listErr == nil {
+				for _, d := range deployments {
+					if d.Labels["aima.dev/model"] == name || d.Name == name {
+						if snap, snapErr := json.Marshal(d); snapErr == nil {
+							_ = db.SaveSnapshot(ctx, &state.RollbackSnapshot{
+								ToolName: "deploy.delete", ResourceType: "deployment", ResourceName: d.Name, Snapshot: string(snap),
+							})
+						}
+						break
+					}
+				}
+			}
 			// Try exact pod name first, then fall back to searching by model label.
 			// Pod names are "<model>-<engine>" (e.g. qwen3-8b-vllm), but users
 			// often pass just the model name (e.g. qwen3-8b).

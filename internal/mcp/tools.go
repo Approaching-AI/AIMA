@@ -71,9 +71,11 @@ type ToolDeps struct {
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
 
 	// Agent
-	DispatchAsk  func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error)
-	AgentInstall func(ctx context.Context) (json.RawMessage, error)
-	AgentStatus  func(ctx context.Context) (json.RawMessage, error)
+	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error)
+	AgentInstall    func(ctx context.Context) (json.RawMessage, error)
+	AgentStatus     func(ctx context.Context) (json.RawMessage, error)
+	RollbackList    func(ctx context.Context) (json.RawMessage, error)
+	RollbackRestore func(ctx context.Context, id int64) (json.RawMessage, error)
 
 	// System
 	SystemStatus func(ctx context.Context) (json.RawMessage, error)
@@ -1202,6 +1204,49 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.AgentStatus(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("agent status: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.rollback_list
+	s.RegisterTool(&Tool{
+		Name:        "agent.rollback_list",
+		Description: "List available rollback snapshots (pre-deletion state saved before destructive operations)",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RollbackList == nil {
+				return ErrorResult("agent.rollback_list not implemented"), nil
+			}
+			data, err := deps.RollbackList(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list rollback snapshots: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.rollback
+	s.RegisterTool(&Tool{
+		Name:        "agent.rollback",
+		Description: "Restore a resource from a rollback snapshot. For models/engines, restores the DB record. For deployments, redeploys with original config.",
+		InputSchema: schema(`"id":{"type":"integer","description":"Snapshot ID from agent.rollback_list"}`, "id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RollbackRestore == nil {
+				return ErrorResult("agent.rollback not implemented"), nil
+			}
+			var p struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ID <= 0 {
+				return ErrorResult("id is required (positive integer)"), nil
+			}
+			data, err := deps.RollbackRestore(ctx, p.ID)
+			if err != nil {
+				return nil, fmt.Errorf("rollback snapshot %d: %w", p.ID, err)
 			}
 			return TextResult(string(data)), nil
 		},

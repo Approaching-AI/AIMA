@@ -185,6 +185,43 @@ func TestNativeDeleteNotFound(t *testing.T) {
 	}
 }
 
+func TestNativeProcessDoneChannelClosedOnExit(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	var cmd []string
+	if runtime.GOOS == "windows" {
+		cmd = []string{"cmd", "/c", "echo done"}
+	} else {
+		cmd = []string{"sh", "-c", "echo done"}
+	}
+
+	if err := rt.Deploy(context.Background(), &DeployRequest{
+		Name:    "quick-exit",
+		Engine:  "test",
+		Command: cmd,
+	}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	rt.mu.RLock()
+	proc := rt.processes["quick-exit"]
+	rt.mu.RUnlock()
+	if proc == nil {
+		t.Fatal("expected in-memory process entry")
+	}
+
+	select {
+	case <-proc.done:
+		// expected
+	case <-time.After(2 * time.Second):
+		t.Fatal("process done channel was not closed after process exit")
+	}
+
+	if err := rt.Delete(context.Background(), "quick-exit"); err != nil {
+		t.Fatalf("Delete exited process: %v", err)
+	}
+}
+
 func TestNativeEmptyCommand(t *testing.T) {
 	rt := newTestRuntime(t)
 	err := rt.Deploy(context.Background(), &DeployRequest{

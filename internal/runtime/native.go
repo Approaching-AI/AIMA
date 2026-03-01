@@ -41,6 +41,7 @@ type nativeProcess struct {
 	name      string
 	cmd       *exec.Cmd
 	cancel    context.CancelFunc
+	done      chan struct{}
 	logFile   *os.File
 	logPath   string
 	port      int
@@ -203,6 +204,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		name:      req.Name,
 		cmd:       cmd,
 		cancel:    cancel,
+		done:      make(chan struct{}),
 		logFile:   logFile,
 		logPath:   logPath,
 		port:      req.Port,
@@ -257,18 +259,18 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 
 	if inMemory {
 		proc.cancel()
-		done := make(chan struct{})
-		go func() {
-			proc.cmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			slog.Warn("process did not exit within timeout", "name", name)
-		}
-		if proc.logFile != nil {
-			proc.logFile.Close()
+
+		if !waitForProcessExit(proc, 5*time.Second) {
+			slog.Warn("process did not exit within timeout; forcing kill", "name", name)
+			if proc.cmd.Process != nil {
+				if err := proc.cmd.Process.Kill(); err != nil {
+					slog.Warn("force kill process", "name", name, "error", err)
+				}
+			}
+			if !waitForProcessExit(proc, 2*time.Second) {
+				r.removeMeta(name)
+				return fmt.Errorf("stop deployment %q: process did not exit after force kill", name)
+			}
 		}
 	} else {
 		// Recover from persisted metadata and kill by PID
@@ -348,7 +350,14 @@ func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
 	err := proc.cmd.Wait()
 	proc.mu.Lock()
 	proc.exited = true
+	proc.ready = false
 	proc.mu.Unlock()
+	if proc.logFile != nil {
+		_ = proc.logFile.Close()
+	}
+	if proc.done != nil {
+		close(proc.done)
+	}
 	if err != nil {
 		slog.Warn("process exited with error", "name", proc.name, "error", err)
 	} else {
@@ -366,6 +375,14 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 	client := &http.Client{Timeout: 3 * time.Second}
 
 	for time.Now().Before(deadline) {
+		proc.mu.Lock()
+		exited := proc.exited
+		proc.mu.Unlock()
+		if exited {
+			slog.Warn("health check aborted: process already exited", "name", proc.name)
+			return
+		}
+
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
@@ -581,4 +598,15 @@ func (r *NativeRuntime) findInDist(name string) string {
 		}
 	}
 	return ""
+}
+
+func waitForProcessExit(proc *nativeProcess, timeout time.Duration) bool {
+	// proc.done is always initialized in Deploy(); this function must not be
+	// called on a process without a done channel.
+	select {
+	case <-proc.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }

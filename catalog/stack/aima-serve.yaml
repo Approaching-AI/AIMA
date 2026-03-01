@@ -23,6 +23,10 @@ install:
       rationale: "Advertise via mDNS for auto-discovery"
       source: "design"
       verified: true
+    - flag: "--allow-insecure-no-auth"
+      rationale: "LAN daemon runs without API key; host firewall provides network boundary"
+      source: "design"
+      verified: true
 
 verify:
   command: "curl -sf http://localhost:6188/health"

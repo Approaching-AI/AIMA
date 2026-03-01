@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ func newServeCmd(app *App) *cobra.Command {
 		apiKey          string
 		mdnsEnabled     bool
 		discoverEnabled bool
+		allowInsecure   bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,6 +41,14 @@ func newServeCmd(app *App) *cobra.Command {
 
 			// Apply listen address from flag
 			app.Proxy.SetAddr(addr)
+
+			if err := validateServeSecurity(addr, mcpAddr, mcpMod, apiKey, allowInsecure); err != nil {
+				return err
+			}
+
+			if !allowInsecure && apiKey == "" && (!isLoopbackListenAddr(addr) || (mcpMod && !isLoopbackListenAddr(mcpAddr))) {
+				slog.Warn("starting without API key on non-loopback address; this is insecure")
+			}
 
 			// Apply API key authentication if configured
 			if apiKey != "" {
@@ -123,14 +133,44 @@ func newServeCmd(app *App) *cobra.Command {
 	}
 
 	defaultKey := os.Getenv("AIMA_API_KEY")
-	cmd.Flags().StringVar(&addr, "addr", fmt.Sprintf(":%d", proxy.DefaultPort), "Proxy server listen address")
-	cmd.Flags().StringVar(&mcpAddr, "mcp-addr", ":9090", "MCP server listen address")
+	cmd.Flags().StringVar(&addr, "addr", fmt.Sprintf("127.0.0.1:%d", proxy.DefaultPort), "Proxy server listen address")
+	cmd.Flags().StringVar(&mcpAddr, "mcp-addr", "127.0.0.1:9090", "MCP server listen address")
 	cmd.Flags().BoolVar(&mcpMod, "mcp", false, "Also serve MCP protocol over HTTP")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
-	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
-	cmd.Flags().BoolVar(&discoverEnabled, "discover", true, "Discover remote inference services via mDNS")
+	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", false, "Enable mDNS service broadcast")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Discover remote inference services via mDNS")
+	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
 
 	return cmd
+}
+
+func validateServeSecurity(addr, mcpAddr string, mcpEnabled bool, apiKey string, allowInsecure bool) error {
+	if apiKey != "" || allowInsecure {
+		return nil
+	}
+	if !isLoopbackListenAddr(addr) {
+		return fmt.Errorf("refusing insecure proxy listen address %q without API key; set --api-key or pass --allow-insecure-no-auth", addr)
+	}
+	if mcpEnabled && !isLoopbackListenAddr(mcpAddr) {
+		return fmt.Errorf("refusing insecure MCP listen address %q without API key; set --api-key or pass --allow-insecure-no-auth", mcpAddr)
+	}
+	return nil
+}
+
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" {
+		// Empty host means all interfaces (e.g. ":6188"), not loopback-only.
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // parsePort extracts the port number from an address like ":6188" or "0.0.0.0:6188".

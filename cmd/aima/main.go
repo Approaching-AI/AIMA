@@ -462,6 +462,47 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	return resolved, dbModel.Name, nil
 }
 
+// resolvedDeployment holds the shared result of resolve + CheckFit + runtime selection,
+// used by both DeployApply and DeployDryRun.
+type resolvedDeployment struct {
+	ModelName   string
+	Resolved    *knowledge.ResolvedConfig
+	Fit         *knowledge.FitReport
+	RuntimeName string
+}
+
+// resolveDeployment performs the common resolve → CheckFit → runtime selection sequence.
+func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hwInfo knowledge.HardwareInfo, rt, nativeRt runtime.Runtime, modelName, engineType, slot string, overrides map[string]any, dataDir string) (*resolvedDeployment, error) {
+	if overrides == nil {
+		overrides = map[string]any{}
+	}
+	if slot != "" {
+		overrides["slot"] = slot
+	}
+	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
+	if err != nil {
+		return nil, err
+	}
+
+	fit := knowledge.CheckFit(resolved, hwInfo)
+	for k, v := range fit.Adjustments {
+		resolved.Config[k] = v
+		resolved.Provenance[k] = "L0-auto"
+	}
+
+	runtimeName := rt.Name()
+	if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
+		runtimeName = nativeRt.Name()
+	}
+
+	return &resolvedDeployment{
+		ModelName:   canonicalName,
+		Resolved:    resolved,
+		Fit:         fit,
+		RuntimeName: runtimeName,
+	}, nil
+}
+
 // buildToolDeps wires all ToolDeps fields to real implementations.
 // nativeRt is always provided so DeployApply can use it when the engine recommends native runtime.
 func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string, factoryDigests map[string]string) *mcp.ToolDeps {
@@ -821,31 +862,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			overrides := map[string]any{}
-			if slot != "" {
-				overrides["slot"] = slot
-			}
-			for k, v := range configOverrides {
-				overrides[k] = v
-			}
-			resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, hwInfo, rt, nativeRt, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
-			modelName = canonicalName
-
-			// Hardware fitness check: validate and auto-adjust config
-			fit := knowledge.CheckFit(resolved, hwInfo)
-			if !fit.Fit {
-				return nil, fmt.Errorf("hardware check: %s", fit.Reason)
+			if !rd.Fit.Fit {
+				return nil, fmt.Errorf("hardware check: %s", rd.Fit.Reason)
 			}
-			for _, w := range fit.Warnings {
+			for _, w := range rd.Fit.Warnings {
 				slog.Warn("deploy fitness", "warning", w)
 			}
-			for k, v := range fit.Adjustments {
-				resolved.Config[k] = v
-				resolved.Provenance[k] = "L0-auto"
-			}
+			modelName = rd.ModelName
+			resolved := rd.Resolved
 
 			port := 8000
 			if p, ok := resolved.Config["port"]; ok {
@@ -949,53 +977,35 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		DeployDryRun: func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			if overrides == nil {
-				overrides = map[string]any{}
-			}
-			if slot != "" {
-				overrides["slot"] = slot
-			}
-			resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, hwInfo, rt, nativeRt, modelName, engineType, slot, overrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
-			modelName = canonicalName
-
-			fit := knowledge.CheckFit(resolved, hwInfo)
-			for k, v := range fit.Adjustments {
-				resolved.Config[k] = v
-				resolved.Provenance[k] = "L0-auto"
-			}
-
-			runtimeName := rt.Name()
-			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
-				runtimeName = nativeRt.Name()
-			}
 
 			result := map[string]any{
-				"model":       modelName,
-				"engine":      resolved.Engine,
-				"engine_image": resolved.EngineImage,
-				"slot":        resolved.Slot,
-				"runtime":     runtimeName,
-				"config":      resolved.Config,
-				"provenance":  resolved.Provenance,
+				"model":        rd.ModelName,
+				"engine":       rd.Resolved.Engine,
+				"engine_image": rd.Resolved.EngineImage,
+				"slot":         rd.Resolved.Slot,
+				"runtime":      rd.RuntimeName,
+				"config":       rd.Resolved.Config,
+				"provenance":   rd.Resolved.Provenance,
 				"fit_report": map[string]any{
-					"fit":         fit.Fit,
-					"reason":      fit.Reason,
-					"warnings":    fit.Warnings,
-					"adjustments": fit.Adjustments,
+					"fit":         rd.Fit.Fit,
+					"reason":      rd.Fit.Reason,
+					"warnings":    rd.Fit.Warnings,
+					"adjustments": rd.Fit.Adjustments,
 				},
 			}
 
 			var warnings []string
-			warnings = append(warnings, fit.Warnings...)
-			if !fit.Fit {
-				warnings = append(warnings, "WILL NOT DEPLOY: "+fit.Reason)
+			warnings = append(warnings, rd.Fit.Warnings...)
+			if !rd.Fit.Fit {
+				warnings = append(warnings, "WILL NOT DEPLOY: "+rd.Fit.Reason)
 			}
 
-			if runtimeName == "k3s" {
-				if podYAML, podErr := knowledge.GeneratePod(resolved); podErr == nil {
+			if rd.RuntimeName == "k3s" {
+				if podYAML, podErr := knowledge.GeneratePod(rd.Resolved); podErr == nil {
 					result["pod_yaml"] = string(podYAML)
 				} else {
 					warnings = append(warnings, "pod generation failed: "+podErr.Error())

@@ -377,6 +377,7 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 }
 
 // FormatEngineMap maps model file formats to the preferred engine type.
+// Read-only — do not modify at runtime.
 var FormatEngineMap = map[string]string{
 	"safetensors": "vllm",
 	"gguf":        "llamacpp",

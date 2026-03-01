@@ -137,6 +137,8 @@ func parseConfigOverrides(pairs []string) map[string]any {
 
 // parseValue tries to convert a string to the most specific type.
 // Order matters: int before bool, so "0" → 0 (int) not false (bool).
+// Only "true"/"false" (case-insensitive) are treated as booleans,
+// not strconv.ParseBool which also accepts "1", "t", "T", etc.
 func parseValue(s string) any {
 	if i, err := strconv.Atoi(s); err == nil {
 		return i
@@ -144,8 +146,8 @@ func parseValue(s string) any {
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
 		return f
 	}
-	if b, err := strconv.ParseBool(s); err == nil {
-		return b
+	if lower := strings.ToLower(s); lower == "true" || lower == "false" {
+		return lower == "true"
 	}
 	return s
 }

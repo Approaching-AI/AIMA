@@ -29,4 +29,4 @@ variants:
       device: cpu
     expected_performance:
       vram_mib: 0
-      notes: "CPU inference, RTF ~0.87, 0.6B params ≈ 4GB RAM"
+      notes: "CPU ARM64 RTF ~5.0 (gb10 measured), 24kHz 32bit float WAV, 0.6B params ≈ 4GB RAM"

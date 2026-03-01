@@ -33,5 +33,5 @@ variants:
       dtype: bfloat16
       trust_remote_code: true
     expected_performance:
-      vram_mib: 3400
-      notes: "1.7B bf16 ≈ 3.4GB, ASR 短 context, 与 LLM 共享 GPU 内存"
+      vram_mib: 3870
+      notes: "3.87 GiB model, KV cache 5.25 GiB (49K tokens), max audio 157s (encoder cache 2048), latency 0.14s@10s, 4-conc peak 10.4 req/s"

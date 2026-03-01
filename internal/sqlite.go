@@ -135,21 +135,23 @@ func Open(ctx context.Context, dbPath string) (*DB, error) {
 	// serialized per process (SQLite is optimized for this pattern).
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
+	// busy_timeout is a per-connection setting that needs no lock — set it
+	// first so all subsequent operations benefit from SQLite's built-in retry.
+	if _, err := sqlDB.ExecContext(ctx, "PRAGMA busy_timeout=3000"); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
+	}
 	d := &DB{db: sqlDB}
+	// journal_mode=WAL requires a write lock, so it goes inside retryBusy
+	// together with migrate (which uses BEGIN IMMEDIATE).
 	if err := retryBusy(ctx, 8, func() error {
-		if _, err := sqlDB.ExecContext(ctx, "PRAGMA busy_timeout=10000"); err != nil {
-			return fmt.Errorf("set busy timeout: %w", err)
-		}
 		if _, err := sqlDB.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
 			return fmt.Errorf("set WAL mode: %w", err)
 		}
 		if _, err := sqlDB.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
 			return fmt.Errorf("enable foreign keys: %w", err)
 		}
-		if err := d.migrate(ctx); err != nil {
-			return err
-		}
-		return nil
+		return d.migrate(ctx)
 	}); err != nil {
 		sqlDB.Close()
 		return nil, err
@@ -193,8 +195,9 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrate(ctx context.Context) error {
-	// Serialize schema migrations across processes to avoid TOCTOU races between
-	// "check column exists" and "ALTER TABLE ADD COLUMN".
+	// Use raw "BEGIN IMMEDIATE" instead of db.BeginTx because database/sql
+	// doesn't support SQLite's IMMEDIATE lock level. Safe because
+	// SetMaxOpenConns(1) guarantees all statements use the same connection.
 	if _, err := d.db.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return fmt.Errorf("begin migration lock: %w", err)
 	}

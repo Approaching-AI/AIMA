@@ -30,7 +30,7 @@ type ToolDeps struct {
 	ImportEngine   func(ctx context.Context, path string) error
 
 	// Deployment (runtime package)
-	DeployApply  func(ctx context.Context, engine, model, slot string) (json.RawMessage, error)
+	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
@@ -428,16 +428,18 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model to deploy"},`+
 				`"engine":{"type":"string","description":"Engine to use (optional)"},`+
-				`"slot":{"type":"string","description":"Partition slot (optional)"}`,
+				`"slot":{"type":"string","description":"Partition slot (optional)"},`+
+				`"config":{"type":"object","description":"Config overrides as key-value pairs (optional)"}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployApply == nil {
 				return ErrorResult("deploy.apply not implemented"), nil
 			}
 			var p struct {
-				Model  string `json:"model"`
-				Engine string `json:"engine"`
-				Slot   string `json:"slot"`
+				Model  string         `json:"model"`
+				Engine string         `json:"engine"`
+				Slot   string         `json:"slot"`
+				Config map[string]any `json:"config"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -445,7 +447,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Model == "" {
 				return ErrorResult("model is required"), nil
 			}
-			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot)
+			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
 				return nil, fmt.Errorf("deploy apply %s: %w", p.Model, err)
 			}

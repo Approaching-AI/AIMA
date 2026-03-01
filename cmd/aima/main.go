@@ -791,11 +791,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 
 		// Deployment (runtime abstraction: K3S or native)
-		DeployApply: func(ctx context.Context, engineType, modelName, slot string) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			overrides := map[string]any{}
 			if slot != "" {
 				overrides["slot"] = slot
+			}
+			for k, v := range configOverrides {
+				overrides[k] = v
 			}
 			resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
 			if err != nil {
@@ -846,6 +849,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				Engine:           resolved.Engine,
 				Image:            resolved.EngineImage,
 				Command:          resolved.Command,
+				InitCommands:     resolved.InitCommands,
 				ModelPath:        modelPath,
 				Port:             port,
 				Config:           resolved.Config,
@@ -853,6 +857,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				CPUArch:          resolved.CPUArch,
 				Env:              resolved.Env,
 				GPUResourceName:  resolved.GPUResourceName,
+				ExtraVolumes:     resolved.ExtraVolumes,
 				Labels: map[string]string{
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,

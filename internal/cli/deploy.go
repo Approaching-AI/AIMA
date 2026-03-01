@@ -3,14 +3,17 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 func newDeployCmd(app *App) *cobra.Command {
 	var (
-		engineType string
-		slot       string
+		engineType      string
+		slot            string
+		configOverrides []string
 	)
 
 	cmd := &cobra.Command{
@@ -21,7 +24,9 @@ func newDeployCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			modelName := args[0]
 
-			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot)
+			configMap := parseConfigOverrides(configOverrides)
+
+			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap)
 			if err != nil {
 				return fmt.Errorf("deploy %s: %w", modelName, err)
 			}
@@ -33,6 +38,7 @@ func newDeployCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringVar(&engineType, "engine", "", "Engine type (e.g., vllm, llamacpp)")
 	cmd.Flags().StringVar(&slot, "slot", "", "Partition slot name")
+	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
 
 	return cmd
 }
@@ -100,4 +106,35 @@ func formatJSON(data json.RawMessage) string {
 		return string(data)
 	}
 	return string(out)
+}
+
+// parseConfigOverrides converts ["key=value", ...] to map[string]any with type inference.
+func parseConfigOverrides(pairs []string) map[string]any {
+	if len(pairs) == 0 {
+		return nil
+	}
+	m := make(map[string]any, len(pairs))
+	for _, pair := range pairs {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		m[k] = parseValue(v)
+	}
+	return m
+}
+
+// parseValue tries to convert a string to the most specific type.
+// Order matters: int before bool, so "0" → 0 (int) not false (bool).
+func parseValue(s string) any {
+	if i, err := strconv.Atoi(s); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	if b, err := strconv.ParseBool(s); err == nil {
+		return b
+	}
+	return s
 }

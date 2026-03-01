@@ -92,34 +92,6 @@ ssh <user@host> 'uname -a && cat /etc/os-release 2>/dev/null; sw_vers 2>/dev/nul
 ./aima deploy list            # only meaningful on K3S-capable devices
 ```
 
-### Quick Reference: Full-Fleet Build → Distribute → Test
-
-```bash
-# ── [2] Build all targets ──
-go build -o build/aima.exe ./cmd/aima && \
-GOOS=darwin GOARCH=arm64 go build -o build/aima-darwin-arm64 ./cmd/aima && \
-GOOS=linux  GOARCH=arm64 go build -o build/aima-linux-arm64  ./cmd/aima && \
-GOOS=linux  GOARCH=amd64 go build -o build/aima-linux-amd64  ./cmd/aima
-
-# ── [3] Distribute ──
-scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
-scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
-scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
-
-# ── [4] Execute ALL in parallel, wait for ALL ──
-build/aima.exe hal detect > build/result-dev-win.txt 2>&1 &
-ssh user@<REDACTED_IP> 'chmod +x ~/aima && ~/aima hal detect' > build/result-mac-m4.txt 2>&1 &
-ssh user@<REDACTED_IP>      'chmod +x ~/aima && ~/aima hal detect' > build/result-gb10.txt 2>&1 &
-ssh user@<REDACTED_IP>       'chmod +x ~/aima && ~/aima hal detect' > build/result-linux-1.txt 2>&1 &
-wait
-
-# ── [5] Collect: print comparison matrix ──
-echo "=== dev-win ===" && cat build/result-dev-win.txt
-echo "=== mac-m4 ===" && cat build/result-mac-m4.txt
-echo "=== gb10 ===" && cat build/result-gb10.txt
-echo "=== linux-1 ===" && cat build/result-linux-1.txt
-```
-
 ### Adding a New Machine
 
 1. Ensure SSH key auth works: `ssh-copy-id <user@host>`
@@ -130,7 +102,6 @@ echo "=== linux-1 ===" && cat build/result-linux-1.txt
 
 ### Conventions
 
-- **全量采集、统一分析、一次修改。** 这是最高优先级的流程约束。不要在看到一台设备的结果后就开始改代码。必须等所有设备结果到齐，对比后再动手。违反此原则的修改大概率引入平台特异性 bug。
 - **Never store passwords in this file or any tracked file.** Use SSH keys only.
 - **Cross-compile locally.** Don't install Go on remote machines — AIMA has zero CGO, so cross-compilation always works.
 - **Test results are ephemeral.** Don't commit raw test outputs. Summarize findings in commit messages or design docs.

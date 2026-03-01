@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path"
 	"strings"
 )
@@ -16,10 +17,10 @@ type PullOptions struct {
 }
 
 // ImageExists reports whether a container image is already present in the local runtime.
-// Tries crictl first, then docker. Returns false on any error.
+// Tries crictl (with K3S fallback) first, then docker. Returns false on any error.
 func ImageExists(ctx context.Context, image, tag string, runner CommandRunner) bool {
 	ref := image + ":" + tag
-	if out, err := runner.Run(ctx, "crictl", "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+	if out, err := runCrictl(ctx, runner, "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		return true
 	}
 	if out, err := runner.Run(ctx, "docker", "images", "-q", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
@@ -47,8 +48,8 @@ func Pull(ctx context.Context, opts PullOptions) error {
 
 		ref := buildImageRef(registry, opts.Image, opts.Tag)
 
-		// Try crictl first
-		if _, err := opts.Runner.Run(ctx, "crictl", "pull", ref); err == nil {
+		// Try crictl first (with K3S fallback)
+		if _, err := runCrictl(ctx, opts.Runner, "pull", ref); err == nil {
 			return nil
 		}
 
@@ -73,14 +74,43 @@ func ImageExistsInDocker(ctx context.Context, image string, runner CommandRunner
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
-// ImportDockerToContainerd pipes `docker save | k3s ctr -n k8s.io images import -`
-// to transfer an image from Docker store to K3S containerd.
-// Requires root privileges (containerd socket is root-owned).
+// ImportDockerToContainerd transfers an image from Docker store to K3S containerd.
+// runner is optional: tests can inject a mocked runner; nil uses real process piping.
 func ImportDockerToContainerd(ctx context.Context, image string, runner CommandRunner) error {
-	_, err := runner.Run(ctx, "sh", "-c",
-		fmt.Sprintf("docker save %q | k3s ctr -n k8s.io images import -", image))
+	if runner != nil {
+		if _, err := runner.Run(ctx, "docker", "save", image); err != nil {
+			return fmt.Errorf("import %s: docker save: %w", image, err)
+		}
+		if _, err := runner.Run(ctx, "k3s", "ctr", "-n", "k8s.io", "images", "import", "-"); err != nil {
+			return fmt.Errorf("import %s: k3s ctr import: %w", image, err)
+		}
+		return nil
+	}
+
+	// Use docker save piped to k3s ctr import. Avoid sh -c to prevent command injection.
+	saveCmd := exec.CommandContext(ctx, "docker", "save", image)
+	importCmd := exec.CommandContext(ctx, "k3s", "ctr", "-n", "k8s.io", "images", "import", "-")
+
+	pipe, err := saveCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("import %s from docker to containerd: %w", image, err)
+		return fmt.Errorf("import %s: create pipe: %w", image, err)
+	}
+	importCmd.Stdin = pipe
+
+	if err := saveCmd.Start(); err != nil {
+		return fmt.Errorf("import %s: docker save: %w", image, err)
+	}
+	if err := importCmd.Start(); err != nil {
+		_ = saveCmd.Process.Kill()
+		_ = saveCmd.Wait()
+		return fmt.Errorf("import %s: k3s ctr import: %w", image, err)
+	}
+
+	if err := saveCmd.Wait(); err != nil {
+		return fmt.Errorf("import %s: docker save: %w", image, err)
+	}
+	if err := importCmd.Wait(); err != nil {
+		return fmt.Errorf("import %s: k3s ctr import: %w", image, err)
 	}
 	return nil
 }

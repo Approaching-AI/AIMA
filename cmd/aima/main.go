@@ -116,9 +116,9 @@ func run() error {
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 9. Create agent (L3a Go Agent)
-	// Agent needs an LLM client — nil means agent is not available until a model is deployed.
 	toolAdapter := &mcpToolAdapter{server: mcpServer}
-	goAgent := agent.NewAgent(nil, toolAdapter)
+	llmClient := buildLLMClient()
+	goAgent := agent.NewAgent(llmClient, toolAdapter)
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
 
 	// 10. Build App and run CLI
@@ -374,6 +374,23 @@ func buildNativeRuntime(dataDir string) runtime.Runtime {
 			return bm.Resolve(ctx, src)
 		}),
 	)
+}
+
+// buildLLMClient creates an OpenAI-compatible LLM client for the Go Agent.
+// Endpoint defaults to localhost proxy; model auto-discovered from /v1/models.
+func buildLLMClient() agent.LLMClient {
+	endpoint := os.Getenv("AIMA_LLM_ENDPOINT")
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort)
+	}
+	var opts []agent.OpenAIOption
+	if m := os.Getenv("AIMA_LLM_MODEL"); m != "" {
+		opts = append(opts, agent.WithModel(m))
+	}
+	if k := os.Getenv("AIMA_API_KEY"); k != "" {
+		opts = append(opts, agent.WithAPIKey(k))
+	}
+	return agent.NewOpenAIClient(endpoint, opts...)
 }
 
 // selectRuntime picks the best runtime: K3S on Linux if available, else native.

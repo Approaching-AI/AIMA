@@ -14,7 +14,7 @@ type mockLLM struct {
 	messages  [][]Message // record of all calls
 }
 
-func (m *mockLLM) ChatCompletion(ctx context.Context, messages []Message) (*Response, error) {
+func (m *mockLLM) ChatCompletion(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	m.messages = append(m.messages, messages)
 	if m.calls >= len(m.responses) {
 		return nil, fmt.Errorf("no more mock responses (call %d)", m.calls)
@@ -317,11 +317,9 @@ func TestAgent_SystemPrompt(t *testing.T) {
 	if len(sysPrompt) == 0 {
 		t.Fatal("system prompt is empty")
 	}
-	// Check that tool names appear in the prompt
-	for _, name := range []string{"hardware.detect", "model.list"} {
-		if !contains(sysPrompt, name) {
-			t.Errorf("system prompt missing tool %q", name)
-		}
+	// System prompt should contain persona description
+	if !contains(sysPrompt, "AIMA") {
+		t.Error("system prompt missing AIMA persona")
 	}
 }
 
@@ -509,6 +507,59 @@ func TestIsComplexQuery(t *testing.T) {
 				t.Errorf("isComplexQuery(%q) = %v, want %v", tt.query, got, tt.complex)
 			}
 		})
+	}
+}
+
+func TestAgent_NilLLM(t *testing.T) {
+	tools := &mockTools{tools: []ToolDefinition{}}
+	agent := NewAgent(nil, tools)
+
+	_, err := agent.Ask(context.Background(), "test")
+	if err == nil {
+		t.Fatal("expected error with nil LLM, not panic")
+	}
+	if !contains(err.Error(), "no LLM backend") {
+		t.Errorf("error = %q, want mention of no LLM backend", err)
+	}
+}
+
+func TestAgent_Available(t *testing.T) {
+	llm := &mockLLM{responses: []*Response{{Content: "ok"}}}
+	tools := &mockTools{}
+
+	withLLM := NewAgent(llm, tools)
+	if !withLLM.Available() {
+		t.Error("Available() = false with LLM, want true")
+	}
+
+	withoutLLM := NewAgent(nil, tools)
+	if withoutLLM.Available() {
+		t.Error("Available() = true without LLM, want false")
+	}
+}
+
+func TestDispatcher_NoLLM_ReturnsError(t *testing.T) {
+	tools := &mockTools{tools: []ToolDefinition{}}
+	goAgent := NewAgent(nil, tools)
+	d := NewDispatcher(goAgent, nil)
+
+	_, err := d.Ask(context.Background(), "test", DispatchOption{})
+	if err == nil {
+		t.Fatal("expected error when agent has no LLM")
+	}
+	if !contains(err.Error(), "no LLM backend") {
+		t.Errorf("error = %q, want mention of no LLM backend", err)
+	}
+}
+
+func TestDispatcher_ForceLocal_NoLLM(t *testing.T) {
+	tools := &mockTools{tools: []ToolDefinition{}}
+	goAgent := NewAgent(nil, tools)
+	d := NewDispatcher(goAgent, nil)
+
+	_, err := d.Ask(context.Background(), "test", DispatchOption{ForceLocal: true})
+	if err == nil {
+		t.Fatal("expected error when forcing local with no LLM")
 	}
 }
 

@@ -16,10 +16,10 @@ type PullOptions struct {
 }
 
 // ImageExists reports whether a container image is already present in the local runtime.
-// Tries crictl first, then docker. Returns false on any error.
+// Tries crictl (with K3S fallback) first, then docker. Returns false on any error.
 func ImageExists(ctx context.Context, image, tag string, runner CommandRunner) bool {
 	ref := image + ":" + tag
-	if out, err := runner.Run(ctx, "crictl", "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+	if out, err := runCrictl(ctx, runner, "images", "--quiet", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		return true
 	}
 	if out, err := runner.Run(ctx, "docker", "images", "-q", ref); err == nil && len(strings.TrimSpace(string(out))) > 0 {
@@ -47,8 +47,8 @@ func Pull(ctx context.Context, opts PullOptions) error {
 
 		ref := buildImageRef(registry, opts.Image, opts.Tag)
 
-		// Try crictl first
-		if _, err := opts.Runner.Run(ctx, "crictl", "pull", ref); err == nil {
+		// Try crictl first (with K3S fallback)
+		if _, err := runCrictl(ctx, opts.Runner, "pull", ref); err == nil {
 			return nil
 		}
 
@@ -73,14 +73,15 @@ func ImageExistsInDocker(ctx context.Context, image string, runner CommandRunner
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
-// ImportDockerToContainerd pipes `docker save | k3s ctr -n k8s.io images import -`
-// to transfer an image from Docker store to K3S containerd.
-// Requires root privileges (containerd socket is root-owned).
+// ImportDockerToContainerd transfers an image from Docker store to K3S containerd.
+// Uses runner.Pipe to stream docker save stdout into k3s ctr import stdin.
 func ImportDockerToContainerd(ctx context.Context, image string, runner CommandRunner) error {
-	_, err := runner.Run(ctx, "sh", "-c",
-		fmt.Sprintf("docker save %q | k3s ctr -n k8s.io images import -", image))
+	err := runner.Pipe(ctx,
+		[]string{"docker", "save", image},
+		[]string{"k3s", "ctr", "-n", "k8s.io", "images", "import", "-"},
+	)
 	if err != nil {
-		return fmt.Errorf("import %s from docker to containerd: %w", image, err)
+		return fmt.Errorf("import %s: %w", image, err)
 	}
 	return nil
 }

@@ -141,7 +141,10 @@ func newEngineRemoveCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			name := args[0]
 
-			if err := app.DB.DeleteEngine(ctx, name); err != nil {
+			if app.ToolDeps.RemoveEngine == nil {
+				return fmt.Errorf("engine.remove not implemented")
+			}
+			if err := app.ToolDeps.RemoveEngine(ctx, name); err != nil {
 				return fmt.Errorf("remove engine %s: %w", name, err)
 			}
 

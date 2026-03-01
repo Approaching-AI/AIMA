@@ -243,6 +243,9 @@ func run() error {
 		return fleetClient.ListTools(ctx, d)
 	}
 	deps.FleetExecTool = func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error) {
+		if strings.HasPrefix(toolName, "fleet.") {
+			return nil, fmt.Errorf("cannot execute fleet tools remotely (recursive call blocked): %s", toolName)
+		}
 		d := fleetRegistry.Get(deviceID)
 		if d == nil {
 			return nil, fmt.Errorf("device %q not found", deviceID)

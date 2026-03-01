@@ -131,6 +131,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("proxy listen: %w", err)
 	}
+	defer ln.Close()
 	slog.Info("proxy server starting", "addr", ln.Addr().String())
 
 	// Watch for context cancellation

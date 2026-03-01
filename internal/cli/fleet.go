@@ -15,27 +15,36 @@ import (
 )
 
 func newFleetCmd(app *App) *cobra.Command {
+	var (
+		apiKey string
+		port   int
+	)
+
 	cmd := &cobra.Command{
 		Use:   "fleet",
 		Short: "Manage fleet of AIMA devices on the LAN",
 		Long:  "Query and manage AIMA devices discovered on the LAN.\nRequires a running 'aima serve' instance with --mdns --discover.",
 	}
 
+	defaultKey := os.Getenv("AIMA_API_KEY")
+	cmd.PersistentFlags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
+	cmd.PersistentFlags().IntVar(&port, "port", proxy.DefaultPort, "Port of the local aima serve instance")
+
 	cmd.AddCommand(
-		newFleetDevicesCmd(app),
-		newFleetInfoCmd(app),
-		newFleetToolsCmd(app),
-		newFleetExecCmd(app),
+		newFleetDevicesCmd(app, &apiKey, &port),
+		newFleetInfoCmd(app, &apiKey, &port),
+		newFleetToolsCmd(app, &apiKey, &port),
+		newFleetExecCmd(app, &apiKey, &port),
 	)
 	return cmd
 }
 
-func newFleetDevicesCmd(app *App) *cobra.Command {
+func newFleetDevicesCmd(app *App, apiKey *string, port *int) *cobra.Command {
 	return &cobra.Command{
 		Use:   "devices",
 		Short: "List all discovered AIMA devices",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices", nil)
+			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices", nil, *apiKey, *port)
 			if err != nil {
 				return err
 			}
@@ -45,13 +54,13 @@ func newFleetDevicesCmd(app *App) *cobra.Command {
 	}
 }
 
-func newFleetInfoCmd(app *App) *cobra.Command {
+func newFleetInfoCmd(app *App, apiKey *string, port *int) *cobra.Command {
 	return &cobra.Command{
 		Use:   "info <device-id>",
 		Short: "Get detailed info about a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices/"+args[0], nil)
+			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices/"+args[0], nil, *apiKey, *port)
 			if err != nil {
 				return err
 			}
@@ -61,13 +70,13 @@ func newFleetInfoCmd(app *App) *cobra.Command {
 	}
 }
 
-func newFleetToolsCmd(app *App) *cobra.Command {
+func newFleetToolsCmd(app *App, apiKey *string, port *int) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tools <device-id>",
 		Short: "List available tools on a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices/"+args[0]+"/tools", nil)
+			data, err := fleetHTTP(cmd, "GET", "/api/v1/devices/"+args[0]+"/tools", nil, *apiKey, *port)
 			if err != nil {
 				return err
 			}
@@ -77,7 +86,7 @@ func newFleetToolsCmd(app *App) *cobra.Command {
 	}
 }
 
-func newFleetExecCmd(app *App) *cobra.Command {
+func newFleetExecCmd(app *App, apiKey *string, port *int) *cobra.Command {
 	return &cobra.Command{
 		Use:   "exec <device-id> <tool-name> [params-json]",
 		Short: "Execute a tool on a remote device",
@@ -88,7 +97,7 @@ func newFleetExecCmd(app *App) *cobra.Command {
 				body = []byte(args[2])
 			}
 			path := "/api/v1/devices/" + args[0] + "/tools/" + args[1]
-			data, err := fleetHTTP(cmd, "POST", path, body)
+			data, err := fleetHTTP(cmd, "POST", path, body, *apiKey, *port)
 			if err != nil {
 				return err
 			}
@@ -100,8 +109,8 @@ func newFleetExecCmd(app *App) *cobra.Command {
 
 // fleetHTTP calls the local aima serve REST API.
 // Fleet CLI commands require a running 'aima serve --mdns --discover' instance.
-func fleetHTTP(cmd *cobra.Command, method, path string, body []byte) (json.RawMessage, error) {
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", proxy.DefaultPort, path)
+func fleetHTTP(cmd *cobra.Command, method, path string, body []byte, apiKey string, port int) (json.RawMessage, error) {
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
 
 	var reqBody io.Reader
 	if body != nil {
@@ -115,8 +124,8 @@ func fleetHTTP(cmd *cobra.Command, method, path string, body []byte) (json.RawMe
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if key := os.Getenv("AIMA_API_KEY"); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}

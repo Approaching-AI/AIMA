@@ -102,6 +102,14 @@ func (r *Registry) List() []*Device {
 	return list
 }
 
+// SetLocalPort updates the local port used for self-detection.
+// Call before starting the discovery loop with the actual listen port.
+func (r *Registry) SetLocalPort(port int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.localPort = port
+}
+
 // Get returns a device by ID, or nil if not found.
 func (r *Registry) Get(id string) *Device {
 	r.mu.RLock()

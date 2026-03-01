@@ -25,8 +25,6 @@ variants:
       gpu_arch: "*"
     engine: qwen-tts-fastapi
     format: safetensors
-    default_config:
-      device: cpu
     expected_performance:
       vram_mib: 0
       notes: "CPU ARM64 RTF ~5.0 (gb10 measured), 24kHz 32bit float WAV, 0.6B params ≈ 4GB RAM"

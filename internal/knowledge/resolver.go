@@ -46,6 +46,8 @@ type ResolvedConfig struct {
 	Provenance      map[string]string
 	Partition       *PartitionSlot
 	Command         []string
+	InitCommands    []string       // pre-commands to run before main server (from engine YAML)
+	ExtraVolumes    []EngineVolume // additional host volumes to mount (from engine YAML)
 	HealthCheck     *HealthCheck
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)
@@ -108,17 +110,19 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	}
 
 	resolved := &ResolvedConfig{
-		Engine:      engineType,
-		EngineImage: engine.Image.Name + ":" + engine.Image.Tag,
-		ModelName:   model.Metadata.Name,
-		Slot:        slot.Name,
-		Config:      config,
-		Provenance:  provenance,
-		Partition:   slot,
-		Command:     engine.Startup.Command,
-		Env:         engine.Startup.Env,
-		HealthCheck: &engine.Startup.HealthCheck,
-		Source:      engine.Source,
+		Engine:       engineType,
+		EngineImage:  engine.Image.Name + ":" + engine.Image.Tag,
+		ModelName:    model.Metadata.Name,
+		Slot:         slot.Name,
+		Config:       config,
+		Provenance:   provenance,
+		Partition:    slot,
+		Command:      engine.Startup.Command,
+		InitCommands: engine.Startup.InitCommands,
+		ExtraVolumes: engine.Startup.ExtraVolumes,
+		Env:          engine.Startup.Env,
+		HealthCheck:  &engine.Startup.HealthCheck,
+		Source:       engine.Source,
 	}
 	if engine.Startup.Warmup.Enabled {
 		resolved.Warmup = &engine.Startup.Warmup
@@ -181,7 +185,7 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 // VRAM requirements exceed the detected GPU VRAM.
 func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, error) {
 	for _, ma := range c.ModelAssets {
-		if ma.Metadata.Name != modelName {
+		if !strings.EqualFold(ma.Metadata.Name, modelName) {
 			continue
 		}
 		// First pass: exact gpu_arch match
@@ -250,7 +254,7 @@ func platformInList(platform string, platforms []string) bool {
 func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
 	for i := range c.ModelAssets {
 		ma := &c.ModelAssets[i]
-		if ma.Metadata.Name != modelName {
+		if !strings.EqualFold(ma.Metadata.Name, modelName) {
 			continue
 		}
 		// Find best variant: exact gpu_arch+engine match first, then wildcard.
@@ -415,7 +419,7 @@ func BuildSyntheticModelAsset(name, modelType, family, paramCount, format string
 // same name already exists.
 func (c *Catalog) RegisterModel(ma ModelAsset) {
 	for _, existing := range c.ModelAssets {
-		if existing.Metadata.Name == ma.Metadata.Name {
+		if strings.EqualFold(existing.Metadata.Name, ma.Metadata.Name) {
 			return
 		}
 	}

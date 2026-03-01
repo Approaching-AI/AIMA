@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/knowledge"
 )
 
 // Runtime abstracts deployment execution. K3S uses Pod YAML via kubectl;
@@ -23,6 +24,7 @@ type DeployRequest struct {
 	Engine       string
 	Image        string            // container image (K3S only)
 	Command      []string          // startup command with {{.ModelPath}} placeholder
+	InitCommands []string          // pre-commands to run before main server (K3S only)
 	ModelPath    string            // host path to model files
 	Port         int
 	Config       map[string]any
@@ -35,6 +37,7 @@ type DeployRequest struct {
 	CPUArch         string            // "arm64", "amd64" — for platform-specific paths in Pod spec
 	Env             map[string]string // extra env vars for the container (engine + hardware)
 	GPUResourceName string            // K8s GPU resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource)
+	ExtraVolumes    []knowledge.EngineVolume // additional host volumes to mount (K3S only)
 }
 
 // DeploymentStatus is the unified status across runtimes.

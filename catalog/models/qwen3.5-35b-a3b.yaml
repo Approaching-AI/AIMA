@@ -77,6 +77,25 @@ variants:
           128: [59.60, 131477]
           255: [157.20, 261906]          # 逼近 262K context limit
 
+  # --- GB10 vllm-spark variant (vllm-spark-tf5 镜像, 已在 containerd) ---
+  # 与 vllm-nightly 相同模型, 但使用 vllm-spark 引擎 (Transformers 5, FlashInfer)
+  # 支持多模型共存时用较低 gmu; 单独部署默认 gmu=0.85
+  - name: qwen3.5-35b-a3b-blackwell-vllm-spark-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-spark
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.65
+      max_model_len: 32768
+      dtype: bfloat16
+      enable_chunked_prefill: true
+    expected_performance:
+      vram_mib: 67100
+      notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.65 for multi-model (LLM+ASR+TTS) coexistence."
+
   # --- amd395 (RDNA3.5, 62GB unified, native Vulkan) ---
   # GGUF Q4_K_M ~22GB, 62GB unified 余量充足 (40GB for KV cache + system)
   # MoE 35B total / 3B active, Vulkan GPU acceleration

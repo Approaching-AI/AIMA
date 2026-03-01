@@ -89,10 +89,10 @@ type ContainerAccess struct {
 }
 
 type ContainerVolume struct {
-	Name      string `yaml:"name"`
-	HostPath  string `yaml:"host_path"`
-	MountPath string `yaml:"mount_path"`
-	ReadOnly  bool   `yaml:"read_only,omitempty"`
+	Name      string `yaml:"name"       json:"name"`
+	HostPath  string `yaml:"host_path"  json:"host_path"`
+	MountPath string `yaml:"mount_path" json:"mount_path"`
+	ReadOnly  bool   `yaml:"read_only,omitempty"  json:"read_only,omitempty"`
 }
 
 type ContainerSecurity struct {
@@ -171,15 +171,7 @@ type EngineStartup struct {
 	DefaultArgs  map[string]any    `yaml:"default_args"               json:"default_args"`
 	HealthCheck  HealthCheck       `yaml:"health_check"               json:"health_check"`
 	Warmup       WarmupConfig      `yaml:"warmup"                     json:"warmup"`
-	ExtraVolumes []EngineVolume    `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
-}
-
-// EngineVolume describes a host path to mount into the container.
-type EngineVolume struct {
-	Name      string `yaml:"name"       json:"name"`
-	HostPath  string `yaml:"host_path"  json:"host_path"`
-	MountPath string `yaml:"mount_path" json:"mount_path"`
-	ReadOnly  bool   `yaml:"read_only"  json:"read_only"`
+	ExtraVolumes []ContainerVolume `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
 }
 
 type HealthCheck struct {

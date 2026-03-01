@@ -1,0 +1,179 @@
+=== AIMA UAT Log ===
+机器: linux-1
+日期: 2026-02-27 14:26
+测试员: linux1-tester (Claude Code Agent)
+场景: A — K3S 基础设施初始化验证
+
+--- 步骤 1: 验证 AIMA 可执行 ---
+时间: 14:26:22
+操作: chmod +x ~/aima && ~/aima version
+结果: PARTIAL
+输出:
+2026/02/27 14:26:22 INFO runtime selected runtime=native
+aima: unknown command "version" for "aima"
+观察: "version" 命令在手册中列出，但实际二进制中不存在。使用 --help 确认了可用命令列表。
+      AIMA 二进制本身可执行（正常启动，报未知命令而非无法运行）。
+      可用命令: agent, ask, deploy, engine, help, init, knowledge, model, serve, status, undeploy
+      差异记录: 手册 §三 提到 "aima version" 命令，但实际二进制不支持该命令。
+
+--- 步骤 2: 执行硬件检测 ---
+时间: 14:26:40
+操作: ~/aima status
+结果: SUCCESS
+输出:
+2026/02/27 14:26:40 INFO runtime selected runtime=native
+{
+  "deployments": [],
+  "hardware": {
+    "gpu": {
+      "vendor": "nvidia",
+      "name": "NVIDIA GeForce RTX 4090",
+      "arch": "Ada",
+      "vram_mib": 49140,
+      "compute_capability": "8.9",
+      "driver_version": "550.135",
+      "cuda_version": "12.4",
+      "power_draw_watts": 20.63,
+      "power_limit_watts": 450,
+      "temperature_celsius": 34,
+      "unified_memory": false,
+      "count": 2
+    },
+    "cpu": {
+      "arch": "amd64",
+      "model": "Intel(R) Xeon(R) Platinum 8488C",
+      "cores": 48,
+      "threads": 96,
+      "freq_ghz": 2.4
+    },
+    "ram": {
+      "total_mib": 1031692,
+      "available_mib": 688717
+    },
+    "storage": {
+      "data_dir_path": "/home/qujing/.aima",
+      "free_mib": 374680
+    },
+    "os": {
+      "os": "linux",
+      "arch": "amd64",
+      "version": "\"22.04\"",
+      "container_runtime": "docker"
+    }
+  },
+  "metrics": {
+    "gpu": {
+      "utilization_percent": 0,
+      "memory_used_mib": 26371,
+      "memory_total_mib": 49140,
+      "temperature_celsius": 34,
+      "power_draw_watts": 20.67
+    },
+    "cpu": {
+      "usage_percent": 1.6
+    },
+    "ram": {
+      "used_mib": 342975,
+      "available_mib": 688717,
+      "total_mib": 1031692
+    }
+  }
+}
+观察: GPU 检测正确。
+      - GPU: NVIDIA GeForce RTX 4090 x2，Ada 架构，每块 49140 MiB (约 48GB)
+      - CUDA 12.4，Driver 550.135
+      - CPU: Intel Xeon Platinum 8488C，48核96线程，2.4GHz
+      - RAM: 1031692 MiB (约 1TB)，可用 688717 MiB
+      注意：memory_used_mib 显示 26371 MiB，说明双卡共计约 26GB 已被占用（原因未知）
+
+--- 步骤 3: 验证知识库覆盖 ---
+时间: 14:26:51
+操作: ~/aima knowledge list
+结果: SUCCESS
+输出:
+{
+  "engine_assets": 5,
+  "engines": ["llamacpp-universal", "llamacpp-vulkan", "sglang-universal", "vllm-ada", "vllm-blackwell"],
+  "hardware_profiles": 5,
+  "model_assets": 8,
+  "models": ["qwen3-14b","qwen3-30b-a3b","qwen3-32b","qwen3-4b","qwen3-8b","qwen3-asr-1.7b","qwen3-coder-next-fp8","qwen3.5-35b-a3b"],
+  "partition_strategies": 2,
+  "profiles": ["amd-radeon-8060s-x86","apple-m4-arm64","nvidia-gb10-arm64","nvidia-rtx4060-x86","nvidia-rtx4090-x86"]
+}
+观察: 知识库包含 nvidia-rtx4090-x86 硬件配置，与本机 RTX 4090 匹配。5 个引擎资产（含 vllm-ada，对应 Ada 架构 RTX 4090）。
+
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: SUCCESS
+输出:
+{
+  "Engine": "vllm",
+  "EngineImage": "vllm/vllm-openai:v0.8.5",
+  "ModelPath": "",
+  "ModelName": "qwen3-8b",
+  "Config": {"dtype":"auto","gpu_memory_utilization":0.8,"max_model_len":4096,"port":8000},
+  "Provenance": {"dtype":"L0","gpu_memory_utilization":"L0","max_model_len":"L0","port":"L0"},
+  "Partition": {"Name":"primary","GPUMemoryMiB":0,"GPUCoresPercent":90,"CPUCores":0,"RAMMiB":0},
+  "Command": ["vllm","serve","--model","{{.ModelPath}}"],
+  "HealthCheck": {"path":"/health","timeout_s":300},
+  "Warmup": {"enabled":true,"prompt":"Hello","max_tokens":1,"timeout_s":60},
+  "GPUResourceName":"nvidia.com/gpu","RuntimeClassName":"nvidia","RuntimeRecommendation":"container"
+}
+观察: 知识库能为 qwen3-8b + vllm 生成配置。所有参数均来自 L0（内置默认值），没有 L2 覆盖。
+      vllm-ada 引擎匹配 Ada 架构，镜像 vllm/vllm-openai:v0.8.5。
+
+--- 步骤 4: 执行初始化 ---
+时间: 14:27:22
+操作: sudo ~/aima init --yes (使用 base64 sudo 密码)
+结果: SUCCESS
+输出:
+2026/02/27 14:27:22 INFO runtime selected runtime=native
+Initializing AIMA infrastructure stack...
+2026/02/27 14:27:23 INFO wrote containerd registries config path=/etc/rancher/k3s/registries.yaml
+2026/02/27 14:27:23 INFO placed airgap images for K3S auto-import path=/var/lib/rancher/k3s/agent/images/k3s-airgap-images.tar.zst
+2026/02/27 14:27:23 INFO importing airgap images into running containerd file=/root/.aima/dist/linux-amd64/k3s-airgap-images.tar.zst
+2026/02/27 14:27:23 INFO installing stack component name=k3s method=binary
+2026/02/27 14:27:23 INFO using local binary path=/root/.aima/dist/linux-amd64/k3s
+2026/02/27 14:27:23 INFO installed binary to system path path=/usr/local/bin/k3s
+2026/02/27 14:27:23 INFO wrote systemd unit path=/etc/systemd/system/k3s.service
+2026/02/27 14:27:27 INFO daemon installed as systemd service name=k3s unit=/etc/systemd/system/k3s.service
+2026/02/27 14:27:39 INFO stack component verified name=k3s
+2026/02/27 14:27:39 INFO importing airgap images via containerd file=/root/.aima/dist/linux-amd64/hami-airgap-images.tar
+2026/02/27 14:27:44 INFO airgap images imported successfully
+2026/02/27 14:27:44 INFO installing stack component name=hami method=helm
+2026/02/27 14:27:44 INFO applying HelmChart CRD via k3s kubectl name=hami
+2026/02/27 14:27:53 INFO stack component verified name=hami
+  [OK] k3s: installed and verified
+  [OK] hami: installed and verified
+
+All components ready. Run aima serve to begin.
+观察: K3S 和 HAMi 均安装成功。
+      - K3S 从 airgap 包安装（离线模式），无需网络
+      - HAMi 通过 HelmChart CRD 部署
+      - 总安装时间约 31 秒（14:27:22 → 14:27:53）
+
+--- 步骤 5: 验证初始化结果 ---
+时间: 14:28:02
+操作: ~/aima status
+结果: SUCCESS
+输出:
+2026/02/27 14:28:02 INFO runtime selected runtime=k3s
+{
+  "deployments": [],
+  "hardware": { ...（与步骤2相同）... },
+  "metrics": { ...（与步骤2相同）... }
+}
+观察: 关键变化：runtime 从 "native" 切换为 "k3s"，说明 K3S 已就绪并被 AIMA 检测到。
+      deployments 为空数组，符合预期（尚未部署任何服务）。
+      GPU/CPU/RAM 信息与初始化前一致。
+
+=== 场景总结 ===
+整体结果: PASS
+通过的步骤:
+  - 步骤1（PARTIAL，二进制可执行但 version 命令缺失）
+  - 步骤2: 硬件检测 SUCCESS —— 2×RTX 4090 Ada 架构正确识别
+  - 步骤3: 知识库覆盖 SUCCESS —— nvidia-rtx4090-x86 配置匹配，qwen3-8b 配置可解析
+  - 步骤4: aima init SUCCESS —— K3S + HAMi 均安装成功（约 31 秒）
+  - 步骤5: 初始化验证 SUCCESS —— runtime 切换至 k3s，系统就绪
+失败/阻塞的步骤: 无
+根本原因分析: 所有场景A验收标准均已满足。手册中提到的 "aima version" 命令与实际二进制不符，属于文档与实现的差异。
+建议的修复方向: 1) 添加 "version" 子命令（或在手册中更正为使用 "--help" 确认版本）; 2) 步骤2中显示 GPU 已用 26371 MiB，建议排查是否有其他进程占用显存。

@@ -34,10 +34,11 @@ type DeployRequest struct {
 	Labels       map[string]string
 	BinarySource *engine.BinarySource // native: where to download the engine binary if missing
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
-	CPUArch         string            // "arm64", "amd64" — for platform-specific paths in Pod spec
-	Env             map[string]string // extra env vars for the container (engine + hardware)
-	GPUResourceName string            // K8s GPU resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource)
-	ExtraVolumes    []knowledge.EngineVolume // additional host volumes to mount (K3S only)
+	CPUArch          string                     // "arm64", "amd64" -- for platform-specific paths in Pod spec
+	Env              map[string]string          // extra env vars (engine YAML + hardware YAML merged)
+	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S only)
+	GPUResourceName  string                     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	ExtraVolumes     []knowledge.EngineVolume   // additional host volumes to mount (K3S only)
 }
 
 // DeploymentStatus is the unified status across runtimes.

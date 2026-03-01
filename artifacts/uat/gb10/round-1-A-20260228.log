@@ -1,0 +1,191 @@
+=== AIMA UAT Log ===
+机器: gb10
+日期: 2026-02-28 (executed 2026-02-27)
+测试员: claude-agent (gb10-tester)
+场景: A - K3S 基础设施初始化验证
+
+--- 步骤 1: 验证 AIMA 可执行 ---
+时间: 14:26:05
+操作: ~/aima version
+结果: PARTIAL
+输出:
+aima: unknown command "version" for "aima"
+NOTE: Also tried --version, -v flags — all unknown.
+      ~/aima help shows available commands (no version command).
+观察: AIMA 二进制可执行，但 "version" 命令不存在。手册记录与实际不符（发现：手册第三节列出 "aima version" 但命令不存在）。
+     二进制文件本身可正常运行，help 输出正常，判断为手册文档问题而非二进制问题。
+
+--- 步骤 2: 执行硬件检测 ---
+时间: 14:26:22
+操作: ~/aima status
+结果: SUCCESS
+输出:
+{
+  "deployments": [],
+  "hardware": {
+    "gpu": {
+      "vendor": "nvidia",
+      "name": "NVIDIA GB10",
+      "arch": "Blackwell",
+      "vram_mib": 122506,
+      "compute_capability": "12.1",
+      "driver_version": "580.126.09",
+      "cuda_version": "13.0",
+      "power_draw_watts": 4.72,
+      "temperature_celsius": 39,
+      "unified_memory": true,
+      "count": 1
+    },
+    "cpu": {
+      "arch": "arm64",
+      "model": "Cortex-X925",
+      "cores": 20,
+      "threads": 20,
+      "freq_ghz": 4.004
+    },
+    "ram": {
+      "total_mib": 122506,
+      "available_mib": 116320
+    },
+    "storage": {
+      "data_dir_path": "/home/qujing/.aima",
+      "free_mib": 147793
+    },
+    "os": {
+      "os": "linux",
+      "arch": "arm64",
+      "version": "\"24.04\"",
+      "container_runtime": "docker"
+    }
+  },
+  "metrics": {
+    "gpu": {
+      "utilization_percent": 0,
+      "memory_used_mib": 6186,
+      "memory_total_mib": 122506,
+      "temperature_celsius": 39,
+      "power_draw_watts": 4.72
+    },
+    "cpu": {
+      "usage_percent": 0
+    },
+    "ram": {
+      "used_mib": 6186,
+      "available_mib": 116320,
+      "total_mib": 122506
+    }
+  }
+}
+观察: GPU 检测正确：NVIDIA GB10, Blackwell 架构, 122506 MiB VRAM (~120GB 统一内存),
+      CUDA 13.0, Driver 580.126.09。CPU: arm64 Cortex-X925, 20核, 4GHz。
+      RAM: 122506 MiB 总量（与 GPU VRAM 相同 = 统一内存架构正确识别）。
+      所有硬件指标与已知 GB10 规格完全匹配。验收标准通过。
+
+--- 步骤 3: 验证知识库覆盖 ---
+时间: 14:26:31
+操作: ~/aima knowledge list
+结果: SUCCESS
+输出:
+{
+  "engine_assets": 5,
+  "engines": ["llamacpp-universal","llamacpp-vulkan","sglang-universal","vllm-ada","vllm-blackwell"],
+  "hardware_profiles": 5,
+  "model_assets": 8,
+  "models": ["qwen3-14b","qwen3-30b-a3b","qwen3-32b","qwen3-4b","qwen3-8b","qwen3-asr-1.7b","qwen3-coder-next-fp8","qwen3.5-35b-a3b"],
+  "partition_strategies": 2,
+  "profiles": ["amd-radeon-8060s-x86","apple-m4-arm64","nvidia-gb10-arm64","nvidia-rtx4060-x86","nvidia-rtx4090-x86"]
+}
+观察: 知识库包含 5 个引擎资产、5 个硬件 profile、8 个模型资产。
+     GB10 有专用硬件 profile（nvidia-gb10-arm64），有 vllm-blackwell 引擎资产。
+     目标模型 qwen3-8b 在列表中。覆盖完整。
+
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: SUCCESS
+输出:
+{
+  "Engine": "vllm",
+  "EngineImage": "nvcr.io/nvidia/vllm:26.01-py3",
+  "ModelPath": "",
+  "ModelName": "qwen3-8b",
+  "Slot": "primary",
+  "Config": {
+    "dtype": "bfloat16",
+    "gpu_memory_utilization": 0.3,
+    "max_model_len": 8192,
+    "port": 8000
+  },
+  "Provenance": {"dtype": "L0","gpu_memory_utilization": "L0","max_model_len": "L0","port": "L0"},
+  "Partition": {
+    "Name": "primary",
+    "GPUMemoryMiB": 10240,
+    "GPUCoresPercent": 60,
+    "CPUCores": 8,
+    "RAMMiB": 65536
+  },
+  "Command": ["vllm","serve","--model","{{.ModelPath}}"],
+  "HealthCheck": {"path": "/health","timeout_s": 300},
+  "Warmup": {"enabled": true,"prompt": "Hello","max_tokens": 1,"timeout_s": 60},
+  "Source": null,
+  "GPUResourceName": "nvidia.com/gpu",
+  "RuntimeClassName": "nvidia",
+  "RuntimeRecommendation": "container"
+}
+观察: 知识库能正确解析 qwen3-8b + vllm 配置。引擎镜像 nvcr.io/nvidia/vllm:26.01-py3（Blackwell 专用）。
+      注意：所有配置来源均为 L0（内置默认），非 L2 知识库匹配。
+      gpu_memory_utilization=0.3 对于 120GB 统一内存来说偏低但安全。验收标准通过。
+
+--- 步骤 4: 执行初始化 ---
+时间: 14:28:06
+操作: echo [PASS] | sudo -S ~/aima init --yes
+结果: SUCCESS
+输出:
+2026/02/27 14:28:06 INFO runtime selected runtime=native
+Initializing AIMA infrastructure stack...
+2026/02/27 14:28:06 INFO wrote containerd registries config path=/etc/rancher/k3s/registries.yaml
+2026/02/27 14:28:06 INFO placed airgap images for K3S auto-import path=/var/lib/rancher/k3s/agent/images/k3s-airgap-images.tar.zst
+2026/02/27 14:28:06 INFO importing airgap images into running containerd file=/root/.aima/dist/linux-arm64/k3s-airgap-images.tar.zst
+2026/02/27 14:28:06 INFO installing stack component name=k3s method=binary
+2026/02/27 14:28:06 INFO using local binary path=/root/.aima/dist/linux-arm64/k3s
+2026/02/27 14:28:07 INFO installed binary to system path path=/usr/local/bin/k3s
+2026/02/27 14:28:07 INFO wrote systemd unit path=/etc/systemd/system/k3s.service
+2026/02/27 14:28:09 INFO daemon installed as systemd service name=k3s unit=/etc/systemd/system/k3s.service
+2026/02/27 14:28:12 INFO stack component verified name=k3s
+2026/02/27 14:28:12 INFO importing airgap images via containerd file=/root/.aima/dist/linux-arm64/hami-airgap-images.tar
+2026/02/27 14:28:14 INFO airgap images imported successfully
+2026/02/27 14:28:14 INFO installing stack component name=hami method=helm
+2026/02/27 14:28:14 INFO applying HelmChart CRD via k3s kubectl name=hami
+2026/02/27 14:28:20 INFO stack component verified name=hami
+  [OK] k3s: installed and verified
+  [OK] hami: installed and verified
+All components ready. Run aima serve to begin.
+观察: K3S 和 HAMi 均安装并验证成功（[OK] 状态）。无需下载（使用预置 airgap 镜像）。
+      K3S binary 来自本地 dist 目录，安装到 /usr/local/bin/k3s，注册为 systemd 服务。
+      HAMi 通过 HelmChart CRD 安装。历史 known issue（HAMi 在 GB10 崩溃）在本轮未复现。
+
+--- 步骤 5: 验证初始化结果 ---
+时间: 14:28:29
+操作: ~/aima status (post-init)
+结果: SUCCESS
+输出:
+{
+  "deployments": [],
+  "hardware": { ... (same as step 2, GPU/CPU/RAM confirmed) ... },
+  "metrics": { ... }
+}
+NOTE: runtime changed from "native" to "k3s" (log line: "runtime selected runtime=k3s")
+观察: 初始化后 runtime 自动切换为 k3s，表明 K3S 已就绪并被 AIMA 成功识别。
+      deployments 为空（正常，还未部署任何服务）。硬件信息与步骤 2 一致。
+      验收标准通过：K3S 相关组件显示已就绪状态。
+
+=== 场景总结 ===
+整体结果: PASS
+通过的步骤: 步骤2(硬件检测), 步骤3(知识库验证), 步骤4(初始化), 步骤5(初始化结果验证)
+失败/阻塞的步骤: 步骤1 PARTIAL - "aima version" 命令不存在（手册文档与实际不符）
+根本原因分析:
+  - 核心功能全部正常：硬件检测准确，知识库完整，K3S+HAMi 初始化成功
+  - 唯一问题是 "aima version" 命令不在 AIMA 二进制中，手册文档有误
+  - K3S runtime 在 init 后自动切换，符合预期
+  - 注意：L2 知识库匹配未生效（所有配置来源为 L0），但这不影响功能
+建议的修复方向:
+  - [低优先级] 手册第三节删除 "aima version" 命令，或在二进制中添加该命令
+  - [信息] 可考虑在 "aima status" 输出中增加软件版本信息字段

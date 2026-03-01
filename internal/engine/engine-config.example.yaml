@@ -1,0 +1,31 @@
+# AIMA Engine Configuration
+#
+# 此文件用于定义自定义引擎映射
+# 格式: 镜像模式: 引擎类型
+#
+# 示例:
+#   my-custom-llama: llamacpp
+#   company-tensorrt: tensorrtllm
+#
+# 匹配规则:
+#   - 如果镜像名包含模式字符串，就匹配到对应引擎类型
+#   - 支持通配符: * 表示任意字符
+#   - 不区分大小写
+#
+# 已知引擎类型:
+#   - llamacpp (llama.cpp)
+#   - vllm
+#   - sglang
+#   - ollama
+#   - lmdeploy (Turbomind)
+#   - tensorrtllm (TensorRT-LLM)
+#   - triton
+
+# 示例 1: 自定义 llama 镜像
+# my-custom-llama-box: llamacpp
+
+# 示例 2: 公司内部 TensorRT 镜像
+# company-tensorrt-server: tensorrtllm
+
+# 示例 3: 第三方推理服务
+# third-party-inference: llamacpp

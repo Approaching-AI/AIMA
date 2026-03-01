@@ -164,6 +164,49 @@ GPU 资源名不再硬编码 `nvidia.com/gpu`，而是从 Hardware Profile 的 `
 - Intel: `gpu.intel.com/i915`
 
 HAMi annotation 的 vendor 前缀通过 `GPUVendorDomain()` 从资源名自动推导。
+当 `resource_name` 为空时，Pod 不生成 GPU 资源请求（无 `resources.limits` 中的 GPU 项）。
+
+### 厂商无关容器访问
+
+Pod 模板不包含任何厂商特定逻辑。所有容器访问配置从 Hardware Profile YAML 的 `container` 字段读取：
+
+```
+Hardware Profile YAML                    Pod YAML 渲染
+┌─────────────────────┐                 ┌──────────────────────────┐
+│ container:          │                 │ env:                     │
+│   devices:          │ ──→ volumes +   │   - name: LD_PRELOAD     │
+│     - /dev/kfd      │     volumeMounts│     value: /opt/rocm/... │
+│     - /dev/dri      │                 │ volumeMounts:            │
+│   env:              │ ──→ env:        │   - name: dev-kfd        │
+│     LD_PRELOAD: ... │                 │     mountPath: /dev/kfd  │
+│   security:         │ ──→ security    │ securityContext:         │
+│     supplemental_   │     Context     │   supplementalGroups:    │
+│     groups: [44,110]│                 │     - 44                 │
+└─────────────────────┘                 │     - 110                │
+                                        └──────────────────────────┘
+```
+
+**Env 合并规则**：Hardware Profile 的 `container.env`（基础层）与 Engine YAML 的 `startup.env`（覆盖层）合并。
+当同名 key 冲突时，**引擎 env 优先**（引擎比硬件更了解运行时需求）。
+
+**NVIDIA 示例** (`nvidia-rtx4060-x86.yaml`):
+```yaml
+container:
+  env:
+    NVIDIA_VISIBLE_DEVICES: "all"
+    NVIDIA_DRIVER_CAPABILITIES: "all"
+    LD_LIBRARY_PATH: "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+```
+
+**AMD 示例** (`amd-radeon-x86.yaml`):
+```yaml
+container:
+  devices: ["/dev/kfd", "/dev/dri"]
+  env:
+    LD_PRELOAD: "/opt/rocm/lib/librocm_smi64.so"
+  security:
+    supplemental_groups: [44, 110]
+```
 
 ### 最小部署
 
@@ -199,8 +242,9 @@ kubectl delete pod <pod-name>
 ## 相关文件
 
 - `internal/k3s/client.go` - K3S 客户端封装
-- `internal/knowledge/podgen.go` - Pod YAML 生成
+- `internal/knowledge/podgen.go` - Pod YAML 生成（厂商无关模板）
+- `catalog/hardware/*.yaml` - Hardware Profile（含 `container` 厂商特定配置）
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-02-28*

@@ -1,0 +1,126 @@
+=== AIMA UAT Log ===
+机器: linux-1
+日期: 2026-02-27 14:44
+测试员: linux1-tester (Claude Code Agent)
+场景: B — 单模型 VLLM 部署验证 (qwen3-8b)
+
+--- 步骤 1: 检查模型状态 ---
+时间: 14:29:13
+操作: ~/aima model list
+结果: SUCCESS (但 qwen3-8b 不在列表中)
+输出: 列表共 25 个模型，其中包含 Qwen3-0.6B-Q8_0, DeepSeek-R1-70B, Qwen2.5-32B 等，
+     无 qwen3-8b (safetensors 格式)。
+观察: qwen3-8b 未在本地注册，需要 pull 或 scan+import。
+
+--- 步骤 2: 扫描+拉取模型 ---
+时间: 14:30:41
+操作: ~/aima model pull qwen3-8b
+结果: SUCCESS（模型下载完成）
+输出:
+2026/02/27 14:30:41 INFO runtime selected runtime=k3s
+Pulling model qwen3-8b...
+2026/02/27 14:30:41 INFO model pull: inferred format engine=vllm format=safetensors
+2026/02/27 14:30:41 INFO downloading via HuggingFace HTTP repo=Qwen/Qwen3-8B endpoint=https://hf-mirror.com
+2026/02/27 14:30:43 INFO repo file list retrieved files=14 total_size_mb=15637
+...（逐一下载 14 个文件）...
+2026/02/27 14:42:02 INFO downloading file progress=[14/14] file=vocab.json size_mb=2
+Model qwen3-8b downloaded successfully
+观察: 下载成功，约 11 分钟完成 15.6 GB 下载（约 24 MB/s）。
+     模型存储路径: /home/qujing/.aima/models/qwen3-8b/
+     ISSUE 发现：下载完成后 model list 仍然 25 条，qwen3-8b 未自动注册到数据库。
+
+操作（补充）: ~/aima model import ~/.aima/models/qwen3-8b
+结果: SUCCESS
+输出:
+{"id":"e6be7481a03de8a770ce2f3f4d96a776caaf62b0eba06ab44e8cb2b3b708cb7b","name":"qwen3-8b",
+"type":"llm","path":"/home/qujing/.aima/models/qwen3-8b","format":"safetensors",
+"size_bytes":16381516776,"detected_arch":"qwen","detected_params":"7B","model_class":"dense",
+"total_params":7247757312,"active_params":7247757312,"quantization":"bf16","quant_src":"config"}
+观察: 手动 import 后成功注册。差异记录：model pull 完成后应自动注册到 DB，实际上需要再手动 import。
+
+--- 步骤 3: 检查引擎准备情况 ---
+时间: 14:29:48
+操作: ~/aima engine list && ~/aima engine scan
+结果: SUCCESS
+输出（引擎列表）:
+- llamacpp native binary: ~/.aima/dist/linux-amd64/llama-server (available)
+- zhiwen-llama-box:v3.3.1 container (llamacpp, available)
+- zhiwen-vllm:v3.3.1 container (vllm, available)
+扫描额外发现: ghcr.io/ggml-org/llama.cpp:server, ghcr.nju.edu.cn/ggerganov/llama.cpp 等
+观察: VLLM 引擎 (zhiwen-vllm:v3.3.1) 已在本地，无需拉取。engine info vllm 确认 zhiwen-vllm
+     被识别为 vllm 类型引擎。
+
+--- 步骤 4: 解析配置（预演）---
+时间: 14:44:47
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: SUCCESS
+输出:
+{
+  "Engine": "vllm", "EngineImage": "vllm/vllm-openai:v0.8.5",
+  "Config": {"dtype":"auto","gpu_memory_utilization":0.8,"max_model_len":4096,"port":8000},
+  "Provenance": {"dtype":"L0","gpu_memory_utilization":"L0","max_model_len":"L0","port":"L0"},
+  "RuntimeRecommendation": "container", "GPUResourceName": "nvidia.com/gpu",
+  "RuntimeClassName": "nvidia"
+}
+观察: 所有参数来自 L0（默认值），无 L2 覆盖。
+     重要发现：EngineImage 为 vllm/vllm-openai:v0.8.5，但本地已有的是 zhiwen-vllm:v3.3.1。
+     AIMA 会使用哪个镜像是关键问题。
+
+--- 步骤 5: 部署模型 ---
+时间: 14:44:56
+操作: ~/aima deploy qwen3-8b --engine vllm
+结果: PARTIAL（命令成功创建 Pod，但 Pod 无法调度）
+输出:
+2026/02/27 14:44:56 INFO runtime selected runtime=k3s
+2026/02/27 14:44:56 INFO kubectl apply output="pod/qwen3-8b-vllm created\n"
+{
+  "engine": "vllm", "model": "qwen3-8b", "runtime": "k3s",
+  "slot": "primary", "status": "deploying"
+}
+观察: Pod 已创建，但状态持续为 Pending，超过 10 分钟未调度。
+根本原因分析（测试员判断）：
+  检查 K3S 集群状态发现：
+  1. HAMi 安装时配置了 kubeScheduler.enabled: false（仅作为 extender，不是独立 scheduler）
+  2. AIMA 生成的 Pod YAML 中包含 schedulerName: hami-scheduler
+  3. 由于不存在名为 hami-scheduler 的独立调度器，该 Pod 永远无法被调度
+  4. 这是 AIMA Pod 生成逻辑与 HAMi 安装配置的不匹配
+  
+  具体证据：
+  - k3s kubectl get pods: STATUS=Pending，NOMINATED NODE=<none>，无 Events
+  - HelmChart valuesContent 显示: kubeScheduler.enabled: false
+  - Pod YAML: schedulerName: hami-scheduler（与 HAMi 配置矛盾）
+  - 如果 HAMi 作为 extender，Pod 应使用默认的 default-scheduler
+
+--- 步骤 6-7: 未执行 ---
+时间: N/A
+原因: 步骤 5 Pod 无法调度，部署从未就绪，无法启动 aima serve 或测试推理 API。
+
+=== 场景总结 ===
+整体结果: BLOCKED
+通过的步骤:
+  - 步骤1: 模型状态检查 SUCCESS（发现无 qwen3-8b）
+  - 步骤2: 模型下载+导入 SUCCESS（需要额外 model import 步骤）
+  - 步骤3: 引擎检查 SUCCESS（zhiwen-vllm 已就绪）
+  - 步骤4: 配置解析 SUCCESS
+失败/阻塞的步骤:
+  - 步骤5: BLOCKED — Pod 调度失败（schedulerName: hami-scheduler 但该 scheduler 不存在）
+  - 步骤6: 未执行（依赖步骤5）
+  - 步骤7: 未执行（依赖步骤6）
+
+根本原因分析:
+  AIMA 在 K3S + HAMi 模式下生成 Pod 时，硬编码了 schedulerName: hami-scheduler。
+  但 HAMi 有两种安装模式：
+    (A) 独立 scheduler 模式（kubeScheduler.enabled: true）：此时确实有名为 hami-scheduler 的 Pod
+    (B) Extender 模式（kubeScheduler.enabled: false）：HAMi 作为 kube-scheduler 的 extender，
+        此时 Pod 应使用 schedulerName: default-scheduler
+  本机安装的是模式 B（extender），但 AIMA 使用了模式 A 的 Pod 配置，导致调度死锁。
+
+建议的修复方向:
+  1. AIMA 在生成 K3S Pod 时，检测 HAMi 安装模式：
+     - 若 hami-scheduler pod 存在 → 使用 schedulerName: hami-scheduler
+     - 若 hami-scheduler pod 不存在 → 使用 schedulerName: default-scheduler（extender 模式）
+  2. 或者修改 aima init 安装 HAMi 时统一选择模式 A（独立 scheduler），确保一致性
+  3. 次要问题：model pull 完成后应自动 import 到 DB，当前需要额外手动步骤
+
+附加发现（手册差异）:
+  - "aima version" 命令不存在（手册 §三 提及，实际未实现）

@@ -1,0 +1,201 @@
+=== AIMA UAT Log ===
+机器: amd395
+日期: 2026-02-27 14:27
+测试员: amd395-tester (Claude Agent)
+场景: A — K3S 基础设施初始化验证
+
+--- 步骤 1: 验证 AIMA 可执行 ---
+时间: 14:26:30
+操作: chmod +x ~/aima && ~/aima version
+结果: PARTIAL
+输出:
+  aima: unknown command "version" for "aima"
+  (二进制正常响应，但无 "version" 子命令)
+
+观察: AIMA 二进制可正常执行，但当前版本未实现 "version" 子命令。
+      运行 --help 确认二进制正常，可用命令为:
+      agent, ask, completion, deploy, engine, help, init, knowledge, model, serve, status, undeploy
+
+--- 步骤 2: 执行硬件检测 ---
+时间: 14:26:44
+操作: ~/aima status
+结果: SUCCESS
+输出:
+  {
+    "deployments": [
+      {
+        "name": "Qwen3-0.6B-Q8_0",
+        "phase": "stopped",
+        "ready": false,
+        "address": "127.0.0.1:8080",
+        "labels": {
+          "aima.dev/engine": "llamacpp",
+          "aima.dev/model": "Qwen3-0.6B-Q8_0",
+          "aima.dev/port": "8080",
+          "aima.dev/slot": "primary"
+        },
+        "start_time": "2026-02-27T11:37:35Z",
+        "runtime": "native"
+      }
+    ],
+    "hardware": {
+      "gpu": {
+        "vendor": "amd",
+        "name": "AMD Radeon Graphics",
+        "arch": "RDNA3.5",
+        "vram_mib": 65536,
+        "compute_capability": "",
+        "driver_version": "",
+        "cuda_version": "",
+        "power_draw_watts": 9.031,
+        "temperature_celsius": 33,
+        "unified_memory": true,
+        "count": 1
+      },
+      "npu": {
+        "vendor": "amd",
+        "name": "NPU Strix Halo",
+        "firmware_version": "255.0.11.71",
+        "driver": "amdxdna",
+        "count": 1
+      },
+      "cpu": {
+        "arch": "amd64",
+        "model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+        "cores": 16,
+        "threads": 32,
+        "freq_ghz": 2
+      },
+      "ram": {
+        "total_mib": 63937,
+        "available_mib": 60956
+      },
+      "storage": {
+        "data_dir_path": "/home/quings/.aima",
+        "free_mib": 571136
+      },
+      "os": {
+        "os": "linux",
+        "arch": "amd64",
+        "version": "\"24.04\""
+      }
+    },
+    "metrics": {
+      "gpu": {
+        "utilization_percent": 0,
+        "memory_used_mib": 147,
+        "memory_total_mib": 65536,
+        "temperature_celsius": 33,
+        "power_draw_watts": 10.01
+      },
+      "cpu": {
+        "usage_percent": 0
+      },
+      "ram": {
+        "used_mib": 2984,
+        "available_mib": 60953,
+        "total_mib": 63937
+      }
+    }
+  }
+
+观察: GPU 检测正确：AMD Radeon Graphics，RDNA3.5，65536 MiB VRAM（unified memory）。
+      NPU 也被正确检测：NPU Strix Halo，firmware 255.0.11.71，驱动 amdxdna。
+      CPU: AMD Ryzen AI MAX+ 395，16核32线程。RAM: 64 GB 系统内存，使用中统一显存。
+      注意：driver_version 和 cuda_version 为空（AMD GPU，无 CUDA，符合预期）。
+      注意：运行时显示 runtime=native（K3S 尚未安装时）。
+
+--- 步骤 3: 验证知识库覆盖 ---
+时间: 14:26:53
+操作: ~/aima knowledge list
+结果: SUCCESS
+输出:
+  {
+    "engine_assets": 5,
+    "engines": ["llamacpp-universal", "llamacpp-vulkan", "sglang-universal", "vllm-ada", "vllm-blackwell"],
+    "hardware_profiles": 5,
+    "model_assets": 8,
+    "models": ["qwen3-14b", "qwen3-30b-a3b", "qwen3-32b", "qwen3-4b", "qwen3-8b", "qwen3-asr-1.7b", "qwen3-coder-next-fp8", "qwen3.5-35b-a3b"],
+    "partition_strategies": 2,
+    "profiles": ["amd-radeon-8060s-x86", "apple-m4-arm64", "nvidia-gb10-arm64", "nvidia-rtx4060-x86", "nvidia-rtx4090-x86"]
+  }
+
+观察: 知识库已加载。硬件 profile "amd-radeon-8060s-x86" 存在，与本机 GPU 匹配。
+      引擎资产中有 llamacpp-vulkan，适合 AMD GPU（使用 Vulkan 后端）。
+      注意：没有 vllm-rdna 或 vllm-rocm 类型的引擎资产，这是后续 AMD VLLM 探查的关键发现。
+
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: FAIL
+输出:
+  aima: resolve config for qwen3-8b: no engine asset for type "vllm" gpu_arch "RDNA3.5"
+
+观察: VLLM 在 RDNA3.5 上无 catalog 条目，catalog gap 确认。
+
+--- 步骤 4: 执行初始化 ---
+时间: 14:28:05
+操作: sudo ~/aima init --yes
+结果: SUCCESS
+输出:
+  2026/02/27 14:28:05 INFO runtime selected runtime=native
+  Initializing AIMA infrastructure stack...
+  2026/02/27 14:28:05 INFO wrote containerd registries config path=/etc/rancher/k3s/registries.yaml
+  2026/02/27 14:28:05 INFO placed airgap images for K3S auto-import path=/var/lib/rancher/k3s/agent/images/k3s-airgap-images.tar.zst
+  2026/02/27 14:28:05 INFO importing airgap images into running containerd file=/root/.aima/dist/linux-amd64/k3s-airgap-images.tar.zst
+  2026/02/27 14:28:05 INFO installing stack component name=k3s method=binary
+  2026/02/27 14:28:05 INFO using local binary path=/root/.aima/dist/linux-amd64/k3s
+  2026/02/27 14:28:05 INFO installed binary to system path path=/usr/local/bin/k3s
+  2026/02/27 14:28:05 INFO wrote systemd unit path=/etc/systemd/system/k3s.service
+  2026/02/27 14:28:08 INFO daemon installed as systemd service name=k3s unit=/etc/systemd/system/k3s.service
+  2026/02/27 14:28:11 INFO stack component verified name=k3s
+  2026/02/27 14:28:11 INFO importing airgap images via containerd file=/root/.aima/dist/linux-amd64/hami-airgap-images.tar
+  2026/02/27 14:28:14 INFO airgap images imported successfully
+  2026/02/27 14:28:14 INFO installing stack component name=hami method=helm
+  2026/02/27 14:28:14 INFO applying HelmChart CRD via k3s kubectl name=hami
+  2026/02/27 14:28:20 INFO stack component verified name=hami
+    [OK] k3s: installed and verified
+    [OK] hami: installed and verified
+
+  All components ready. Run 'aima serve' to begin.
+
+观察: K3S 和 HAMi 均安装成功！两个组件都显示 [OK]。
+      整个初始化耗时约 15 秒（airgap 离线安装，无网络等待）。
+      注意：初始化需要 root 权限（sudo），以普通用户运行会得到明确的错误提示：
+      "init: root privileges required: installing k3s needs to write to /etc and /usr/local/bin"
+      这个错误信息清晰友好。
+
+--- 步骤 5: 验证初始化结果 ---
+时间: 14:28:29
+操作: ~/aima status（初始化后）
+结果: SUCCESS
+输出:
+  {
+    "deployments": [...同步骤2...],
+    "hardware": {...同步骤2...}
+  }
+  (runtime 日志从 "native" 变为 "k3s")
+
+观察: 关键变化：运行时日志从 "runtime=native" 变为 "runtime=k3s"，
+      确认 AIMA 已检测到 K3S 安装并切换到 K3S 运行时模式。
+      硬件检测数据一致，GPU/NPU/CPU/RAM 信息与初始化前相同。
+
+=== 场景总结 ===
+整体结果: PASS（含一个次要发现）
+通过的步骤:
+  - 步骤 2: 硬件检测成功，AMD Radeon RDNA3.5 + NPU Strix Halo 均正确识别
+  - 步骤 3: 知识库正确加载，amd-radeon-8060s-x86 硬件 profile 匹配本机
+  - 步骤 4: K3S + HAMi 初始化成功，两个组件均 [OK]（耗时 ~15 秒）
+  - 步骤 5: 初始化后运行时切换为 k3s，状态更新正确
+
+失败/阻塞的步骤:
+  - 步骤 1: "version" 子命令不存在（次要问题，不影响功能）
+  - 步骤 3（子步骤）: aima knowledge resolve qwen3-8b --engine vllm 返回 catalog gap
+    错误："no engine asset for type vllm gpu_arch RDNA3.5"
+    这是已知的 AMD VLLM catalog 缺口，不阻塞场景 A 其他步骤。
+
+根本原因分析:
+  场景 A 核心验收标准全部满足。"version" 命令缺失为功能缺口（非阻塞）。
+  VLLM catalog gap 是本轮 AMD 探查的主要发现，详见 AMD VLLM 探查日志。
+
+建议的修复方向:
+  1. 添加 "aima version" 子命令（低优先级，手册中引用了此命令）
+  2. 在 catalog 中添加 vllm-rocm 引擎资产（支持 RDNA3.5/ROCm），见 AMD VLLM 探查日志详情

@@ -86,6 +86,12 @@ type ToolDeps struct {
 
 	// Knowledge (summary)
 	ListKnowledgeSummary func(ctx context.Context) (json.RawMessage, error)
+
+	// Fleet management
+	FleetListDevices func(ctx context.Context) (json.RawMessage, error)
+	FleetDeviceInfo  func(ctx context.Context, deviceID string) (json.RawMessage, error)
+	FleetDeviceTools func(ctx context.Context, deviceID string) (json.RawMessage, error)
+	FleetExecTool    func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error)
 }
 
 // isCommandAllowed checks if a command is in the whitelist.
@@ -335,7 +341,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				Runtime string `json:"runtime"`
 			}
 			if len(params) > 0 {
-				json.Unmarshal(params, &p)
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			if p.Runtime == "" {
 				p.Runtime = "auto"
@@ -400,7 +408,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			}
 			var p struct{ Name string `json:"name"` }
 			if len(params) > 0 {
-				json.Unmarshal(params, &p) //nolint:errcheck
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			name := p.Name
 			// Empty name is handled by the PullEngine implementation (uses catalog.DefaultEngine)
@@ -828,7 +838,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				AllowDownload bool `json:"allow_download"`
 			}
 			if len(params) > 0 {
-				json.Unmarshal(params, &p)
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			data, err := deps.StackInit(ctx, p.AllowDownload)
 			if err != nil {
@@ -1323,6 +1335,103 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return nil, fmt.Errorf("get config %s: %w", p.Key, err)
 			}
 			return TextResult(val), nil
+		},
+	})
+
+	// fleet.list_devices
+	s.RegisterTool(&Tool{
+		Name:        "fleet.list_devices",
+		Description: "List all AIMA devices discovered on the LAN",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.FleetListDevices == nil {
+				return ErrorResult("fleet.list_devices not implemented"), nil
+			}
+			data, err := deps.FleetListDevices(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("fleet list devices: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// fleet.device_info
+	s.RegisterTool(&Tool{
+		Name:        "fleet.device_info",
+		Description: "Get detailed info about a specific fleet device (hardware, status)",
+		InputSchema: schema(`"device_id":{"type":"string","description":"Device ID (lowercase mDNS instance name)"}`, "device_id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.FleetDeviceInfo == nil {
+				return ErrorResult("fleet.device_info not implemented"), nil
+			}
+			var p struct{ DeviceID string `json:"device_id"` }
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.DeviceID == "" {
+				return ErrorResult("device_id is required"), nil
+			}
+			data, err := deps.FleetDeviceInfo(ctx, p.DeviceID)
+			if err != nil {
+				return nil, fmt.Errorf("fleet device info %s: %w", p.DeviceID, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// fleet.device_tools
+	s.RegisterTool(&Tool{
+		Name:        "fleet.device_tools",
+		Description: "List available MCP tools on a specific fleet device",
+		InputSchema: schema(`"device_id":{"type":"string","description":"Device ID (lowercase mDNS instance name)"}`, "device_id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.FleetDeviceTools == nil {
+				return ErrorResult("fleet.device_tools not implemented"), nil
+			}
+			var p struct{ DeviceID string `json:"device_id"` }
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.DeviceID == "" {
+				return ErrorResult("device_id is required"), nil
+			}
+			data, err := deps.FleetDeviceTools(ctx, p.DeviceID)
+			if err != nil {
+				return nil, fmt.Errorf("fleet device tools %s: %w", p.DeviceID, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// fleet.exec_tool
+	s.RegisterTool(&Tool{
+		Name:        "fleet.exec_tool",
+		Description: "Execute an MCP tool on a remote fleet device",
+		InputSchema: schema(
+			`"device_id":{"type":"string","description":"Device ID (lowercase mDNS instance name)"},`+
+				`"tool_name":{"type":"string","description":"MCP tool name (e.g. hardware.detect)"},`+
+				`"params":{"type":"object","description":"Tool parameters (optional)"}`,
+			"device_id", "tool_name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.FleetExecTool == nil {
+				return ErrorResult("fleet.exec_tool not implemented"), nil
+			}
+			var p struct {
+				DeviceID string          `json:"device_id"`
+				ToolName string          `json:"tool_name"`
+				Params   json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.DeviceID == "" || p.ToolName == "" {
+				return ErrorResult("device_id and tool_name are required"), nil
+			}
+			data, err := deps.FleetExecTool(ctx, p.DeviceID, p.ToolName, p.Params)
+			if err != nil {
+				return nil, fmt.Errorf("fleet exec %s on %s: %w", p.ToolName, p.DeviceID, err)
+			}
+			return TextResult(string(data)), nil
 		},
 	})
 }

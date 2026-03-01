@@ -39,11 +39,12 @@ func cloneBackend(b *Backend) *Backend {
 
 // Server is the HTTP inference proxy.
 type Server struct {
-	addr   string
-	apiKey string
-	routes map[string]*Backend
-	mu     sync.RWMutex
-	server *http.Server
+	addr        string
+	apiKey      string
+	routes      map[string]*Backend
+	mu          sync.RWMutex
+	server      *http.Server
+	extraRoutes func(*http.ServeMux)
 }
 
 // Option configures Server.
@@ -55,6 +56,10 @@ func WithAddr(addr string) Option {
 
 func WithAPIKey(key string) Option {
 	return func(s *Server) { s.apiKey = key }
+}
+
+func WithExtraRoutes(fn func(*http.ServeMux)) Option {
+	return func(s *Server) { s.extraRoutes = fn }
 }
 
 // SetAddr configures the listen address. Must be called before Start.
@@ -69,6 +74,13 @@ func (s *Server) SetAPIKey(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.apiKey = key
+}
+
+// SetExtraRoutes configures additional routes to register on the mux. Must be called before Start.
+func (s *Server) SetExtraRoutes(fn func(*http.ServeMux)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.extraRoutes = fn
 }
 
 func NewServer(opts ...Option) *Server {
@@ -119,6 +131,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("proxy listen: %w", err)
 	}
+	defer ln.Close()
 	slog.Info("proxy server starting", "addr", ln.Addr().String())
 
 	// Watch for context cancellation
@@ -152,6 +165,10 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.handleInference)
 	mux.HandleFunc("/v1/completions", s.handleInference)
 	mux.HandleFunc("/v1/embeddings", s.handleInference)
+
+	if s.extraRoutes != nil {
+		s.extraRoutes(mux)
+	}
 
 	var h http.Handler = mux
 	s.mu.RLock()

@@ -113,7 +113,6 @@ func run() error {
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
 	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir, factoryDigests)
-	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 9. Create agent (L3a Go Agent)
 	toolAdapter := &mcpToolAdapter{server: mcpServer}
@@ -121,16 +120,38 @@ func run() error {
 	goAgent := agent.NewAgent(llmClient, toolAdapter)
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
 
+	// 9b. Wire agent-related ToolDeps (dispatcher/zeroclaw created after buildToolDeps)
+	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error) {
+		result, err := dispatcher.Ask(ctx, query, agent.DispatchOption{ForceLocal: forceLocal, ForceDeep: forceDeep, SessionID: sessionID})
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"result": result})
+	}
+	deps.AgentInstall = func(ctx context.Context) (json.RawMessage, error) {
+		binPath, err := zeroclaw.Install(ctx, filepath.Join(dataDir, "bin"))
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"path": binPath})
+	}
+	deps.AgentStatus = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(map[string]any{
+			"zeroclaw_available": zeroClawMgr.Available(),
+			"zeroclaw_healthy":   zeroClawMgr.Health(),
+		})
+	}
+
+	// 9c. Register all tools (after all deps are fully wired)
+	mcp.RegisterAllTools(mcpServer, deps)
+
 	// 10. Build App and run CLI
 	app := &cli.App{
-		DB:         db,
-		Catalog:    cat,
-		Proxy:      proxyServer,
-		MCP:        mcpServer,
-		Dispatcher: dispatcher,
-		ZeroClaw:   zeroClawMgr,
-		DataDir:    dataDir,
-		ToolDeps:   deps,
+		DB:      db,
+		Catalog: cat,
+		Proxy:   proxyServer,
+		MCP:     mcpServer,
+		ToolDeps: deps,
 	}
 
 	rootCmd := cli.NewRootCmd(app)
@@ -463,7 +484,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	slog.Info("model not in catalog, using auto-detected config",
 		"model", dbModel.Name, "format", dbModel.Format, "path", dbModel.Path)
 
-	synth := knowledge.BuildSyntheticModelAsset(
+	synth := cat.BuildSyntheticModelAsset(
 		dbModel.Name, dbModel.Type, dbModel.DetectedArch, dbModel.DetectedParams, dbModel.Format)
 	cat.RegisterModel(synth)
 
@@ -632,7 +653,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
 				sources := []model.Source{{Type: matchedVariant.Source.Type, Repo: matchedVariant.Source.Repo}}
 				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-					return err
+					return fmt.Errorf("download model %s: %w", name, err)
 				}
 				return registerPulledModel(ctx, destPath, dataDir, db)
 			}
@@ -658,7 +679,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
 				sources := []model.Source{{Type: resolvedVariant.Source.Type, Repo: resolvedVariant.Source.Repo}}
 				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-					return err
+					return fmt.Errorf("download model %s: %w", name, err)
 				}
 				return registerPulledModel(ctx, destPath, dataDir, db)
 			}
@@ -679,7 +700,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return fmt.Errorf("no download source for model %q with format %q", name, requiredFormat)
 			}
 			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-				return err
+				return fmt.Errorf("download model %s: %w", name, err)
 			}
 			return registerPulledModel(ctx, destPath, dataDir, db)
 		},
@@ -708,7 +729,17 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}); err != nil {
 				return nil, fmt.Errorf("register imported model: %w", err)
 			}
-			return json.Marshal(info)
+			// Wrap info with engine_hint derived from catalog (INV-5: MCP response is the source of truth)
+			raw, err := json.Marshal(info)
+			if err != nil {
+				return nil, err
+			}
+			var result map[string]any
+			json.Unmarshal(raw, &result) //nolint:errcheck
+			if hint := cat.FormatToEngine(info.Format); hint != "" {
+				result["engine_hint"] = hint
+			}
+			return json.Marshal(result)
 		},
 		GetModelInfo: func(ctx context.Context, name string) (json.RawMessage, error) {
 			m, err := db.GetModel(ctx, name)
@@ -721,11 +752,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			// First get the model to find its ID and Path
 			m, err := db.GetModel(ctx, name)
 			if err != nil {
-				return err
+				return fmt.Errorf("find model %s: %w", name, err)
 			}
 			// Delete from database
 			if err := db.DeleteModel(ctx, m.ID); err != nil {
-				return err
+				return fmt.Errorf("delete model %s from database: %w", name, err)
 			}
 			// Delete files from disk if requested
 			if deleteFiles {
@@ -808,7 +839,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		PullEngine: func(ctx context.Context, name string) error {
 			if name == "" {
-				name = "llamacpp"
+				name = cat.DefaultEngine()
 			}
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			nameLower := strings.ToLower(name)
@@ -866,7 +897,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return fmt.Errorf("resolve path %s: %w", path, err)
 			}
 			if err := engine.Import(ctx, absPath, &execRunner{}); err != nil {
-				return err
+				return fmt.Errorf("import engine from %s: %w", path, err)
 			}
 			// Refresh DB: imported image only visible via runtime scan
 			_, _ = scanEnginesImpl(ctx, "auto")
@@ -1427,6 +1458,110 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				result["note"] = "overlay shadows factory asset, _base_digest injected"
 			}
 			return json.Marshal(result)
+		},
+		SystemStatus: func(ctx context.Context) (json.RawMessage, error) {
+			status := map[string]json.RawMessage{}
+			if hw, err := hal.Detect(ctx); err == nil {
+				if b, e := json.Marshal(hw); e == nil {
+					status["hardware"] = b
+				}
+			} else {
+				return nil, fmt.Errorf("detect hardware: %w", err)
+			}
+			// Non-fatal: K3S may not be running
+			if pods, err := rt.List(ctx); err == nil {
+				if b, e := json.Marshal(pods); e == nil {
+					status["deployments"] = b
+				}
+			}
+			if nativeRt != nil && nativeRt != rt {
+				if nativePods, err := nativeRt.List(ctx); err == nil && len(nativePods) > 0 {
+					if b, e := json.Marshal(nativePods); e == nil {
+						status["native_deployments"] = b
+					}
+				}
+			}
+			if m, err := hal.CollectMetrics(ctx); err == nil {
+				if b, e := json.Marshal(m); e == nil {
+					status["metrics"] = b
+				}
+			}
+			return json.Marshal(status)
+		},
+		ListKnowledgeSummary: func(ctx context.Context) (json.RawMessage, error) {
+			profilesRaw, err := json.Marshal(cat.HardwareProfiles)
+			if err != nil {
+				return nil, fmt.Errorf("marshal profiles: %w", err)
+			}
+			enginesRaw, err := json.Marshal(cat.EngineAssets)
+			if err != nil {
+				return nil, fmt.Errorf("marshal engines: %w", err)
+			}
+			modelsRaw, err := json.Marshal(cat.ModelAssets)
+			if err != nil {
+				return nil, fmt.Errorf("marshal models: %w", err)
+			}
+
+			var profiles []map[string]any
+			var engines []map[string]any
+			var models []map[string]any
+			if err := json.Unmarshal(profilesRaw, &profiles); err != nil {
+				return nil, fmt.Errorf("decode profiles: %w", err)
+			}
+			if err := json.Unmarshal(enginesRaw, &engines); err != nil {
+				return nil, fmt.Errorf("decode engines: %w", err)
+			}
+			if err := json.Unmarshal(modelsRaw, &models); err != nil {
+				return nil, fmt.Errorf("decode models: %w", err)
+			}
+
+			summary := map[string]any{
+				"hardware_profiles": len(profiles),
+				"engine_assets":     len(engines),
+				"model_assets":      len(models),
+			}
+
+			profileNames := make([]string, 0, len(profiles))
+			for _, hp := range profiles {
+				if n, ok := hp["name"].(string); ok && n != "" {
+					profileNames = append(profileNames, n)
+					continue
+				}
+				if n, ok := hp["id"].(string); ok && n != "" {
+					profileNames = append(profileNames, n)
+				}
+			}
+			summary["profiles"] = profileNames
+
+			engineNames := make([]string, 0, len(engines))
+			for _, ea := range engines {
+				if t, ok := ea["type"].(string); ok && t != "" {
+					engineNames = append(engineNames, t)
+					continue
+				}
+				if n, ok := ea["name"].(string); ok && n != "" {
+					engineNames = append(engineNames, n)
+					continue
+				}
+				if n, ok := ea["id"].(string); ok && n != "" {
+					engineNames = append(engineNames, n)
+				}
+			}
+			summary["engines"] = engineNames
+
+			modelNames := make([]string, 0, len(models))
+			for _, ma := range models {
+				if n, ok := ma["name"].(string); ok && n != "" {
+					modelNames = append(modelNames, n)
+					continue
+				}
+				if n, ok := ma["id"].(string); ok && n != "" {
+					modelNames = append(modelNames, n)
+				}
+			}
+			summary["models"] = modelNames
+
+			return json.Marshal(summary)
 		},
 		CatalogStatus: func(ctx context.Context) (json.RawMessage, error) {
 			factoryCat, _ := knowledge.LoadCatalog(catalog.FS)

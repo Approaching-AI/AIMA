@@ -70,33 +70,42 @@ type ToolDeps struct {
 	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
 
+	// Agent
+	DispatchAsk  func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error)
+	AgentInstall func(ctx context.Context) (json.RawMessage, error)
+	AgentStatus  func(ctx context.Context) (json.RawMessage, error)
+
 	// System
-	ExecShell func(ctx context.Context, command string) (json.RawMessage, error)
-	GetConfig func(ctx context.Context, key string) (string, error)
-	SetConfig func(ctx context.Context, key, value string) error
-}
+	SystemStatus func(ctx context.Context) (json.RawMessage, error)
+	ExecShell    func(ctx context.Context, command string) (json.RawMessage, error)
+	GetConfig    func(ctx context.Context, key string) (string, error)
+	SetConfig    func(ctx context.Context, key, value string) error
 
-// allowedCommands is the whitelist for shell.exec.
-// Single-word entries match exact command name. Multi-word entries match exact prefix.
-var allowedCommands = []string{
-	"nvidia-smi",
-	"df",
-	"free",
-	"uname",
-	"cat /proc/cpuinfo",
-}
-
-// allowedKubectlSubcommands restricts kubectl to read-only operations.
-var allowedKubectlSubcommands = map[string]bool{
-	"get":      true,
-	"describe": true,
-	"logs":     true,
-	"top":      true,
-	"version":  true,
+	// Knowledge (summary)
+	ListKnowledgeSummary func(ctx context.Context) (json.RawMessage, error)
 }
 
 // isCommandAllowed checks if a command is in the whitelist.
 func isCommandAllowed(command string) bool {
+	// allowedCommands is the whitelist for shell.exec.
+	// Single-word entries match exact command name. Multi-word entries match exact prefix.
+	allowedCommands := []string{
+		"nvidia-smi",
+		"df",
+		"free",
+		"uname",
+		"cat /proc/cpuinfo",
+	}
+
+	// allowedKubectlSubcommands restricts kubectl to read-only operations.
+	allowedKubectlSubcommands := map[string]bool{
+		"get":      true,
+		"describe": true,
+		"logs":     true,
+		"top":      true,
+		"version":  true,
+	}
+
 	cmd := strings.TrimSpace(command)
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
@@ -380,8 +389,8 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.pull
 	s.RegisterTool(&Tool{
 		Name:        "engine.pull",
-		Description: "Pull an inference engine. Downloads native binary or container image depending on platform. Defaults to llamacpp (fallback engine) if name is omitted.",
-		InputSchema: schema(`"name":{"type":"string","description":"Engine type (llamacpp, vllm, etc). Defaults to llamacpp (fallback engine) if omitted"}`),
+		Description: "Pull an inference engine. Downloads native binary or container image depending on platform. Defaults to the catalog's default engine if name is omitted.",
+		InputSchema: schema(`"name":{"type":"string","description":"Engine type (llamacpp, vllm, etc). Defaults to catalog default engine if omitted"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.PullEngine == nil {
 				return ErrorResult("engine.pull not implemented"), nil
@@ -391,9 +400,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				json.Unmarshal(params, &p) //nolint:errcheck
 			}
 			name := p.Name
-			if name == "" {
-				name = "llamacpp"
-			}
+			// Empty name is handled by the PullEngine implementation (uses catalog.DefaultEngine)
 			if err := deps.PullEngine(ctx, name); err != nil {
 				return nil, fmt.Errorf("pull engine %s: %w", name, err)
 			}
@@ -862,7 +869,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return ErrorResult("command is required"), nil
 			}
 			if !isCommandAllowed(p.Command) {
-				return ErrorResult(fmt.Sprintf("command not allowed: %s (allowed: %v)", p.Command, allowedCommands)), nil
+				return ErrorResult(fmt.Sprintf("command not allowed: %s (allowed: nvidia-smi, df, free, uname, cat /proc/cpuinfo, kubectl get/describe/logs/top/version)", p.Command)), nil
 			}
 			data, err := deps.ExecShell(ctx, p.Command)
 			if err != nil {
@@ -1093,6 +1100,108 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.CatalogStatus(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("catalog status: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// system.status
+	s.RegisterTool(&Tool{
+		Name:        "system.status",
+		Description: "Get comprehensive system status: hardware, deployments, and metrics in a single call",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.SystemStatus == nil {
+				return ErrorResult("system.status not implemented"), nil
+			}
+			data, err := deps.SystemStatus(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("system status: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.list
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.list",
+		Description: "List a summary of all knowledge assets: hardware profiles, engine assets, and model assets with their names",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ListKnowledgeSummary == nil {
+				return ErrorResult("knowledge.list not implemented"), nil
+			}
+			data, err := deps.ListKnowledgeSummary(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("knowledge list: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.ask
+	s.RegisterTool(&Tool{
+		Name:        "agent.ask",
+		Description: "Route a query through the dispatcher: auto-selects L3a (Go Agent) or L3b (ZeroClaw) based on complexity",
+		InputSchema: schema(
+			`"query":{"type":"string","description":"The question to ask"},`+
+				`"force_local":{"type":"boolean","description":"Force use of Go Agent (L3a)"},`+
+				`"force_deep":{"type":"boolean","description":"Force use of ZeroClaw (L3b)"},`+
+				`"session_id":{"type":"string","description":"Continue a ZeroClaw session by ID"}`,
+			"query"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DispatchAsk == nil {
+				return ErrorResult("agent.ask not implemented"), nil
+			}
+			var p struct {
+				Query      string `json:"query"`
+				ForceLocal bool   `json:"force_local"`
+				ForceDeep  bool   `json:"force_deep"`
+				SessionID  string `json:"session_id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Query == "" {
+				return ErrorResult("query is required"), nil
+			}
+			data, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SessionID)
+			if err != nil {
+				return nil, fmt.Errorf("agent ask: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.install
+	s.RegisterTool(&Tool{
+		Name:        "agent.install",
+		Description: "Install the ZeroClaw sidecar binary",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AgentInstall == nil {
+				return ErrorResult("agent.install not implemented"), nil
+			}
+			data, err := deps.AgentInstall(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("install agent: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.status
+	s.RegisterTool(&Tool{
+		Name:        "agent.status",
+		Description: "Show agent subsystem availability: ZeroClaw binary presence and health",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AgentStatus == nil {
+				return ErrorResult("agent.status not implemented"), nil
+			}
+			data, err := deps.AgentStatus(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("agent status: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

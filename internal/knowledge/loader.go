@@ -144,9 +144,11 @@ type EngineAsset struct {
 }
 
 type EngineMetadata struct {
-	Name    string `yaml:"name"    json:"name"`
-	Type    string `yaml:"type"    json:"type"`
-	Version string `yaml:"version" json:"version"`
+	Name             string   `yaml:"name"              json:"name"`
+	Type             string   `yaml:"type"              json:"type"`
+	Version          string   `yaml:"version"           json:"version"`
+	Default          bool     `yaml:"default,omitempty" json:"default,omitempty"`
+	SupportedFormats []string `yaml:"supported_formats,omitempty" json:"supported_formats,omitempty"`
 }
 
 type EngineImage struct {

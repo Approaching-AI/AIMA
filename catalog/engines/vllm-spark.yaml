@@ -3,6 +3,7 @@ metadata:
   name: vllm-spark
   type: vllm-spark
   version: "main"
+  supported_formats: [safetensors]
 image:
   # spark-vllm-docker: community build for DGX Spark / GB10
   # Built from vLLM main + FlashInfer + Transformers 5 (glm4_moe_lite support)

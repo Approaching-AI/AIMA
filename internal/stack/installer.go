@@ -865,16 +865,16 @@ func (inst *Installer) ensureKubectlLink(binaryName string) {
 func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("open source %s: %w", src, err)
 	}
 	defer in.Close()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
-		return err
+		return fmt.Errorf("create destination %s: %w", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
-		return err
+		return fmt.Errorf("copy %s to %s: %w", src, dst, err)
 	}
 	return out.Close()
 }
@@ -884,10 +884,9 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// WriteRegistries writes container registry mirror config to /etc/rancher/k3s/registries.yaml.
+// writeRegistriesConfig writes container registry mirror config to /etc/rancher/k3s/registries.yaml.
 // K3S containerd hot-reloads this file, so no restart is needed.
-// Called from aima init (which runs as root).
-func WriteRegistries(registries map[string]any) error {
+func writeRegistriesConfig(registries map[string]any) error {
 	dir := "/etc/rancher/k3s"
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create registries dir: %w", err)
@@ -907,7 +906,7 @@ func WriteRegistries(registries map[string]any) error {
 }
 
 func (inst *Installer) writeRegistries(comp knowledge.StackComponent) error {
-	return WriteRegistries(comp.Registries)
+	return writeRegistriesConfig(comp.Registries)
 }
 
 // prepareAirgapImages places or imports airgap image tars before component installation.

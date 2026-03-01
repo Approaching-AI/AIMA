@@ -424,7 +424,10 @@ func TestRegisterAllTools(t *testing.T) {
 		"deploy.apply", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.save",
 		"knowledge.generate_pod", "knowledge.list_profiles", "knowledge.list_engines", "knowledge.list_models",
-		"shell.exec", "system.config",
+		"knowledge.list",
+		"system.status", "system.config",
+		"agent.ask", "agent.install", "agent.status",
+		"shell.exec",
 	}
 	for _, name := range expectedTools {
 		if !names[name] {

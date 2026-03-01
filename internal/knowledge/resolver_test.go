@@ -203,22 +203,43 @@ func TestResolveAutoEngine(t *testing.T) {
 }
 
 func TestBuildSyntheticModelAsset(t *testing.T) {
+	// Build a catalog with engines that declare supported_formats.
+	// This mirrors the real catalog: llamacpp supports gguf, vllm supports safetensors.
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "llamacpp-universal", Type: "llamacpp", Version: "1.0",
+					Default: true, SupportedFormats: []string{"gguf"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "TestArch"},
+			},
+		},
+	}
+
 	tests := []struct {
-		name          string
-		format        string
-		modelType     string
-		wantEngine    string
-		wantType      string
-		wantVariants  int  // non-llamacpp engines get a llamacpp fallback variant
+		name         string
+		format       string
+		modelType    string
+		wantEngine   string
+		wantType     string
+		wantVariants int // non-default engines get a fallback variant
 	}{
-		{"safetensors→vllm", "safetensors", "llm", "vllm", "llm", 2},
-		{"gguf→llamacpp", "gguf", "llm", "llamacpp", "llm", 1},
+		{"safetensors->vllm", "safetensors", "llm", "vllm", "llm", 2},
+		{"gguf->llamacpp", "gguf", "llm", "llamacpp", "llm", 1},
 		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm", 1},
-		{"unknown format→llamacpp", "awq", "llm", "llamacpp", "llm", 1},
+		{"unknown format->default engine", "awq", "llm", "llamacpp", "llm", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ma := BuildSyntheticModelAsset("test-model", tt.modelType, "testfam", "8B", tt.format)
+			ma := cat.BuildSyntheticModelAsset("test-model", tt.modelType, "testfam", "8B", tt.format)
 			if ma.Metadata.Type != tt.wantType {
 				t.Errorf("Type = %q, want %q", ma.Metadata.Type, tt.wantType)
 			}
@@ -235,7 +256,7 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			if !strings.HasSuffix(v.Name, "-auto") {
 				t.Errorf("variant Name = %q, want suffix -auto", v.Name)
 			}
-			// Non-llamacpp engines should have a llamacpp fallback variant
+			// Non-default engines should have a fallback variant
 			if tt.wantVariants == 2 {
 				fb := ma.Variants[1]
 				if fb.Engine != "llamacpp" {
@@ -244,6 +265,78 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFormatToEngine(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "llamacpp-universal", Type: "llamacpp",
+					SupportedFormats: []string{"gguf"},
+				},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm",
+					SupportedFormats: []string{"safetensors"},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		format string
+		want   string
+	}{
+		{"gguf", "llamacpp"},
+		{"GGUF", "llamacpp"},        // case insensitive
+		{"safetensors", "vllm"},
+		{"Safetensors", "vllm"},
+		{"awq", ""},                 // unknown
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			got := cat.FormatToEngine(tt.format)
+			if got != tt.want {
+				t.Errorf("FormatToEngine(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultEngine(t *testing.T) {
+	t.Run("explicit default", func(t *testing.T) {
+		cat := &Catalog{
+			EngineAssets: []EngineAsset{
+				{Metadata: EngineMetadata{Name: "vllm", Type: "vllm"}, Hardware: EngineHardware{GPUArch: "Ada"}},
+				{Metadata: EngineMetadata{Name: "llamacpp", Type: "llamacpp", Default: true}, Hardware: EngineHardware{GPUArch: "*"}},
+			},
+		}
+		if got := cat.DefaultEngine(); got != "llamacpp" {
+			t.Errorf("DefaultEngine() = %q, want llamacpp", got)
+		}
+	})
+
+	t.Run("wildcard fallback", func(t *testing.T) {
+		cat := &Catalog{
+			EngineAssets: []EngineAsset{
+				{Metadata: EngineMetadata{Name: "vllm", Type: "vllm"}, Hardware: EngineHardware{GPUArch: "Ada"}},
+				{Metadata: EngineMetadata{Name: "uni", Type: "universal"}, Hardware: EngineHardware{GPUArch: "*"}},
+			},
+		}
+		if got := cat.DefaultEngine(); got != "universal" {
+			t.Errorf("DefaultEngine() = %q, want universal", got)
+		}
+	})
+
+	t.Run("empty catalog uses FallbackEngine", func(t *testing.T) {
+		cat := &Catalog{}
+		if got := cat.DefaultEngine(); got != FallbackEngine {
+			t.Errorf("DefaultEngine() = %q, want %q", got, FallbackEngine)
+		}
+	})
 }
 
 func TestRegisterModelDedup(t *testing.T) {

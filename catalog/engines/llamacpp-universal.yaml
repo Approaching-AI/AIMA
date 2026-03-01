@@ -3,6 +3,8 @@ metadata:
   name: llamacpp-universal
   type: llamacpp
   version: "b8157"
+  default: true
+  supported_formats: [gguf]
 image:
   name: ghcr.io/ggml-org/llama.cpp
   tag: "server"

@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/jguan/aima/internal/knowledge"
 	"github.com/spf13/cobra"
 )
 
@@ -123,6 +122,7 @@ func printImportGuidance(w io.Writer, data json.RawMessage) {
 		Format         string `json:"format"`
 		DetectedArch   string `json:"detected_arch"`
 		Quantization   string `json:"quantization"`
+		EngineHint     string `json:"engine_hint"`
 	}
 	if err := json.Unmarshal(data, &info); err != nil || info.Name == "" {
 		return
@@ -148,11 +148,9 @@ func printImportGuidance(w io.Writer, data json.RawMessage) {
 	}
 	fmt.Fprintln(w, summary)
 
-	engineHint := knowledge.FormatEngineMap[strings.ToLower(info.Format)]
-
 	fmt.Fprintln(w, "\nNext steps:")
-	if engineHint != "" {
-		fmt.Fprintf(w, "  Deploy:  aima deploy %s --engine %s\n", info.Name, engineHint)
+	if info.EngineHint != "" {
+		fmt.Fprintf(w, "  Deploy:  aima deploy %s --engine %s\n", info.Name, info.EngineHint)
 	} else {
 		fmt.Fprintf(w, "  Deploy:  aima deploy %s\n", info.Name)
 	}

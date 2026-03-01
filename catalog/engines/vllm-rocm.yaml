@@ -3,6 +3,7 @@ metadata:
   name: vllm-rocm
   type: vllm
   version: "nightly"
+  supported_formats: [safetensors]
 image:
   # Community gfx1151 build: TheRock nightly ROCm + patched vLLM
   # https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes

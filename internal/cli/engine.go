@@ -93,21 +93,25 @@ func newEngineListCmd(app *App) *cobra.Command {
 func newEnginePullCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull [name]",
-		Short: "Pull an inference engine (default: llamacpp fallback engine)",
+		Short: "Pull an inference engine (default: catalog default engine)",
 		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			name := "llamacpp"
+			var name string
 			if len(args) > 0 {
 				name = args[0]
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Pulling engine %s...\n", name)
+			if name == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Pulling default engine...")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Pulling engine %s...\n", name)
+			}
 			if err := app.ToolDeps.PullEngine(ctx, name); err != nil {
-				return fmt.Errorf("pull engine %s: %w", name, err)
+				return fmt.Errorf("pull engine: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Engine %s pulled successfully\n", name)
+			fmt.Fprintln(cmd.OutOrStdout(), "Engine pulled successfully")
 			return nil
 		},
 	}

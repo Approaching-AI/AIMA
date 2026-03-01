@@ -3,6 +3,7 @@ metadata:
   name: vllm-ada
   type: vllm
   version: "0.8.5"
+  supported_formats: [safetensors]
 image:
   name: vllm/vllm-openai
   tag: "v0.8.5"

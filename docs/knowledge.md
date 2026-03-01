@@ -253,8 +253,8 @@ cat.Resolve(model) → "not found in catalog"
   │     └── 未找到 → 报错
   │     └── 无 format → 报错
   │
-  ├── BuildSyntheticModelAsset(name, type, arch, params, format)
-  │     └── format → engine 映射: safetensors→vllm, gguf→llamacpp
+  ├── cat.BuildSyntheticModelAsset(name, type, arch, params, format)
+  │     └── format → engine 映射: 从 catalog supported_formats 动态构建
   │     └── 生成 gpu_arch="*" 通配变体，空 DefaultConfig
   │
   ├── cat.RegisterModel(synth)  → 注册到内存 catalog（去重）

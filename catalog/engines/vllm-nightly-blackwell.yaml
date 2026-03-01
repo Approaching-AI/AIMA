@@ -3,6 +3,7 @@ metadata:
   name: vllm-nightly-blackwell
   type: vllm-nightly
   version: "nightly"
+  supported_formats: [safetensors]
 image:
   # vLLM Qwen3.5 专用 build, CUDA 13.0, multi-arch (含 arm64)
   # 支持 qwen3_5_moe + qwen3_next 等新架构

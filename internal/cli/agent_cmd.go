@@ -1,13 +1,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jguan/aima/internal/zeroclaw"
 )
 
 func newAgentCmd(app *App) *cobra.Command {
@@ -29,15 +25,11 @@ func newAgentInstallCmd(app *App) *cobra.Command {
 		Use:   "install",
 		Short: "Install the ZeroClaw sidecar",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			destDir := filepath.Join(app.DataDir, "bin")
-			binPath, err := zeroclaw.Install(ctx, destDir)
+			data, err := app.ToolDeps.AgentInstall(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("install zeroclaw: %w", err)
+				return fmt.Errorf("install agent: %w", err)
 			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "ZeroClaw installed at %s\n", binPath)
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}
@@ -48,13 +40,11 @@ func newAgentStatusCmd(app *App) *cobra.Command {
 		Use:   "status",
 		Short: "Show agent availability status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status := map[string]any{
-				"zeroclaw_available": app.ZeroClaw.Available(),
-				"zeroclaw_healthy":   app.ZeroClaw.Health(),
+			data, err := app.ToolDeps.AgentStatus(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("agent status: %w", err)
 			}
-
-			out, _ := json.MarshalIndent(status, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

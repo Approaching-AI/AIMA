@@ -118,7 +118,7 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 10*1024*1024)) // 10 MB limit
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -174,7 +174,7 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 	}
 	defer httpResp.Body.Close()
 
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 10*1024*1024)) // 10 MB limit
 	if err != nil {
 		return "", fmt.Errorf("read models response: %w", err)
 	}

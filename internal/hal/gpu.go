@@ -248,13 +248,15 @@ func computeCapToArch(cc string) string {
 	}
 }
 
+var gpuEnrichers = map[string]func(context.Context, CommandRunner, *GPUInfo){
+	"nvidia": enrichNvidiaGPU,
+	"amd":    enrichAMDGPU,
+}
+
 // enrichGPU fills in fields that the primary probe couldn't provide.
 func enrichGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
-	switch gpu.Vendor {
-	case "nvidia":
-		enrichNvidiaGPU(ctx, runner, gpu)
-	case "amd":
-		enrichAMDGPU(ctx, runner, gpu)
+	if fn, ok := gpuEnrichers[gpu.Vendor]; ok {
+		fn(ctx, runner, gpu)
 	}
 }
 

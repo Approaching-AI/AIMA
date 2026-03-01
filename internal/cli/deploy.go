@@ -78,29 +78,11 @@ func newStatusCmd(app *App) *cobra.Command {
 		Use:   "status",
 		Short: "Show system status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			hw, err := app.ToolDeps.DetectHardware(ctx)
+			data, err := app.ToolDeps.SystemStatus(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("detect hardware: %w", err)
+				return fmt.Errorf("system status: %w", err)
 			}
-
-			// Non-fatal: K3S may not be running
-			pods, _ := app.ToolDeps.DeployList(ctx)
-			metrics, _ := app.ToolDeps.CollectMetrics(ctx)
-
-			status := map[string]json.RawMessage{
-				"hardware": hw,
-			}
-			if pods != nil {
-				status["deployments"] = pods
-			}
-			if metrics != nil {
-				status["metrics"] = metrics
-			}
-
-			out, _ := json.MarshalIndent(status, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

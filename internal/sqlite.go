@@ -154,23 +154,23 @@ func (d *DB) Close() error {
 func (d *DB) migrate(ctx context.Context) error {
 	// v1: system tables (models, engines, config, audit_log, knowledge_notes)
 	if err := d.migrateV1(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate v1: %w", err)
 	}
 	// v2: knowledge architecture tables (static + dynamic)
 	if err := d.migrateV2(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate v2: %w", err)
 	}
 	// v3: enhanced model metadata
 	if err := d.migrateV3(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate v3: %w", err)
 	}
 	// v4: unified engine scan (container + native)
 	if err := d.migrateV4(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate v4: %w", err)
 	}
 	// v5: vendor-neutral GPU fields (gpu_compute_cap → gpu_compute_id)
 	if err := d.migrateV5(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate v5: %w", err)
 	}
 	return nil
 }

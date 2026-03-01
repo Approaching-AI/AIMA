@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jguan/aima/internal/agent"
 )
 
 func newAskCmd(app *App) *cobra.Command {
@@ -25,18 +23,12 @@ func newAskCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			query := strings.Join(args, " ")
 
-			opts := agent.DispatchOption{
-				ForceLocal: forceLocal,
-				ForceDeep:  forceDeep,
-				SessionID:  sessionID,
-			}
-
-			result, err := app.Dispatcher.Ask(ctx, query, opts)
+			data, err := app.ToolDeps.DispatchAsk(ctx, query, forceLocal, forceDeep, sessionID)
 			if err != nil {
 				return fmt.Errorf("ask: %w", err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), result)
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

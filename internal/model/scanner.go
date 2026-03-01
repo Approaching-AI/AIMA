@@ -56,77 +56,72 @@ type ParentPattern struct {
 	IndicatorValueContains string
 }
 
-// Runtime configuration (loaded from YAML or defaults, read-only after init).
-var (
-	maxScanDepth      int
-	minModelSize     int64
-	skipSubdirNames  map[string]bool  // Set for O(1) lookup
-	parentPatterns    []ParentPattern
-	modelPatterns     []ModelPattern
-)
-
-// init loads scanner configuration from embedded catalog.
-func init() {
-	applyConfig()
+// ScanConfig holds scanner configuration loaded from YAML or defaults.
+type ScanConfig struct {
+	MaxScanDepth    int
+	MinModelSize    int64
+	SkipSubdirNames map[string]bool // Set for O(1) lookup
+	ParentPatterns  []ParentPattern
+	ModelPatterns   []ModelPattern
 }
 
-func applyConfig() {
+// NewScanConfig loads scanner configuration from the embedded catalog YAML.
+// Falls back to built-in defaults if the YAML is missing or invalid.
+func NewScanConfig() *ScanConfig {
+	sc := &ScanConfig{}
+
 	data, err := catalog.FS.ReadFile("scanner.yaml")
 	if err != nil {
-		applyDefaultConfig()
-		return
+		sc.applyDefaults()
+		return sc
 	}
 
 	var yamlConfig ScannerConfig
 	if err := yaml.Unmarshal(data, &yamlConfig); err != nil {
-		applyDefaultConfig()
-		return
+		sc.applyDefaults()
+		return sc
 	}
 
 	if yamlConfig.Kind != "scanner_config" {
-		applyDefaultConfig()
-		return
+		sc.applyDefaults()
+		return sc
 	}
 
 	cfg := yamlConfig.Config
 
-	// Apply values with fallback to defaults
 	if cfg.MaxScanDepth > 0 {
-		maxScanDepth = cfg.MaxScanDepth
+		sc.MaxScanDepth = cfg.MaxScanDepth
 	} else {
-		maxScanDepth = 4
+		sc.MaxScanDepth = 4
 	}
 
 	if cfg.MinModelSizeBytes > 0 {
-		minModelSize = cfg.MinModelSizeBytes
+		sc.MinModelSize = cfg.MinModelSizeBytes
 	} else {
-		minModelSize = 10 * 1024 * 1024 // 10MB
+		sc.MinModelSize = 10 * 1024 * 1024 // 10MB
 	}
 
-	// Load skip subdir names as a set for O(1) lookup
-	skipSubdirNames = make(map[string]bool)
+	sc.SkipSubdirNames = make(map[string]bool)
 	for _, name := range cfg.SkipSubdirNames {
-		skipSubdirNames[strings.ToLower(name)] = true
+		sc.SkipSubdirNames[strings.ToLower(name)] = true
 	}
 
-	// Convert parent patterns
 	for _, p := range cfg.ParentPatterns {
 		if len(p.IndicatorFiles) == 0 {
 			continue
 		}
-		parentPatterns = append(parentPatterns, ParentPattern{
-			IndicatorFiles:       p.IndicatorFiles,
-			IndicatorField:       p.IndicatorField,
+		sc.ParentPatterns = append(sc.ParentPatterns, ParentPattern{
+			IndicatorFiles:         p.IndicatorFiles,
+			IndicatorField:         p.IndicatorField,
 			IndicatorValueContains: p.IndicatorValueContains,
 		})
 	}
 
-	// Convert model patterns
 	for _, p := range cfg.ModelPatterns {
 		if p.Name == "" || p.Format == "" {
 			continue
 		}
-		modelPatterns = append(modelPatterns, ModelPattern{
+		sc.ModelPatterns = append(sc.ModelPatterns, ModelPattern{
 			name:        p.Name,
 			configFiles: p.ConfigFiles,
 			weightExts:  p.WeightExts,
@@ -135,16 +130,17 @@ func applyConfig() {
 		})
 	}
 
-	// Fallback to defaults if empty
-	if len(modelPatterns) == 0 {
-		applyDefaultPatterns()
+	if len(sc.ModelPatterns) == 0 {
+		sc.applyDefaultPatterns()
 	}
+
+	return sc
 }
 
-func applyDefaultConfig() {
-	maxScanDepth = 4
-	minModelSize = 10 * 1024 * 1024 // 10MB
-	skipSubdirNames = make(map[string]bool)
+func (sc *ScanConfig) applyDefaults() {
+	sc.MaxScanDepth = 4
+	sc.MinModelSize = 10 * 1024 * 1024 // 10MB
+	sc.SkipSubdirNames = make(map[string]bool)
 	defaultSkipNames := []string{
 		"text_encoder", "transformer", "vae", "unet", "controlnet",
 		"scheduler", "feature_extractor", "speech_tokenizer", "tokenizer",
@@ -153,20 +149,20 @@ func applyDefaultConfig() {
 		"postprocessor", "preprocessor", "vision_model", "audio_encoder", "projection",
 	}
 	for _, name := range defaultSkipNames {
-		skipSubdirNames[name] = true
+		sc.SkipSubdirNames[name] = true
 	}
-	parentPatterns = []ParentPattern{
+	sc.ParentPatterns = []ParentPattern{
 		{
-			IndicatorFiles:       []string{"model_index.json"},
-			IndicatorField:       "_class_name",
+			IndicatorFiles:         []string{"model_index.json"},
+			IndicatorField:         "_class_name",
 			IndicatorValueContains: "Pipeline",
 		},
 	}
-	applyDefaultPatterns()
+	sc.applyDefaultPatterns()
 }
 
-func applyDefaultPatterns() {
-	modelPatterns = []ModelPattern{
+func (sc *ScanConfig) applyDefaultPatterns() {
+	sc.ModelPatterns = []ModelPattern{
 		{
 			name:        "huggingface_safetensors",
 			configFiles: []string{"config.json"},
@@ -242,38 +238,11 @@ type ModelInfo struct {
 	QuantSrc       string `json:"quant_src"`        // config | filename | header | unknown
 }
 
-// Store is the persistence interface for model records.
-type Store interface {
-	InsertModel(ctx context.Context, m *StoreModel) error
-	GetModel(ctx context.Context, id string) (*StoreModel, error)
-	ListModels(ctx context.Context) ([]*StoreModel, error)
-	UpdateModelStatus(ctx context.Context, id, status string) error
-	DeleteModel(ctx context.Context, id string) error
-}
-
-// StoreModel is the persistence representation of a model.
-type StoreModel struct {
-	ID               string
-	Name             string
-	Type             string
-	Path             string
-	Format           string
-	SizeBytes        int64
-	DetectedArch     string
-	DetectedParams   string
-	ModelClass       string
-	TotalParams      int64
-	ActiveParams     int64
-	Quantization     string
-	QuantSrc         string
-	Status           string  // unknown|downloading|registered|failed
-	DownloadProgress float64 // 0.0-1.0
-}
-
 // ScanOptions configures which directories to scan.
 type ScanOptions struct {
 	Paths             []string
-	MinModelSizeBytes int64 // override default 10MB floor; 0 means use default
+	MinModelSizeBytes int64       // override default 10MB floor; 0 means use default
+	Config            *ScanConfig // nil means use NewScanConfig() defaults
 }
 
 // DefaultScanPaths returns platform-appropriate default scan locations.
@@ -309,7 +278,12 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 		return nil, fmt.Errorf("scan models: %w", err)
 	}
 
-	effectiveMinSize := minModelSize
+	cfg := opts.Config
+	if cfg == nil {
+		cfg = NewScanConfig()
+	}
+
+	effectiveMinSize := cfg.MinModelSize
 	if opts.MinModelSizeBytes > 0 {
 		effectiveMinSize = opts.MinModelSizeBytes
 	}
@@ -332,7 +306,7 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 			continue
 		}
 
-		found, err := scanDirectory(ctx, root, 0, seen, skipParentPaths, effectiveMinSize)
+		found, err := scanDirectory(ctx, root, 0, seen, skipParentPaths, effectiveMinSize, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -342,11 +316,11 @@ func Scan(ctx context.Context, opts ScanOptions) ([]*ModelInfo, error) {
 	return models, nil
 }
 
-func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool, skipParentPaths map[string]bool, minSize int64) ([]*ModelInfo, error) {
+func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]bool, skipParentPaths map[string]bool, minSize int64, cfg *ScanConfig) ([]*ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
 	}
-	if depth > maxScanDepth {
+	if depth > cfg.MaxScanDepth {
 		return nil, nil
 	}
 
@@ -358,7 +332,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 	}
 
 	// Check if this is a parent pipeline (e.g., diffusion model)
-	if isParentPipeline(dir, entries) {
+	if isParentPipeline(dir, entries, cfg) {
 		skipParentPaths[dir] = true
 	}
 
@@ -372,7 +346,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 		subdir := filepath.Join(dir, entry.Name())
 
 		// Skip subdirectories with known component names
-		if skipSubdirNames[subdirName] {
+		if cfg.SkipSubdirNames[subdirName] {
 			continue
 		}
 
@@ -381,7 +355,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 			continue
 		}
 
-		subModels, err := scanDirectory(ctx, subdir, depth+1, seen, skipParentPaths, minSize)
+		subModels, err := scanDirectory(ctx, subdir, depth+1, seen, skipParentPaths, minSize, cfg)
 		if err == nil {
 			models = append(models, subModels...)
 		}
@@ -389,7 +363,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 
 	// Then check if current directory itself is a model (after recursion)
 	// Skip if this is a known component subdirectory
-	if skipSubdirNames[strings.ToLower(filepath.Base(dir))] {
+	if cfg.SkipSubdirNames[strings.ToLower(filepath.Base(dir))] {
 		return models, nil
 	}
 
@@ -416,7 +390,7 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 		return models, nil
 	}
 
-	for _, m := range tryDetectModel(ctx, dir, entries, minSize) {
+	for _, m := range tryDetectModel(ctx, dir, entries, minSize, cfg) {
 		if !seen[m.Path] {
 			seen[m.Path] = true
 			models = append(models, m)
@@ -426,8 +400,8 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 	return models, nil
 }
 
-func isParentPipeline(dir string, entries []os.DirEntry) bool {
-	for _, pp := range parentPatterns {
+func isParentPipeline(dir string, entries []os.DirEntry, cfg *ScanConfig) bool {
+	for _, pp := range cfg.ParentPatterns {
 		for _, indicatorFile := range pp.IndicatorFiles {
 			for _, entry := range entries {
 				if entry.IsDir() {
@@ -467,8 +441,8 @@ func shouldSkipParentChild(dir string, skipParentPaths map[string]bool) bool {
 	return false
 }
 
-func tryDetectModel(_ context.Context, dir string, entries []os.DirEntry, minSize int64) []*ModelInfo {
-	for _, p := range modelPatterns {
+func tryDetectModel(_ context.Context, dir string, entries []os.DirEntry, minSize int64, cfg *ScanConfig) []*ModelInfo {
+	for _, p := range cfg.ModelPatterns {
 		if ms := detectByPattern(dir, entries, p, minSize); len(ms) > 0 {
 			return ms
 		}

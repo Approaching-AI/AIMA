@@ -3,6 +3,7 @@ metadata:
   name: vllm-blackwell
   type: vllm
   version: "26.01"
+  supported_formats: [safetensors]
 image:
   # NGC official DGX Spark image, arm64 + Blackwell SM121
   name: nvcr.io/nvidia/vllm

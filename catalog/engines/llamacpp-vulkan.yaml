@@ -3,6 +3,7 @@ metadata:
   name: llamacpp-vulkan
   type: llamacpp
   version: "b8157"
+  supported_formats: [gguf]
 image:
   name: ghcr.io/ggml-org/llama.cpp
   tag: "server"

@@ -168,7 +168,7 @@ func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destDir, b
 func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) error {
 	tmpFile, err := os.CreateTemp(destDir, ".download-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file in %s: %w", destDir, err)
 	}
 	tmpPath := tmpFile.Name()
 	defer func() {
@@ -178,13 +178,13 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) er
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("create HTTP request for %s: %w", url, err)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("download from %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
@@ -242,23 +242,23 @@ func extractZip(archivePath, destDir string) error {
 
 		destPath := filepath.Join(destDir, cleaned)
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			return err
+			return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
 		}
 
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			return fmt.Errorf("open zip entry %s: %w", f.Name, err)
 		}
 		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
 		if err != nil {
 			rc.Close()
-			return err
+			return fmt.Errorf("create file %s: %w", destPath, err)
 		}
 		_, err = io.Copy(out, rc)
 		out.Close()
 		rc.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("extract file %s: %w", cleaned, err)
 		}
 	}
 	return nil
@@ -332,16 +332,16 @@ func extractTarGz(archivePath, destDir string) error {
 		switch hdr.Typeflag {
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-				return err
+				return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
 			}
 			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
 			if err != nil {
-				return err
+				return fmt.Errorf("create file %s: %w", destPath, err)
 			}
 			_, err = io.Copy(out, tr)
 			out.Close()
 			if err != nil {
-				return err
+				return fmt.Errorf("extract file %s: %w", cleaned, err)
 			}
 		case tar.TypeSymlink:
 			// Validate symlink target: must resolve within destDir
@@ -352,7 +352,7 @@ func extractTarGz(archivePath, destDir string) error {
 				continue
 			}
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-				return err
+				return fmt.Errorf("create directory for symlink %s: %w", destPath, err)
 			}
 			os.Remove(destPath) // remove stale symlink or file if present
 			if err := os.Symlink(hdr.Linkname, destPath); err != nil {
@@ -368,13 +368,13 @@ func extractTarGz(archivePath, destDir string) error {
 func tarGzCommonPrefix(archivePath string) (string, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open archive %s: %w", archivePath, err)
 	}
 	defer f.Close()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("gzip reader for %s: %w", archivePath, err)
 	}
 	defer gz.Close()
 
@@ -386,7 +386,7 @@ func tarGzCommonPrefix(archivePath string) (string, error) {
 			break
 		}
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("read tar header in %s: %w", archivePath, err)
 		}
 
 		name := normalizeTarPath(hdr.Name)

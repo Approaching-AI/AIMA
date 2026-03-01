@@ -9,11 +9,9 @@ import (
 	"github.com/spf13/cobra"
 
 	state "github.com/jguan/aima/internal"
-	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
-	"github.com/jguan/aima/internal/zeroclaw"
 )
 
 // Ensure cobra import is used.
@@ -32,18 +30,12 @@ func testApp(t *testing.T) *App {
 	cat := &knowledge.Catalog{}
 	proxyServer := proxy.NewServer()
 	mcpServer := mcp.NewServer()
-	zcMgr := zeroclaw.NewManager()
-	goAgent := agent.NewAgent(nil, nil)
-	dispatcher := agent.NewDispatcher(goAgent, zcMgr)
 
 	return &App{
-		DB:         db,
-		Catalog:    cat,
-		Proxy:      proxyServer,
-		MCP:        mcpServer,
-		Dispatcher: dispatcher,
-		ZeroClaw:   zcMgr,
-		DataDir:    t.TempDir(),
+		DB:      db,
+		Catalog: cat,
+		Proxy:   proxyServer,
+		MCP:     mcpServer,
 		ToolDeps: &mcp.ToolDeps{
 			ListProfiles: func(ctx context.Context) (json.RawMessage, error) {
 				return json.RawMessage(`[{"name":"test-hw"}]`), nil
@@ -53,6 +45,12 @@ func testApp(t *testing.T) *App {
 			},
 			ListModelAssets: func(ctx context.Context) (json.RawMessage, error) {
 				return json.RawMessage(`[{"name":"test-model"}]`), nil
+			},
+			ListKnowledgeSummary: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`{"hardware_profiles":1,"engine_assets":1,"model_assets":1}`), nil
+			},
+			AgentStatus: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`{"zeroclaw_available":false,"zeroclaw_healthy":false}`), nil
 			},
 		},
 	}

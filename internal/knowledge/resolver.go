@@ -376,39 +376,69 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 	return &PartitionSlot{Name: "default"}
 }
 
-// FormatEngineMap maps model file formats to the preferred engine type.
-// Read-only — do not modify at runtime.
-var FormatEngineMap = map[string]string{
-	"safetensors": "vllm",
-	"gguf":        "llamacpp",
+// FallbackEngine is the engine type used when no better match is found.
+// All code should reference this constant instead of hardcoding "llamacpp".
+const FallbackEngine = "llamacpp"
+
+// FormatToEngine returns the engine type for a given model file format,
+// derived from the catalog's engine assets (supported_formats field).
+// Returns "" if no engine declares support for the format.
+func (c *Catalog) FormatToEngine(format string) string {
+	lower := strings.ToLower(format)
+	for _, ea := range c.EngineAssets {
+		for _, f := range ea.Metadata.SupportedFormats {
+			if strings.EqualFold(f, lower) {
+				return ea.Metadata.Type
+			}
+		}
+	}
+	return ""
+}
+
+// DefaultEngine returns the fallback engine type from the catalog.
+// Priority: explicit default: true in metadata, then first wildcard gpu_arch engine.
+func (c *Catalog) DefaultEngine() string {
+	for _, ea := range c.EngineAssets {
+		if ea.Metadata.Default {
+			return ea.Metadata.Type
+		}
+	}
+	for _, ea := range c.EngineAssets {
+		if ea.Hardware.GPUArch == "*" {
+			return ea.Metadata.Type
+		}
+	}
+	return FallbackEngine
 }
 
 // BuildSyntheticModelAsset creates a ModelAsset from scan-detected metadata
 // for models that have no YAML catalog entry. Uses wildcard gpu_arch="*"
 // so it matches any hardware, and relies on engine L0 defaults for config.
-func BuildSyntheticModelAsset(name, modelType, family, paramCount, format string) ModelAsset {
+// The catalog is used to derive the engine type from the model's file format.
+func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, format string) ModelAsset {
 	if modelType == "" {
 		modelType = "llm"
 	}
-	engineType := "llamacpp" // most permissive fallback
-	if et, ok := FormatEngineMap[strings.ToLower(format)]; ok {
-		engineType = et
+	engineType := c.FormatToEngine(format)
+	if engineType == "" {
+		engineType = c.DefaultEngine()
 	}
 
+	defaultEngine := c.DefaultEngine()
 	variants := []ModelVariant{{
 		Name:     name + "-auto",
 		Hardware: ModelVariantHardware{GPUArch: "*"},
 		Engine:   engineType,
 		Format:   format,
 	}}
-	// Add llamacpp fallback when primary is a container-only engine (e.g. vllm).
+	// Add fallback variant when primary is a container-only engine (e.g. vllm).
 	// InferEngineType tries each variant's engine via findEngine; if vllm is
-	// unavailable (native runtime, no Source), it falls through to llamacpp.
-	if engineType != "llamacpp" {
+	// unavailable (native runtime, no Source), it falls through to the default engine.
+	if engineType != defaultEngine {
 		variants = append(variants, ModelVariant{
 			Name:     name + "-auto-fallback",
 			Hardware: ModelVariantHardware{GPUArch: "*"},
-			Engine:   "llamacpp",
+			Engine:   defaultEngine,
 			Format:   format,
 		})
 	}

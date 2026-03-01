@@ -186,7 +186,3 @@ func K3SAvailable(ctx context.Context, client *k3s.Client) bool {
 	return err == nil
 }
 
-// FormatPort converts int port to string for labels.
-func FormatPort(port int) string {
-	return strconv.Itoa(port)
-}

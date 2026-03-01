@@ -6,13 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -748,7 +746,3 @@ func TestDetectArch(t *testing.T) {
 		})
 	}
 }
-
-// Suppress unused import warnings by using the imports
-var _ = strings.Contains
-var _ = math.Round

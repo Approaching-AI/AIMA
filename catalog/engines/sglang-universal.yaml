@@ -3,6 +3,7 @@ metadata:
   name: sglang-universal
   type: sglang
   version: "0.5.7"
+  supported_formats: [safetensors]
 image:
   name: lmsysorg/sglang
   tag: "v0.5.7"

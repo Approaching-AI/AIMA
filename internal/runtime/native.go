@@ -483,11 +483,11 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 
 func (r *NativeRuntime) saveMeta(meta *deploymentMeta) error {
 	if err := os.MkdirAll(r.deployDir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("create meta dir %s: %w", r.deployDir, err)
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal deployment meta %s: %w", meta.Name, err)
 	}
 	return os.WriteFile(filepath.Join(r.deployDir, meta.Name+".json"), data, 0o644)
 }
@@ -495,11 +495,11 @@ func (r *NativeRuntime) saveMeta(meta *deploymentMeta) error {
 func (r *NativeRuntime) loadMeta(name string) (*deploymentMeta, error) {
 	data, err := os.ReadFile(filepath.Join(r.deployDir, name+".json"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read deployment meta %s: %w", name, err)
 	}
 	var meta deploymentMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse deployment meta %s: %w", name, err)
 	}
 	return &meta, nil
 }

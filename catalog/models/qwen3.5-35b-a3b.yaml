@@ -122,23 +122,34 @@ variants:
       notes: "llamacpp-vulkan b8157, GGUF Q4_K_M, untested estimate, 62GB unified LPDDR5X"
 
   # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
-  # FP8 权重 ~36GB, TP=2 → 每 GPU 18GB, 24GB VRAM 充裕
-  # vram_min_mib: 20480 → 排除 RTX 4060 (8GB), 仅 4090 (24GB) 匹配
-  - name: qwen3.5-35b-a3b-ada-vllm-fp8
+  # BF16 权重 ~72GB, TP=2 → 每 GPU 36GB, 48GB VRAM 充裕
+  # vram_min_mib: 20480 → 排除 RTX 4060 (8GB), 仅 4090 (48GB) 匹配
+  # 需要 vllm-nightly (v0.16.0+) 支持 Qwen3_5MoeForConditionalGeneration 架构
+  - name: qwen3.5-35b-a3b-ada-vllm-nightly-bf16
     hardware:
       gpu_arch: Ada
       vram_min_mib: 20480
       unified_memory: false
-    engine: vllm
+    engine: vllm-nightly
     format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B
     default_config:
       gpu_memory_utilization: 0.85
       max_model_len: 4096
-      dtype: auto
+      dtype: bfloat16
       tensor_parallel_size: 2
     expected_performance:
-      tokens_per_second: [10, 25]
-      latency_first_token_ms: [40, 150]
+      tokens_per_second: [170, 175]            # measured: 172-174 tok/s decode (TP=2, 2× RTX 4090)
+      latency_first_token_ms: [41, 481]        # short 41ms → 2K 481ms
+      tpot_ms: [5.7, 5.8]                      # measured: rock-solid 5.7-5.8ms across all context
+      vram_mib: 88098                           # measured: 44030+44068 MiB (2 GPUs, gmu=0.85)
+      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), TP=2, FLASH_ATTN, no P2P/NVLink (custom allreduce disabled). Model load 32.86 GiB in 9.3s, torch.compile 22.9s, CUDA graph 13s. No MoE config for RTX 4090 (using default). 2026-03-01."
+      context_scaling:                          # measured: 1-concurrency, 128-token output
+        # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        1024:   [0.083, 173.7, 12337]
+        2048:   [0.481, 174.0, 4257]
 
   # --- 所有设备通用 (llamacpp + GGUF Q4_K_M=21GB) ---
   # linux-1 fallback, dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload

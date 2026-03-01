@@ -1,0 +1,62 @@
+kind: engine_asset
+metadata:
+  name: vllm-nightly-ada
+  type: vllm-nightly
+  version: "nightly"
+  supported_formats: [safetensors]
+image:
+  # vLLM Qwen3.5 专用 build, CUDA 13.0, multi-arch
+  # 支持 qwen3_5_moe + qwen3_next 等新架构
+  name: vllm/vllm-openai
+  tag: "qwen3_5-cu130"
+  size_approx_mb: 8000
+  platforms: [linux/amd64]
+  registries:
+    - docker.io/vllm/vllm-openai
+patterns:
+  - "^vllm-nightly$"
+  - "vllm-nightly"
+  - "vllm/vllm-openai:qwen3_5"
+hardware:
+  gpu_arch: Ada
+  vram_min_mib: 4096
+startup:
+  command: ["vllm", "serve", "{{.ModelPath}}"]
+  default_args:
+    port: 8000
+    gpu_memory_utilization: 0.85
+    max_model_len: 8192
+    served_model_name: "{{.ModelName}}"
+  health_check:
+    path: /health
+    timeout_s: 600
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 60
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - paged_attention
+    - continuous_batching
+    - flash_attention
+  performance_gain: "2-4x throughput vs naive serving, nightly with latest model support"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 4096
+  recommended_gpu_cores_percent: 50
+time_constraints:
+  cold_start_s: [60, 180]
+  model_switch_s: [60, 180]
+power_constraints:
+  typical_draw_watts: [150, 350]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

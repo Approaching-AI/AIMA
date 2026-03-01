@@ -172,16 +172,11 @@ func TestQueryGoldenOverrides(t *testing.T) {
 		}
 	})
 
-	t.Run("empty gpu arch matches nothing specific", func(t *testing.T) {
-		// Empty string = no hardware filter → would match ANY hardware.
-		// This verifies the caller must pass a real GPUArch.
-		// With no hardware filter it returns the golden config (bad), so
-		// the caller (resolveDeployment) must always pass GPUArch.
+	t.Run("empty gpu arch returns nil", func(t *testing.T) {
+		// Empty GPUArch must return nil to prevent cross-hardware golden injection.
 		result := queryGoldenOverrides(ctx, kStore, "", "vllm-nightly", "qwen3-8b")
-		// With empty filter it DOES find results (no hardware constraint).
-		// This is why P0 fix was critical: we must pass GPUArch, not empty HardwareProfile.
-		if result == nil {
-			t.Log("empty gpu arch returned nil (no golden configs without hardware filter)")
+		if result != nil {
+			t.Errorf("expected nil for empty gpu arch (cross-hardware guard), got %v", result)
 		}
 	})
 

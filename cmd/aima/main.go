@@ -724,9 +724,10 @@ type resolvedDeployment struct {
 }
 
 // queryGoldenOverrides returns config overrides from the best golden configuration
-// matching the given hardware/engine/model. Returns empty map if no golden config found.
+// matching the given hardware/engine/model. Returns nil if no golden config found
+// or if hwProfile is empty (to prevent cross-hardware injection).
 func queryGoldenOverrides(ctx context.Context, kStore *knowledge.Store, hwProfile, engineType, modelName string) map[string]any {
-	if kStore == nil {
+	if kStore == nil || hwProfile == "" {
 		return nil
 	}
 	resp, err := kStore.Search(ctx, knowledge.SearchParams{
@@ -762,21 +763,10 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		overrides["slot"] = slot
 	}
 
-	// L2: query golden config and merge as middle layer (L0 < L2 < L1)
+	// First resolve to get canonical model name, then query golden config
 	userKeys := make(map[string]bool, len(overrides))
 	for k := range overrides {
 		userKeys[k] = true
-	}
-	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, engineType, modelName)
-	if len(goldenConfig) > 0 {
-		merged := make(map[string]any, len(goldenConfig)+len(overrides))
-		for k, v := range goldenConfig {
-			merged[k] = v
-		}
-		for k, v := range overrides {
-			merged[k] = v // L1 wins over L2
-		}
-		overrides = merged
 	}
 
 	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
@@ -784,10 +774,14 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		return nil, err
 	}
 
-	// Fix provenance: golden-only keys should show as "L2", not "L1"
-	for k := range goldenConfig {
-		if !userKeys[k] {
-			resolved.Provenance[k] = "L2"
+	// L2: query golden config using canonical name and merge as middle layer (L0 < L2 < L1)
+	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, engineType, canonicalName)
+	if len(goldenConfig) > 0 {
+		for k, v := range goldenConfig {
+			if !userKeys[k] {
+				resolved.Config[k] = v
+				resolved.Provenance[k] = "L2"
+			}
 		}
 	}
 

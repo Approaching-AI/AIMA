@@ -96,6 +96,9 @@ func newServeCmd(app *App) *cobra.Command {
 			// Start remote discovery loop (find other aima instances via mDNS)
 			if discoverEnabled {
 				go proxy.StartRemoteDiscoveryLoop(ctx, app.Proxy, 10*time.Second, parsePort(addr))
+				if app.FleetRegistry != nil {
+					go app.FleetRegistry.StartDiscoveryLoop(ctx, 10*time.Second)
+				}
 			}
 
 			// Start MCP server if requested (on a separate port)

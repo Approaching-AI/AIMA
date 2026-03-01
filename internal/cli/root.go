@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	state "github.com/jguan/aima/internal"
+	"github.com/jguan/aima/internal/fleet"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
@@ -11,11 +12,12 @@ import (
 
 // App holds all wired dependencies for CLI commands.
 type App struct {
-	DB       *state.DB
-	Catalog  *knowledge.Catalog
-	Proxy    *proxy.Server
-	MCP      *mcp.Server
-	ToolDeps *mcp.ToolDeps
+	DB            *state.DB
+	Catalog       *knowledge.Catalog
+	Proxy         *proxy.Server
+	MCP           *mcp.Server
+	ToolDeps      *mcp.ToolDeps
+	FleetRegistry *fleet.Registry
 }
 
 // NewRootCmd creates the root aima command with all subcommands.
@@ -43,6 +45,7 @@ func NewRootCmd(app *App) *cobra.Command {
 		newAgentCmd(app),
 		newServeCmd(app),
 		newDiscoverCmd(app),
+		newFleetCmd(app),
 		newVersionCmd(),
 	)
 

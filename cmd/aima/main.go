@@ -354,12 +354,13 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 	}
 
 	// system.config supports both get and set. Agent may read, but writes are blocked.
-	if name == "system.config" {
-		var p struct {
-			Value *string `json:"value"`
-		}
-		if len(arguments) > 0 && json.Unmarshal(arguments, &p) == nil && p.Value != nil {
-			return true, "persistent configuration mutation"
+	// Block when "value" key is present in the JSON (regardless of its value, including null).
+	if name == "system.config" && len(arguments) > 0 {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(arguments, &raw) == nil {
+			if _, hasValue := raw["value"]; hasValue {
+				return true, "persistent configuration mutation"
+			}
 		}
 	}
 

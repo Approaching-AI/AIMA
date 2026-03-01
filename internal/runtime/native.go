@@ -268,6 +268,7 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 				}
 			}
 			if !waitForProcessExit(proc, 2*time.Second) {
+				r.removeMeta(name)
 				return fmt.Errorf("stop deployment %q: process did not exit after force kill", name)
 			}
 		}
@@ -600,20 +601,8 @@ func (r *NativeRuntime) findInDist(name string) string {
 }
 
 func waitForProcessExit(proc *nativeProcess, timeout time.Duration) bool {
-	if proc.done == nil {
-		done := make(chan struct{})
-		go func() {
-			_ = proc.cmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			return true
-		case <-time.After(timeout):
-			return false
-		}
-	}
-
+	// proc.done is always initialized in Deploy(); this function must not be
+	// called on a process without a done channel.
 	select {
 	case <-proc.done:
 		return true

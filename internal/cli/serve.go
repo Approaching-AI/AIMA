@@ -46,8 +46,7 @@ func newServeCmd(app *App) *cobra.Command {
 				return err
 			}
 
-			exposedWithoutAuth := apiKey == "" && (!isLoopbackListenAddr(addr) || (mcpMod && !isLoopbackListenAddr(mcpAddr)))
-			if exposedWithoutAuth {
+			if !allowInsecure && apiKey == "" && (!isLoopbackListenAddr(addr) || (mcpMod && !isLoopbackListenAddr(mcpAddr))) {
 				slog.Warn("starting without API key on non-loopback address; this is insecure")
 			}
 

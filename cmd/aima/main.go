@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,7 @@ import (
 	"github.com/jguan/aima/internal/zeroclaw"
 
 	state "github.com/jguan/aima/internal"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -87,9 +89,9 @@ func run() error {
 		)
 	}
 
-	// 4. Load static knowledge into SQLite relational tables
-	if err := knowledge.LoadToSQLite(ctx, db.RawDB(), cat); err != nil {
-		return fmt.Errorf("load knowledge to sqlite: %w", err)
+	// 4. Load static knowledge into SQLite relational tables (only when catalog changes).
+	if err := syncCatalogToSQLite(ctx, db, cat); err != nil {
+		return err
 	}
 	if err := db.Analyze(ctx); err != nil {
 		slog.Warn("analyze failed", "error", err)
@@ -147,10 +149,10 @@ func run() error {
 
 	// 10. Build App and run CLI
 	app := &cli.App{
-		DB:      db,
-		Catalog: cat,
-		Proxy:   proxyServer,
-		MCP:     mcpServer,
+		DB:       db,
+		Catalog:  cat,
+		Proxy:    proxyServer,
+		MCP:      mcpServer,
 		ToolDeps: deps,
 	}
 
@@ -426,6 +428,50 @@ func catalogSize(cat *knowledge.Catalog) int {
 	return len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
 }
 
+const catalogDigestConfigKey = "catalog.digest.sha256"
+
+// syncCatalogToSQLite avoids full static-knowledge rewrites when catalog content
+// is unchanged. This shortens startup and reduces SQLite write lock contention.
+func syncCatalogToSQLite(ctx context.Context, db *state.DB, cat *knowledge.Catalog) error {
+	digest, err := catalogDigest(cat)
+	if err != nil {
+		return fmt.Errorf("compute catalog digest: %w", err)
+	}
+
+	prevDigest, err := db.GetConfig(ctx, catalogDigestConfigKey)
+	if err == nil && prevDigest == digest {
+		// Guard against stale config key: only skip reload when static tables exist.
+		if staticKnowledgeLoaded(ctx, db.RawDB()) {
+			return nil
+		}
+	}
+
+	if err := knowledge.LoadToSQLite(ctx, db.RawDB(), cat); err != nil {
+		return fmt.Errorf("load knowledge to sqlite: %w", err)
+	}
+	if err := db.SetConfig(ctx, catalogDigestConfigKey, digest); err != nil {
+		return fmt.Errorf("set catalog digest: %w", err)
+	}
+	return nil
+}
+
+func catalogDigest(cat *knowledge.Catalog) (string, error) {
+	data, err := yaml.Marshal(cat)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func staticKnowledgeLoaded(ctx context.Context, sqlDB *sql.DB) bool {
+	var count int
+	if err := sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM hardware_profiles").Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}
+
 // buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
 // Missing data results in zero values, which downstream functions treat as "unknown" and skip.
@@ -560,10 +606,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		distDir := filepath.Join(dataDir, "dist", platform)
 		images, err := engine.ScanUnified(ctx, engine.ScanOptions{
 			AssetPatterns: assetPatterns,
-			Runner:       &execRunner{},
-			DistDir:      distDir,
-			Platform:     platform,
-			BinaryAssets: binaryAssets,
+			Runner:        &execRunner{},
+			DistDir:       distDir,
+			Platform:      platform,
+			BinaryAssets:  binaryAssets,
 		})
 		if err != nil {
 			return nil, err
@@ -1263,24 +1309,24 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Benchmark
 		RecordBenchmark: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 			var p struct {
-				Hardware       string         `json:"hardware"`
-				Engine         string         `json:"engine"`
-				Model          string         `json:"model"`
-				DeviceID       string         `json:"device_id"`
-				Config         map[string]any `json:"config"`
-				Concurrency    int            `json:"concurrency"`
-				InputLenBucket string         `json:"input_len_bucket"`
-				OutputLenBucket string        `json:"output_len_bucket"`
-				TTFTP50ms      float64        `json:"ttft_ms_p50"`
-				TTFTP95ms      float64        `json:"ttft_ms_p95"`
-				TPOTP50ms      float64        `json:"tpot_ms_p50"`
-				TPOTP95ms      float64        `json:"tpot_ms_p95"`
-				ThroughputTPS  float64        `json:"throughput_tps"`
-				QPS            float64        `json:"qps"`
-				VRAMUsageMiB   int            `json:"vram_usage_mib"`
-				SampleCount    int            `json:"sample_count"`
-				Stability      string         `json:"stability"`
-				Notes          string         `json:"notes"`
+				Hardware        string         `json:"hardware"`
+				Engine          string         `json:"engine"`
+				Model           string         `json:"model"`
+				DeviceID        string         `json:"device_id"`
+				Config          map[string]any `json:"config"`
+				Concurrency     int            `json:"concurrency"`
+				InputLenBucket  string         `json:"input_len_bucket"`
+				OutputLenBucket string         `json:"output_len_bucket"`
+				TTFTP50ms       float64        `json:"ttft_ms_p50"`
+				TTFTP95ms       float64        `json:"ttft_ms_p95"`
+				TPOTP50ms       float64        `json:"tpot_ms_p50"`
+				TPOTP95ms       float64        `json:"tpot_ms_p95"`
+				ThroughputTPS   float64        `json:"throughput_tps"`
+				QPS             float64        `json:"qps"`
+				VRAMUsageMiB    int            `json:"vram_usage_mib"`
+				SampleCount     int            `json:"sample_count"`
+				Stability       string         `json:"stability"`
+				Notes           string         `json:"notes"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse benchmark params: %w", err)
@@ -1624,4 +1670,3 @@ func findModelFileInDir(dir string) string {
 	}
 	return ""
 }
-

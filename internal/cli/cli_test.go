@@ -281,6 +281,55 @@ func TestCatalogSubcommands(t *testing.T) {
 	}
 }
 
+func TestParseConfigOverrides(t *testing.T) {
+	tests := []struct {
+		name  string
+		pairs []string
+		want  map[string]any
+	}{
+		{"nil input", nil, nil},
+		{"empty input", []string{}, nil},
+		{"integer", []string{"max_model_len=8000"}, map[string]any{"max_model_len": 8000}},
+		{"float", []string{"gpu_memory_utilization=0.85"}, map[string]any{"gpu_memory_utilization": 0.85}},
+		{"bool true", []string{"enable_chunked_prefill=true"}, map[string]any{"enable_chunked_prefill": true}},
+		{"bool false", []string{"enable_chunked_prefill=false"}, map[string]any{"enable_chunked_prefill": false}},
+		{"bool True case insensitive", []string{"flag=True"}, map[string]any{"flag": true}},
+		{"string", []string{"dtype=float16"}, map[string]any{"dtype": "float16"}},
+		{"zero is int not bool", []string{"n_gpu_layers=0"}, map[string]any{"n_gpu_layers": 0}},
+		{"t is string not bool", []string{"dtype=t"}, map[string]any{"dtype": "t"}},
+		{"f is string not bool", []string{"dtype=f"}, map[string]any{"dtype": "f"}},
+		{"empty value", []string{"key="}, map[string]any{"key": ""}},
+		{"no equals", []string{"invalid"}, map[string]any{}},
+		{"multiple", []string{"gpu_memory_utilization=0.8", "max_model_len=4096", "dtype=auto"},
+			map[string]any{"gpu_memory_utilization": 0.8, "max_model_len": 4096, "dtype": "auto"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseConfigOverrides(tt.pairs)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("got %v, want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Errorf("len = %d, want %d; got %v", len(got), len(tt.want), got)
+				return
+			}
+			for k, wantV := range tt.want {
+				gotV, ok := got[k]
+				if !ok {
+					t.Errorf("missing key %q", k)
+					continue
+				}
+				if gotV != wantV {
+					t.Errorf("key %q: got %v (%T), want %v (%T)", k, gotV, gotV, wantV, wantV)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentStatusCmd(t *testing.T) {
 	app := testApp(t)
 	root := NewRootCmd(app)

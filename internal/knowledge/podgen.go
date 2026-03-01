@@ -11,7 +11,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var podTemplate = template.Must(template.New("pod").Parse(`apiVersion: v1
+var podTemplate = template.Must(template.New("pod").Funcs(template.FuncMap{
+	"deviceVolName": deviceVolName,
+}).Parse(`apiVersion: v1
 kind: Pod
 metadata:
   name: {{ .PodName }}
@@ -35,6 +37,15 @@ spec:
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
   {{- end }}
+  {{- if .HasSecurityContext }}
+  securityContext:
+    {{- if .Security.SupplementalGroups }}
+    supplementalGroups:
+      {{- range .Security.SupplementalGroups }}
+      - {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
   containers:
     - name: inference
       image: {{ .EngineImage }}
@@ -54,6 +65,10 @@ spec:
         - name: {{ $k }}
           value: "{{ $v }}"
         {{- end }}
+      {{- end }}
+      {{- if .HasContainerSecurity }}
+      securityContext:
+        privileged: true
       {{- end }}
       {{- if or .HasGPUResource .HasComputeResources }}
       resources:
@@ -96,10 +111,16 @@ spec:
           readOnly: true
         - name: dshm
           mountPath: /dev/shm
+        {{- range .Devices }}
+        - name: {{ deviceVolName . }}
+          mountPath: {{ . }}
+        {{- end }}
         {{- range .ExtraVolumes }}
         - name: {{ .Name }}
           mountPath: {{ .MountPath }}
-          readOnly: {{ .ReadOnly }}
+          {{- if .ReadOnly }}
+          readOnly: true
+          {{- end }}
         {{- end }}
   volumes:
     - name: model-data
@@ -109,6 +130,11 @@ spec:
     - name: dshm
       emptyDir:
         medium: Memory
+    {{- range .Devices }}
+    - name: {{ deviceVolName . }}
+      hostPath:
+        path: {{ . }}
+    {{- end }}
     {{- range .ExtraVolumes }}
     - name: {{ .Name }}
       hostPath:
@@ -117,6 +143,13 @@ spec:
     {{- end }}
 `))
 
+// deviceVolName converts a device path like "/dev/kfd" to a K8s-safe volume name like "dev-kfd".
+func deviceVolName(path string) string {
+	name := strings.TrimPrefix(path, "/")
+	name = strings.ReplaceAll(name, "/", "-")
+	return name
+}
+
 type podData struct {
 	PodName          string
 	Engine           string
@@ -124,18 +157,20 @@ type podData struct {
 	ModelName        string
 	Slot             string
 	Port             int
-	Args             []string // command arguments (excluding binary name — image entrypoint is used)
-	ExtraEnv         map[string]string // additional env vars from engine YAML
-	ExtraVolumes     []EngineVolume    // additional host volumes to mount
+	Args             []string          // command arguments (excluding binary name -- image entrypoint is used)
+	ExtraEnv         map[string]string // merged: hardware container env (base) + engine env (override)
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
 	RAMMiB           int
 	HealthCheckPath        string
-	HealthCheckInitDelaySec int // initialDelaySeconds for liveness probe — use health_check.timeout_s
+	HealthCheckInitDelaySec int
 	ModelHostPath          string
 	GPUResourceName        string
-	RuntimeClassName       string // e.g. "nvidia" for NVIDIA CUDA containers
+	RuntimeClassName       string             // e.g. "nvidia" for NVIDIA CUDA containers
+	Devices                []string           // device paths to mount, e.g. ["/dev/kfd", "/dev/dri"]
+	ExtraVolumes           []ContainerVolume  // additional host mounts
+	Security               *ContainerSecurity // pod-level securityContext
 }
 
 func (d podData) HasAnnotations() bool {
@@ -143,7 +178,7 @@ func (d podData) HasAnnotations() bool {
 }
 
 // HasGPUResource reports whether a device-plugin GPU resource request should be added.
-// Requires both a non-empty GPUResourceName and explicit GPU partitioning (HAMi-style).
+// True only when there is a GPU resource name AND explicit GPU partitioning (HAMi-style).
 // False when GPUResourceName is unset or when using runtimeClassName without a device plugin.
 func (d podData) HasGPUResource() bool {
 	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
@@ -152,6 +187,16 @@ func (d podData) HasGPUResource() bool {
 // HasComputeResources reports whether CPU or RAM limits should be set.
 func (d podData) HasComputeResources() bool {
 	return d.CPUCores > 0 || d.RAMMiB > 0
+}
+
+// HasSecurityContext reports whether pod-level securityContext should be rendered.
+func (d podData) HasSecurityContext() bool {
+	return d.Security != nil && len(d.Security.SupplementalGroups) > 0
+}
+
+// HasContainerSecurity reports whether container-level securityContext (privileged) should be rendered.
+func (d podData) HasContainerSecurity() bool {
+	return d.Security != nil && d.Security.Privileged
 }
 
 // GPUVendorDomain extracts the vendor domain from the GPU resource name.
@@ -253,7 +298,8 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		args = []string{"/bin/bash", "-c", strings.Join(allCmds, " && ")}
 	}
 
-	gpuResource := resolved.GPUResourceName
+	// Merge env: hardware container env (base) + engine env (override on conflict).
+	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
 
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
@@ -263,11 +309,17 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Slot:             resolved.Slot,
 		Port:             port,
 		Args:             args,
-		ExtraEnv:         resolved.Env,
-		ExtraVolumes:     resolved.ExtraVolumes,
+		ExtraEnv:         mergedEnv,
 		ModelHostPath:    modelHostPath,
-		GPUResourceName:  gpuResource,
+		GPUResourceName:  resolved.GPUResourceName,
 		RuntimeClassName: resolved.RuntimeClassName,
+	}
+
+	// Populate vendor-specific container access fields from hardware profile.
+	if resolved.Container != nil {
+		data.Devices = resolved.Container.Devices
+		data.ExtraVolumes = resolved.Container.Volumes
+		data.Security = resolved.Container.Security
 	}
 
 	if resolved.Partition != nil {
@@ -298,6 +350,29 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// mergeEnv merges hardware container env (base) with engine env (override).
+// Engine env wins on conflict. Returns nil if both are empty.
+func mergeEnv(container *ContainerAccess, engineEnv map[string]string) map[string]string {
+	hwEnv := 0
+	if container != nil {
+		hwEnv = len(container.Env)
+	}
+	if hwEnv == 0 && len(engineEnv) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, hwEnv+len(engineEnv))
+	if container != nil {
+		for k, v := range container.Env {
+			merged[k] = v
+		}
+	}
+	// Engine env overrides hardware env on conflict
+	for k, v := range engineEnv {
+		merged[k] = v
+	}
+	return merged
 }
 
 // SanitizePodName is the exported version for use by other packages.

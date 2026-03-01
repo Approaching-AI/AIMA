@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,6 +31,8 @@ type EngineImage struct {
 // CommandRunner abstracts shell command execution for testability.
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Pipe connects stdout of 'from' to stdin of 'to' (e.g. docker save | k3s ctr import).
+	Pipe(ctx context.Context, from, to []string) error
 }
 
 // ScanOptions configures engine scanning (both container and native).
@@ -83,7 +86,7 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 					slog.Warn("engine in Docker but not in K3S containerd; import requires root",
 						"engine", img.Type, "image", ref,
 						"fix", "sudo docker save "+ref+" | sudo k3s ctr -n k8s.io images import -")
-				} else if err := ImportDockerToContainerd(ctx, ref); err != nil {
+				} else if err := ImportDockerToContainerd(ctx, ref, opts.Runner); err != nil {
 					slog.Warn("failed to import engine from Docker to K3S containerd",
 						"engine", img.Type, "image", ref, "error", err)
 				} else {
@@ -342,6 +345,13 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 	return images, nil
 }
 
+// patternEntry pairs a pattern with its engine type. Using a slice instead of
+// a map guarantees deterministic matching order when multiple patterns exist.
+type patternEntry struct {
+	pattern    string
+	engineType string
+}
+
 // matchImages matches images to engine types using YAML knowledge.
 // Knowledge-driven: patterns come from Engine Asset YAMLs, not hardcoded.
 // Tag-aware: patterns containing ":" match against "repo:tag"; others match repo only.
@@ -350,16 +360,23 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 	var matched []*EngineImage
 	seen := make(map[string]bool)
 
-	// Split patterns: tag-aware (contain ":") vs repo-only
-	tagPatterns := make(map[string]string)
-	repoPatterns := make(map[string]string)
-	for engineType, patterns := range assetPatterns {
-		for _, pattern := range patterns {
+	// Split patterns into ordered slices: tag-aware (contain ":") vs repo-only.
+	// Sorted by engine type then pattern for deterministic order.
+	var tagPatterns, repoPatterns []patternEntry
+	engineTypes := make([]string, 0, len(assetPatterns))
+	for et := range assetPatterns {
+		engineTypes = append(engineTypes, et)
+	}
+	sort.Strings(engineTypes)
+
+	for _, engineType := range engineTypes {
+		for _, pattern := range assetPatterns[engineType] {
 			clean := strings.TrimPrefix(strings.TrimSuffix(pattern, "$"), "^")
+			entry := patternEntry{pattern: pattern, engineType: engineType}
 			if strings.Contains(clean, ":") {
-				tagPatterns[pattern] = engineType
+				tagPatterns = append(tagPatterns, entry)
 			} else {
-				repoPatterns[pattern] = engineType
+				repoPatterns = append(repoPatterns, entry)
 			}
 		}
 	}
@@ -372,24 +389,25 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 		searchRef := strings.ToLower(img.repo + ":" + img.tag)
 		searchName := strings.ToLower(img.repo)
 
-		// Tag-aware patterns take priority (match against repo:tag)
-		engineType := patternMatch(searchRef, tagPatterns)
-		if engineType == "" {
-			engineType = patternMatch(searchName, repoPatterns)
+		// Tag-aware patterns take priority (match against repo:tag).
+		matchedEngineType := patternMatch(searchRef, tagPatterns)
+		if matchedEngineType == "" {
+			matchedEngineType = patternMatch(searchName, repoPatterns)
+		}
+		if matchedEngineType == "" {
+			continue
 		}
 
-		if engineType != "" {
-			matched = append(matched, &EngineImage{
-				ID:         img.id,
-				Type:       engineType,
-				Image:      img.repo,
-				Tag:        img.tag,
-				SizeBytes:  img.size,
-				Available:  true,
-				DockerOnly: img.source == "docker",
-			})
-			seen[img.id] = true
-		}
+		matched = append(matched, &EngineImage{
+			ID:         img.id,
+			Type:       matchedEngineType,
+			Image:      img.repo,
+			Tag:        img.tag,
+			SizeBytes:  img.size,
+			Available:  true,
+			DockerOnly: img.source == "docker",
+		})
+		seen[img.id] = true
 	}
 
 	return matched
@@ -397,10 +415,34 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 
 // patternMatch checks search string against a set of patterns.
 // Supports anchors: ^pattern (prefix), pattern$ (suffix), ^pattern$ (exact).
-func patternMatch(search string, patterns map[string]string) string {
-	for pattern, engineType := range patterns {
-		lower := strings.ToLower(pattern)
-		// Strip anchors
+// Patterns are sorted by specificity (exact > anchored > contains), then lexically.
+func patternMatch(search string, patterns []patternEntry) string {
+	type rule struct {
+		pattern    string
+		engineType string
+		score      int
+	}
+	rules := make([]rule, 0, len(patterns))
+	for _, p := range patterns {
+		rules = append(rules, rule{
+			pattern:    p.pattern,
+			engineType: p.engineType,
+			score:      patternScore(strings.ToLower(p.pattern)),
+		})
+	}
+	// Deterministic order: higher specificity first, then lexical tie-break.
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].score != rules[j].score {
+			return rules[i].score > rules[j].score
+		}
+		if rules[i].pattern != rules[j].pattern {
+			return rules[i].pattern < rules[j].pattern
+		}
+		return rules[i].engineType < rules[j].engineType
+	})
+
+	for _, r := range rules {
+		lower := strings.ToLower(r.pattern)
 		cmp := lower
 		hasPrefix := strings.HasPrefix(cmp, "^")
 		hasSuffix := strings.HasSuffix(cmp, "$")
@@ -414,24 +456,46 @@ func patternMatch(search string, patterns map[string]string) string {
 		switch {
 		case hasPrefix && hasSuffix:
 			if search == cmp {
-				return engineType
+				return r.engineType
 			}
 		case hasPrefix:
 			if strings.HasPrefix(search, cmp) {
-				return engineType
+				return r.engineType
 			}
 		case hasSuffix:
 			if strings.HasSuffix(search, cmp) {
-				return engineType
+				return r.engineType
 			}
 		default:
 			if search == cmp || strings.Contains(search, cmp) {
-				return engineType
+				return r.engineType
 			}
 		}
 	}
 	return ""
 }
+
+func patternScore(pattern string) int {
+	cmp := pattern
+	hasPrefix := strings.HasPrefix(cmp, "^")
+	hasSuffix := strings.HasSuffix(cmp, "$")
+	if hasPrefix {
+		cmp = cmp[1:]
+	}
+	if hasSuffix && len(cmp) > 0 {
+		cmp = cmp[:len(cmp)-1]
+	}
+	base := len(cmp)
+	switch {
+	case hasPrefix && hasSuffix:
+		return 3000 + base
+	case hasPrefix || hasSuffix:
+		return 2000 + base
+	default:
+		return 1000 + base
+	}
+}
+
 
 func splitImageTag(ref string) (repo, tag string) {
 	// Handle format "repo:tag"

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jguan/aima/internal/k3s"
+	"github.com/jguan/aima/internal/knowledge"
 )
 
 func TestPodToStatus(t *testing.T) {
@@ -70,8 +71,15 @@ func TestToResolvedConfig(t *testing.T) {
 			CPUCores:        4,
 			RAMMiB:          8192,
 		},
-		HealthCheck: &HealthCheckConfig{Path: "/health", TimeoutS: 60},
-		Labels:      map[string]string{"aima.dev/slot": "primary"},
+		HealthCheck:     &HealthCheckConfig{Path: "/health", TimeoutS: 60},
+		Labels:          map[string]string{"aima.dev/slot": "primary"},
+		Env:             map[string]string{"HSA_OVERRIDE_GFX_VERSION": "11.0.0"},
+		GPUResourceName: "nvidia.com/gpu",
+		CPUArch:         "x86_64",
+		Container: &knowledge.ContainerAccess{
+			Devices: []string{"/dev/kfd"},
+			Env:     map[string]string{"LD_PRELOAD": "/opt/rocm/lib/librocm_smi64.so"},
+		},
 	}
 
 	rc := toResolvedConfig(req)
@@ -96,5 +104,17 @@ func TestToResolvedConfig(t *testing.T) {
 	}
 	if rc.HealthCheck == nil || rc.HealthCheck.Path != "/health" {
 		t.Error("health check not set correctly")
+	}
+	if rc.Env == nil || rc.Env["HSA_OVERRIDE_GFX_VERSION"] != "11.0.0" {
+		t.Error("env not mapped correctly")
+	}
+	if rc.GPUResourceName != "nvidia.com/gpu" {
+		t.Errorf("GPUResourceName = %q, want %q", rc.GPUResourceName, "nvidia.com/gpu")
+	}
+	if rc.CPUArch != "x86_64" {
+		t.Errorf("CPUArch = %q, want %q", rc.CPUArch, "x86_64")
+	}
+	if rc.Container == nil || len(rc.Container.Devices) != 1 || rc.Container.Devices[0] != "/dev/kfd" {
+		t.Error("container access not mapped correctly")
 	}
 }

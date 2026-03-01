@@ -246,6 +246,17 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !backend.Ready || backend.Address == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{
+				"message": fmt.Sprintf("model %q is not ready", req.Model),
+				"type":    "service_unavailable",
+			},
+		})
+		return
+	}
 
 	// Determine the target path: basePath + suffix from original request
 	// e.g., request to /v1/chat/completions with basePath=/v1 → forward to /v1/chat/completions

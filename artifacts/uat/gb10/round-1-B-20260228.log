@@ -1,0 +1,130 @@
+=== AIMA UAT Log ===
+机器: gb10
+日期: 2026-02-28 (executed 2026-02-27)
+测试员: claude-agent (gb10-tester)
+场景: B - 单模型 VLLM 部署验证
+
+--- 步骤 1: 检查模型状态 ---
+时间: 14:30:07
+操作: ~/aima model list
+结果: PARTIAL
+输出: [26条记录，无 qwen3-8b safetensors 模型]
+观察: 数据库中未找到 qwen3-8b (safetensors 格式)。存在多个 gguf 小模型和其他 safetensors 模型。
+     需要下载 qwen3-8b。
+
+--- 步骤 2: 导入或扫描本地模型 ---
+时间: 14:31:07
+操作: ~/aima model scan（扫描）
+结果: PARTIAL
+输出: model scan 返回 26 个模型，但 qwen3-8b safetensors 格式未在文件系统中。
+操作: ~/aima model pull qwen3-8b
+结果: SUCCESS（下载完成）
+输出:
+2026/02/27 14:33:41 INFO repo file list retrieved files=14 total_size_mb=15637
+[分批下载5个 safetensors shard + 其他文件]
+2026/02/27 15:04:57 INFO downloading file progress=[11/14] file=model.safetensors.index.json
+2026/02/27 15:04:58 INFO downloading file progress=[12/14] file=tokenizer.json size_mb=10
+2026/02/27 15:05:00 INFO downloading file progress=[13/14] file=tokenizer_config.json
+2026/02/27 15:05:01 INFO downloading file progress=[14/14] file=vocab.json size_mb=2
+Model qwen3-8b downloaded successfully
+观察: 下载共耗时约 31 分钟（14:33 → 15:05），总量约 15.6 GB，5 个 safetensors shard + 配套文件。
+     注意：model pull 完成后模型未自动导入 AIMA 数据库，需要手动 import。
+     操作: ~/aima model import /home/qujing/.aima/models/qwen3-8b
+     结果: SUCCESS
+     输出: {"id":"e6be7481...","name":"qwen3-8b","type":"llm","path":"/home/qujing/.aima/models/qwen3-8b",
+            "format":"safetensors","size_bytes":17292506991,"detected_arch":"qwen","detected_params":"7B",
+            "model_class":"dense","total_params":7247757312,"quantization":"bf16"}
+
+--- 步骤 3: 检查引擎准备情况 ---
+时间: 14:30:44
+操作: ~/aima engine list
+结果: SUCCESS
+输出: [6个引擎，包含 vllm/vllm-openai:v0.15.0 和 aima-vllm-qwen3-omni]
+操作: ~/aima engine scan
+结果: SUCCESS
+输出: [同样的6个引擎列表]
+操作: ~/aima engine pull vllm
+结果: FAIL
+输出: aima: pull engine vllm: pull image vllm/vllm-openai:v0.8.5: all registries failed: exit status 1
+观察: 引擎 pull 尝试拉取 vllm/vllm-openai:v0.8.5 失败（所有镜像仓库均失败）。
+     本地已有 vllm/vllm-openai:v0.15.0 和 aima-vllm-qwen3-omni，但 catalog 指定的版本不匹配。
+     发现：catalog 中 vllm 引擎指定的拉取镜像为 v0.8.5，但知识库解析配置使用 nvcr.io/nvidia/vllm:26.01-py3。
+     这两个都不在本地，且 engine pull 尝试的是 v0.8.5 而非知识库推荐的 26.01-py3。
+
+--- 步骤 4: 解析配置（预演）---
+时间: 15:06:36
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: SUCCESS
+输出:
+{
+  "Engine": "vllm",
+  "EngineImage": "nvcr.io/nvidia/vllm:26.01-py3",
+  "ModelPath": "",
+  "Config": {"dtype": "bfloat16", "gpu_memory_utilization": 0.3, "max_model_len": 8192, "port": 8000},
+  "Provenance": {"dtype": "L0", "gpu_memory_utilization": "L0", ...},  (全为 L0)
+  "GPUResourceName": "nvidia.com/gpu",
+  "RuntimeClassName": "nvidia",
+  "RuntimeRecommendation": "container"
+}
+观察: 配置解析成功，引擎镜像为 nvcr.io/nvidia/vllm:26.01-py3（GB10 专用 Blackwell 镜像）。
+     所有参数来源于 L0 默认值（非 L2 知识库匹配），gpu_memory_utilization=0.3 偏低（120GB 可用）。
+     注意：ModelPath 为空，意味着 aima 将在部署时注入实际路径。
+
+--- 步骤 5: 部署模型 ---
+时间: 15:06:54
+操作: ~/aima deploy qwen3-8b --engine vllm
+结果: PARTIAL（Pod 创建成功，但 STUCK Pending）
+输出:
+2026/02/27 15:06:54 INFO kubectl apply output="pod/qwen3-8b-vllm created\n"
+{"engine": "vllm", "model": "qwen3-8b", "runtime": "k3s", "slot": "primary", "status": "deploying"}
+
+K3S Pod 状态（持续 Pending，无法调度）：
+NAME            READY   STATUS    RESTARTS   AGE
+qwen3-8b-vllm   0/1     Pending   0          100s
+
+K3S Node 资源：
+Capacity:    nvidia.com/gpu: 10
+Allocatable: nvidia.com/gpu: 0   <-- 关键问题！
+
+HAMi device-plugin 日志（CrashLoopBackOff，已 12 次重启）：
+E0227 15:09:43.523915 register.go:114] nvml get memory error ret=3
+panic: 0
+goroutine 90 [running]:
+...NvidiaDevicePlugin.getAPIDevices...register.go:115
+NVML error ret=3 = NVML_ERROR_NOT_SUPPORTED
+
+观察: 
+  1. Pod 成功创建（kubectl apply 成功）
+  2. Pod 无法调度：nvidia.com/gpu allocatable=0，调度器找不到满足 1 GPU 需求的节点
+  3. 根本原因：HAMi device-plugin 在 GB10（Grace-Blackwell unified memory）上崩溃
+     NVML_ERROR_NOT_SUPPORTED ret=3 表明 HAMi 的 nvmlDeviceGetMemoryInfo 等调用不支持统一内存架构
+  4. 这是已知问题（见历史记录）：HAMi v2.4.1 对 GB10 统一内存架构不兼容
+
+--- 步骤 6-7: 启动服务代理 / 验证推理功能 ---
+时间: 未执行（前置步骤被阻塞）
+结果: BLOCKED - 部署未成功，无法进行推理验证
+
+=== 场景总结 ===
+整体结果: BLOCKED
+通过的步骤: 步骤2(模型下载), 步骤3(引擎列表), 步骤4(配置解析), 步骤5a(Pod创建)
+失败/阻塞的步骤:
+  - 步骤3: engine pull vllm 失败（目标版本 v0.8.5 所有仓库均不可达）
+  - 步骤5: Pod Pending 无法调度（HAMi device-plugin CrashLoopBackOff 导致 GPU allocatable=0）
+  - 步骤6-7: 未执行（被步骤5阻塞）
+
+根本原因分析:
+  主要障碍：HAMi v2.4.1 device-plugin 与 GB10 Grace-Blackwell 统一内存架构不兼容
+  错误：NVML_ERROR_NOT_SUPPORTED (ret=3)，出现在 nvmlDeviceGetMemoryInfo 调用
+  结果：nvidia.com/gpu allocatable=0，所有需要 GPU 的 Pod 都无法调度
+
+次要问题：
+  - engine pull 指定 v0.8.5，但知识库推荐 nvcr.io/nvidia/vllm:26.01-py3
+  - model pull 完成后未自动 import 到数据库，需手动 aima model import
+  - 知识库所有配置源为 L0（无 L2 匹配），gpu_memory_utilization=0.3 对 120GB 内存不理想
+
+建议的修复方向:
+  [高优先级] HAMi 兼容性：需要支持 GB10 统一内存的 HAMi 版本（v2.5+ 或专门适配版本）
+  [高优先级] 替代方案：使用 NVIDIA 官方设备插件 (nvidia-device-plugin) 替代 HAMi，可访问 GPU 无需统一内存支持
+  [中优先级] engine pull 版本与知识库推荐版本不一致（v0.8.5 vs 26.01-py3）
+  [低优先级] model pull 后自动 import 到数据库，避免手动步骤
+  [信息] 在 init 报告中明确指出 GB10 的 HAMi CrashLoopBackOff 状态，而非仅报 [OK]

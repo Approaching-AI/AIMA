@@ -30,6 +30,14 @@ func (m *mockRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return nil, fmt.Errorf("command not mocked: %s", key)
 }
 
+func (m *mockRunner) Pipe(ctx context.Context, from, to []string) error {
+	if _, err := m.Run(ctx, from[0], from[1:]...); err != nil {
+		return err
+	}
+	_, err := m.Run(ctx, to[0], to[1:]...)
+	return err
+}
+
 // --- crictl image list format for tests ---
 type crictlImageList struct {
 	Images []crictlImage `json:"images"`
@@ -224,8 +232,8 @@ func TestScanTagAwarePatternPriority(t *testing.T) {
 
 func TestPatternMatchExactAnchors(t *testing.T) {
 	// ^pattern$ should match exactly
-	patterns := map[string]string{
-		"^vllm-nightly$": "vllm-nightly",
+	patterns := []patternEntry{
+		{pattern: "^vllm-nightly$", engineType: "vllm-nightly"},
 	}
 
 	if got := patternMatch("vllm-nightly", patterns); got != "vllm-nightly" {
@@ -238,6 +246,20 @@ func TestPatternMatchExactAnchors(t *testing.T) {
 		t.Errorf("^vllm-nightly$ should NOT match 'pre-vllm-nightly', got %q", got)
 	}
 }
+
+func TestPatternMatchDeterministicPriority(t *testing.T) {
+	patterns := []patternEntry{
+		{pattern: "vllm", engineType: "contains"},
+		{pattern: "^vllm$", engineType: "exact"},
+		{pattern: "^vllm-nightly$", engineType: "nightly"},
+	}
+	for i := 0; i < 100; i++ {
+		if got := patternMatch("vllm", patterns); got != "exact" {
+			t.Fatalf("iteration %d: expected exact, got %q", i, got)
+		}
+	}
+}
+
 
 func TestScanFallbackToDocker(t *testing.T) {
 	// Docker image list JSON format (one JSON object per line)
@@ -514,6 +536,31 @@ func TestImportNonExistentFile(t *testing.T) {
 	err := Import(context.Background(), "/nonexistent/image.tar", runner)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestImportDockerToContainerdPipe(t *testing.T) {
+	runner := &mockRunner{
+		responses: map[string]mockResponse{
+			"docker save vllm/vllm-openai:latest":   {output: []byte("ok")},
+			"k3s ctr -n k8s.io images import -":     {output: []byte("ok")},
+		},
+	}
+
+	if err := ImportDockerToContainerd(context.Background(), "vllm/vllm-openai:latest", runner); err != nil {
+		t.Fatalf("ImportDockerToContainerd: %v", err)
+	}
+}
+
+func TestImportDockerToContainerdPipeError(t *testing.T) {
+	runner := &mockRunner{
+		responses: map[string]mockResponse{
+			"docker save vllm/vllm-openai:latest": {err: fmt.Errorf("save failed")},
+		},
+	}
+
+	if err := ImportDockerToContainerd(context.Background(), "vllm/vllm-openai:latest", runner); err == nil {
+		t.Fatal("expected error when docker save fails")
 	}
 }
 

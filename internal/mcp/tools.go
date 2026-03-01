@@ -28,6 +28,7 @@ type ToolDeps struct {
 	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
 	PullEngine     func(ctx context.Context, name string) error
 	ImportEngine   func(ctx context.Context, path string) error
+	RemoveEngine   func(ctx context.Context, name string) error
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
@@ -43,6 +44,7 @@ type ToolDeps struct {
 	GeneratePod      func(ctx context.Context, model, engine, slot string) (json.RawMessage, error)
 	ListProfiles     func(ctx context.Context) (json.RawMessage, error)
 	ListEngineAssets func(ctx context.Context) (json.RawMessage, error)
+	ListModelAssets  func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
 	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -421,6 +423,29 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
+	// engine.remove
+	s.RegisterTool(&Tool{
+		Name:        "engine.remove",
+		Description: "Remove an engine from the local database",
+		InputSchema: schema(`"name":{"type":"string","description":"Engine name or ID to remove"}`, "name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RemoveEngine == nil {
+				return ErrorResult("engine.remove not implemented"), nil
+			}
+			var p struct{ Name string `json:"name"` }
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			if err := deps.RemoveEngine(ctx, p.Name); err != nil {
+				return nil, fmt.Errorf("remove engine %s: %w", p.Name, err)
+			}
+			return TextResult(fmt.Sprintf("engine %s removed", p.Name)), nil
+		},
+	})
+
 	// deploy.apply
 	s.RegisterTool(&Tool{
 		Name:        "deploy.apply",
@@ -706,6 +731,23 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.ListEngineAssets(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("list engine assets: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.list_models
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.list_models",
+		Description: "List all model assets from the knowledge base",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ListModelAssets == nil {
+				return ErrorResult("knowledge.list_models not implemented"), nil
+			}
+			data, err := deps.ListModelAssets(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list model assets: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

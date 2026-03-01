@@ -286,6 +286,31 @@ func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+func (r *execRunner) Pipe(ctx context.Context, from, to []string) error {
+	fromCmd := exec.CommandContext(ctx, from[0], from[1:]...)
+	toCmd := exec.CommandContext(ctx, to[0], to[1:]...)
+
+	pipe, err := fromCmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("create pipe: %w", err)
+	}
+	toCmd.Stdin = pipe
+
+	if err := fromCmd.Start(); err != nil {
+		return fmt.Errorf("%s: %w", from[0], err)
+	}
+	if err := toCmd.Start(); err != nil {
+		_ = fromCmd.Process.Kill()
+		_ = fromCmd.Wait()
+		return fmt.Errorf("%s: %w", to[0], err)
+	}
+
+	if err := fromCmd.Wait(); err != nil {
+		return fmt.Errorf("%s: %w", from[0], err)
+	}
+	return toCmd.Wait()
+}
+
 // podQuerierAdapter bridges k3s.Client to stack.PodQuerier interface.
 type podQuerierAdapter struct {
 	client *k3s.Client
@@ -789,6 +814,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			_, _ = scanEnginesImpl(ctx, "auto")
 			return nil
 		},
+		RemoveEngine: func(ctx context.Context, name string) error {
+			return db.DeleteEngine(ctx, name)
+		},
 
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
@@ -856,6 +884,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				RuntimeClassName: resolved.RuntimeClassName,
 				CPUArch:          resolved.CPUArch,
 				Env:              resolved.Env,
+				Container:        resolved.Container,
 				GPUResourceName:  resolved.GPUResourceName,
 				ExtraVolumes:     resolved.ExtraVolumes,
 				Labels: map[string]string{
@@ -923,6 +952,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			// Pod names are "<model>-<engine>" (e.g. qwen3-8b-vllm), but users
 			// often pass just the model name (e.g. qwen3-8b).
 			deleted := name
+			modelKey := ""
 			err := rt.Delete(ctx, name)
 			if err != nil {
 				// Exact name failed — search deployments for this model name.
@@ -931,6 +961,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						if d.Labels["aima.dev/model"] == name || d.Name == name {
 							if delErr := rt.Delete(ctx, d.Name); delErr == nil {
 								deleted = d.Name
+								modelKey = d.Labels["aima.dev/model"]
 								err = nil
 								break
 							}
@@ -947,6 +978,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err != nil {
 				return fmt.Errorf("deployment %q not found", name)
 			}
+			if modelKey != "" {
+				proxyServer.RemoveBackend(modelKey)
+			}
+			proxyServer.RemoveBackend(name)
 			proxyServer.RemoveBackend(deleted)
 			return nil
 		},
@@ -1037,6 +1072,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return json.Marshal(cat.EngineAssets) // fallback to in-memory
 			}
 			return json.Marshal(assets)
+		},
+		ListModelAssets: func(ctx context.Context) (json.RawMessage, error) {
+			return json.Marshal(cat.ModelAssets)
 		},
 
 		// Knowledge query (enhanced — SQLite relational queries)

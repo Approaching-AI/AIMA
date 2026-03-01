@@ -147,7 +147,20 @@ ConfigResolver 不仅用 `gpu_arch` 匹配 variant，还根据硬件规格和运
 ```
 HAL Detect (静态规格)  ──→  HardwareInfo  ──→  findModelVariant (VRAM/统一显存过滤)
 HAL Metrics (动态状态)  ──→  HardwareInfo  ──→  CheckFit (gpu_memory_utilization 自动调整)
+Hardware Profile YAML  ──→  ContainerAccess ──→  GeneratePod (厂商无关容器配置)
 ```
+
+**容器访问配置**
+
+Hardware Profile YAML 的 `container` 字段描述该硬件在 K3S 容器中运行推理时需要的厂商特定配置：
+- `devices`: 需挂载的宿主机设备（如 AMD ROCm 的 `/dev/kfd`, `/dev/dri`）
+- `env`: 注入到容器的环境变量（如 NVIDIA 的 `LD_LIBRARY_PATH`, AMD 的 `LD_PRELOAD`）
+- `volumes`: 额外的 hostPath 挂载
+- `security`: securityContext 配置（如 `supplemental_groups` 用于 video/render 组权限）
+
+ConfigResolver 在 `Resolve()` 中通过 `findContainerAccess()` 匹配当前硬件的 container 配置，
+传入 `ResolvedConfig.Container`，最终由 `GeneratePod()` 通用渲染。
+Env 合并规则：hardware container env（基础层）+ engine env（覆盖层），引擎 env 在冲突时优先。
 
 ---
 
@@ -157,8 +170,10 @@ HAL Metrics (动态状态)  ──→  HardwareInfo  ──→  CheckFit (gpu_me
 
 **INV-1: 不为引擎类型写代码。** 引擎行为定义在 YAML。添加新引擎 = 写 YAML。
 
-**INV-2: 不为模型类型写代码。** 模型元数据在 YAML。模型类型是知识，不是代码分支。
+**INV-2: 不为模型/硬件类型写代码。** 模型元数据在 YAML。模型类型是知识，不是代码分支。
 硬件约束（`vram_min_mib`、`unified_memory`）同样在 YAML 中定义，Go 代码仅做数值比较。
+厂商特定的容器访问配置（设备挂载、环境变量、安全上下文）定义在 Hardware Profile YAML 的 `container` 字段中，
+Pod 生成器通用渲染，不含 NVIDIA/AMD/Intel 等厂商分支。
 
 **INV-3: 最小化运行时管理。** K3S 管 Pod 的创建、监控、重启、销毁。
 Native runtime 只做极简进程管理（start/stop/logs）。
@@ -229,4 +244,4 @@ vLLM engine YAML 通过 `served_model_name: "{{.ModelName}}"` 确保 vLLM 的对
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-02-28 (vendor-agnostic GPU container access)*

@@ -120,6 +120,13 @@ func TestGeneratePodWithPartition(t *testing.T) {
 			Path:     "/health",
 			TimeoutS: 300,
 		},
+		Container: &ContainerAccess{
+			Env: map[string]string{
+				"NVIDIA_VISIBLE_DEVICES":      "all",
+				"NVIDIA_DRIVER_CAPABILITIES":  "all",
+				"LD_LIBRARY_PATH":             "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+			},
+		},
 	}
 
 	podYAML, err := GeneratePod(resolved)
@@ -148,6 +155,27 @@ func TestGeneratePodWithPartition(t *testing.T) {
 		// HAMi GPU resources
 		if limits["nvidia.com/gpu"] == nil {
 			t.Error("expected nvidia.com/gpu in limits")
+		}
+	})
+
+	t.Run("env vars from hardware container access", func(t *testing.T) {
+		envList, ok := c["env"].([]any)
+		if !ok {
+			t.Fatal("expected env in container")
+		}
+		envMap := make(map[string]string)
+		for _, e := range envList {
+			entry := e.(map[string]any)
+			envMap[entry["name"].(string)] = entry["value"].(string)
+		}
+		if envMap["NVIDIA_VISIBLE_DEVICES"] != "all" {
+			t.Errorf("NVIDIA_VISIBLE_DEVICES = %q, want %q", envMap["NVIDIA_VISIBLE_DEVICES"], "all")
+		}
+		if envMap["NVIDIA_DRIVER_CAPABILITIES"] != "all" {
+			t.Errorf("NVIDIA_DRIVER_CAPABILITIES = %q, want %q", envMap["NVIDIA_DRIVER_CAPABILITIES"], "all")
+		}
+		if !strings.Contains(envMap["LD_LIBRARY_PATH"], "x86_64-linux-gnu") {
+			t.Errorf("LD_LIBRARY_PATH = %q, should contain x86_64-linux-gnu", envMap["LD_LIBRARY_PATH"])
 		}
 	})
 
@@ -184,5 +212,136 @@ func TestGeneratePodNilResolved(t *testing.T) {
 	_, err := GeneratePod(nil)
 	if err == nil {
 		t.Fatal("expected error for nil resolved config")
+	}
+}
+
+func TestGeneratePodAMDDevices(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "rocm-engine",
+		EngineImage: "rocm/vllm:latest",
+		ModelPath:   "/data/models/test-model",
+		ModelName:   "test-model",
+		Slot:        "default",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve", "--model", "{{.ModelPath}}"},
+		Container: &ContainerAccess{
+			Devices: []string{"/dev/kfd", "/dev/dri"},
+			Env: map[string]string{
+				"LD_PRELOAD": "/opt/rocm/lib/librocm_smi64.so",
+			},
+			Security: &ContainerSecurity{
+				SupplementalGroups: []int{44, 110},
+			},
+		},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+
+	s := string(podYAML)
+
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, podYAML)
+	}
+
+	t.Run("device mounts", func(t *testing.T) {
+		if !strings.Contains(s, "/dev/kfd") {
+			t.Error("expected /dev/kfd in pod YAML")
+		}
+		if !strings.Contains(s, "/dev/dri") {
+			t.Error("expected /dev/dri in pod YAML")
+		}
+	})
+
+	t.Run("LD_PRELOAD env", func(t *testing.T) {
+		if !strings.Contains(s, "LD_PRELOAD") {
+			t.Error("expected LD_PRELOAD in pod YAML")
+		}
+		if !strings.Contains(s, "/opt/rocm/lib/librocm_smi64.so") {
+			t.Error("expected rocm lib path in pod YAML")
+		}
+	})
+
+	t.Run("supplemental groups", func(t *testing.T) {
+		spec := pod["spec"].(map[string]any)
+		sc, ok := spec["securityContext"].(map[string]any)
+		if !ok {
+			t.Fatal("expected securityContext in pod spec")
+		}
+		groups, ok := sc["supplementalGroups"].([]any)
+		if !ok {
+			t.Fatal("expected supplementalGroups in securityContext")
+		}
+		if len(groups) != 2 {
+			t.Fatalf("supplementalGroups count = %d, want 2", len(groups))
+		}
+	})
+
+	t.Run("no GPU resource request without resource name", func(t *testing.T) {
+		spec := pod["spec"].(map[string]any)
+		containers := spec["containers"].([]any)
+		c := containers[0].(map[string]any)
+		if c["resources"] != nil {
+			t.Error("should not have resources when GPUResourceName is empty and no partition")
+		}
+	})
+}
+
+func TestGeneratePodEnvMerge(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "vllm",
+		EngineImage: "vllm/vllm-openai:latest",
+		ModelPath:   "/data/models/test",
+		ModelName:   "test",
+		Slot:        "default",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve"},
+		Env: map[string]string{
+			"HSA_OVERRIDE_GFX_VERSION": "11.0.0",
+			"SHARED_VAR":              "engine-wins",
+		},
+		Container: &ContainerAccess{
+			Env: map[string]string{
+				"LD_PRELOAD": "/opt/rocm/lib/librocm_smi64.so",
+				"SHARED_VAR": "hw-loses",
+			},
+		},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, podYAML)
+	}
+
+	spec := pod["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	c := containers[0].(map[string]any)
+
+	envList, ok := c["env"].([]any)
+	if !ok {
+		t.Fatal("expected env in container")
+	}
+	envMap := make(map[string]string)
+	for _, e := range envList {
+		entry := e.(map[string]any)
+		envMap[entry["name"].(string)] = entry["value"].(string)
+	}
+
+	if envMap["HSA_OVERRIDE_GFX_VERSION"] != "11.0.0" {
+		t.Errorf("HSA_OVERRIDE_GFX_VERSION = %q, want %q", envMap["HSA_OVERRIDE_GFX_VERSION"], "11.0.0")
+	}
+	if envMap["LD_PRELOAD"] != "/opt/rocm/lib/librocm_smi64.so" {
+		t.Errorf("LD_PRELOAD = %q, want hw value", envMap["LD_PRELOAD"])
+	}
+	if envMap["SHARED_VAR"] != "engine-wins" {
+		t.Errorf("SHARED_VAR = %q, want engine-wins (engine overrides hw)", envMap["SHARED_VAR"])
 	}
 }

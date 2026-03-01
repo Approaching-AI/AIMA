@@ -1,0 +1,191 @@
+=== AIMA UAT Log ===
+机器: amd395
+日期: 2026-02-27 14:27
+测试员: amd395-tester (Claude Agent)
+场景: AMD VLLM 可行性探查（超出标准场景 B，专项探查）
+
+背景: amd395 搭载 AMD Radeon 8060S（RDNA3.5 架构），无 NVIDIA GPU。
+      VLLM 原生支持 CUDA（NVIDIA），通过 ROCm 可支持 AMD GPU，
+      但需要专门的 ROCm 版 VLLM 容器镜像。
+      本探查记录 AIMA catalog 对 AMD VLLM 路径的当前覆盖程度。
+
+--- 步骤 1: aima knowledge resolve qwen3-8b --engine vllm ---
+时间: 14:27:01
+操作: ~/aima knowledge resolve qwen3-8b --engine vllm
+结果: FAIL
+输出:
+  2026/02/27 14:27:01 INFO runtime selected runtime=native
+  aima: resolve config for qwen3-8b: no engine asset for type "vllm" gpu_arch "RDNA3.5"
+
+观察: AIMA 明确报告：catalog 中无 type=vllm、gpu_arch=RDNA3.5 的引擎资产。
+      错误信息清晰，包含了足够的调试信息（type 和 gpu_arch 均已给出）。
+      这证实了 AMD GPU 的 VLLM 路径在 catalog 中尚不存在。
+
+--- 步骤 2: aima engine scan ---
+时间: 14:27:19
+操作: ~/aima engine scan
+结果: SUCCESS
+输出:
+  [
+    {
+      "available": true,
+      "binary_path": "/home/quings/.aima/dist/linux-amd64/llama-server",
+      "id": "5ec30eef7dc17ed0",
+      "image": "",
+      "platform": "linux-amd64",
+      "runtime_type": "native",
+      "size_bytes": 7461016,
+      "tag": "",
+      "type": "llamacpp"
+    }
+  ]
+
+观察: 本地只有 llamacpp 引擎（原生二进制）。没有任何 VLLM 容器镜像。
+      llamacpp-vulkan 可在 AMD GPU 上使用（Vulkan 后端），已经在本机正常工作过。
+      没有发现 ROCm/VLLM 相关的任何镜像或二进制。
+
+--- 步骤 3: aima knowledge resolve qwen3-8b（不指定引擎） ---
+时间: 14:27:12
+操作: ~/aima knowledge resolve qwen3-8b
+结果: SUCCESS
+输出:
+  {
+    "Engine": "llamacpp",
+    "EngineImage": "ghcr.io/ggml-org/llama.cpp:server",
+    "ModelPath": "",
+    "ModelName": "qwen3-8b",
+    "Slot": "primary",
+    "Config": {
+      "ctx_size": 4096,
+      "n_gpu_layers": 999,
+      "port": 8080
+    },
+    "Provenance": {
+      "ctx_size": "L0",
+      "n_gpu_layers": "L0",
+      "port": "L0"
+    },
+    "Partition": {
+      "Name": "primary",
+      "GPUMemoryMiB": 0,
+      "GPUCoresPercent": 90,
+      "CPUCores": 0,
+      "RAMMiB": 0
+    },
+    "Command": [
+      "llama-server",
+      "--model",
+      "{{.ModelPath}}",
+      "--host",
+      "0.0.0.0"
+    ],
+    "HealthCheck": {
+      "path": "/health",
+      "timeout_s": 60
+    },
+    "Warmup": {
+      "enabled": true,
+      "prompt": "Hello",
+      "max_tokens": 1,
+      "timeout_s": 30
+    },
+    "Source": {
+      "binary": "llama-server",
+      "platforms": ["linux/amd64"],
+      "download": {
+        "linux/amd64": "https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
+      },
+      "mirror": {
+        "linux/amd64": "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
+      }
+    },
+    "GPUResourceName": "amd.com/gpu",
+    "RuntimeClassName": "",
+    "RuntimeRecommendation": "native"
+  }
+
+观察: AIMA 对 amd395 推荐使用 llamacpp（Vulkan 后端）而非 VLLM，这是正确的降级策略。
+      RuntimeRecommendation: "native" 说明 AIMA 知道 llamacpp 在本机应以原生进程运行，不走 K3S。
+      GPUResourceName: "amd.com/gpu" 正确（非 nvidia.com/gpu）。
+      Config 中所有参数均为 L0（内置默认值），说明 catalog 中没有针对 RDNA3.5+qwen3-8b 的 L2 知识。
+      n_gpu_layers: 999 是 "全部 GPU 卸载" 的标准设置，适合 65GB VRAM 的 AMD 显卡。
+
+--- 步骤 4: aima deploy qwen3-8b --engine vllm（在 K3S 初始化后） ---
+时间: 14:28:37
+操作: ~/aima deploy qwen3-8b --engine vllm
+结果: FAIL
+输出:
+  2026/02/27 14:28:37 INFO runtime selected runtime=k3s
+  aima: deploy qwen3-8b: resolve config: no engine asset for type "vllm" gpu_arch "RDNA3.5"
+
+观察: K3S 初始化后（runtime 切换为 k3s），VLLM 部署仍然失败，原因相同：
+      catalog 中无 type=vllm、gpu_arch=RDNA3.5 的引擎资产。
+      AIMA 在 deploy 阶段正确地阻止了无效部署，给出了明确错误信息。
+      这是预期的、正确的行为——AIMA 不应该尝试用 CUDA VLLM 镜像在 AMD 显卡上运行。
+
+--- 步骤 5: aima engine list（K3S 初始化后） ---
+时间: 14:28:46
+操作: ~/aima engine list
+结果: SUCCESS
+输出:
+  [
+    {
+      "available": true,
+      "binary_path": "/home/quings/.aima/dist/linux-amd64/llama-server",
+      "created_at": "2026-02-27T06:58:58Z",
+      "id": "5ec30eef7dc17ed0",
+      "image": "",
+      "platform": "linux-amd64",
+      "runtime_type": "native",
+      "size_bytes": 7461016,
+      "tag": "",
+      "type": "llamacpp"
+    }
+  ]
+
+观察: 引擎列表与初始化前相同，只有 llamacpp 原生二进制，无 VLLM 容器镜像。
+
+=== AMD VLLM 可行性分析 ===
+
+当前状态:
+- AIMA catalog 中无任何 AMD GPU 的 VLLM 引擎资产
+- 错误模式一致：no engine asset for type "vllm" gpu_arch "RDNA3.5"
+- AIMA 正确推荐 llamacpp-vulkan 作为 AMD GPU 的替代引擎
+
+缺失的 catalog 条目:
+1. 引擎资产: vllm-rocm（type: vllm, gpu_arch: RDNA3.5）
+   - 镜像: rocm/vllm 或 AMD 官方 ROCm VLLM 镜像
+   - 所需: ROCm 6.x 驱动，AMD GPU 支持
+   - 优先级: 低（llamacpp-vulkan 已提供可用的 AMD GPU 推理路径）
+
+技术可行性评估:
+  AMD VLLM（ROCm 路径）技术上可行，但：
+  - 需要 AMD ROCm 驱动（需确认 amd395 是否已安装 ROCm）
+  - ROCm VLLM 镜像体积大（约 15-20 GB）
+  - 当前 llamacpp-vulkan 已提供良好的 AMD GPU 推理能力（qwen3-0.6B 实测 ~194 tok/s）
+  - 在 K3S 中运行 ROCm 容器还需要设备挂载（/dev/kfd, /dev/dri）
+
+推荐的工作优先级:
+  1. 近期（高优先级）: 验证 llamacpp-vulkan 在 K3S 模式下的表现（添加 K3S runtime 的 amd.com/gpu 资源支持）
+  2. 中期: 添加 sglang-rocm 引擎资产（SGLang 对 AMD ROCm 支持更成熟）
+  3. 长期: 添加 vllm-rocm 引擎资产（AMD 官方 ROCm VLLM 路径）
+
+=== 场景总结 ===
+整体结果: BLOCKED（catalog gap，符合预期）
+通过的步骤:
+  - 步骤 2: engine scan 正确报告本地已有引擎
+  - 步骤 3: 无引擎限制时，AIMA 正确推荐 llamacpp（AMD GPU 最优选择）
+  - 步骤 4: AIMA 正确拒绝了无效的 AMD VLLM 部署请求
+
+失败/阻塞的步骤:
+  - 步骤 1: catalog 中无 vllm-rocm 引擎资产（gap）
+  - 步骤 4: 无法部署 VLLM（根本原因：catalog gap）
+
+根本原因分析:
+  AMD VLLM 在 AIMA catalog 中没有覆盖。这不是 AIMA 代码 bug，
+  而是 catalog 知识库的覆盖范围问题。AIMA 架构设计正确：
+  通过 catalog gap 给出明确错误，而不是尝试用错误的引擎部署。
+
+建议的修复方向:
+  优先添加 sglang-rocm 引擎资产（SGLang AMD ROCm 支持更完善），
+  或者先验证 llamacpp-vulkan 在 K3S 模式下的完整部署链路。

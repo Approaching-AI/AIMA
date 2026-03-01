@@ -100,6 +100,7 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 		RuntimeClassName: req.RuntimeClassName,
 		CPUArch:          req.CPUArch,
 		Env:              req.Env,
+		Container:        req.Container,
 		GPUResourceName:  req.GPUResourceName,
 	}
 

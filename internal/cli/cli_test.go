@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -43,7 +44,17 @@ func testApp(t *testing.T) *App {
 		Dispatcher: dispatcher,
 		ZeroClaw:   zcMgr,
 		DataDir:    t.TempDir(),
-		ToolDeps:   &mcp.ToolDeps{},
+		ToolDeps: &mcp.ToolDeps{
+			ListProfiles: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`[{"name":"test-hw"}]`), nil
+			},
+			ListEngineAssets: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`[{"type":"llamacpp"}]`), nil
+			},
+			ListModelAssets: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`[{"name":"test-model"}]`), nil
+			},
+		},
 	}
 }
 

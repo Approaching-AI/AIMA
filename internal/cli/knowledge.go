@@ -67,6 +67,10 @@ func newKnowledgeListCmd(app *App) *cobra.Command {
 			for _, hp := range profiles {
 				if n, ok := hp["name"].(string); ok && n != "" {
 					profileNames = append(profileNames, n)
+					continue
+				}
+				if n, ok := hp["id"].(string); ok && n != "" {
+					profileNames = append(profileNames, n)
 				}
 			}
 			summary["profiles"] = profileNames
@@ -75,6 +79,14 @@ func newKnowledgeListCmd(app *App) *cobra.Command {
 			for _, ea := range engines {
 				if t, ok := ea["type"].(string); ok && t != "" {
 					engineNames = append(engineNames, t)
+					continue
+				}
+				if n, ok := ea["name"].(string); ok && n != "" {
+					engineNames = append(engineNames, n)
+					continue
+				}
+				if n, ok := ea["id"].(string); ok && n != "" {
+					engineNames = append(engineNames, n)
 				}
 			}
 			summary["engines"] = engineNames
@@ -82,6 +94,10 @@ func newKnowledgeListCmd(app *App) *cobra.Command {
 			modelNames := make([]string, 0, len(models))
 			for _, ma := range models {
 				if n, ok := ma["name"].(string); ok && n != "" {
+					modelNames = append(modelNames, n)
+					continue
+				}
+				if n, ok := ma["id"].(string); ok && n != "" {
 					modelNames = append(modelNames, n)
 				}
 			}

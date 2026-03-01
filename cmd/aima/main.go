@@ -947,6 +947,67 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			return json.Marshal(result)
 		},
+		DeployDryRun: func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			if overrides == nil {
+				overrides = map[string]any{}
+			}
+			if slot != "" {
+				overrides["slot"] = slot
+			}
+			resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
+			if err != nil {
+				return nil, err
+			}
+			modelName = canonicalName
+
+			fit := knowledge.CheckFit(resolved, hwInfo)
+			for k, v := range fit.Adjustments {
+				resolved.Config[k] = v
+				resolved.Provenance[k] = "L0-auto"
+			}
+
+			runtimeName := rt.Name()
+			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
+				runtimeName = nativeRt.Name()
+			}
+
+			result := map[string]any{
+				"model":       modelName,
+				"engine":      resolved.Engine,
+				"engine_image": resolved.EngineImage,
+				"slot":        resolved.Slot,
+				"runtime":     runtimeName,
+				"config":      resolved.Config,
+				"provenance":  resolved.Provenance,
+				"fit_report": map[string]any{
+					"fit":         fit.Fit,
+					"reason":      fit.Reason,
+					"warnings":    fit.Warnings,
+					"adjustments": fit.Adjustments,
+				},
+			}
+
+			var warnings []string
+			warnings = append(warnings, fit.Warnings...)
+			if !fit.Fit {
+				warnings = append(warnings, "WILL NOT DEPLOY: "+fit.Reason)
+			}
+
+			if runtimeName == "k3s" {
+				if podYAML, podErr := knowledge.GeneratePod(resolved); podErr == nil {
+					result["pod_yaml"] = string(podYAML)
+				} else {
+					warnings = append(warnings, "pod generation failed: "+podErr.Error())
+				}
+			}
+
+			if len(warnings) > 0 {
+				result["warnings"] = warnings
+			}
+
+			return json.Marshal(result)
+		},
 		DeployDelete: func(ctx context.Context, name string) error {
 			// Try exact pod name first, then fall back to searching by model label.
 			// Pod names are "<model>-<engine>" (e.g. qwen3-8b-vllm), but users

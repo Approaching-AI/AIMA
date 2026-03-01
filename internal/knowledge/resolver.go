@@ -376,8 +376,8 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 	return &PartitionSlot{Name: "default"}
 }
 
-// formatEngineMap maps model file formats to the preferred engine type.
-var formatEngineMap = map[string]string{
+// FormatEngineMap maps model file formats to the preferred engine type.
+var FormatEngineMap = map[string]string{
 	"safetensors": "vllm",
 	"gguf":        "llamacpp",
 }
@@ -390,7 +390,7 @@ func BuildSyntheticModelAsset(name, modelType, family, paramCount, format string
 		modelType = "llm"
 	}
 	engineType := "llamacpp" // most permissive fallback
-	if et, ok := formatEngineMap[strings.ToLower(format)]; ok {
+	if et, ok := FormatEngineMap[strings.ToLower(format)]; ok {
 		engineType = et
 	}
 

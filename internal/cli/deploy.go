@@ -13,6 +13,7 @@ func newDeployCmd(app *App) *cobra.Command {
 	var (
 		engineType      string
 		slot            string
+		dryRun          bool
 		configOverrides []string
 	)
 
@@ -26,6 +27,15 @@ func newDeployCmd(app *App) *cobra.Command {
 
 			configMap := parseConfigOverrides(configOverrides)
 
+			if dryRun {
+				data, err := app.ToolDeps.DeployDryRun(ctx, engineType, modelName, slot, configMap)
+				if err != nil {
+					return fmt.Errorf("deploy dry-run %s: %w", modelName, err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+				return nil
+			}
+
 			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap)
 			if err != nil {
 				return fmt.Errorf("deploy %s: %w", modelName, err)
@@ -38,6 +48,7 @@ func newDeployCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringVar(&engineType, "engine", "", "Engine type (e.g., vllm, llamacpp)")
 	cmd.Flags().StringVar(&slot, "slot", "", "Partition slot name")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployment without executing")
 	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
 
 	return cmd

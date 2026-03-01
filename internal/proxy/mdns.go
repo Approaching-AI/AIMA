@@ -92,20 +92,24 @@ func startMDNSDarwin(instance string, port int, txt []string) (*MDNSAdvertiser, 
 	return &MDNSAdvertiser{cmd: cmd}, nil
 }
 
-// isLANAddr returns true if ip4 is a non-container, non-loopback LAN address.
-func isLANAddr(ip4 net.IP) bool {
-	if ip4 == nil || ip4.IsLoopback() {
-		return false
+// isContainerInterface returns true if the interface name matches known
+// container/overlay network patterns (Docker, Kubernetes, etc).
+func isContainerInterface(name string) bool {
+	lower := strings.ToLower(name)
+	// Docker: docker0, vethXXX, br-XXX
+	// Kubernetes: cni0, flannel.1, cali*, weave
+	// libvirt: virbr*
+	prefixes := []string{"docker", "veth", "br-", "cni", "flannel", "cali", "weave", "virbr"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
 	}
-	// Skip container/overlay networks: 10.0.0.0/8, 172.16.0.0/12
-	if ip4[0] == 10 || (ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) {
-		return false
-	}
-	return true
+	return false
 }
 
 // lanInterfaces returns up, multicast-capable interfaces that have at least
-// one non-container IPv4 address. Used to bind mDNS to all LAN segments.
+// one private IPv4 address, excluding container/overlay interfaces by name.
 func lanInterfaces() []*net.Interface {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -120,6 +124,9 @@ func lanInterfaces() []*net.Interface {
 		if iface.Flags&net.FlagMulticast == 0 {
 			continue
 		}
+		if isContainerInterface(iface.Name) {
+			continue
+		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
@@ -129,7 +136,7 @@ func lanInterfaces() []*net.Interface {
 			if !ok {
 				continue
 			}
-			if isLANAddr(ipnet.IP.To4()) {
+			if ip4 := ipnet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && ip4.IsPrivate() {
 				result = append(result, iface)
 				break
 			}
@@ -138,7 +145,8 @@ func lanInterfaces() []*net.Interface {
 	return result
 }
 
-// lanIPs returns non-loopback, non-virtual IPv4 addresses for mDNS advertisement.
+// lanIPs returns non-loopback, private IPv4 addresses for mDNS advertisement,
+// excluding addresses on container/overlay interfaces.
 func lanIPs() []net.IP {
 	var ips []net.IP
 	ifaces, err := net.Interfaces()
@@ -149,6 +157,9 @@ func lanIPs() []net.IP {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
+		if isContainerInterface(iface.Name) {
+			continue
+		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
@@ -158,7 +169,7 @@ func lanIPs() []net.IP {
 			if !ok {
 				continue
 			}
-			if ip4 := ipnet.IP.To4(); isLANAddr(ip4) {
+			if ip4 := ipnet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && ip4.IsPrivate() {
 				ips = append(ips, ip4)
 			}
 		}

@@ -340,7 +340,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				Runtime string `json:"runtime"`
 			}
 			if len(params) > 0 {
-				json.Unmarshal(params, &p)
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			if p.Runtime == "" {
 				p.Runtime = "auto"
@@ -405,7 +407,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			}
 			var p struct{ Name string `json:"name"` }
 			if len(params) > 0 {
-				json.Unmarshal(params, &p) //nolint:errcheck
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			name := p.Name
 			// Empty name is handled by the PullEngine implementation (uses catalog.DefaultEngine)
@@ -833,7 +837,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				AllowDownload bool `json:"allow_download"`
 			}
 			if len(params) > 0 {
-				json.Unmarshal(params, &p)
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+				}
 			}
 			data, err := deps.StackInit(ctx, p.AllowDownload)
 			if err != nil {

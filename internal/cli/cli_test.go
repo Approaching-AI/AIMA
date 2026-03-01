@@ -49,6 +49,9 @@ func testApp(t *testing.T) *App {
 			ListKnowledgeSummary: func(ctx context.Context) (json.RawMessage, error) {
 				return json.RawMessage(`{"hardware_profiles":1,"engine_assets":1,"model_assets":1}`), nil
 			},
+			DeployList: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`[]`), nil
+			},
 			AgentStatus: func(ctx context.Context) (json.RawMessage, error) {
 				return json.RawMessage(`{"zeroclaw_available":false,"zeroclaw_healthy":false}`), nil
 			},
@@ -150,6 +153,33 @@ func TestEngineSubcommands(t *testing.T) {
 	for _, name := range expected {
 		if !subs[name] {
 			t.Errorf("engine missing subcommand %q", name)
+		}
+	}
+}
+
+func TestDeploySubcommands(t *testing.T) {
+	app := testApp(t)
+	root := NewRootCmd(app)
+
+	var deployCmd *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() == "deploy" {
+			deployCmd = c
+			break
+		}
+	}
+	if deployCmd == nil {
+		t.Fatal("deploy command not found")
+	}
+
+	expected := []string{"list"}
+	subs := make(map[string]bool)
+	for _, c := range deployCmd.Commands() {
+		subs[c.Name()] = true
+	}
+	for _, name := range expected {
+		if !subs[name] {
+			t.Errorf("deploy missing subcommand %q", name)
 		}
 	}
 }
@@ -342,5 +372,22 @@ func TestAgentStatusCmd(t *testing.T) {
 
 	if buf.Len() == 0 {
 		t.Error("agent status output is empty")
+	}
+}
+
+func TestDeployListCmd(t *testing.T) {
+	app := testApp(t)
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"deploy", "list"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("deploy list failed: %v", err)
+	}
+
+	if buf.Len() == 0 {
+		t.Error("deploy list output is empty")
 	}
 }

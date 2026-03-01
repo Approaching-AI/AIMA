@@ -50,8 +50,31 @@ func newDeployCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&slot, "slot", "", "Partition slot name")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployment without executing")
 	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
+	cmd.AddCommand(newDeployListCmd(app))
 
 	return cmd
+}
+
+func newDeployListCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List deployed inference services",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if app.ToolDeps.DeployList == nil {
+				return fmt.Errorf("deploy.list not implemented")
+			}
+
+			data, err := app.ToolDeps.DeployList(ctx)
+			if err != nil {
+				return fmt.Errorf("deploy list: %w", err)
+			}
+
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
 }
 
 func newUndeployCmd(app *App) *cobra.Command {

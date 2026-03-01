@@ -44,8 +44,8 @@ type Model struct {
 type Engine struct {
 	ID          string    `json:"id"`
 	Type        string    `json:"type"`
-	Image       string    `json:"image"`        // container image name (container engines) or empty (native)
-	Tag         string    `json:"tag"`          // container image tag (container engines) or empty (native)
+	Image       string    `json:"image"` // container image name (container engines) or empty (native)
+	Tag         string    `json:"tag"`   // container image tag (container engines) or empty (native)
 	SizeBytes   int64     `json:"size_bytes"`
 	Platform    string    `json:"platform"`
 	RuntimeType string    `json:"runtime_type"` // "container" or "native"
@@ -131,20 +131,63 @@ func Open(ctx context.Context, dbPath string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
-	if _, err := sqlDB.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+	// Keep one long-lived connection so PRAGMA settings are stable and access is
+	// serialized per process (SQLite is optimized for this pattern).
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	// busy_timeout is a per-connection setting that needs no lock — set it
+	// first so all subsequent operations benefit from SQLite's built-in retry.
+	if _, err := sqlDB.ExecContext(ctx, "PRAGMA busy_timeout=3000"); err != nil {
 		sqlDB.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
-	}
-	if _, err := sqlDB.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
 	d := &DB{db: sqlDB}
-	if err := d.migrate(ctx); err != nil {
+	// journal_mode=WAL requires a write lock, so it goes inside retryBusy
+	// together with migrate (which uses BEGIN IMMEDIATE).
+	if err := retryBusy(ctx, 8, func() error {
+		if _, err := sqlDB.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+			return fmt.Errorf("set WAL mode: %w", err)
+		}
+		if _, err := sqlDB.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+			return fmt.Errorf("enable foreign keys: %w", err)
+		}
+		return d.migrate(ctx)
+	}); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
 	return d, nil
+}
+
+func retryBusy(ctx context.Context, maxAttempts int, fn func() error) error {
+	var lastErr error
+	for i := 0; i < maxAttempts; i++ {
+		if err := fn(); err == nil {
+			return nil
+		} else if !isSQLiteBusy(err) {
+			return err
+		} else {
+			lastErr = err
+		}
+
+		delay := time.Duration(50*(i+1)) * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w (last busy error: %v)", ctx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("sqlite busy retry exhausted")
+}
+
+func isSQLiteBusy(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "database is locked")
 }
 
 func (d *DB) Close() error {
@@ -152,6 +195,19 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrate(ctx context.Context) error {
+	// Use raw "BEGIN IMMEDIATE" instead of db.BeginTx because database/sql
+	// doesn't support SQLite's IMMEDIATE lock level. Safe because
+	// SetMaxOpenConns(1) guarantees all statements use the same connection.
+	if _, err := d.db.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin migration lock: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = d.db.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
 	// v1: system tables (models, engines, config, audit_log, knowledge_notes)
 	if err := d.migrateV1(ctx); err != nil {
 		return fmt.Errorf("migrate v1: %w", err)
@@ -172,6 +228,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err := d.migrateV5(ctx); err != nil {
 		return fmt.Errorf("migrate v5: %w", err)
 	}
+	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	committed = true
 	return nil
 }
 

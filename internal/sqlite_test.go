@@ -2,6 +2,9 @@ package state
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -19,6 +22,51 @@ func TestOpenClose(t *testing.T) {
 	db := mustOpen(t)
 	if db == nil {
 		t.Fatal("expected non-nil DB")
+	}
+}
+
+func TestOpenConcurrent(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	for i := 0; i < 8; i++ {
+		dbPath := filepath.Join(dir, fmt.Sprintf("aima-%d.db", i))
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		results := make(chan *DB, 2)
+		errs := make(chan error, 2)
+
+		openFn := func() {
+			defer wg.Done()
+			<-start
+			db, err := Open(ctx, dbPath)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- db
+		}
+
+		wg.Add(2)
+		go openFn()
+		go openFn()
+		close(start)
+		wg.Wait()
+		close(errs)
+		close(results)
+
+		var gotErr error
+		for err := range errs {
+			if gotErr == nil {
+				gotErr = err
+			}
+		}
+		for db := range results {
+			_ = db.Close()
+		}
+		if gotErr != nil {
+			t.Fatalf("concurrent Open(%s): %v", dbPath, gotErr)
+		}
 	}
 }
 

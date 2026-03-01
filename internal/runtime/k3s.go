@@ -95,6 +95,8 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 		Slot:             slot,
 		Config:           config,
 		Command:          req.Command,
+		InitCommands:     req.InitCommands,
+		ExtraVolumes:     req.ExtraVolumes,
 		RuntimeClassName: req.RuntimeClassName,
 		CPUArch:          req.CPUArch,
 		Env:              req.Env,

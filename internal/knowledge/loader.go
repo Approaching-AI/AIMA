@@ -139,11 +139,21 @@ type EngineHardware struct {
 }
 
 type EngineStartup struct {
-	Command     []string          `yaml:"command"      json:"command"`
-	Env         map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-	DefaultArgs map[string]any    `yaml:"default_args" json:"default_args"`
-	HealthCheck HealthCheck       `yaml:"health_check" json:"health_check"`
-	Warmup      WarmupConfig      `yaml:"warmup"       json:"warmup"`
+	Command      []string          `yaml:"command"                    json:"command"`
+	InitCommands []string          `yaml:"init_commands,omitempty"    json:"init_commands,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"              json:"env,omitempty"`
+	DefaultArgs  map[string]any    `yaml:"default_args"               json:"default_args"`
+	HealthCheck  HealthCheck       `yaml:"health_check"               json:"health_check"`
+	Warmup       WarmupConfig      `yaml:"warmup"                     json:"warmup"`
+	ExtraVolumes []EngineVolume    `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
+}
+
+// EngineVolume describes a host path to mount into the container.
+type EngineVolume struct {
+	Name      string `yaml:"name"       json:"name"`
+	HostPath  string `yaml:"host_path"  json:"host_path"`
+	MountPath string `yaml:"mount_path" json:"mount_path"`
+	ReadOnly  bool   `yaml:"read_only"  json:"read_only"`
 }
 
 type HealthCheck struct {

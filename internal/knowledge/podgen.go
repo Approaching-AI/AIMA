@@ -96,6 +96,11 @@ spec:
           readOnly: true
         - name: dshm
           mountPath: /dev/shm
+        {{- range .ExtraVolumes }}
+        - name: {{ .Name }}
+          mountPath: {{ .MountPath }}
+          readOnly: {{ .ReadOnly }}
+        {{- end }}
   volumes:
     - name: model-data
       hostPath:
@@ -104,6 +109,12 @@ spec:
     - name: dshm
       emptyDir:
         medium: Memory
+    {{- range .ExtraVolumes }}
+    - name: {{ .Name }}
+      hostPath:
+        path: {{ .HostPath }}
+        type: DirectoryOrCreate
+    {{- end }}
 `))
 
 type podData struct {
@@ -115,6 +126,7 @@ type podData struct {
 	Port             int
 	Args             []string // command arguments (excluding binary name — image entrypoint is used)
 	ExtraEnv         map[string]string // additional env vars from engine YAML
+	ExtraVolumes     []EngineVolume    // additional host volumes to mount
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
@@ -222,6 +234,25 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		}
 	}
 
+	// Wrap command with init_commands: join pre-commands + main command into bash -c.
+	// This is needed for engines that require patching libraries before startup
+	// (e.g. vllm-spark needs fix_rope.py for transformers 5.2.0 bug).
+	if len(resolved.InitCommands) > 0 {
+		var cmdParts []string
+		for _, a := range args {
+			if strings.ContainsAny(a, " \t\"'\\$`!") {
+				cmdParts = append(cmdParts, "'"+strings.ReplaceAll(a, "'", "'\\''")+"'")
+			} else {
+				cmdParts = append(cmdParts, a)
+			}
+		}
+		mainCmd := strings.Join(cmdParts, " ")
+		allCmds := make([]string, 0, len(resolved.InitCommands)+1)
+		allCmds = append(allCmds, resolved.InitCommands...)
+		allCmds = append(allCmds, "exec "+mainCmd)
+		args = []string{"/bin/bash", "-c", strings.Join(allCmds, " && ")}
+	}
+
 	gpuResource := resolved.GPUResourceName
 
 	data := podData{
@@ -233,6 +264,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Port:             port,
 		Args:             args,
 		ExtraEnv:         resolved.Env,
+		ExtraVolumes:     resolved.ExtraVolumes,
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  gpuResource,
 		RuntimeClassName: resolved.RuntimeClassName,

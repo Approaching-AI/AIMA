@@ -149,6 +149,9 @@ func queryRemoteModels(ctx context.Context, addr string, port int) []string {
 	return models
 }
 
+// IsLocalIP checks if addr belongs to the local machine.
+func IsLocalIP(addr string) bool { return isLocalIP(addr) }
+
 // isLocalIP checks if addr belongs to the local machine.
 func isLocalIP(addr string) bool {
 	ip := net.ParseIP(addr)

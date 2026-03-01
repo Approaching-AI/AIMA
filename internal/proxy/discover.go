@@ -36,16 +36,62 @@ func Discover(ctx context.Context, timeout time.Duration) ([]DiscoveredService, 
 }
 
 // discoverMDNS uses hashicorp/mdns for service discovery (Linux, Windows).
+// It queries on all LAN interfaces in parallel so devices reachable via
+// different NICs (WiFi, Ethernet) are all discovered.
 func discoverMDNS(ctx context.Context, timeout time.Duration) ([]DiscoveredService, error) {
+	ifaces := lanInterfaces()
+	if len(ifaces) == 0 {
+		// Fallback: single query on system default interface
+		return discoverOnInterface(ctx, timeout, nil)
+	}
+
+	type ifaceResult struct {
+		services []DiscoveredService
+		err      error
+	}
+	ch := make(chan ifaceResult, len(ifaces))
+	for _, iface := range ifaces {
+		go func(iface *net.Interface) {
+			svcs, err := discoverOnInterface(ctx, timeout, iface)
+			ch <- ifaceResult{services: svcs, err: err}
+		}(iface)
+	}
+
+	// Collect and deduplicate by Name
+	seen := make(map[string]bool)
+	var services []DiscoveredService
+	var firstErr error
+	for range ifaces {
+		r := <-ch
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		for _, svc := range r.services {
+			if !seen[svc.Name] {
+				seen[svc.Name] = true
+				services = append(services, svc)
+			}
+		}
+	}
+
+	if len(services) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return services, nil
+}
+
+// discoverOnInterface runs a single mDNS query on the given interface (nil = system default).
+func discoverOnInterface(ctx context.Context, timeout time.Duration, iface *net.Interface) ([]DiscoveredService, error) {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
 	var services []DiscoveredService
 
-	// Collect results in background, filtering to only _llm._tcp services
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for entry := range entriesCh {
-			// hashicorp/mdns may return unrelated services; filter by service type
 			if !strings.Contains(entry.Name, "_llm._tcp") {
 				continue
 			}
@@ -65,6 +111,9 @@ func discoverMDNS(ctx context.Context, timeout time.Duration) ([]DiscoveredServi
 	params := mdns.DefaultParams("_llm._tcp")
 	params.Entries = entriesCh
 	params.Timeout = timeout
+	if iface != nil {
+		params.Interface = iface
+	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

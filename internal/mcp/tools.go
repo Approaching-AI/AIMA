@@ -49,6 +49,7 @@ type ToolDeps struct {
 
 	// Benchmark
 	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	PromoteConfig   func(ctx context.Context, configID, status string) (json.RawMessage, error)
 
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -1007,6 +1008,36 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.AggregateKnowledge(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("knowledge aggregate: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.promote
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.promote",
+		Description: "Promote a configuration status (e.g., experiment → golden). Golden configs are auto-applied as L2 defaults on future deployments.",
+		InputSchema: schema(
+			`"config_id":{"type":"string","description":"Configuration ID to promote"},`+
+				`"status":{"type":"string","enum":["golden","experiment","archived"],"description":"Target status"}`,
+			"config_id", "status"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PromoteConfig == nil {
+				return ErrorResult("knowledge.promote not implemented"), nil
+			}
+			var p struct {
+				ConfigID string `json:"config_id"`
+				Status   string `json:"status"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ConfigID == "" || p.Status == "" {
+				return ErrorResult("config_id and status are required"), nil
+			}
+			data, err := deps.PromoteConfig(ctx, p.ConfigID, p.Status)
+			if err != nil {
+				return nil, fmt.Errorf("promote config: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

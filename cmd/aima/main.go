@@ -265,6 +265,31 @@ func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+func (r *execRunner) Pipe(ctx context.Context, from, to []string) error {
+	fromCmd := exec.CommandContext(ctx, from[0], from[1:]...)
+	toCmd := exec.CommandContext(ctx, to[0], to[1:]...)
+
+	pipe, err := fromCmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("create pipe: %w", err)
+	}
+	toCmd.Stdin = pipe
+
+	if err := fromCmd.Start(); err != nil {
+		return fmt.Errorf("%s: %w", from[0], err)
+	}
+	if err := toCmd.Start(); err != nil {
+		_ = fromCmd.Process.Kill()
+		_ = fromCmd.Wait()
+		return fmt.Errorf("%s: %w", to[0], err)
+	}
+
+	if err := fromCmd.Wait(); err != nil {
+		return fmt.Errorf("%s: %w", from[0], err)
+	}
+	return toCmd.Wait()
+}
+
 // podQuerierAdapter bridges k3s.Client to stack.PodQuerier interface.
 type podQuerierAdapter struct {
 	client *k3s.Client

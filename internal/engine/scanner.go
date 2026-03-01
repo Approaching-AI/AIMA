@@ -31,6 +31,8 @@ type EngineImage struct {
 // CommandRunner abstracts shell command execution for testability.
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Pipe connects stdout of 'from' to stdin of 'to' (e.g. docker save | k3s ctr import).
+	Pipe(ctx context.Context, from, to []string) error
 }
 
 // ScanOptions configures engine scanning (both container and native).
@@ -343,6 +345,13 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 	return images, nil
 }
 
+// patternEntry pairs a pattern with its engine type. Using a slice instead of
+// a map guarantees deterministic matching order when multiple patterns exist.
+type patternEntry struct {
+	pattern    string
+	engineType string
+}
+
 // matchImages matches images to engine types using YAML knowledge.
 // Knowledge-driven: patterns come from Engine Asset YAMLs, not hardcoded.
 // Tag-aware: patterns containing ":" match against "repo:tag"; others match repo only.
@@ -351,16 +360,23 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 	var matched []*EngineImage
 	seen := make(map[string]bool)
 
-	// Split patterns: tag-aware (contain ":") vs repo-only.
-	tagPatterns := make(map[string]string)
-	repoPatterns := make(map[string]string)
-	for engineType, patterns := range assetPatterns {
-		for _, pattern := range patterns {
+	// Split patterns into ordered slices: tag-aware (contain ":") vs repo-only.
+	// Sorted by engine type then pattern for deterministic order.
+	var tagPatterns, repoPatterns []patternEntry
+	engineTypes := make([]string, 0, len(assetPatterns))
+	for et := range assetPatterns {
+		engineTypes = append(engineTypes, et)
+	}
+	sort.Strings(engineTypes)
+
+	for _, engineType := range engineTypes {
+		for _, pattern := range assetPatterns[engineType] {
 			clean := strings.TrimPrefix(strings.TrimSuffix(pattern, "$"), "^")
+			entry := patternEntry{pattern: pattern, engineType: engineType}
 			if strings.Contains(clean, ":") {
-				tagPatterns[pattern] = engineType
+				tagPatterns = append(tagPatterns, entry)
 			} else {
-				repoPatterns[pattern] = engineType
+				repoPatterns = append(repoPatterns, entry)
 			}
 		}
 	}
@@ -399,18 +415,19 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 
 // patternMatch checks search string against a set of patterns.
 // Supports anchors: ^pattern (prefix), pattern$ (suffix), ^pattern$ (exact).
-func patternMatch(search string, patterns map[string]string) string {
+// Patterns are sorted by specificity (exact > anchored > contains), then lexically.
+func patternMatch(search string, patterns []patternEntry) string {
 	type rule struct {
 		pattern    string
 		engineType string
 		score      int
 	}
 	rules := make([]rule, 0, len(patterns))
-	for pattern, engineType := range patterns {
+	for _, p := range patterns {
 		rules = append(rules, rule{
-			pattern:    pattern,
-			engineType: engineType,
-			score:      patternScore(strings.ToLower(pattern)),
+			pattern:    p.pattern,
+			engineType: p.engineType,
+			score:      patternScore(strings.ToLower(p.pattern)),
 		})
 	}
 	// Deterministic order: higher specificity first, then lexical tie-break.

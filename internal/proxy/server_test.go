@@ -223,6 +223,38 @@ func TestChatCompletions_UnknownModelReturns404(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_NotReadyModelReturns503(t *testing.T) {
+	backendCalls := 0
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("qwen3-8b", &Backend{
+		ModelName:  "qwen3-8b",
+		EngineType: "vllm",
+		Address:    addr,
+		Ready:      false,
+	})
+
+	handler := s.handler()
+	body := `{"model":"qwen3-8b","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for not-ready model, got %d", w.Code)
+	}
+	if backendCalls != 0 {
+		t.Errorf("backend should not be called for not-ready model, got %d calls", backendCalls)
+	}
+}
+
 func TestChatCompletions_ModelNotFound(t *testing.T) {
 	s := NewServer()
 	// Register 2 backends so no default fallback

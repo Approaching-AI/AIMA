@@ -374,6 +374,7 @@ type PartitionSlotDef struct {
 }
 
 type SlotGPU struct {
+	Count        int `yaml:"count"`
 	MemoryMiB    int `yaml:"memory_mib"`
 	CoresPercent int `yaml:"cores_percent"`
 }

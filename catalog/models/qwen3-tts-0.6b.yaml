@@ -28,3 +28,17 @@ variants:
     expected_performance:
       vram_mib: 0
       notes: "CPU ARM64 RTF ~5.0 (gb10 measured), 24kHz 32bit float WAV, 0.6B params ≈ 4GB RAM"
+
+  # --- Ada GPU (RTX 4090, CUDA inference) ---
+  - name: qwen3-tts-0.6b-ada-fastapi-cuda
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 2048
+      unified_memory: false
+    engine: qwen-tts-fastapi-cuda
+    format: safetensors
+    default_config:
+      port: 8002
+    expected_performance:
+      vram_mib: 2048
+      notes: "CUDA GPU inference, ~1.2GiB model. Single-threaded: no health probes (liveness kills pod during 2-5min inference). RTF untested. 2026-03-02."

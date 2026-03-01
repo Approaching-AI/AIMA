@@ -635,3 +635,143 @@ func TestCheckFitLowRAMWarning(t *testing.T) {
 		t.Errorf("warning = %q, want substring 'low available RAM'", fit.Warnings[0])
 	}
 }
+
+func TestResolveVariantForPull(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	tests := []struct {
+		name        string
+		modelName   string
+		hw          HardwareInfo
+		wantVariant string // expected variant name, "" if nil
+		wantEngine  string // expected engine type, "" if none
+		wantFormat  string
+		wantErr     bool
+	}{
+		{
+			name:        "exact gpu_arch match",
+			modelName:   "test-model-8b",
+			hw:          HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192},
+			wantVariant: "test-model-8b-testarch-testengine",
+			wantEngine:  "testengine",
+			wantFormat:  "safetensors",
+		},
+		{
+			name:        "wildcard fallback for unknown arch",
+			modelName:   "test-model-8b",
+			hw:          HardwareInfo{GPUArch: "UnknownArch", CPUArch: "arm64"},
+			wantVariant: "test-model-8b-universal",
+			wantEngine:  "universal",
+			wantFormat:  "gguf",
+		},
+		{
+			name:        "VRAM too low falls back to universal",
+			modelName:   "test-model-8b",
+			hw:          HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 2048},
+			wantVariant: "test-model-8b-universal",
+			wantEngine:  "universal",
+			wantFormat:  "gguf",
+		},
+		{
+			name:      "model not found",
+			modelName: "nonexistent",
+			hw:        HardwareInfo{GPUArch: "TestArch"},
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ma, variant, engineType, err := cat.ResolveVariantForPull(tt.modelName, tt.hw)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+
+			if ma == nil {
+				t.Fatal("expected non-nil ModelAsset")
+			}
+			if engineType != tt.wantEngine {
+				t.Errorf("engineType = %q, want %q", engineType, tt.wantEngine)
+			}
+			if tt.wantVariant == "" {
+				if variant != nil {
+					t.Errorf("expected nil variant, got %q", variant.Name)
+				}
+			} else {
+				if variant == nil {
+					t.Fatalf("expected variant %q, got nil", tt.wantVariant)
+				}
+				if variant.Name != tt.wantVariant {
+					t.Errorf("variant.Name = %q, want %q", variant.Name, tt.wantVariant)
+				}
+				if variant.Format != tt.wantFormat {
+					t.Errorf("variant.Format = %q, want %q", variant.Format, tt.wantFormat)
+				}
+			}
+		})
+	}
+}
+
+func TestFindEngineByName(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	tests := []struct {
+		name       string
+		query      string
+		hw         HardwareInfo
+		wantName   string // expected engine metadata.name, "" if nil
+	}{
+		{
+			name:     "exact metadata.name",
+			query:    "testengine-1.0",
+			hw:       HardwareInfo{},
+			wantName: "testengine-1.0",
+		},
+		{
+			name:     "by type with hw match",
+			query:    "testengine",
+			hw:       HardwareInfo{GPUArch: "TestArch"},
+			wantName: "testengine-1.0",
+		},
+		{
+			name:     "by type no hw match returns first",
+			query:    "universal",
+			hw:       HardwareInfo{GPUArch: "TestArch"},
+			wantName: "universal-engine",
+		},
+		{
+			name:     "by image substring",
+			query:    "test/engine",
+			hw:       HardwareInfo{},
+			wantName: "testengine-1.0",
+		},
+		{
+			name:     "not found",
+			query:    "nonexistent",
+			hw:       HardwareInfo{},
+			wantName: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ea := cat.FindEngineByName(tt.query, tt.hw)
+			if tt.wantName == "" {
+				if ea != nil {
+					t.Errorf("expected nil, got %q", ea.Metadata.Name)
+				}
+			} else {
+				if ea == nil {
+					t.Fatalf("expected %q, got nil", tt.wantName)
+				}
+				if ea.Metadata.Name != tt.wantName {
+					t.Errorf("Name = %q, want %q", ea.Metadata.Name, tt.wantName)
+				}
+			}
+		})
+	}
+}

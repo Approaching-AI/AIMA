@@ -704,19 +704,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return registerPulledModel(ctx, destPath, dataDir, db)
 			}
 
-			// Determine required format: resolve what engine this hardware would use
-			requiredFormat := ""
-			var resolvedVariant *knowledge.ModelVariant
+			// Determine required format via hardware-aware variant resolution.
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			if engineType, err := cat.InferEngineType(ma.Metadata.Name, hwInfo); err == nil {
-				for i, v := range ma.Variants {
-					if v.Engine == engineType {
-						requiredFormat = v.Format
-						resolvedVariant = &ma.Variants[i]
-						break
-					}
+			_, resolvedVariant, engineType, _ := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
+			requiredFormat := ""
+			if resolvedVariant != nil {
+				requiredFormat = resolvedVariant.Format
+			}
+			if engineType != "" {
+				variantName := ""
+				if resolvedVariant != nil {
+					variantName = resolvedVariant.Name
 				}
-				slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat)
+				slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat, "variant", variantName)
 			}
 
 			// If resolved variant has its own source, use it directly
@@ -832,18 +832,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(engines)
 		},
 		GetEngineInfo: func(ctx context.Context, name string) (json.RawMessage, error) {
-			// Find matching catalog asset (by type, asset name, or image name)
-			var asset *knowledge.EngineAsset
+			hwInfo := buildHardwareInfo(ctx, rt.Name())
 			nameLower := strings.ToLower(name)
-			for i := range cat.EngineAssets {
-				ea := &cat.EngineAssets[i]
-				if strings.ToLower(ea.Metadata.Type) == nameLower ||
-					strings.ToLower(ea.Metadata.Name) == nameLower ||
-					strings.Contains(strings.ToLower(ea.Image.Name), nameLower) {
-					asset = ea
-					break
-				}
-			}
+
+			// Catalog lookup: exact name → type+hw preference → image substring
+			asset := cat.FindEngineByName(name, hwInfo)
 
 			// Find installed instances in DB (by type, image name, or ID)
 			allEngines, err := db.ListEngines(ctx)
@@ -863,15 +856,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return nil, fmt.Errorf("engine %q not found in catalog or database", name)
 			}
 
-			// If found only in DB, try to find the catalog asset by type
+			// If found only in DB, try to find the catalog asset by installed type
 			if asset == nil && len(installed) > 0 {
-				typeLower := strings.ToLower(installed[0].Type)
-				for i := range cat.EngineAssets {
-					if strings.ToLower(cat.EngineAssets[i].Metadata.Type) == typeLower {
-						asset = &cat.EngineAssets[i]
-						break
-					}
-				}
+				asset = cat.FindEngineByName(installed[0].Type, hwInfo)
 			}
 
 			result := struct {
@@ -888,30 +875,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				name = cat.DefaultEngine()
 			}
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			nameLower := strings.ToLower(name)
 
-			// Select best engine asset: exact gpu_arch match first, then wildcard "*"
-			var matched, wildcard *knowledge.EngineAsset
-			for i := range cat.EngineAssets {
-				ea := &cat.EngineAssets[i]
-				if strings.ToLower(ea.Metadata.Type) != nameLower && strings.ToLower(ea.Metadata.Name) != nameLower {
-					continue
-				}
-				if ea.Hardware.GPUArch == hwInfo.GPUArch {
-					matched = ea
-					break
-				}
-				if ea.Hardware.GPUArch == "*" && wildcard == nil {
-					wildcard = ea
-				}
+			ea := cat.FindEngineByName(name, hwInfo)
+			if ea == nil {
+				return fmt.Errorf("engine %q not found in catalog for gpu_arch %q", name, hwInfo.GPUArch)
 			}
-			if matched == nil {
-				matched = wildcard
-			}
-			if matched == nil {
-				return fmt.Errorf("engine %q not found in catalog", name)
-			}
-			ea := matched
 
 			// Native binary path: prefer if platform is supported
 			platform := goruntime.GOOS + "/" + goruntime.GOARCH

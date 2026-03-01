@@ -14,9 +14,16 @@ import (
 	"time"
 )
 
-// downloadClient is a shared HTTP client with a generous timeout for large model downloads.
+// downloadClient is a shared HTTP client for large model downloads.
+// No overall Timeout: multi-GB files at slow speeds can take hours.
+// Connection and TLS timeouts are handled by the default transport.
 var downloadClient = &http.Client{
-	Timeout: 30 * time.Minute,
+	// API calls use apiClient (below) with a shorter timeout.
+}
+
+// apiClient is used for metadata API calls (file listing, etc.) which should be fast.
+var apiClient = &http.Client{
+	Timeout: 2 * time.Minute,
 }
 
 // DownloadOptions configures a file download.
@@ -210,7 +217,7 @@ func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string) error 
 	if err != nil {
 		return fmt.Errorf("create API request: %w", err)
 	}
-	resp, err := downloadClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("list repo files: %w", err)
 	}
@@ -297,7 +304,7 @@ func downloadModelScope(ctx context.Context, repo, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("create API request: %w", err)
 	}
-	resp, err := downloadClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("list ModelScope repo: %w", err)
 	}

@@ -31,4 +31,5 @@ container:
   env:
     LD_PRELOAD: "/opt/rocm/lib/librocm_smi64.so"
   security:
-    supplemental_groups: [44, 110]
+    privileged: true
+    supplemental_groups: [44, 109]

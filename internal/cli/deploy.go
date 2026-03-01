@@ -51,6 +51,8 @@ func newDeployCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployment without executing")
 	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
 	cmd.AddCommand(newDeployListCmd(app))
+	cmd.AddCommand(newDeployStatusCmd(app))
+	cmd.AddCommand(newDeployLogsCmd(app))
 
 	return cmd
 }
@@ -58,23 +60,61 @@ func newDeployCmd(app *App) *cobra.Command {
 func newDeployListCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List deployed inference services",
+		Short: "List all active deployments",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
 			if app.ToolDeps.DeployList == nil {
-				return fmt.Errorf("deploy.list not implemented")
+				return fmt.Errorf("deploy list not available")
 			}
-
-			data, err := app.ToolDeps.DeployList(ctx)
+			data, err := app.ToolDeps.DeployList(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("deploy list: %w", err)
 			}
-
 			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}
+}
+
+func newDeployStatusCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <name>",
+		Short: "Show status of a deployment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.DeployStatus == nil {
+				return fmt.Errorf("deploy status not available")
+			}
+			data, err := app.ToolDeps.DeployStatus(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("deploy status %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+}
+
+func newDeployLogsCmd(app *App) *cobra.Command {
+	var lines int
+	cmd := &cobra.Command{
+		Use:   "logs <name>",
+		Short: "Show logs of a deployment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.DeployLogs == nil {
+				return fmt.Errorf("deploy logs not available")
+			}
+			data, err := app.ToolDeps.DeployLogs(cmd.Context(), args[0], lines)
+			if err != nil {
+				return fmt.Errorf("deploy logs %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&lines, "lines", 100, "Number of log lines to show")
+	return cmd
 }
 
 func newUndeployCmd(app *App) *cobra.Command {

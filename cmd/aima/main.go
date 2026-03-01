@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strings"
 	"time"
@@ -310,10 +311,60 @@ func catalogModelNames(cat *knowledge.Catalog) string {
 	return strings.Join(names, ", ")
 }
 
-// destructiveTools lists MCP tools that the Agent must not call directly.
+var overlayAssetNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// validateOverlayAssetName ensures the user-provided override name stays inside
+// the overlay directory and is safe as a file basename.
+func validateOverlayAssetName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid name %q: path traversal is not allowed", name)
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("invalid name %q: path separators are not allowed", name)
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("invalid name %q: absolute paths are not allowed", name)
+	}
+	if !overlayAssetNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid name %q: only letters, digits, dot, underscore, and dash are allowed", name)
+	}
+	return nil
+}
+
+// blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
-var destructiveTools = map[string]bool{
-	"model.remove": true, "engine.remove": true, "deploy.delete": true,
+var blockedAgentTools = map[string]string{
+	"model.remove":     "destructive operation",
+	"engine.remove":    "destructive operation",
+	"deploy.delete":    "destructive operation",
+	"shell.exec":       "arbitrary command execution",
+	"stack.init":       "infrastructure mutation",
+	"catalog.override": "knowledge mutation",
+	"agent.ask":        "recursive agent invocation",
+	"agent.install":    "agent binary installation",
+	"agent.rollback":   "state rollback mutation",
+}
+
+func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
+	if reason, ok := blockedAgentTools[name]; ok {
+		return true, reason
+	}
+
+	// system.config supports both get and set. Agent may read, but writes are blocked.
+	// Block when "value" key is present in the JSON (regardless of its value, including null).
+	if name == "system.config" && len(arguments) > 0 {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(arguments, &raw) == nil {
+			if _, hasValue := raw["value"]; hasValue {
+				return true, "persistent configuration mutation"
+			}
+		}
+	}
+
+	return false, ""
 }
 
 // mcpToolAdapter bridges mcp.Server to agent.ToolExecutor interface.
@@ -324,9 +375,9 @@ type mcpToolAdapter struct {
 }
 
 func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
-	// Gap 1: Block destructive operations from the Agent
-	if destructiveTools[name] {
-		msg := fmt.Sprintf("BLOCKED: %s is a destructive operation and cannot be called by the Agent. Ask the user to run it via CLI instead.", name)
+	// Gap 1: Block high-risk operations from the Agent.
+	if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
+		msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
 		a.audit(ctx, name, string(arguments), "BLOCKED")
 		return &agent.ToolResult{Content: msg, IsError: true}, nil
 	}
@@ -1565,6 +1616,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			dir := knowledge.KindToDir(kind)
 			if dir == "" {
 				return nil, fmt.Errorf("unknown kind %q", kind)
+			}
+			// Validate override file basename to prevent path traversal.
+			if err := validateOverlayAssetName(name); err != nil {
+				return nil, err
 			}
 			// Validate YAML parses as the correct kind
 			tmpCat := &knowledge.Catalog{}

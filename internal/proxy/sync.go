@@ -36,20 +36,31 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 				Address:    d.Address,
 				Ready:      true,
 			})
-		} else {
-			// Deployment exists but not ready — preserve existing backend entry,
-			// just ensure Ready=false so /v1/models still lists it.
-			existing := s.ListBackends()
-			if b, ok := existing[model]; ok {
-				b.Ready = false
-				s.RegisterBackend(model, b)
-			} else {
-				s.RegisterBackend(model, &Backend{
-					ModelName:  model,
-					EngineType: d.Labels["aima.dev/engine"],
-					Ready:      false,
-				})
+			continue
+		}
+
+		// Deployment exists but not ready: preserve existing route metadata
+		// (address/basePath/remote), but mark it not ready.
+		existing := s.ListBackends()
+		if b, ok := existing[model]; ok {
+			engineType := d.Labels["aima.dev/engine"]
+			if engineType == "" {
+				engineType = b.EngineType
 			}
+			s.RegisterBackend(model, &Backend{
+				ModelName:  model,
+				EngineType: engineType,
+				Address:    b.Address,
+				BasePath:   b.BasePath,
+				Ready:      false,
+				Remote:     b.Remote,
+			})
+		} else {
+			s.RegisterBackend(model, &Backend{
+				ModelName:  model,
+				EngineType: d.Labels["aima.dev/engine"],
+				Ready:      false,
+			})
 		}
 	}
 

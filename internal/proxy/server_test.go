@@ -67,9 +67,34 @@ func TestListBackends_ReturnsCopy(t *testing.T) {
 
 	backends := s.ListBackends()
 	backends["model-b"] = &Backend{ModelName: "model-b"} // modify the returned map
+	backends["model-a"].Address = "9.9.9.9:9000"         // modify returned backend object
 
-	if len(s.ListBackends()) != 1 {
+	current := s.ListBackends()
+	if len(current) != 1 {
 		t.Error("ListBackends should return a copy, not the original map")
+	}
+	if current["model-a"].Address != "1.2.3.4:8000" {
+		t.Error("ListBackends should return copied backend values, not shared pointers")
+	}
+}
+
+func TestRegisterBackend_ClonesInput(t *testing.T) {
+	s := NewServer()
+	original := &Backend{
+		ModelName:  "model-a",
+		EngineType: "vllm",
+		Address:    "1.2.3.4:8000",
+		Ready:      true,
+	}
+	s.RegisterBackend("model-a", original)
+
+	// Mutate caller-owned object after registration.
+	original.Address = "9.9.9.9:9000"
+	original.Ready = false
+
+	got := s.ListBackends()["model-a"]
+	if got.Address != "1.2.3.4:8000" || !got.Ready {
+		t.Fatalf("RegisterBackend should copy input; got %+v", got)
 	}
 }
 

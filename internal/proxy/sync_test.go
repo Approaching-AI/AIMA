@@ -62,6 +62,46 @@ func TestSyncBackends_NotReady(t *testing.T) {
 	}
 }
 
+func TestSyncBackends_NotReadyPreservesExistingRouteFields(t *testing.T) {
+	s := NewServer()
+	s.RegisterBackend("qwen3-8b", &Backend{
+		ModelName:  "qwen3-8b",
+		EngineType: "vllm",
+		Address:    "10.42.0.73:8000",
+		BasePath:   "/v1",
+		Ready:      true,
+		Remote:     true,
+	})
+
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:   "qwen3-8b-vllm",
+			Ready:  false,
+			Labels: map[string]string{"aima.dev/model": "qwen3-8b"},
+		},
+	})
+
+	b := s.ListBackends()["qwen3-8b"]
+	if b == nil {
+		t.Fatal("expected backend for qwen3-8b")
+	}
+	if b.Ready {
+		t.Error("expected Ready=false")
+	}
+	if b.Address != "10.42.0.73:8000" {
+		t.Errorf("address = %q, want %q", b.Address, "10.42.0.73:8000")
+	}
+	if b.BasePath != "/v1" {
+		t.Errorf("basePath = %q, want %q", b.BasePath, "/v1")
+	}
+	if !b.Remote {
+		t.Error("expected Remote=true to be preserved")
+	}
+	if b.EngineType != "vllm" {
+		t.Errorf("engine = %q, want %q", b.EngineType, "vllm")
+	}
+}
+
 func TestSyncBackends_Removed(t *testing.T) {
 	s := NewServer()
 	s.RegisterBackend("old-model", &Backend{ModelName: "old-model", Address: "1.2.3.4:8000", Ready: true})

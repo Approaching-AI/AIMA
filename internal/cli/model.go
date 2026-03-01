@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 
+	"github.com/jguan/aima/internal/knowledge"
 	"github.com/spf13/cobra"
 )
 
@@ -103,11 +107,57 @@ func newModelImportCmd(app *App) *cobra.Command {
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			printImportGuidance(cmd.OutOrStdout(), data)
 			return nil
 		},
 	}
 
 	return cmd
+}
+
+// printImportGuidance prints actionable next steps after a successful model import.
+func printImportGuidance(w io.Writer, data json.RawMessage) {
+	var info struct {
+		Name           string `json:"name"`
+		DetectedParams string `json:"detected_params"`
+		Format         string `json:"format"`
+		DetectedArch   string `json:"detected_arch"`
+		Quantization   string `json:"quantization"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil || info.Name == "" {
+		return
+	}
+
+	var details []string
+	if info.DetectedParams != "" {
+		details = append(details, info.DetectedParams)
+	}
+	if info.Format != "" {
+		details = append(details, info.Format)
+	}
+	if info.DetectedArch != "" {
+		details = append(details, info.DetectedArch)
+	}
+	if info.Quantization != "" && info.Quantization != "unknown" {
+		details = append(details, info.Quantization)
+	}
+
+	summary := "\nModel imported: " + info.Name
+	if len(details) > 0 {
+		summary += " (" + strings.Join(details, ", ") + ")"
+	}
+	fmt.Fprintln(w, summary)
+
+	engineHint := knowledge.FormatEngineMap[strings.ToLower(info.Format)]
+
+	fmt.Fprintln(w, "\nNext steps:")
+	if engineHint != "" {
+		fmt.Fprintf(w, "  Deploy:  aima deploy %s --engine %s\n", info.Name, engineHint)
+	} else {
+		fmt.Fprintf(w, "  Deploy:  aima deploy %s\n", info.Name)
+	}
+	fmt.Fprintf(w, "  Preview: aima deploy %s --dry-run\n", info.Name)
+	fmt.Fprintf(w, "  Info:    aima model info %s\n", info.Name)
 }
 
 func newModelInfoCmd(app *App) *cobra.Command {

@@ -32,6 +32,7 @@ type ToolDeps struct {
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
+	DeployDryRun func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
@@ -454,7 +455,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			`"model":{"type":"string","description":"Model to deploy"},`+
 				`"engine":{"type":"string","description":"Engine to use (optional)"},`+
 				`"slot":{"type":"string","description":"Partition slot (optional)"},`+
-				`"config":{"type":"object","description":"Config overrides as key-value pairs (optional)"}`,
+				`"config":{"type":"object","description":"Config overrides (e.g. gpu_memory_utilization, max_model_len)"}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployApply == nil {
@@ -475,6 +476,40 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
 				return nil, fmt.Errorf("deploy apply %s: %w", p.Model, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// deploy.dry_run
+	s.RegisterTool(&Tool{
+		Name:        "deploy.dry_run",
+		Description: "Preview a deployment without executing it. Returns resolved config, hardware fitness report, Pod YAML (K3S), and warnings.",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model to deploy"},`+
+				`"engine":{"type":"string","description":"Engine to use (optional)"},`+
+				`"slot":{"type":"string","description":"Partition slot (optional)"},`+
+				`"config":{"type":"object","description":"Config overrides (e.g. gpu_memory_utilization, max_model_len)"}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DeployDryRun == nil {
+				return ErrorResult("deploy.dry_run not implemented"), nil
+			}
+			var p struct {
+				Model  string         `json:"model"`
+				Engine string         `json:"engine"`
+				Slot   string         `json:"slot"`
+				Config map[string]any `json:"config"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Model == "" {
+				return ErrorResult("model is required"), nil
+			}
+			data, err := deps.DeployDryRun(ctx, p.Engine, p.Model, p.Slot, p.Config)
+			if err != nil {
+				return nil, fmt.Errorf("deploy dry run %s: %w", p.Model, err)
 			}
 			return TextResult(string(data)), nil
 		},

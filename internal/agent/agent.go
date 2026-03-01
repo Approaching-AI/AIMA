@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 )
 
 // LLMClient sends messages to an LLM and returns the response.
 type LLMClient interface {
-	ChatCompletion(ctx context.Context, messages []Message) (*Response, error)
+	ChatCompletion(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error)
 }
 
 // Message represents a chat message in the conversation.
@@ -85,8 +84,18 @@ func NewAgent(llm LLMClient, tools ToolExecutor, opts ...AgentOption) *Agent {
 	return a
 }
 
+// Available reports whether the agent has an LLM client configured.
+func (a *Agent) Available() bool {
+	return a.llm != nil
+}
+
 // Ask processes a user query through the agent loop and returns the final text response.
 func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
+	if a.llm == nil {
+		return "", fmt.Errorf("no LLM backend configured: deploy a model and run 'aima serve', or set AIMA_LLM_ENDPOINT")
+	}
+
+	tools := a.tools.ListTools()
 	messages := []Message{
 		{Role: "system", Content: a.buildSystemPrompt()},
 		{Role: "user", Content: query},
@@ -99,7 +108,7 @@ func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
 		default:
 		}
 
-		resp, err := a.llm.ChatCompletion(ctx, messages)
+		resp, err := a.llm.ChatCompletion(ctx, messages, tools)
 		if err != nil {
 			return "", fmt.Errorf("chat completion (turn %d): %w", turn, err)
 		}
@@ -146,16 +155,8 @@ func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
 }
 
 func (a *Agent) buildSystemPrompt() string {
-	var sb strings.Builder
-	sb.WriteString("You are AIMA, an AI inference management assistant. ")
-	sb.WriteString("You have access to tools that let you detect hardware, manage models and engines, ")
-	sb.WriteString("deploy inference services, and query the knowledge base.\n\n")
-	sb.WriteString("Available tools:\n")
-
-	for _, t := range a.tools.ListTools() {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
-	}
-
-	sb.WriteString("\nUse these tools to help the user manage AI inference on their device.")
-	return sb.String()
+	return "You are AIMA, an AI inference management assistant. " +
+		"You have access to tools that let you detect hardware, manage models and engines, " +
+		"deploy inference services, and query the knowledge base. " +
+		"Use these tools to help the user manage AI inference on their device."
 }

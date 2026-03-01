@@ -219,6 +219,69 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, er
 	return "", fmt.Errorf("model %q not found in catalog", modelName)
 }
 
+// ResolveVariantForPull finds the best model variant for downloading on the given hardware.
+// It composes InferEngineType + findModelVariant to avoid duplicating matching logic
+// in call sites. Returns (ma, nil, engineType, err) when the model exists but no variant
+// matches, allowing the caller to fall back to global sources.
+func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*ModelAsset, *ModelVariant, string, error) {
+	engineType, err := c.InferEngineType(modelName, hw)
+	if err != nil {
+		// Model found but no compatible engine — return model asset for global source fallback.
+		for i := range c.ModelAssets {
+			if strings.EqualFold(c.ModelAssets[i].Metadata.Name, modelName) {
+				return &c.ModelAssets[i], nil, "", err
+			}
+		}
+		return nil, nil, "", err
+	}
+	ma, variant, err := c.findModelVariant(modelName, engineType, hw)
+	if err != nil {
+		return ma, nil, engineType, err
+	}
+	return ma, variant, engineType, nil
+}
+
+// FindEngineByName looks up an engine asset using a flexible name match.
+// Priority: exact metadata.name → metadata.type with hardware preference → image name substring.
+// Returns nil if no catalog asset matches.
+func (c *Catalog) FindEngineByName(name string, hw HardwareInfo) *EngineAsset {
+	nameLower := strings.ToLower(name)
+
+	// Pass 1: exact metadata.name
+	for i := range c.EngineAssets {
+		if strings.ToLower(c.EngineAssets[i].Metadata.Name) == nameLower {
+			return &c.EngineAssets[i]
+		}
+	}
+
+	// Pass 2: metadata.type with hardware preference
+	var typeMatch *EngineAsset
+	for i := range c.EngineAssets {
+		ea := &c.EngineAssets[i]
+		if strings.ToLower(ea.Metadata.Type) != nameLower {
+			continue
+		}
+		if typeMatch == nil {
+			typeMatch = ea
+		}
+		if strings.EqualFold(ea.Hardware.GPUArch, hw.GPUArch) {
+			return ea
+		}
+	}
+	if typeMatch != nil {
+		return typeMatch
+	}
+
+	// Pass 3: image name substring
+	for i := range c.EngineAssets {
+		if strings.Contains(strings.ToLower(c.EngineAssets[i].Image.Name), nameLower) {
+			return &c.EngineAssets[i]
+		}
+	}
+
+	return nil
+}
+
 // findGPUResourceName looks up the K8s GPU resource name from hardware profiles.
 // Returns "" if not specified (no GPU resource request in pod spec).
 func (c *Catalog) findGPUResourceName(hw HardwareInfo) string {

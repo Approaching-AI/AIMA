@@ -12,6 +12,10 @@ storage:
       repo: Qwen/Qwen3-30B-A3B
       format: safetensors
     - type: huggingface
+      repo: Qwen/Qwen3-30B-A3B-FP8
+      format: safetensors
+      quantization: fp8
+    - type: huggingface
       repo: Qwen/Qwen3-30B-A3B-GGUF
       format: gguf
     - type: modelscope
@@ -38,6 +42,12 @@ variants:
     expected_performance:
       tokens_per_second: [20, 40]
       latency_first_token_ms: [30, 100]
+
+  # --- AMD395 (RDNA3.5, 64GB unified) --- vLLM 不可用:
+  # FP8: ROCm vLLM TheRock 不支持 FP8 MoE kernels (gfx1151)
+  # BF16: 58GiB 权重 + 5GiB PyTorch overhead > 64GiB VRAM → OOM
+  # CPU offload 无效: unified memory 下 CPU/GPU 共享物理内存池
+  # 此设备需要 llamacpp + GGUF 量化 (走下方 universal variant)
 
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)

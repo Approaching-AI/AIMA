@@ -414,6 +414,41 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	return cat, nil
 }
 
+// normalizeMap recursively converts map[interface{}]interface{} values (from YAML)
+// to map[string]interface{} so the map is JSON-safe.
+func normalizeMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	for k, v := range m {
+		m[k] = normalizeValue(v)
+	}
+	return m
+}
+
+func normalizeValue(v any) any {
+	switch val := v.(type) {
+	case map[interface{}]interface{}:
+		m := make(map[string]interface{}, len(val))
+		for k, v2 := range val {
+			m[fmt.Sprint(k)] = normalizeValue(v2)
+		}
+		return m
+	case map[string]interface{}:
+		for k, v2 := range val {
+			val[k] = normalizeValue(v2)
+		}
+		return val
+	case []interface{}:
+		for i, v2 := range val {
+			val[i] = normalizeValue(v2)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
 // kindProbe extracts just the "kind" field from YAML without full parsing.
 type kindProbe struct {
 	Kind string `yaml:"kind"`
@@ -442,6 +477,12 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 		var ma ModelAsset
 		if err := yaml.Unmarshal(data, &ma); err != nil {
 			return fmt.Errorf("parse model asset %s: %w", path, err)
+		}
+		// YAML unmarshal produces map[interface{}]interface{} for nested maps;
+		// normalize to map[string]interface{} so json.Marshal works later.
+		for i := range ma.Variants {
+			ma.Variants[i].DefaultConfig = normalizeMap(ma.Variants[i].DefaultConfig)
+			ma.Variants[i].ExpectedPerformance = normalizeMap(ma.Variants[i].ExpectedPerformance)
 		}
 		cat.ModelAssets = append(cat.ModelAssets, ma)
 	case "partition_strategy":

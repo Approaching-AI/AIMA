@@ -62,7 +62,7 @@ func newModelListCmd(app *App) *cobra.Command {
 			return fmt.Errorf("list models: %w", err)
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), string(data))
+		fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 		return nil
 	}
 
@@ -105,7 +105,7 @@ func newModelImportCmd(app *App) *cobra.Command {
 				return fmt.Errorf("import model from %s: %w", srcPath, err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			printImportGuidance(cmd.OutOrStdout(), data)
 			return nil
 		},
@@ -172,7 +172,7 @@ func newModelInfoCmd(app *App) *cobra.Command {
 				return fmt.Errorf("get model info %s: %w", name, err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}

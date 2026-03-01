@@ -47,7 +47,7 @@ type ResolvedConfig struct {
 	Partition       *PartitionSlot
 	Command         []string
 	InitCommands    []string       // pre-commands to run before main server (from engine YAML)
-	ExtraVolumes    []EngineVolume // additional host volumes to mount (from engine YAML)
+	ExtraVolumes    []ContainerVolume // additional host volumes to mount (from engine YAML)
 	HealthCheck     *HealthCheck
 	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
 	Source          *EngineSource // native binary source info (nil if container-only)

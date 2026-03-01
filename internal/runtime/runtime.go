@@ -38,7 +38,7 @@ type DeployRequest struct {
 	Env              map[string]string          // extra env vars (engine YAML + hardware YAML merged)
 	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S only)
 	GPUResourceName  string                     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
-	ExtraVolumes     []knowledge.EngineVolume   // additional host volumes to mount (K3S only)
+	ExtraVolumes     []knowledge.ContainerVolume // additional host volumes to mount (K3S only)
 }
 
 // DeploymentStatus is the unified status across runtimes.

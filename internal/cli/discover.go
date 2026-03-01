@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -23,18 +22,7 @@ func newDiscoverCmd(app *App) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("discover: %w", err)
 			}
-			// Pretty-print the JSON
-			var pretty json.RawMessage
-			if err := json.Unmarshal(raw, &pretty); err != nil {
-				cmd.Println(string(raw))
-				return nil
-			}
-			data, err := json.MarshalIndent(pretty, "", "  ")
-			if err != nil {
-				cmd.Println(string(raw))
-				return nil
-			}
-			cmd.Println(string(data))
+			cmd.Println(formatJSON(raw))
 			return nil
 		},
 	}

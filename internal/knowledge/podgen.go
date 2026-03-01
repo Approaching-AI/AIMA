@@ -322,6 +322,9 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.Security = resolved.Container.Security
 	}
 
+	// Merge engine extra_volumes (e.g. patch scripts) into pod volumes.
+	data.ExtraVolumes = append(data.ExtraVolumes, resolved.ExtraVolumes...)
+
 	if resolved.Partition != nil {
 		data.GPUMemoryMiB = resolved.Partition.GPUMemoryMiB
 		data.GPUCoresPercent = resolved.Partition.GPUCoresPercent

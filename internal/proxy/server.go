@@ -29,6 +29,14 @@ type Backend struct {
 	Remote     bool   `json:"remote"` // true = discovered via mDNS, not a local deployment
 }
 
+func cloneBackend(b *Backend) *Backend {
+	if b == nil {
+		return nil
+	}
+	cp := *b
+	return &cp
+}
+
 // Server is the HTTP inference proxy.
 type Server struct {
 	addr   string
@@ -78,7 +86,7 @@ func NewServer(opts ...Option) *Server {
 func (s *Server) RegisterBackend(model string, backend *Backend) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.routes[model] = backend
+	s.routes[model] = cloneBackend(backend)
 }
 
 // RemoveBackend removes a model route.
@@ -94,7 +102,7 @@ func (s *Server) ListBackends() map[string]*Backend {
 	defer s.mu.RUnlock()
 	result := make(map[string]*Backend, len(s.routes))
 	for k, v := range s.routes {
-		result[k] = v
+		result[k] = cloneBackend(v)
 	}
 	return result
 }
@@ -301,7 +309,7 @@ func (s *Server) resolveBackend(model string) *Backend {
 	defer s.mu.RUnlock()
 
 	if b, ok := s.routes[model]; ok {
-		return b
+		return cloneBackend(b)
 	}
 	return nil
 }

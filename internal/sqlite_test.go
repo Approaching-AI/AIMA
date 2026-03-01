@@ -329,6 +329,55 @@ func TestAuditLog(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigStatus(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	cfg := &Configuration{
+		ID:         "cfg-001",
+		HardwareID: "nvidia-gb10-arm64",
+		EngineID:   "vllm-nightly",
+		ModelID:    "qwen3-8b",
+		Config:     `{"gpu_memory_utilization":0.8}`,
+		ConfigHash: "abc123",
+		Status:     "experiment",
+		Source:     "benchmark",
+	}
+	if err := db.InsertConfiguration(ctx, cfg); err != nil {
+		t.Fatalf("InsertConfiguration: %v", err)
+	}
+
+	t.Run("promote to golden", func(t *testing.T) {
+		if err := db.UpdateConfigStatus(ctx, "cfg-001", "golden"); err != nil {
+			t.Fatalf("UpdateConfigStatus: %v", err)
+		}
+		got, err := db.GetConfiguration(ctx, "cfg-001")
+		if err != nil {
+			t.Fatalf("GetConfiguration: %v", err)
+		}
+		if got.Status != "golden" {
+			t.Errorf("Status = %q, want %q", got.Status, "golden")
+		}
+	})
+
+	t.Run("archive", func(t *testing.T) {
+		if err := db.UpdateConfigStatus(ctx, "cfg-001", "archived"); err != nil {
+			t.Fatalf("UpdateConfigStatus: %v", err)
+		}
+		got, _ := db.GetConfiguration(ctx, "cfg-001")
+		if got.Status != "archived" {
+			t.Errorf("Status = %q, want %q", got.Status, "archived")
+		}
+	})
+
+	t.Run("nonexistent config", func(t *testing.T) {
+		err := db.UpdateConfigStatus(ctx, "does-not-exist", "golden")
+		if err == nil {
+			t.Fatal("expected error for nonexistent config")
+		}
+	})
+}
+
 func TestDuplicateInsert(t *testing.T) {
 	db := mustOpen(t)
 	ctx := context.Background()

@@ -1113,6 +1113,21 @@ func (d *DB) DeleteNote(ctx context.Context, id string) error {
 	return nil
 }
 
+// UpdateConfigStatus transitions a configuration's status (e.g., experiment → golden).
+func (d *DB) UpdateConfigStatus(ctx context.Context, configID, status string) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE configurations SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		status, configID)
+	if err != nil {
+		return fmt.Errorf("update config status %s: %w", configID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("configuration %q not found", configID)
+	}
+	return nil
+}
+
 // Configurations CRUD
 
 func (d *DB) InsertConfiguration(ctx context.Context, c *Configuration) error {

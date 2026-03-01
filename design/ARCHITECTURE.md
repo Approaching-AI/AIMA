@@ -169,11 +169,14 @@ Env 合并规则：hardware container env（基础层）+ engine env（覆盖层
 不可违反的架构约束：
 
 **INV-1: 不为引擎类型写代码。** 引擎行为定义在 YAML。添加新引擎 = 写 YAML。
+引擎支持的模型格式通过 `metadata.supported_formats` 声明，运行时 `Catalog.FormatToEngine()` 动态映射。
+默认引擎通过 `metadata.default: true` 标记，运行时 `Catalog.DefaultEngine()` 动态读取。
 
 **INV-2: 不为模型/硬件类型写代码。** 模型元数据在 YAML。模型类型是知识，不是代码分支。
 硬件约束（`vram_min_mib`、`unified_memory`）同样在 YAML 中定义，Go 代码仅做数值比较。
 厂商特定的容器访问配置（设备挂载、环境变量、安全上下文）定义在 Hardware Profile YAML 的 `container` 字段中，
 Pod 生成器通用渲染，不含 NVIDIA/AMD/Intel 等厂商分支。
+HAL 层的 GPU enrichment 使用表驱动 map（`gpuEnrichers`），新增厂商 = 添加 map 条目。
 
 **INV-3: 最小化运行时管理。** K3S 管 Pod 的创建、监控、重启、销毁。
 Native runtime 只做极简进程管理（start/stop/logs）。
@@ -181,6 +184,8 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-4: 职责分离的状态存储。** AIMA 系统状态在 `aima.db`，Agent 记忆在 `zeroclaw.db`。
 
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
+所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`）均通过 ToolDeps 调用 MCP 工具。
+当前共 37 个 MCP 工具覆盖所有功能领域。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
 

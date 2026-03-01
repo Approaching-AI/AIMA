@@ -162,7 +162,7 @@ Xinference 最接近 AIMA 的多模型多模态能力，但它是面向人的 Py
 新设备上电 → AIMA 预装 → 自动检测 GPU → 匹配 Recipe → 拉模型 → 启动推理 → mDNS 广播 → 应用发现并使用。全程零人工。
 
 **S2: 开发者 5 分钟多模型**
-`aima up qwen3-8b` + `aima up whisper-large` → 同一台 GPU 上同时跑 LLM 和 ASR → 统一 API 调用。
+`aima deploy qwen3-8b` + `aima deploy whisper-large` → 同一台 GPU 上同时跑 LLM 和 ASR → 统一 API 调用。
 
 **S3: Agent 自治运维**
 Agent 通过 MCP 连接设备 → 查询硬件能力 → 部署推理组合 → 监控性能 → 自动调参 → 异常恢复。人类只看仪表盘。

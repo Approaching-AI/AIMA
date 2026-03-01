@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -19,10 +20,10 @@ type MDNSConfig struct {
 	Models   []string // TXT record: models=a,b,c
 }
 
-// MDNSAdvertiser wraps a running mDNS server.
+// MDNSAdvertiser wraps running mDNS servers (one per LAN interface).
 type MDNSAdvertiser struct {
-	server *mdns.Server // non-macOS: hashicorp/mdns
-	cmd    *exec.Cmd    // macOS: dns-sd -R subprocess
+	servers []*mdns.Server // non-macOS: one per LAN interface
+	cmd     *exec.Cmd      // macOS: dns-sd -R subprocess
 }
 
 // StartMDNS advertises an _llm._tcp.local service via mDNS.
@@ -36,7 +37,7 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 		hostname = h
 	}
 
-	txt := []string{"aima=1"}
+	txt := []string{"aima=1", "api=v1"}
 	if len(cfg.Models) > 0 {
 		txt = append(txt, "models="+strings.Join(cfg.Models, ","))
 	}
@@ -47,17 +48,37 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 		return startMDNSDarwin(hostname, cfg.Port, txt)
 	}
 
-	service, err := mdns.NewMDNSService(hostname, "_llm._tcp", "", "", cfg.Port, lanIPs(), txt)
+	ips := lanIPs()
+	service, err := mdns.NewMDNSService(hostname, "_llm._tcp", "", "", cfg.Port, ips, txt)
 	if err != nil {
 		return nil, fmt.Errorf("mdns service: %w", err)
 	}
 
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
-	if err != nil {
-		return nil, fmt.Errorf("mdns server: %w", err)
+	// Bind to all LAN interfaces so mDNS works across WiFi ↔ Ethernet switches.
+	ifaces := lanInterfaces()
+	if len(ifaces) == 0 {
+		// Fallback: single server on system default interface
+		server, err := mdns.NewServer(&mdns.Config{Zone: service})
+		if err != nil {
+			return nil, fmt.Errorf("mdns server: %w", err)
+		}
+		return &MDNSAdvertiser{servers: []*mdns.Server{server}}, nil
 	}
 
-	return &MDNSAdvertiser{server: server}, nil
+	var servers []*mdns.Server
+	for _, iface := range ifaces {
+		server, err := mdns.NewServer(&mdns.Config{Zone: service, Iface: iface})
+		if err != nil {
+			slog.Debug("mdns: skip interface for advertise", "iface", iface.Name, "error", err)
+			continue
+		}
+		slog.Debug("mdns: advertising on interface", "iface", iface.Name)
+		servers = append(servers, server)
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("mdns: no multicast listeners on any LAN interface")
+	}
+	return &MDNSAdvertiser{servers: servers}, nil
 }
 
 // startMDNSDarwin registers the service via macOS native dns-sd command.
@@ -71,17 +92,39 @@ func startMDNSDarwin(instance string, port int, txt []string) (*MDNSAdvertiser, 
 	return &MDNSAdvertiser{cmd: cmd}, nil
 }
 
-// lanIPs returns non-loopback, non-virtual IPv4 addresses for mDNS advertisement.
-// It skips container/overlay networks (10.x, 172.16-31.x) to advertise the real LAN IP.
-func lanIPs() []net.IP {
-	var ips []net.IP
+// isContainerInterface returns true if the interface name matches known
+// container/overlay network patterns (Docker, Kubernetes, etc).
+func isContainerInterface(name string) bool {
+	lower := strings.ToLower(name)
+	// Docker: docker0, vethXXX, br-XXX
+	// Kubernetes: cni0, flannel.1, cali*, weave
+	// libvirt: virbr*
+	prefixes := []string{"docker", "veth", "br-", "cni", "flannel", "cali", "weave", "virbr"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// lanInterfaces returns up, multicast-capable interfaces that have at least
+// one private IPv4 address, excluding container/overlay interfaces by name.
+func lanInterfaces() []*net.Interface {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	for _, iface := range ifaces {
-		// Skip down, loopback, and common virtual interfaces
+	var result []*net.Interface
+	for i := range ifaces {
+		iface := &ifaces[i]
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+		if isContainerInterface(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -93,15 +136,42 @@ func lanIPs() []net.IP {
 			if !ok {
 				continue
 			}
-			ip4 := ipnet.IP.To4()
-			if ip4 == nil || ip4.IsLoopback() {
+			if ip4 := ipnet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && ip4.IsPrivate() {
+				result = append(result, iface)
+				break
+			}
+		}
+	}
+	return result
+}
+
+// lanIPs returns non-loopback, private IPv4 addresses for mDNS advertisement,
+// excluding addresses on container/overlay interfaces.
+func lanIPs() []net.IP {
+	var ips []net.IP
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if isContainerInterface(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
 				continue
 			}
-			// Skip container/overlay networks: 10.0.0.0/8, 172.16.0.0/12
-			if ip4[0] == 10 || (ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) {
-				continue
+			if ip4 := ipnet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && ip4.IsPrivate() {
+				ips = append(ips, ip4)
 			}
-			ips = append(ips, ip4)
 		}
 	}
 	return ips
@@ -114,8 +184,11 @@ func (a *MDNSAdvertiser) Shutdown() error {
 		a.cmd.Wait() // reap zombie process
 		return err
 	}
-	if a.server != nil {
-		return a.server.Shutdown()
+	var firstErr error
+	for _, s := range a.servers {
+		if err := s.Shutdown(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }

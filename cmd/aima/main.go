@@ -19,6 +19,7 @@ import (
 	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/fleet"
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
@@ -198,16 +199,78 @@ func run() error {
 		}
 	}
 
-	// 9d. Register all tools (after all deps are fully wired)
+	// 9e. Fleet management: registry + client + REST routes + MCP tools
+	fleetRegistry := fleet.NewRegistry(proxy.DefaultPort)
+	fleetClient := fleet.NewClient(os.Getenv("AIMA_API_KEY"))
+	fleetMCP := &fleetMCPAdapter{server: mcpServer}
+	fleetDeps := &fleet.Deps{
+		Registry: fleetRegistry,
+		MCP:      fleetMCP,
+		Client:   fleetClient,
+		DeviceInfo: func(ctx context.Context) (json.RawMessage, error) {
+			if deps.SystemStatus != nil {
+				return deps.SystemStatus(ctx)
+			}
+			return json.Marshal(map[string]string{"status": "ok"})
+		},
+	}
+	proxyServer.SetExtraRoutes(fleet.RegisterRoutes(fleetDeps))
+
+	deps.FleetListDevices = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(fleetRegistry.List())
+	}
+	deps.FleetDeviceInfo = func(ctx context.Context, deviceID string) (json.RawMessage, error) {
+		d := fleetRegistry.Get(deviceID)
+		if d == nil {
+			return nil, fmt.Errorf("device %q not found", deviceID)
+		}
+		if d.Self {
+			if deps.SystemStatus != nil {
+				return deps.SystemStatus(ctx)
+			}
+			return json.Marshal(d)
+		}
+		return fleetClient.GetDeviceInfo(ctx, d)
+	}
+	deps.FleetDeviceTools = func(ctx context.Context, deviceID string) (json.RawMessage, error) {
+		d := fleetRegistry.Get(deviceID)
+		if d == nil {
+			return nil, fmt.Errorf("device %q not found", deviceID)
+		}
+		if d.Self {
+			return json.Marshal(mcpServer.ListTools())
+		}
+		return fleetClient.ListTools(ctx, d)
+	}
+	deps.FleetExecTool = func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error) {
+		if strings.HasPrefix(toolName, "fleet.") {
+			return nil, fmt.Errorf("cannot execute fleet tools remotely (recursive call blocked): %s", toolName)
+		}
+		d := fleetRegistry.Get(deviceID)
+		if d == nil {
+			return nil, fmt.Errorf("device %q not found", deviceID)
+		}
+		if d.Self {
+			result, err := mcpServer.ExecuteTool(ctx, toolName, params)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		}
+		return fleetClient.CallTool(ctx, d, toolName, params)
+	}
+
+	// 9f. Register all tools (after all deps are fully wired)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 10. Build App and run CLI
 	app := &cli.App{
-		DB:       db,
-		Catalog:  cat,
-		Proxy:    proxyServer,
-		MCP:      mcpServer,
-		ToolDeps: deps,
+		DB:            db,
+		Catalog:       cat,
+		Proxy:         proxyServer,
+		MCP:           mcpServer,
+		ToolDeps:      deps,
+		FleetRegistry: fleetRegistry,
 	}
 
 	rootCmd := cli.NewRootCmd(app)
@@ -337,14 +400,15 @@ func validateOverlayAssetName(name string) error {
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
-	"model.remove":   "destructive operation",
-	"engine.remove":  "destructive operation",
-	"deploy.delete":  "destructive operation",
-	"shell.exec":     "arbitrary command execution",
-	"stack.init":     "infrastructure mutation",
-	"agent.ask":      "recursive agent invocation",
-	"agent.install":  "agent binary installation",
-	"agent.rollback": "state rollback mutation",
+	"model.remove":    "destructive operation",
+	"engine.remove":   "destructive operation",
+	"deploy.delete":   "destructive operation",
+	"shell.exec":      "arbitrary command execution",
+	"stack.init":      "infrastructure mutation",
+	"agent.ask":       "recursive agent invocation",
+	"agent.install":   "agent binary installation",
+	"agent.rollback":  "state rollback mutation",
+	"fleet.exec_tool": "remote tool execution bypasses local guardrails",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -457,6 +521,24 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 		}
 	}
 	return defs
+}
+
+// fleetMCPAdapter bridges mcp.Server to fleet.MCPExecutor interface.
+type fleetMCPAdapter struct {
+	server *mcp.Server
+}
+
+func (a *fleetMCPAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (json.RawMessage, error) {
+	result, err := a.server.ExecuteTool(ctx, name, arguments)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
+func (a *fleetMCPAdapter) ListToolDefs() json.RawMessage {
+	data, _ := json.Marshal(a.server.ListTools())
+	return data
 }
 
 // toEngineBinarySource converts a knowledge.EngineSource to engine.BinarySource.

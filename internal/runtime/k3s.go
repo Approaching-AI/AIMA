@@ -114,6 +114,7 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 	if req.Partition != nil {
 		rc.Partition = &knowledge.PartitionSlot{
 			Name:            slot,
+			GPUCount:        req.Partition.GPUCount,
 			GPUMemoryMiB:    req.Partition.GPUMemoryMiB,
 			GPUCoresPercent: req.Partition.GPUCoresPercent,
 			CPUCores:        req.Partition.CPUCores,

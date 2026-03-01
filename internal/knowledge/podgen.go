@@ -32,7 +32,7 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
-  schedulerName: default-scheduler
+  schedulerName: {{ .SchedulerName }}
   restartPolicy: Always
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
@@ -74,7 +74,7 @@ spec:
       resources:
         limits:
           {{- if .HasGPUResource }}
-          {{ .GPUResourceName }}: "1"
+          {{ .GPUResourceName }}: "{{ .GPUCount }}"
           {{- end }}
           {{- if gt .CPUCores 0 }}
           cpu: "{{ .CPUCores }}"
@@ -84,7 +84,7 @@ spec:
           {{- end }}
         {{- if .HasGPUResource }}
         requests:
-          {{ .GPUResourceName }}: "1"
+          {{ .GPUResourceName }}: "{{ .GPUCount }}"
         {{- end }}
       {{- end }}
       {{- if .HealthCheckPath }}
@@ -159,10 +159,12 @@ type podData struct {
 	Port             int
 	Args             []string          // command arguments (excluding binary name -- image entrypoint is used)
 	ExtraEnv         map[string]string // merged: hardware container env (base) + engine env (override)
+	GPUCount         int
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
 	RAMMiB           int
+	SchedulerName          string             // e.g. "hami-scheduler" for HAMi GPU partitioning
 	HealthCheckPath        string
 	HealthCheckInitDelaySec int
 	ModelHostPath          string
@@ -178,10 +180,12 @@ func (d podData) HasAnnotations() bool {
 }
 
 // HasGPUResource reports whether a device-plugin GPU resource request should be added.
-// True only when there is a GPU resource name AND explicit GPU partitioning (HAMi-style).
-// False when GPUResourceName is unset or when using runtimeClassName without a device plugin.
+// Always false: GPU access is provided by runtimeClassName (e.g. "nvidia"), not by
+// device-plugin resource allocation. HAMi device-plugin intentionally reports
+// Allocatable:0 which blocks scheduling if nvidia.com/gpu is in resource requests.
+// GPU memory/core annotations (HasAnnotations) are kept for HAMi monitoring.
 func (d podData) HasGPUResource() bool {
-	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
+	return false
 }
 
 // HasComputeResources reports whether CPU or RAM limits should be set.
@@ -301,6 +305,23 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	// Merge env: hardware container env (base) + engine env (override on conflict).
 	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
 
+	// When HAMi GPU partitioning is active, let HAMi control GPU visibility.
+	// NVIDIA_VISIBLE_DEVICES=all would bypass HAMi's device allocation.
+	if resolved.Partition != nil && (resolved.Partition.GPUMemoryMiB > 0 || resolved.Partition.GPUCoresPercent > 0) {
+		delete(mergedEnv, "NVIDIA_VISIBLE_DEVICES")
+	}
+
+	// GPU count: default to 1 when partition requests GPU resources.
+	gpuCount := 1
+	if resolved.Partition != nil && resolved.Partition.GPUCount > 0 {
+		gpuCount = resolved.Partition.GPUCount
+	}
+
+	// schedulerName: always "default-scheduler".
+	// When HAMi is active, the kube-scheduler calls HAMi as an extender
+	// (configured in KubeSchedulerConfiguration), not as a standalone scheduler.
+	schedulerName := "default-scheduler"
+
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
 		Engine:           resolved.Engine,
@@ -310,6 +331,8 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Port:             port,
 		Args:             args,
 		ExtraEnv:         mergedEnv,
+		GPUCount:         gpuCount,
+		SchedulerName:    schedulerName,
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  resolved.GPUResourceName,
 		RuntimeClassName: resolved.RuntimeClassName,

@@ -52,3 +52,20 @@ variants:
     expected_performance:
       vram_mib: 3870
       notes: "vllm-spark-tf5, needs fix_rope.py + fix_funasr_import.py patches"
+
+  # --- linux-1 (Ada, RTX 4090, K3S) ---
+  - name: qwen3-asr-1.7b-ada-vllm-nightly-bf16
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 4096
+      unified_memory: false
+    engine: vllm-nightly-audio
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.14
+      max_model_len: 4096
+      dtype: bfloat16
+      trust_remote_code: true
+    expected_performance:
+      vram_mib: 6630
+      notes: "gmu=0.14 for triple-model coexistence (LLM gmu=0.78 leaves ~7.8GiB/GPU). 3.87GiB model + KV cache. Audio deps: librosa+soundfile via init_commands. TTS→ASR chain verified: en/zh 100% accurate. 2026-03-02."

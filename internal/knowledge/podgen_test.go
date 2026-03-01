@@ -152,9 +152,17 @@ func TestGeneratePodWithPartition(t *testing.T) {
 		if !ok {
 			t.Fatal("expected limits in resources")
 		}
-		// HAMi GPU resources
-		if limits["nvidia.com/gpu"] == nil {
-			t.Error("expected nvidia.com/gpu in limits")
+		// GPU resource NOT in limits — HAMi device-plugin reports Allocatable:0
+		// which blocks scheduling. GPU access is via runtimeClassName.
+		if limits["nvidia.com/gpu"] != nil {
+			t.Error("nvidia.com/gpu should not be in resource limits (use runtimeClassName instead)")
+		}
+		// CPU and RAM limits should be present from partition
+		if limits["cpu"] == nil {
+			t.Error("expected cpu in limits")
+		}
+		if limits["memory"] == nil {
+			t.Error("expected memory in limits")
 		}
 	})
 
@@ -168,8 +176,9 @@ func TestGeneratePodWithPartition(t *testing.T) {
 			entry := e.(map[string]any)
 			envMap[entry["name"].(string)] = entry["value"].(string)
 		}
-		if envMap["NVIDIA_VISIBLE_DEVICES"] != "all" {
-			t.Errorf("NVIDIA_VISIBLE_DEVICES = %q, want %q", envMap["NVIDIA_VISIBLE_DEVICES"], "all")
+		// NVIDIA_VISIBLE_DEVICES should be removed when HAMi partitioning is active
+		if _, found := envMap["NVIDIA_VISIBLE_DEVICES"]; found {
+			t.Errorf("NVIDIA_VISIBLE_DEVICES should be removed under HAMi partitioning, got %q", envMap["NVIDIA_VISIBLE_DEVICES"])
 		}
 		if envMap["NVIDIA_DRIVER_CAPABILITIES"] != "all" {
 			t.Errorf("NVIDIA_DRIVER_CAPABILITIES = %q, want %q", envMap["NVIDIA_DRIVER_CAPABILITIES"], "all")

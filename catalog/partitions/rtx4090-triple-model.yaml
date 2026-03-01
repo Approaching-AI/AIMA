@@ -1,0 +1,44 @@
+kind: partition_strategy
+metadata:
+  name: rtx4090-triple-model
+  description: "RTX 4090 x 2 triple model (LLM TP=2 + ASR + TTS GPU)"
+target:
+  hardware_profile: nvidia-rtx4090-x86
+  workload_pattern: triple_model
+slots:
+  - name: primary
+    gpu:
+      count: 2
+      memory_mib: 40000
+      cores_percent: 75
+    cpu:
+      cores: 12
+    ram:
+      mib: 262144
+  - name: secondary
+    gpu:
+      count: 1
+      memory_mib: 5120
+      cores_percent: 13
+    cpu:
+      cores: 4
+    ram:
+      mib: 32768
+  - name: tertiary
+    gpu:
+      count: 1
+      memory_mib: 2048
+      cores_percent: 7
+    cpu:
+      cores: 4
+    ram:
+      mib: 0
+  - name: system_reserved
+    gpu:
+      memory_mib: 1984
+      cores_percent: 5
+    cpu:
+      cores: 2
+    ram:
+      mib: 16384
+    note: "CUDA runtime + HAMi overhead"

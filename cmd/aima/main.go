@@ -1098,6 +1098,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			if resolved.Partition != nil {
 				req.Partition = &runtime.PartitionRequest{
+					GPUCount:        resolved.Partition.GPUCount,
 					GPUMemoryMiB:    resolved.Partition.GPUMemoryMiB,
 					GPUCoresPercent: resolved.Partition.GPUCoresPercent,
 					CPUCores:        resolved.Partition.CPUCores,

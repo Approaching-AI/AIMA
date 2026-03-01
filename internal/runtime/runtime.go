@@ -55,6 +55,7 @@ type DeploymentStatus struct {
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.
 type PartitionRequest struct {
+	GPUCount        int
 	GPUMemoryMiB    int
 	GPUCoresPercent int
 	CPUCores        int

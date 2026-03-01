@@ -1,0 +1,32 @@
+kind: model_asset
+metadata:
+  name: qwen3-tts-0.6b
+  type: tts
+  family: qwen
+  parameter_count: "0.6B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+      format: safetensors
+    - type: modelscope
+      repo: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- CPU-only 容器 (任何硬件) ---
+  # 0.6B 参数, CPU 推理 ~4GB 内存, RTF ~0.87
+  # 使用 qwen-tts-fastapi 引擎 (OpenAI 兼容 /v1/audio/speech)
+  - name: qwen3-tts-0.6b-cpu-fastapi
+    hardware:
+      gpu_arch: "*"
+    engine: qwen-tts-fastapi
+    format: safetensors
+    default_config:
+      device: cpu
+    expected_performance:
+      vram_mib: 0
+      notes: "CPU inference, RTF ~0.87, 0.6B params ≈ 4GB RAM"

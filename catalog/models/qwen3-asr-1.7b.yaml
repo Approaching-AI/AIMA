@@ -19,7 +19,7 @@ storage:
 variants:
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # BF16 权重 ~3.4GB, 128GB unified 余量充足
-  # 复用 vllm-nightly (qwen3_5-cu130 镜像), gmu=0.05 最小化显存占用
+  # 复用 vllm-nightly (qwen3_5-cu130 镜像), gmu=0.1 (0.05 不够 CUDA context 开销)
   - name: qwen3-asr-1.7b-blackwell-vllm-nightly-bf16
     hardware:
       gpu_arch: Blackwell
@@ -28,7 +28,7 @@ variants:
     engine: vllm-nightly
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.05
+      gpu_memory_utilization: 0.1
       max_model_len: 8192
       dtype: bfloat16
       trust_remote_code: true

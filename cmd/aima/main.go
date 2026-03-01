@@ -337,15 +337,14 @@ func validateOverlayAssetName(name string) error {
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
-	"model.remove":     "destructive operation",
-	"engine.remove":    "destructive operation",
-	"deploy.delete":    "destructive operation",
-	"shell.exec":       "arbitrary command execution",
-	"stack.init":       "infrastructure mutation",
-	"catalog.override": "knowledge mutation",
-	"agent.ask":        "recursive agent invocation",
-	"agent.install":    "agent binary installation",
-	"agent.rollback":   "state rollback mutation",
+	"model.remove":   "destructive operation",
+	"engine.remove":  "destructive operation",
+	"deploy.delete":  "destructive operation",
+	"shell.exec":     "arbitrary command execution",
+	"stack.init":     "infrastructure mutation",
+	"agent.ask":      "recursive agent invocation",
+	"agent.install":  "agent binary installation",
+	"agent.rollback": "state rollback mutation",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -362,6 +361,26 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 				return true, "persistent configuration mutation"
 			}
 		}
+	}
+
+	// catalog.override: allow engine_asset and model_asset (inference tuning),
+	// block hardware_profile, partition_strategy, stack_component (infrastructure safety).
+	if name == "catalog.override" {
+		if len(arguments) > 0 {
+			var raw map[string]json.RawMessage
+			if json.Unmarshal(arguments, &raw) == nil {
+				if kindRaw, ok := raw["kind"]; ok {
+					var kind string
+					if json.Unmarshal(kindRaw, &kind) == nil {
+						switch kind {
+						case "engine_asset", "model_asset":
+							return false, ""
+						}
+					}
+				}
+			}
+		}
+		return true, "catalog override restricted to engine/model assets for Agent"
 	}
 
 	return false, ""
@@ -704,17 +723,66 @@ type resolvedDeployment struct {
 	RuntimeName string
 }
 
+// queryGoldenOverrides returns config overrides from the best golden configuration
+// matching the given hardware/engine/model. Returns nil if no golden config found
+// or if hwProfile is empty (to prevent cross-hardware injection).
+func queryGoldenOverrides(ctx context.Context, kStore *knowledge.Store, hwProfile, engineType, modelName string) map[string]any {
+	if kStore == nil || hwProfile == "" {
+		return nil
+	}
+	resp, err := kStore.Search(ctx, knowledge.SearchParams{
+		Hardware: hwProfile,
+		Engine:   engineType,
+		Model:    modelName,
+		Status:   "golden",
+		SortBy:   "throughput",
+		Limit:    1,
+	})
+	if err != nil || len(resp.Results) == 0 {
+		return nil
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(resp.Results[0].Config, &cfg); err != nil {
+		return nil
+	}
+	if len(cfg) == 0 {
+		return nil
+	}
+	slog.Info("L2 golden config found",
+		"config_id", resp.Results[0].ConfigID,
+		"keys", len(cfg))
+	return cfg
+}
+
 // resolveDeployment performs the common resolve → CheckFit → runtime selection sequence.
-func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hwInfo knowledge.HardwareInfo, rt, nativeRt runtime.Runtime, modelName, engineType, slot string, overrides map[string]any, dataDir string) (*resolvedDeployment, error) {
+func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, hwInfo knowledge.HardwareInfo, rt, nativeRt runtime.Runtime, modelName, engineType, slot string, overrides map[string]any, dataDir string) (*resolvedDeployment, error) {
 	if overrides == nil {
 		overrides = map[string]any{}
 	}
 	if slot != "" {
 		overrides["slot"] = slot
 	}
+
+	// First resolve to get canonical model name, then query golden config
+	userKeys := make(map[string]bool, len(overrides))
+	for k := range overrides {
+		userKeys[k] = true
+	}
+
 	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
 	if err != nil {
 		return nil, err
+	}
+
+	// L2: query golden config using canonical name and merge as middle layer (L0 < L2 < L1)
+	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, engineType, canonicalName)
+	if len(goldenConfig) > 0 {
+		for k, v := range goldenConfig {
+			if !userKeys[k] {
+				resolved.Config[k] = v
+				resolved.Provenance[k] = "L2"
+			}
+		}
 	}
 
 	fit := knowledge.CheckFit(resolved, hwInfo)
@@ -1087,7 +1155,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			rd, err := resolveDeployment(ctx, cat, db, hwInfo, rt, nativeRt, modelName, engineType, slot, configOverrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, rt, nativeRt, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
@@ -1202,7 +1270,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		DeployDryRun: func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			rd, err := resolveDeployment(ctx, cat, db, hwInfo, rt, nativeRt, modelName, engineType, slot, overrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, rt, nativeRt, modelName, engineType, slot, overrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
@@ -1542,6 +1610,28 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				"hardware":     p.Hardware,
 				"engine":       p.Engine,
 				"model":        p.Model,
+			})
+		},
+
+		PromoteConfig: func(ctx context.Context, configID, status string) (json.RawMessage, error) {
+			validStatuses := map[string]bool{"golden": true, "experiment": true, "archived": true}
+			if !validStatuses[status] {
+				return nil, fmt.Errorf("invalid status %q: must be golden, experiment, or archived", status)
+			}
+			// Fetch current config to return old status
+			cfg, err := db.GetConfiguration(ctx, configID)
+			if err != nil {
+				return nil, fmt.Errorf("get configuration: %w", err)
+			}
+			oldStatus := cfg.Status
+			if err := db.UpdateConfigStatus(ctx, configID, status); err != nil {
+				return nil, fmt.Errorf("promote config: %w", err)
+			}
+			return json.Marshal(map[string]any{
+				"config_id":  configID,
+				"old_status": oldStatus,
+				"new_status": status,
+				"message":    fmt.Sprintf("Configuration %s promoted from %s to %s", configID, oldStatus, status),
 			})
 		},
 

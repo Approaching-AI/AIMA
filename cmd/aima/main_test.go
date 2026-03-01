@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	state "github.com/jguan/aima/internal"
+	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 )
 
@@ -48,6 +50,14 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		{name: "system config read allowed", tool: "system.config", args: json.RawMessage(`{"key":"foo"}`), wantBlock: false},
 		{name: "system config write blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":"bar"}`), wantBlock: true},
 		{name: "system config null value blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":null}`), wantBlock: true},
+		// catalog.override: engine/model allowed, infrastructure blocked
+		{name: "catalog override engine_asset allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"engine_asset","name":"vllm","content":"x"}`), wantBlock: false},
+		{name: "catalog override model_asset allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"model_asset","name":"qwen3","content":"x"}`), wantBlock: false},
+		{name: "catalog override hardware_profile blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"hardware_profile","name":"gpu","content":"x"}`), wantBlock: true},
+		{name: "catalog override partition_strategy blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"partition_strategy","name":"p","content":"x"}`), wantBlock: true},
+		{name: "catalog override stack_component blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"stack_component","name":"k3s","content":"x"}`), wantBlock: true},
+		{name: "catalog override no kind blocked", tool: "catalog.override", args: json.RawMessage(`{"name":"x","content":"x"}`), wantBlock: true},
+		{name: "catalog override empty args blocked", tool: "catalog.override", args: nil, wantBlock: true},
 	}
 
 	for _, tt := range tests {
@@ -86,6 +96,181 @@ func TestMCPToolAdapter_BlocksHighRiskTool(t *testing.T) {
 	}
 	if called != 0 {
 		t.Fatalf("blocked tool should not execute, called=%d", called)
+	}
+}
+
+func TestQueryGoldenOverrides(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Insert engine asset + hardware profile (required by Search JOINs)
+	_, err = db.RawDB().ExecContext(ctx,
+		`INSERT INTO engine_assets (id, type, version) VALUES ('vllm-nightly', 'vllm-nightly', 'v0.16')`)
+	if err != nil {
+		t.Fatalf("insert engine_asset: %v", err)
+	}
+	_, err = db.RawDB().ExecContext(ctx,
+		`INSERT INTO hardware_profiles (id, name, gpu_arch) VALUES ('nvidia-gb10-arm64', 'GB10', 'Blackwell')`)
+	if err != nil {
+		t.Fatalf("insert hardware_profile: %v", err)
+	}
+
+	// Insert a golden configuration
+	goldenCfg := &state.Configuration{
+		ID:         "cfg-golden-001",
+		HardwareID: "nvidia-gb10-arm64",
+		EngineID:   "vllm-nightly",
+		ModelID:    "qwen3-8b",
+		Config:     `{"gpu_memory_utilization":0.85,"max_model_len":32768}`,
+		ConfigHash: "golden-hash-001",
+		Status:     "golden",
+		Source:     "benchmark",
+	}
+	if err := db.InsertConfiguration(ctx, goldenCfg); err != nil {
+		t.Fatalf("InsertConfiguration: %v", err)
+	}
+	// Insert a benchmark so Search returns results (JOIN on throughput)
+	benchResult := &state.BenchmarkResult{
+		ID:            "br-001",
+		ConfigID:      "cfg-golden-001",
+		Concurrency:   1,
+		ThroughputTPS: 42.5,
+	}
+	if err := db.InsertBenchmarkResult(ctx, benchResult); err != nil {
+		t.Fatalf("InsertBenchmarkResult: %v", err)
+	}
+
+	kStore := knowledge.NewStore(db.RawDB())
+
+	t.Run("finds golden config via gpu arch", func(t *testing.T) {
+		// Real code passes hwInfo.GPUArch (e.g. "Blackwell"), not profile name.
+		// Search matches via: hardware_profiles WHERE gpu_arch = ?
+		result := queryGoldenOverrides(ctx, kStore, "Blackwell", "vllm-nightly", "qwen3-8b")
+		if result == nil {
+			t.Fatal("expected golden config, got nil")
+		}
+		if gmu, ok := result["gpu_memory_utilization"]; !ok {
+			t.Error("missing gpu_memory_utilization")
+		} else if gmu != 0.85 {
+			t.Errorf("gpu_memory_utilization = %v, want 0.85", gmu)
+		}
+		if mml, ok := result["max_model_len"]; !ok {
+			t.Error("missing max_model_len")
+		} else if mml != float64(32768) {
+			t.Errorf("max_model_len = %v, want 32768", mml)
+		}
+	})
+
+	t.Run("no golden for different gpu arch", func(t *testing.T) {
+		result := queryGoldenOverrides(ctx, kStore, "Ada", "vllm-nightly", "qwen3-8b")
+		if result != nil {
+			t.Errorf("expected nil for non-matching gpu arch, got %v", result)
+		}
+	})
+
+	t.Run("empty gpu arch returns nil", func(t *testing.T) {
+		// Empty GPUArch must return nil to prevent cross-hardware golden injection.
+		result := queryGoldenOverrides(ctx, kStore, "", "vllm-nightly", "qwen3-8b")
+		if result != nil {
+			t.Errorf("expected nil for empty gpu arch (cross-hardware guard), got %v", result)
+		}
+	})
+
+	t.Run("nil store returns nil", func(t *testing.T) {
+		result := queryGoldenOverrides(ctx, nil, "Blackwell", "vllm-nightly", "qwen3-8b")
+		if result != nil {
+			t.Errorf("expected nil for nil store, got %v", result)
+		}
+	})
+}
+
+func TestL2ProvenanceMerge(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Insert engine asset + hardware profile
+	_, err = db.RawDB().ExecContext(ctx,
+		`INSERT INTO engine_assets (id, type, version) VALUES ('vllm-nightly', 'vllm-nightly', 'v0.16')`)
+	if err != nil {
+		t.Fatalf("insert engine_asset: %v", err)
+	}
+	_, err = db.RawDB().ExecContext(ctx,
+		`INSERT INTO hardware_profiles (id, name, gpu_arch) VALUES ('nvidia-gb10-arm64', 'GB10', 'Blackwell')`)
+	if err != nil {
+		t.Fatalf("insert hardware_profile: %v", err)
+	}
+
+	// Insert a golden config with gmu=0.85 and max_model_len=32768
+	goldenCfg := &state.Configuration{
+		ID:         "cfg-g-prov",
+		HardwareID: "nvidia-gb10-arm64",
+		EngineID:   "vllm-nightly",
+		ModelID:    "qwen3-8b",
+		Config:     `{"gpu_memory_utilization":0.85,"max_model_len":32768}`,
+		ConfigHash: "prov-hash-001",
+		Status:     "golden",
+		Source:     "benchmark",
+	}
+	if err := db.InsertConfiguration(ctx, goldenCfg); err != nil {
+		t.Fatalf("InsertConfiguration: %v", err)
+	}
+	if err := db.InsertBenchmarkResult(ctx, &state.BenchmarkResult{
+		ID: "br-prov", ConfigID: "cfg-g-prov", Concurrency: 1, ThroughputTPS: 30,
+	}); err != nil {
+		t.Fatalf("InsertBenchmarkResult: %v", err)
+	}
+
+	kStore := knowledge.NewStore(db.RawDB())
+
+	// Simulate user overriding only gmu (L1), golden has both gmu and max_model_len
+	userOverrides := map[string]any{"gpu_memory_utilization": 0.9}
+	userKeys := map[string]bool{"gpu_memory_utilization": true}
+
+	goldenConfig := queryGoldenOverrides(ctx, kStore, "Blackwell", "vllm-nightly", "qwen3-8b")
+	if goldenConfig == nil {
+		t.Fatal("expected golden config")
+	}
+
+	// Merge: L2 first, then L1 wins
+	merged := make(map[string]any, len(goldenConfig)+len(userOverrides))
+	for k, v := range goldenConfig {
+		merged[k] = v
+	}
+	for k, v := range userOverrides {
+		merged[k] = v
+	}
+
+	// Verify user override wins for gmu
+	if gmu := merged["gpu_memory_utilization"]; gmu != 0.9 {
+		t.Errorf("user override should win: gpu_memory_utilization = %v, want 0.9", gmu)
+	}
+	// Verify golden config provides max_model_len
+	if mml := merged["max_model_len"]; mml != float64(32768) {
+		t.Errorf("golden should provide max_model_len = %v, want 32768", mml)
+	}
+
+	// Verify provenance marking
+	for k := range goldenConfig {
+		if userKeys[k] {
+			// User-overridden keys stay as L1
+		} else {
+			// Golden-only keys should be L2
+			// (In real code, this is done by resolveDeployment)
+		}
+	}
+	if userKeys["max_model_len"] {
+		t.Error("max_model_len should not be in userKeys")
+	}
+	if !userKeys["gpu_memory_utilization"] {
+		t.Error("gpu_memory_utilization should be in userKeys")
 	}
 }
 

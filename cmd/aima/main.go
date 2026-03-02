@@ -225,10 +225,31 @@ func run() error {
 	}
 	proxyServer.SetExtraRoutes(fleet.RegisterRoutes(fleetDeps))
 
+	// fleetEnsureDiscovery runs a one-shot mDNS scan if the registry is empty.
+	// This ensures fleet MCP tools work without serve --discover (INV-5 parity).
+	fleetEnsureDiscovery := func(ctx context.Context) {
+		if len(fleetRegistry.List()) > 0 {
+			return
+		}
+		services, err := proxy.Discover(ctx, 3*time.Second)
+		if err != nil {
+			slog.Debug("fleet auto-discovery failed", "error", err)
+			return
+		}
+		fleetRegistry.Update(services)
+	}
+
 	deps.FleetListDevices = func(ctx context.Context) (json.RawMessage, error) {
+		// Always discover — this is the canonical "find devices" operation
+		services, err := proxy.Discover(ctx, 3*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("mDNS discovery: %w", err)
+		}
+		fleetRegistry.Update(services)
 		return json.Marshal(fleetRegistry.List())
 	}
 	deps.FleetDeviceInfo = func(ctx context.Context, deviceID string) (json.RawMessage, error) {
+		fleetEnsureDiscovery(ctx)
 		d := fleetRegistry.Get(deviceID)
 		if d == nil {
 			return nil, fmt.Errorf("device %q not found", deviceID)
@@ -242,6 +263,7 @@ func run() error {
 		return fleetClient.GetDeviceInfo(ctx, d)
 	}
 	deps.FleetDeviceTools = func(ctx context.Context, deviceID string) (json.RawMessage, error) {
+		fleetEnsureDiscovery(ctx)
 		d := fleetRegistry.Get(deviceID)
 		if d == nil {
 			return nil, fmt.Errorf("device %q not found", deviceID)
@@ -259,6 +281,7 @@ func run() error {
 		if reason, ok := fleetBlockedTools[toolName]; ok {
 			return nil, fmt.Errorf("fleet.exec_tool: %s is blocked (%s)", toolName, reason)
 		}
+		fleetEnsureDiscovery(ctx)
 		d := fleetRegistry.Get(deviceID)
 		if d == nil {
 			return nil, fmt.Errorf("device %q not found", deviceID)

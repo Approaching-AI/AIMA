@@ -44,7 +44,7 @@ You operate hardware detection, model/engine lifecycle, deployment, and knowledg
 
 - Want to see all AIMA devices on the LAN? → `fleet.list_devices` (auto-discovers via mDNS)
 - Want hardware details of a specific remote device? → `fleet.device_info`
-- Want to run a tool on a remote device? → `fleet.exec_tool` (check `fleet.device_tools` first)
+- Want to run a tool on a remote device? → `fleet.exec_tool` (check `fleet.device_tools` first). Same safety guardrails (blocked/confirmable) apply to the inner tool as local calls.
 - Want raw mDNS service records? → `discovery.lan` (low-level; prefer `fleet.list_devices`)
 
 ## Example Workflows

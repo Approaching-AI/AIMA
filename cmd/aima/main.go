@@ -505,7 +505,6 @@ var blockedAgentTools = map[string]string{
 	"agent.ask":       "recursive agent invocation",
 	"agent.install":   "agent binary installation",
 	"agent.rollback":  "state rollback mutation",
-	"fleet.exec_tool": "remote tool execution bypasses local guardrails",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -522,6 +521,32 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 				return true, "persistent configuration mutation"
 			}
 		}
+	}
+
+	// fleet.exec_tool: penetrate to inner tool_name — apply same guardrails as local calls.
+	if name == "fleet.exec_tool" {
+		if len(arguments) > 0 {
+			var raw map[string]json.RawMessage
+			if json.Unmarshal(arguments, &raw) == nil {
+				if tnRaw, ok := raw["tool_name"]; ok {
+					var innerTool string
+					if json.Unmarshal(tnRaw, &innerTool) == nil {
+						// Block fleet-recursive calls
+						if strings.HasPrefix(innerTool, "fleet.") {
+							return true, "recursive fleet call blocked"
+						}
+						// Apply same blocked/system.config/catalog.override checks to inner tool
+						var innerParams json.RawMessage
+						if paramsRaw, ok := raw["params"]; ok {
+							innerParams = paramsRaw
+						}
+						return isBlockedAgentTool(innerTool, innerParams)
+					}
+				}
+			}
+		}
+		// Can't parse tool_name → block as safety default
+		return true, "fleet.exec_tool: cannot determine inner tool_name"
 	}
 
 	// catalog.override: allow engine_asset and model_asset (inference tuning),
@@ -578,6 +603,44 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 
 	// Gap 1b: Confirmable tools require user approval (unless --dangerously-skip-permissions).
 	skipPerms, _ := ctx.Value(ctxKeySkipPerms).(bool)
+
+	// fleet.exec_tool wrapping a confirmable inner tool → needs approval too
+	if name == "fleet.exec_tool" && !skipPerms {
+		if len(arguments) > 0 {
+			var raw map[string]json.RawMessage
+			if json.Unmarshal(arguments, &raw) == nil {
+				if tnRaw, ok := raw["tool_name"]; ok {
+					var innerTool string
+					if json.Unmarshal(tnRaw, &innerTool) == nil {
+						if reason, ok := confirmableTools[innerTool]; ok {
+							// Run remote dry-run via fleet.exec_tool itself
+							dryArgs, _ := json.Marshal(map[string]any{
+								"device_id": json.RawMessage(raw["device_id"]),
+								"tool_name": "deploy.dry_run",
+								"params":    json.RawMessage(raw["params"]),
+							})
+							dryResult, drErr := a.server.ExecuteTool(ctx, "fleet.exec_tool", dryArgs)
+							var planText string
+							if drErr == nil {
+								for _, c := range dryResult.Content {
+									planText += c.Text
+								}
+							} else {
+								planText = "remote dry-run unavailable: " + drErr.Error()
+							}
+							id := a.storePending(name, arguments)
+							msg := fmt.Sprintf("NEEDS_APPROVAL (id=%d): remote %s on device requires user approval (%s).\n\n"+
+								"Deployment plan:\n%s\n\nPresent this plan to the user. If they approve, call deploy.approve with id=%d.",
+								id, innerTool, reason, planText, id)
+							a.audit(ctx, name, string(arguments), fmt.Sprintf("NEEDS_APPROVAL id=%d", id))
+							return &agent.ToolResult{Content: msg, IsError: true}, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if reason, ok := confirmableTools[name]; ok && !skipPerms {
 		dryResult, drErr := a.server.ExecuteTool(ctx, "deploy.dry_run", arguments)
 		var planText string

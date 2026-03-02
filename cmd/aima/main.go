@@ -857,7 +857,43 @@ func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
 	} else if k, err := db.GetConfig(ctx, "llm.api_key"); err == nil && k != "" {
 		opts = append(opts, agent.WithAPIKey(k))
 	}
+	opts = append(opts, agent.WithDiscoverFunc(discoverFleetLLM))
 	return agent.NewOpenAIClient(endpoint, opts...)
+}
+
+// discoverFleetLLM discovers LLM endpoints from fleet devices via mDNS.
+// Called lazily by OpenAIClient when local endpoint has no models.
+func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint {
+	services, err := proxy.Discover(ctx, 3*time.Second)
+	if err != nil {
+		slog.Debug("fleet LLM discovery: mDNS failed", "error", err)
+		return nil
+	}
+
+	var endpoints []agent.FleetEndpoint
+	for _, svc := range services {
+		addr := svc.AddrV4
+		if addr == "" {
+			addr = svc.Host
+		}
+		if addr == "" {
+			continue
+		}
+		if proxy.IsLocalIP(addr) {
+			continue
+		}
+		models := proxy.QueryRemoteModels(ctx, addr, svc.Port, apiKey)
+		if len(models) == 0 {
+			continue
+		}
+		baseURL := fmt.Sprintf("http://%s:%d/v1", addr, svc.Port)
+		slog.Debug("fleet LLM discovery: candidate", "addr", baseURL, "models", models)
+		endpoints = append(endpoints, agent.FleetEndpoint{
+			BaseURL: baseURL,
+			Model:   models[0],
+		})
+	}
+	return endpoints
 }
 
 // selectRuntime picks the best runtime: K3S on Linux if available, else native.

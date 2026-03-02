@@ -21,6 +21,12 @@
 |------|------|
 | `agent-l3a-validation.md` | **Go Agent 全量验证** - 40 测试点 (8 phases)、Config 持久化 + Hot-Swap、单轮/多轮工具调用、安全 Guardrails (destructive block + param-level block)、LAN Proxy 通道、审计日志 |
 
+## Fleet 与服务发现
+
+| 文件 | 描述 |
+|------|------|
+| `fleet-llm-discovery.md` | **Fleet LLM 端点自动发现** - DiscoverFunc 注入模式、降级链设计（本地→Fleet mDNS→错误）、hot-swap baseURL、mDNS 默认开启 |
+
 ## AIMA 开发原则
 
 | 文件 | 描述 |

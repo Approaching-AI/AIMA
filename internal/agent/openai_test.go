@@ -225,3 +225,78 @@ func TestOpenAIClient_Available(t *testing.T) {
 		t.Error("Available() = true after close, want false")
 	}
 }
+
+func TestOpenAIClient_FleetDiscovery_EmptyModels(t *testing.T) {
+	// Local server returns empty model list
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(modelsResponse{Data: []modelData{}})
+	}))
+	defer srv.Close()
+
+	// Fleet discover returns a remote endpoint
+	discoverCalled := false
+	discover := func(ctx context.Context, apiKey string) []FleetEndpoint {
+		discoverCalled = true
+		return []FleetEndpoint{{BaseURL: srv.URL + "/v1", Model: "remote-qwen3"}}
+	}
+
+	client := NewOpenAIClient(srv.URL+"/v1", WithDiscoverFunc(discover))
+	model, err := client.resolveModel(context.Background())
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if !discoverCalled {
+		t.Error("expected discover function to be called")
+	}
+	if model != "remote-qwen3" {
+		t.Errorf("model = %q, want remote-qwen3", model)
+	}
+}
+
+func TestOpenAIClient_FleetDiscovery_Unreachable(t *testing.T) {
+	// Fleet discover returns a remote endpoint when local is unreachable
+	discover := func(ctx context.Context, apiKey string) []FleetEndpoint {
+		return []FleetEndpoint{{BaseURL: "http://10.0.0.1:6188/v1", Model: "remote-model"}}
+	}
+
+	client := NewOpenAIClient("http://127.0.0.1:1/v1", WithDiscoverFunc(discover))
+	model, err := client.resolveModel(context.Background())
+	if err != nil {
+		t.Fatalf("resolveModel: %v", err)
+	}
+	if model != "remote-model" {
+		t.Errorf("model = %q, want remote-model", model)
+	}
+}
+
+func TestOpenAIClient_FleetDiscovery_NilFunc(t *testing.T) {
+	// No discover function — original error propagated
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(modelsResponse{Data: []modelData{}})
+	}))
+	defer srv.Close()
+
+	client := NewOpenAIClient(srv.URL + "/v1") // no WithDiscoverFunc
+	_, err := client.resolveModel(context.Background())
+	if err == nil {
+		t.Fatal("expected error when no models and no discover func")
+	}
+}
+
+func TestOpenAIClient_FleetDiscovery_NoEndpoints(t *testing.T) {
+	// Discover function returns empty — original error propagated
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(modelsResponse{Data: []modelData{}})
+	}))
+	defer srv.Close()
+
+	discover := func(ctx context.Context, apiKey string) []FleetEndpoint {
+		return nil
+	}
+
+	client := NewOpenAIClient(srv.URL+"/v1", WithDiscoverFunc(discover))
+	_, err := client.resolveModel(context.Background())
+	if err == nil {
+		t.Fatal("expected error when discover returns no endpoints")
+	}
+}

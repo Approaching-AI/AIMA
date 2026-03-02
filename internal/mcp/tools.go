@@ -1351,7 +1351,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("set config %s: %w", p.Key, err)
 				}
 				display := *p.Value
-				if p.Key == "api_key" {
+				if p.Key == "api_key" || p.Key == "llm.api_key" {
 					display = "***"
 				}
 				return TextResult(fmt.Sprintf("config %s set to %s", p.Key, display)), nil
@@ -1365,7 +1365,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if err != nil {
 				return nil, fmt.Errorf("get config %s: %w", p.Key, err)
 			}
-			if p.Key == "api_key" {
+			if p.Key == "api_key" || p.Key == "llm.api_key" {
 				val = "***"
 			}
 			return TextResult(val), nil

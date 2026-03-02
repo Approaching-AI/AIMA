@@ -30,6 +30,9 @@ func newConfigGetCmd(app *App) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get config %s: %w", args[0], err)
 			}
+			if args[0] == "api_key" || args[0] == "llm.api_key" {
+				value = "***"
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), value)
 			return nil
 		},

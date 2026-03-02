@@ -93,9 +93,10 @@ registries:
     docker.io:
       endpoint:
         - "https://docker.m.daocloud.io"    # DaoCloud — 稳定，国内首选
-        - "https://docker.1ms.run"           # 1ms.run — 备选
-        - "https://docker.nju.edu.cn"        # 南京大学 — 教育网快
-        - "https://docker.rainbond.cc"       # Rainbond — 备选
+        - "https://docker.1ms.run"           # 1ms.run — 快速备选
+        - "https://hub.rat.dev"              # rat.dev — 稳定
+        - "https://proxy.vvvv.ee"            # vvvv.ee — 稳定
+        - "https://dockerproxy.net"          # dockerproxy — 稳定
     ghcr.io:
       endpoint:
         - "https://ghcr.nju.edu.cn"          # 南京大学

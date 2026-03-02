@@ -4,9 +4,10 @@
 
 | 文件 | 描述 |
 |------|------|
-| `k3s-gpu-pod-deployment.md` | **K3S GPU Pod 部署调试** - 13 个部署 Bug、CUDA 803、256K 上下文、VLM 视觉测试、**Qwen3-Coder-Next 80B 双引擎对比**、**GLM-4.7-Flash 部署 (spark-vllm-docker 构建)**、三模型性能对比、**引擎版本全景（4 引擎×Transformers 兼容性）**、benchmark record CLI |
+| `k3s-gpu-pod-deployment.md` | **K3S GPU Pod 部署调试** - 13 个部署 Bug、CUDA 803、256K 上下文、VLM 视觉测试、**Qwen3-Coder-Next 80B 双引擎对比**、**GLM-4.7-Flash 部署 (spark-vllm-docker 构建)**、三模型性能对比、**引擎版本全景（4 引擎×Transformers 兼容性）**、benchmark record CLI、**SGLang v0.5.9 Qwen3.5-27B 部署** |
+| `sglang-qwen35-27b-deployment.md` | **Qwen3.5-27B SGLang 部署** - 11 个 Bug (8 YAML + 3 Go)、HF mirror 注入、K3S 镜像源更新、deploy 自动 Docker→containerd import + 预拉取、SGLang v0.5.9 已知 Bug (重复循环/tool calling 截断)、升级路径 v0.5.10 |
 | `llamacpp-native-vulkan.md` | **llama.cpp Native/Vulkan 部署** - amd395 RDNA3.5 Vulkan、UMA 架构性能特征 |
-| `docker-k3s-image-interop.md` | **Docker↔K3S 镜像互通** - 双存储问题诊断、Docker-only 自动检测（engine scan）、containerd 预检查 + 自动导入、imagePullPolicy:IfNotPresent、deploy 只读检查、pattern 合并修复 |
+| `docker-k3s-image-interop.md` | **Docker↔K3S 镜像互通** - 双存储问题诊断、Docker-only 自动检测（engine scan）、containerd 预检查 + 自动导入、imagePullPolicy:IfNotPresent、**deploy 自动 Docker→containerd import + 预拉取**、K3S 镜像源 5 个已验证源、pattern 合并修复 |
 | `engine-scanner-debugging.md` | **Engine Scanner 调试** - 4 个 Bug（K3S crictl fallback、tag-aware pattern 匹配、双 anchor `^$` 修复、stale DB 清理）、pattern 设计指南、deploy 前数据流水线（scan→resolve→deploy）、CPUArch 传递链 |
 
 ## 模型检测
@@ -58,12 +59,15 @@
 | `cuInit` 返回 803 | CUDA compat stub 覆盖真实驱动 | env: `LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:...` |
 | Pod 挂载空模型目录 | Catalog 命中但缺 DB 路径 | resolveWithFallback 联合查询 Catalog + DB |
 | arm64 路径错误 | LD_LIBRARY_PATH 硬编码 x86 | `libDirForArch()` 根据 CPUArch 适配 |
-| 大镜像拉取中途 EOF | docker.io 镜像源单点故障 | registries.yaml 配 4 个镜像源轮询 |
+| 大镜像拉取中途 EOF | docker.io 镜像源单点故障 | registries.yaml 配 5 个镜像源轮询 |
 | 大 max_model_len 启动 OOM | encoder profiling 262K+16 images | `enable_chunked_prefill: true`（降至 16K profiling）|
 | vLLM CLI 参数 JSON 解析失败 | pod 模板不支持嵌套 JSON | 绕过：不用该参数，用 chunked_prefill 替代 |
 | 超大图片 OOM 崩溃 | 单图 >3424px encoder 内存溢出 | 限制输入 ≤3072px 或 resize |
 | Pod restart 后请求失败 | Pod IP 或模型名变化 | 重新查询 `kubectl get pod -o jsonpath` |
-| ImagePullBackOff (本地有镜像) | Docker store ≠ K3S containerd | `sudo aima engine scan`（自动导入）或手动 `docker save \| sudo k3s ctr import` |
+| ImagePullBackOff (本地有镜像) | Docker store ≠ K3S containerd | deploy 自动 import；手动: `docker save \| sudo k3s ctr import` |
+| huggingface-cli 不走 mirror | CLI 子进程未继承 HF_ENDPOINT | 已修复: 自动注入 `HF_ENDPOINT=hf-mirror.com` |
+| SGLang CuDNN 版本检查失败 | v0.5.9 要求 CuDNN ≥ 9.15 | engine YAML: `SGLANG_DISABLE_CUDNN_CHECK=1` |
+| SGLang 重复循环 | v0.5.9 已知 bug (#19393) | 等 v0.5.10；设 max_tokens 截断 |
 | imagePullPolicy Always 拉取失败 | K8s :latest 默认 Always | podgen 已设 `imagePullPolicy: IfNotPresent` |
 | engine scan 漏扫 NGC 镜像 | 同 type 多 YAML patterns 覆盖 | 已修复：patterns append 合并（不覆盖）|
 | model 参数 0B / class unknown | GGUF 未解析 / dense 粗算偏差 | parseGGUFMeta + calculateDenseParamsFromConfig |

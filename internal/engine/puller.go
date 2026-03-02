@@ -63,6 +63,17 @@ func Pull(ctx context.Context, opts PullOptions) error {
 	return fmt.Errorf("pull image %s:%s: all registries failed: %w", opts.Image, opts.Tag, lastErr)
 }
 
+// ImageExistsInContainerd checks whether image exists in containerd (K3S) store only.
+// Unlike ImageExists, this does NOT fall back to Docker.
+func ImageExistsInContainerd(ctx context.Context, image string, runner CommandRunner) bool {
+	ref := image
+	if !strings.Contains(ref, ":") {
+		ref += ":latest"
+	}
+	out, err := runCrictl(ctx, runner, "images", "--quiet", ref)
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
+}
+
 // ImageExistsInDocker checks whether image exists in Docker store.
 func ImageExistsInDocker(ctx context.Context, image string, runner CommandRunner) bool {
 	ref := image

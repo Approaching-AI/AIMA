@@ -126,6 +126,7 @@ func TestGeneratePodWithPartition(t *testing.T) {
 				"NVIDIA_DRIVER_CAPABILITIES":  "all",
 				"LD_LIBRARY_PATH":             "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
 			},
+			PartitionRemoveEnv: []string{"NVIDIA_VISIBLE_DEVICES"},
 		},
 	}
 

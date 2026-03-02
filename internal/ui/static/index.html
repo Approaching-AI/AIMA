@@ -1697,22 +1697,18 @@ function aimaApp() {
       }
 
       // Save LLM config to server via system.config set
-      if (this.settingsForm.llmEndpoint) {
-        var r = await this.callTool('system.config', { key: 'llm.endpoint', value: this.settingsForm.llmEndpoint });
-        if (r._err) errors.push('llm.endpoint: ' + r._err);
-      }
-      if (this.settingsForm.llmModel) {
-        var r2 = await this.callTool('system.config', { key: 'llm.model', value: this.settingsForm.llmModel });
-        if (r2._err) errors.push('llm.model: ' + r2._err);
-      }
+      // Always send these (empty string = reset to default)
+      var r = await this.callTool('system.config', { key: 'llm.endpoint', value: this.settingsForm.llmEndpoint });
+      if (r._err) errors.push('llm.endpoint: ' + r._err);
+      var r2 = await this.callTool('system.config', { key: 'llm.model', value: this.settingsForm.llmModel });
+      if (r2._err) errors.push('llm.model: ' + r2._err);
+      // Only send api_key if non-empty (empty = "don't change", form starts blank for security)
       if (this.settingsForm.llmApiKey) {
         var r3 = await this.callTool('system.config', { key: 'llm.api_key', value: this.settingsForm.llmApiKey });
         if (r3._err) errors.push('llm.api_key: ' + r3._err);
       }
-      if (this.settingsForm.llmUserAgent) {
-        var r4 = await this.callTool('system.config', { key: 'llm.user_agent', value: this.settingsForm.llmUserAgent });
-        if (r4._err) errors.push('llm.user_agent: ' + r4._err);
-      }
+      var r4 = await this.callTool('system.config', { key: 'llm.user_agent', value: this.settingsForm.llmUserAgent });
+      if (r4._err) errors.push('llm.user_agent: ' + r4._err);
 
       this.settingsSaving = false;
 

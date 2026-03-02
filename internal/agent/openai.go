@@ -128,10 +128,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 	}
 	for i, m := range messages {
 		req.Messages[i] = chatMessage{
-			Role:             m.Role,
-			Content:          m.Content,
-			ReasoningContent: m.ReasoningContent,
-			ToolCallID:       m.ToolCallID,
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
 		}
 		for _, tc := range m.ToolCalls {
 			req.Messages[i].ToolCalls = append(req.Messages[i].ToolCalls, chatToolCall{

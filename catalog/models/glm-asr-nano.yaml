@@ -1,0 +1,24 @@
+kind: model_asset
+metadata:
+  name: glm-asr-nano
+  type: asr
+  family: glm
+  parameter_count: "0.3B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: local_path
+      path: ""
+variants:
+  # --- CPU-only 容器 (任何硬件) ---
+  # GLM-ASR-Nano, 轻量级语音识别模型
+  # 使用 glm-asr-fastapi 引擎 (OpenAI 兼容 /v1/audio/transcriptions)
+  - name: glm-asr-nano-cpu-fastapi
+    hardware:
+      gpu_arch: "*"
+    engine: glm-asr-fastapi
+    format: safetensors
+    expected_performance:
+      vram_mib: 0
+      notes: "CPU-only ASR, lightweight transcription model"

@@ -621,6 +621,63 @@ func TestScanImageWithRegistry(t *testing.T) {
 	}
 }
 
+func TestScanCustomFastAPIContainers(t *testing.T) {
+	// Verify pattern matching for custom FastAPI TTS/ASR containers on GB10.
+	// qwen-tts-fastapi patterns must match "qwen3-tts" (with digit 3) in image names.
+	// glm-asr-fastapi patterns must match "glm-asr" and "asr-nano" in image names.
+	images := crictlImageList{
+		Images: []crictlImage{
+			{
+				ID:       "sha256:tts1",
+				RepoTags: []string{"qujing-qwen3-tts-real:latest"},
+				Size:     "2500000000",
+			},
+			{
+				ID:       "sha256:tts2",
+				RepoTags: []string{"qujing-qwen3-tts:latest"},
+				Size:     "2400000000",
+			},
+			{
+				ID:       "sha256:asr1",
+				RepoTags: []string{"qujing-glm-asr-nano:latest"},
+				Size:     "3000000000",
+			},
+		},
+	}
+	imageJSON, _ := json.Marshal(images)
+
+	runner := &mockRunner{
+		responses: map[string]mockResponse{
+			"crictl images -o json": {output: imageJSON},
+		},
+	}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		AssetPatterns: map[string][]string{
+			"qwen-tts-fastapi": {"^qwen-tts-fastapi$", "qwen3-tts", "qwen-tts", "tts-fastapi"},
+			"glm-asr-fastapi":  {"^glm-asr-fastapi$", "glm-asr", "asr-nano"},
+		},
+		Runner: runner,
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 matched engines, got %d", len(results))
+	}
+
+	typeCount := map[string]int{}
+	for _, r := range results {
+		typeCount[r.Type]++
+	}
+	if typeCount["qwen-tts-fastapi"] != 2 {
+		t.Errorf("expected 2 qwen-tts-fastapi matches, got %d", typeCount["qwen-tts-fastapi"])
+	}
+	if typeCount["glm-asr-fastapi"] != 1 {
+		t.Errorf("expected 1 glm-asr-fastapi match, got %d", typeCount["glm-asr-fastapi"])
+	}
+}
+
 func TestPullImageNameConstruction(t *testing.T) {
 	// Verify the image name is constructed properly from registry + image basename
 	tests := []struct {

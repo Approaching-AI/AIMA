@@ -325,8 +325,8 @@ func TestAgent_SystemPrompt(t *testing.T) {
 	if !contains(sysPrompt, "agent.guide") {
 		t.Error("system prompt missing agent.guide pointer")
 	}
-	if !contains(sysPrompt, "## Tool Groups") {
-		t.Error("system prompt missing tool groups section")
+	if !contains(sysPrompt, "## When to Use Which Tool") {
+		t.Error("system prompt missing tool decision boundaries section")
 	}
 }
 

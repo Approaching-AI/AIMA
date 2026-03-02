@@ -185,6 +185,8 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 **Model statuses**: `registered` → `downloading` → `imported` | `failed`
 
+> **Tip**: `model.list` = what's in the local database (downloaded/imported). `model.scan` = rescan the filesystem for new files. `knowledge.list_models` = browse the YAML catalog of all supported models. If the user asks "what models can I run", start with `model.list`; if they ask "what models does AIMA support", use `knowledge.list_models`.
+
 ### engine — Engine Management
 
 | Tool | Parameters | Returns | Description |
@@ -198,6 +200,8 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 **Engine runtime types**: `container` (K3S/Docker image) | `native` (local binary)
 
+> **Tip**: `engine.list` = engines registered locally. `engine.scan` = rescan for new container images/binaries. `knowledge.list_engines` = browse the YAML catalog of all supported engines. Same pattern as the model tools above.
+
 ### deploy — Deployment Lifecycle
 
 | Tool | Parameters | Returns | Description |
@@ -209,6 +213,8 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 | `deploy.status` | `name` | pod/process status (phase/ready/restarts/exit_code) | Check deployment health. Accepts pod name or model name |
 | `deploy.list` | (none) | all deployments | List all active deployments |
 | `deploy.logs` | `name`, `tail_lines?` | log text | Get deployment logs. Accepts pod name or model name |
+
+> **Tip**: `deploy.apply` = actually deploy (requires approval). `deploy.dry_run` = preview config and fitness report without executing. Always use `deploy.dry_run` first if you want to check compatibility before deploying.
 
 **Deployment flow**:
 ```
@@ -243,6 +249,8 @@ deploy.apply("qwen3-0.6b")
 | `knowledge.list_engines` | (none) | engine assets | List all engine definitions |
 | `knowledge.list_models` | (none) | model assets | List all model definitions |
 
+> **Tip**: `knowledge.search` = search Agent exploration notes (free-text with hardware/model/engine filter). `knowledge.search_configs` = query tested configurations with performance data (SQL multi-dimensional). Use `search` for "what has the agent tried before?", use `search_configs` for "what config gave the best throughput?".
+
 ### knowledge (advanced) — Analytics & Comparison
 
 | Tool | Parameters | Returns | Description |
@@ -273,6 +281,8 @@ deploy.apply("qwen3-0.6b")
 | `system.config` (set) | `key`, `value` | success | Write persistent config (`api_key` hot-reloads auth; `llm.*` hot-swaps Agent LLM client) |
 | `catalog.override` | `type`, `name`, `content` | success | Override YAML asset at runtime |
 
+> **Tip**: `system.status` = combined overview of everything (hardware + deployments + models + engines). `hardware.detect` = detailed hardware capability vector only. `hardware.metrics` = real-time GPU utilization and temperature. For a quick "what's going on?" question, use `system.status`. For deployment decisions, use `hardware.detect`. For monitoring GPU load, use `hardware.metrics`.
+
 **Whitelisted commands** for `system.exec`:
 `nvidia-smi`, `df`, `free`, `uname`, `kubectl get/describe/logs/top/version`
 
@@ -288,6 +298,8 @@ deploy.apply("qwen3-0.6b")
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
 | `discovery.lan` | `timeout?` | found services | Scan LAN for AIMA instances via mDNS |
+
+> **Tip**: `discovery.lan` = low-level mDNS scan returning raw service records. `fleet.list_devices` = higher-level tool that auto-discovers via mDNS and returns structured device list. Prefer `fleet.list_devices` for most use cases.
 
 ### fleet — Multi-Device Management
 

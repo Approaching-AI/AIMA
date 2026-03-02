@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>AIMA</title>
+<style>
+/* ===== CSS Variables ===== */
+:root {
+  --bg-deep: #080b12;
+  --bg-panel: rgba(13, 17, 23, 0.85);
+  --bg-input: rgba(13, 17, 23, 0.95);
+  --cyan: #38bdf8;
+  --cyan-bright: #22d3ee;
+  --cyan-dim: rgba(56, 189, 248, 0.3);
+  --cyan-glow: rgba(56, 189, 248, 0.08);
+  --green: #4ade80;
+  --orange: #fb923c;
+  --red: #f87171;
+  --text: #e6edf3;
+  --text-dim: rgba(230, 237, 243, 0.5);
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --panel-border: 1px solid var(--cyan-dim);
+  --panel-shadow: 0 0 15px var(--cyan-glow), inset 0 1px 0 rgba(56, 189, 248, 0.1);
+  --panel-radius: 4px;
+}
+
+/* ===== Reset ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-deep);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ===== Layout ===== */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Top bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: var(--panel-border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  min-height: 44px;
+}
+.topbar-logo {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 2px;
+}
+.topbar-logo span { color: var(--cyan-bright); }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.status-text { font-size: 12px; color: var(--text-dim); }
+.btn-icon {
+  background: none;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan);
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.btn-icon:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan-glow);
+}
+
+/* Main content area */
+.main {
+  display: grid;
+  grid-template-columns: 220px 1fr 260px;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* Side panels */
+.sidebar-left, .sidebar-right {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-left { border-right: var(--panel-border); }
+.sidebar-right { border-left: var(--panel-border); }
+
+/* Panel card */
+.panel {
+  background: var(--bg-panel);
+  border: var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  padding: 10px;
+  backdrop-filter: blur(8px);
+}
+.panel-title {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(56, 189, 248, 0.8);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Gauge bars */
+.gauge { margin-bottom: 6px; }
+.gauge-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+.gauge-bar {
+  height: 6px;
+  background: rgba(56, 189, 248, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.gauge-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan-bright), var(--cyan));
+  border-radius: 3px;
+  transition: width 0.8s ease;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+.gauge-fill.warn { background: linear-gradient(90deg, var(--orange), #f59e0b); box-shadow: 0 0 8px rgba(251,146,60,0.4); }
+.gauge-fill.crit { background: linear-gradient(90deg, var(--red), #ef4444); box-shadow: 0 0 8px rgba(248,113,113,0.4); }
+
+/* List items in panels */
+.panel-list { list-style: none; }
+.panel-list li {
+  padding: 4px 0;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+}
+.panel-list li:last-child { border-bottom: none; }
+.panel-list .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-green { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.dot-orange { background: var(--orange); box-shadow: 0 0 4px var(--orange); }
+.dot-red { background: var(--red); box-shadow: 0 0 4px var(--red); }
+.dot-dim { background: rgba(230,237,243,0.3); }
+.panel-list .item-detail {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+/* Fleet device card */
+.fleet-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+  font-size: 12px;
+}
+.fleet-device:last-child { border-bottom: none; }
+.fleet-device .name { font-family: var(--font-mono); }
+.fleet-device .meta { font-size: 10px; color: var(--text-dim); }
+
+/* ===== Center: Agent Chat ===== */
+.center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Agent header */
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: var(--panel-border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+.agent-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+.agent-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cyan);
+}
+.agent-mode {
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Chat messages */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  background: #0a0a0a;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.chat-messages::-webkit-scrollbar { width: 6px; }
+.chat-messages::-webkit-scrollbar-track { background: transparent; }
+.chat-messages::-webkit-scrollbar-thumb { background: rgba(56,189,248,0.2); border-radius: 3px; }
+
+.msg { margin-bottom: 12px; white-space: pre-wrap; word-break: break-word; }
+.msg-user .msg-prefix { color: var(--cyan-bright); }
+.msg-user .msg-text { color: var(--cyan-bright); }
+.msg-ai .msg-prefix { color: var(--green); }
+.msg-ai .msg-text { color: var(--text); }
+.msg-error .msg-text { color: var(--red); }
+.msg-system .msg-text { color: var(--text-dim); font-style: italic; }
+
+/* Thinking indicator */
+.thinking {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  animation: pulse 1.5s ease-in-out infinite;
+  margin-bottom: 12px;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+/* Chat input */
+.chat-input-wrap {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: var(--panel-border);
+  background: var(--bg-input);
+  flex-shrink: 0;
+  gap: 8px;
+}
+.chat-prompt {
+  color: var(--cyan-bright);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
+  padding: 6px 0;
+}
+.chat-input::placeholder { color: var(--text-dim); }
+.chat-send {
+  background: none;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.2s, background 0.2s;
+}
+.chat-send:hover { border-color: var(--cyan); background: rgba(56,189,248,0.08); }
+.chat-send:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ===== Bottom bar ===== */
+.bottombar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 6px 16px;
+  border-top: var(--panel-border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  font-size: 11px;
+  min-height: 32px;
+}
+.bottom-gauge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 300px;
+}
+.bottom-gauge-label { color: var(--text-dim); font-family: var(--font-mono); white-space: nowrap; }
+.bottom-gauge-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(56, 189, 248, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.bottom-gauge-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.8s ease;
+}
+.bottom-temp { color: var(--text-dim); font-family: var(--font-mono); white-space: nowrap; }
+
+/* ===== API Key Modal ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--bg-panel);
+  border: var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 0 30px var(--cyan-glow);
+  padding: 24px;
+  width: 340px;
+}
+.modal h3 {
+  font-size: 14px;
+  color: var(--cyan);
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+}
+.modal input {
+  width: 100%;
+  background: var(--bg-deep);
+  border: var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  margin-bottom: 12px;
+}
+.modal input:focus { border-color: var(--cyan); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.modal-btn {
+  background: none;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.modal-btn:hover { background: rgba(56,189,248,0.1); }
+.modal-btn.primary { background: rgba(56,189,248,0.15); border-color: var(--cyan); }
+
+/* ===== Mobile ===== */
+.mobile-tabs {
+  display: none;
+  border-top: var(--panel-border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+.mobile-tabs button {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 8px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.mobile-tabs button.active { color: var(--cyan); border-top: 2px solid var(--cyan); }
+
+/* Mobile panel overlay */
+.mobile-panel {
+  display: none;
+  position: fixed;
+  bottom: 40px;
+  left: 0;
+  right: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  background: var(--bg-deep);
+  border-top: var(--panel-border);
+  padding: 8px;
+  z-index: 50;
+}
+.mobile-panel.show { display: block; }
+
+@media (max-width: 768px) {
+  .main {
+    grid-template-columns: 1fr;
+  }
+  .sidebar-left, .sidebar-right { display: none; }
+  .bottombar { display: none; }
+  .mobile-tabs { display: flex; }
+
+  /* Compact metrics bar for mobile */
+  .mobile-metrics {
+    display: flex;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: var(--panel-border);
+    background: var(--bg-panel);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .mobile-metrics .mm-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  .mobile-metrics .mm-bar {
+    width: 48px;
+    height: 4px;
+    background: rgba(56,189,248,0.12);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .mobile-metrics .mm-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--cyan-bright), var(--cyan));
+    transition: width 0.8s;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-metrics { display: none !important; }
+}
+
+/* Empty state */
+.empty { color: var(--text-dim); font-size: 11px; font-style: italic; }
+</style>
+</head>
+<body>
+<div id="app" x-data="aimaApp()" x-init="init()" @keydown.window="handleGlobalKey($event)">
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-logo"><span>&#x25C8;</span> AIMA</div>
+    <div class="topbar-right">
+      <span class="status-text">
+        <span class="status-dot" :class="systemOnline ? 'online' : 'offline'"></span>
+        <span x-text="systemOnline ? 'System Online' : 'Connecting...'"></span>
+      </span>
+      <button class="btn-icon" @click="showKeyModal = true" title="API Key">&#x2699;</button>
+    </div>
+  </div>
+
+  <!-- Mobile Metrics -->
+  <div class="mobile-metrics">
+    <template x-if="hw.gpu">
+      <div class="mm-item">
+        GPU <span x-text="hw.gpu.util + '%'"></span>
+        <div class="mm-bar"><div class="mm-fill" :style="'width:' + hw.gpu.util + '%'"></div></div>
+        <span x-text="hw.gpu.temp ? hw.gpu.temp + '\u00B0C' : ''"></span>
+      </div>
+    </template>
+    <div class="mm-item">
+      MEM <span x-text="hw.mem.pct + '%'"></span>
+      <div class="mm-bar"><div class="mm-fill" :style="'width:' + hw.mem.pct + '%'"></div></div>
+    </div>
+    <div class="mm-item">
+      CPU <span x-text="hw.cpu.pct + '%'"></span>
+      <div class="mm-bar"><div class="mm-fill" :style="'width:' + hw.cpu.pct + '%'"></div></div>
+    </div>
+  </div>
+
+  <!-- Main 3-Column Layout -->
+  <div class="main">
+
+    <!-- Left Sidebar: Hardware + Engines + Models -->
+    <div class="sidebar-left">
+
+      <!-- Hardware Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25A0; Hardware</div>
+        <template x-if="hw.gpu">
+          <div>
+            <div class="gauge">
+              <div class="gauge-label">
+                <span x-text="'GPU ' + hw.gpu.name"></span>
+                <span x-text="hw.gpu.util + '%'"></span>
+              </div>
+              <div class="gauge-bar">
+                <div class="gauge-fill" :class="hw.gpu.util > 90 ? 'crit' : hw.gpu.util > 70 ? 'warn' : ''" :style="'width:' + hw.gpu.util + '%'"></div>
+              </div>
+            </div>
+            <div class="gauge">
+              <div class="gauge-label">
+                <span>VRAM</span>
+                <span x-text="hw.gpu.memUsed + '/' + hw.gpu.memTotal"></span>
+              </div>
+              <div class="gauge-bar">
+                <div class="gauge-fill" :class="hw.gpu.memPct > 90 ? 'crit' : hw.gpu.memPct > 70 ? 'warn' : ''" :style="'width:' + hw.gpu.memPct + '%'"></div>
+              </div>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px" x-show="hw.gpu.temp">
+              <span x-text="hw.gpu.temp + '\u00B0C'"></span>
+              <span x-show="hw.gpu.power" x-text="' / ' + hw.gpu.power + 'W'"></span>
+            </div>
+          </div>
+        </template>
+        <template x-if="!hw.gpu">
+          <div class="empty">No discrete GPU</div>
+        </template>
+        <div class="gauge" style="margin-top:8px">
+          <div class="gauge-label"><span>CPU</span><span x-text="hw.cpu.pct + '%'"></span></div>
+          <div class="gauge-bar">
+            <div class="gauge-fill" :class="hw.cpu.pct > 90 ? 'crit' : hw.cpu.pct > 70 ? 'warn' : ''" :style="'width:' + hw.cpu.pct + '%'"></div>
+          </div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">
+            <span>RAM</span>
+            <span x-text="hw.mem.used + '/' + hw.mem.total"></span>
+          </div>
+          <div class="gauge-bar">
+            <div class="gauge-fill" :class="hw.mem.pct > 90 ? 'crit' : hw.mem.pct > 70 ? 'warn' : ''" :style="'width:' + hw.mem.pct + '%'"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Engines Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25B6; Engines</div>
+        <template x-if="engines.length === 0">
+          <div class="empty">No engines detected</div>
+        </template>
+        <ul class="panel-list">
+          <template x-for="e in engines" :key="e.id">
+            <li>
+              <span class="dot" :class="e.available ? 'dot-green' : 'dot-dim'"></span>
+              <span x-text="e.type"></span>
+              <span class="item-detail" x-text="e.variant || ''"></span>
+            </li>
+          </template>
+        </ul>
+      </div>
+
+      <!-- Models Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25C6; Models</div>
+        <template x-if="models.length === 0">
+          <div class="empty">No models found</div>
+        </template>
+        <ul class="panel-list">
+          <template x-for="m in models" :key="m.name">
+            <li>
+              <span class="dot dot-green"></span>
+              <span x-text="m.name" style="flex:1;overflow:hidden;text-overflow:ellipsis"></span>
+              <span class="item-detail" x-text="m.size || ''"></span>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Center: Agent Chat -->
+    <div class="center">
+      <div class="agent-header">
+        <img class="agent-avatar" src="avatar.svg" alt="AIMA">
+        <div>
+          <div class="agent-name">AIMA Agent</div>
+          <div class="agent-mode">
+            <span class="status-dot" :class="agentAvailable ? 'online' : 'offline'" style="width:6px;height:6px"></span>
+            <span x-text="agentAvailable ? 'L3a Agent Ready' : 'Direct Mode'"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-messages" x-ref="chatMessages">
+        <template x-for="(msg, i) in messages" :key="i">
+          <div class="msg" :class="'msg-' + msg.role">
+            <template x-if="msg.role === 'user'">
+              <div><span class="msg-prefix">&gt; </span><span class="msg-text" x-text="msg.text"></span></div>
+            </template>
+            <template x-if="msg.role === 'ai'">
+              <div><span class="msg-prefix">AIMA </span><span class="msg-text" x-text="msg.text"></span></div>
+            </template>
+            <template x-if="msg.role === 'error'">
+              <div><span class="msg-text" x-text="msg.text"></span></div>
+            </template>
+            <template x-if="msg.role === 'system'">
+              <div><span class="msg-text" x-text="msg.text"></span></div>
+            </template>
+          </div>
+        </template>
+        <div class="thinking" x-show="thinking">&middot;&middot;&middot;</div>
+      </div>
+
+      <div class="chat-input-wrap">
+        <span class="chat-prompt">&gt;</span>
+        <input class="chat-input"
+          x-ref="chatInput"
+          x-model="input"
+          @keydown.enter="send()"
+          placeholder="Ask AIMA or run a command..."
+          :disabled="thinking"
+          autocomplete="off"
+          spellcheck="false">
+        <button class="chat-send" @click="send()" :disabled="thinking || !input.trim()">Send</button>
+      </div>
+    </div>
+
+    <!-- Right Sidebar: Fleet + Deployments -->
+    <div class="sidebar-right">
+
+      <!-- Fleet Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25C9; Fleet</div>
+        <template x-if="fleet.length === 0">
+          <div class="empty">No devices discovered</div>
+        </template>
+        <template x-for="d in fleet" :key="d.id">
+          <div class="fleet-device">
+            <span class="status-dot" :class="d.online ? 'online' : 'offline'" style="width:6px;height:6px"></span>
+            <div>
+              <div class="name" x-text="d.name || d.id"></div>
+              <div class="meta" x-text="d.meta || ''"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Deployments Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25B2; Deployments</div>
+        <template x-if="deployments.length === 0">
+          <div class="empty">No active deployments</div>
+        </template>
+        <ul class="panel-list">
+          <template x-for="dep in deployments" :key="dep.name">
+            <li>
+              <span class="dot" :class="dep.phase === 'running' ? 'dot-green' : dep.phase === 'pending' ? 'dot-orange' : 'dot-red'"></span>
+              <div style="flex:1;overflow:hidden">
+                <div x-text="dep.name" style="text-overflow:ellipsis;overflow:hidden"></div>
+                <div style="font-size:10px;color:var(--text-dim)" x-text="dep.detail"></div>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Bar (desktop) -->
+  <div class="bottombar">
+    <template x-if="hw.gpu">
+      <div class="bottom-gauge">
+        <span class="bottom-gauge-label">GPU</span>
+        <div class="bottom-gauge-bar">
+          <div class="bottom-gauge-fill" :style="'width:' + hw.gpu.util + '%;background:linear-gradient(90deg,#22d3ee,#38bdf8);box-shadow:0 0 6px rgba(56,189,248,0.3)'"></div>
+        </div>
+        <span class="bottom-gauge-label" x-text="hw.gpu.util + '%'"></span>
+      </div>
+    </template>
+    <div class="bottom-gauge">
+      <span class="bottom-gauge-label">MEM</span>
+      <div class="bottom-gauge-bar">
+        <div class="bottom-gauge-fill" :style="'width:' + hw.mem.pct + '%;background:linear-gradient(90deg,#22d3ee,#38bdf8);box-shadow:0 0 6px rgba(56,189,248,0.3)'"></div>
+      </div>
+      <span class="bottom-gauge-label" x-text="hw.mem.used + '/' + hw.mem.total"></span>
+    </div>
+    <template x-if="hw.gpu && hw.gpu.temp">
+      <span class="bottom-temp" x-text="hw.gpu.temp + '\u00B0C'"></span>
+    </template>
+    <div class="bottom-gauge">
+      <span class="bottom-gauge-label">CPU</span>
+      <div class="bottom-gauge-bar">
+        <div class="bottom-gauge-fill" :style="'width:' + hw.cpu.pct + '%;background:linear-gradient(90deg,#22d3ee,#38bdf8);box-shadow:0 0 6px rgba(56,189,248,0.3)'"></div>
+      </div>
+      <span class="bottom-gauge-label" x-text="hw.cpu.pct + '%'"></span>
+    </div>
+  </div>
+
+  <!-- Mobile Tabs -->
+  <div class="mobile-tabs">
+    <button :class="mobileTab === 'chat' ? 'active' : ''" @click="setMobileTab('chat')">Agent</button>
+    <button :class="mobileTab === 'dashboard' ? 'active' : ''" @click="setMobileTab('dashboard')">Dashboard</button>
+    <button :class="mobileTab === 'fleet' ? 'active' : ''" @click="setMobileTab('fleet')">Fleet</button>
+  </div>
+
+  <!-- Mobile Panel Overlay -->
+  <div class="mobile-panel" :class="mobileTab !== 'chat' ? 'show' : ''" x-show="mobileTab !== 'chat'">
+    <template x-if="mobileTab === 'dashboard'">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="panel">
+          <div class="panel-title">&#x25A0; Hardware</div>
+          <template x-if="hw.gpu">
+            <div>
+              <div class="gauge"><div class="gauge-label"><span x-text="'GPU ' + hw.gpu.name"></span><span x-text="hw.gpu.util + '%'"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.gpu.util + '%'"></div></div></div>
+              <div class="gauge"><div class="gauge-label"><span>VRAM</span><span x-text="hw.gpu.memUsed + '/' + hw.gpu.memTotal"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.gpu.memPct + '%'"></div></div></div>
+            </div>
+          </template>
+          <div class="gauge"><div class="gauge-label"><span>CPU</span><span x-text="hw.cpu.pct + '%'"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.cpu.pct + '%'"></div></div></div>
+          <div class="gauge"><div class="gauge-label"><span>RAM</span><span x-text="hw.mem.used + '/' + hw.mem.total"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.mem.pct + '%'"></div></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">&#x25B6; Engines</div>
+          <ul class="panel-list"><template x-for="e in engines" :key="e.id"><li><span class="dot" :class="e.available ? 'dot-green' : 'dot-dim'"></span><span x-text="e.type"></span></li></template></ul>
+        </div>
+        <div class="panel">
+          <div class="panel-title">&#x25C6; Models</div>
+          <ul class="panel-list"><template x-for="m in models" :key="m.name"><li><span class="dot dot-green"></span><span x-text="m.name"></span></li></template></ul>
+        </div>
+      </div>
+    </template>
+    <template x-if="mobileTab === 'fleet'">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="panel">
+          <div class="panel-title">&#x25C9; Fleet</div>
+          <template x-for="d in fleet" :key="d.id"><div class="fleet-device"><span class="status-dot" :class="d.online ? 'online' : 'offline'" style="width:6px;height:6px"></span><div><div class="name" x-text="d.name || d.id"></div><div class="meta" x-text="d.meta || ''"></div></div></div></template>
+        </div>
+        <div class="panel">
+          <div class="panel-title">&#x25B2; Deployments</div>
+          <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name"><li><span class="dot" :class="dep.phase === 'running' ? 'dot-green' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase"></span></li></template></ul>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- API Key Modal -->
+  <template x-if="showKeyModal">
+    <div class="modal-overlay" @click.self="showKeyModal = false">
+      <div class="modal">
+        <h3>API Key</h3>
+        <input type="password" x-model="apiKeyInput" placeholder="Enter API key (optional)" @keydown.enter="saveKey()">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">Stored in browser localStorage on this device only.</div>
+        <div class="modal-actions">
+          <button class="modal-btn" @click="clearKey()">Clear</button>
+          <button class="modal-btn primary" @click="saveKey()">Save</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+</div>
+
+<!-- Alpine.js: local file for offline-first (INV-8) -->
+<script src="alpine.min.js" defer></script>
+
+<script>
+function aimaApp() {
+  return {
+    // State
+    systemOnline: false,
+    agentAvailable: false,
+    showKeyModal: false,
+    apiKey: localStorage.getItem('aima_api_key') || '',
+    apiKeyInput: localStorage.getItem('aima_api_key') || '',
+    input: '',
+    thinking: false,
+    messages: [
+      { role: 'system', text: 'Welcome to AIMA. Type a command or ask a question.' }
+    ],
+    sessionId: '',
+    mobileTab: 'chat',
+
+    // Dashboard data
+    hw: {
+      gpu: null,
+      cpu: { pct: 0 },
+      mem: { pct: 0, used: '0', total: '0' }
+    },
+    engines: [],
+    models: [],
+    deployments: [],
+    fleet: [],
+
+    // Polling intervals
+    _timers: [],
+
+    init() {
+      this.pollSystemStatus();
+      this.pollEngines();
+      this.pollModels();
+      this.pollDeployments();
+      this.pollFleet();
+      this.pollAgentStatus();
+
+      this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
+      this._timers.push(setInterval(() => this.pollEngines(), 30000));
+      this._timers.push(setInterval(() => this.pollModels(), 30000));
+      this._timers.push(setInterval(() => this.pollDeployments(), 10000));
+      this._timers.push(setInterval(() => this.pollFleet(), 10000));
+      this._timers.push(setInterval(() => this.pollAgentStatus(), 30000));
+
+      this.$nextTick(() => {
+        if (this.$refs.chatInput) this.$refs.chatInput.focus();
+      });
+    },
+
+    destroy() {
+      this._timers.forEach(t => clearInterval(t));
+      this._timers = [];
+    },
+
+    // ── API helpers ──
+
+    // callToolRaw: calls POST /api/v1/tools/{name}, returns the raw ToolResult envelope.
+    async callToolRaw(name, params) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+      try {
+        const resp = await fetch('/api/v1/tools/' + encodeURIComponent(name), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(params || {})
+        });
+        if (resp.status === 401) {
+          this.systemOnline = false;
+          this.showKeyModal = true;
+          return { _err: 'unauthorized' };
+        }
+        return await resp.json();
+      } catch (e) {
+        this.systemOnline = false;
+        return { _err: e.message };
+      }
+    },
+
+    // callTool: calls an MCP tool and unwraps the ToolResult envelope.
+    // MCP tools return: {"content":[{"type":"text","text":"...json..."}],"isError":false}
+    // This function extracts and parses the inner JSON text.
+    async callTool(name, params) {
+      const raw = await this.callToolRaw(name, params);
+      if (raw._err) return { _err: raw._err };
+      // Unwrap MCP ToolResult envelope
+      if (raw.content && Array.isArray(raw.content) && raw.content.length > 0) {
+        const text = raw.content[0].text || '';
+        if (raw.isError) return { _err: text };
+        try { return JSON.parse(text); } catch { return { _raw: text }; }
+      }
+      // Fallback: already unwrapped or unexpected format
+      return raw;
+    },
+
+    // ── Polling functions ──
+
+    // system.status returns:
+    //   hardware: { gpu?: GPUInfo, cpu: CPUInfo, ram: RAMInfo, ... }
+    //   metrics:  { gpu?: GPUMetrics, cpu: CPUMetrics, ram: RAMMetrics }
+    //   deployments: [DeploymentStatus, ...]
+    async pollSystemStatus() {
+      const data = await this.callTool('system.status');
+      if (data._err) return;
+      this.systemOnline = true;
+
+      const hw = data.hardware;
+      const met = data.metrics;
+
+      // GPU: static info from hardware.gpu, dynamic from metrics.gpu
+      if (hw && hw.gpu) {
+        const g = hw.gpu;
+        const gm = (met && met.gpu) || {};
+        const memTotal = gm.memory_total_mib || g.vram_mib || 0;
+        const memUsed = gm.memory_used_mib || 0;
+        const memPct = memTotal > 0 ? Math.round(memUsed / memTotal * 100) : 0;
+        this.hw.gpu = {
+          name: g.name || 'GPU',
+          util: gm.utilization_percent || 0,
+          memTotal: this.fmtMiB(memTotal),
+          memUsed: this.fmtMiB(memUsed),
+          memPct: memPct,
+          temp: gm.temperature_celsius || g.temperature_celsius || 0,
+          power: gm.power_draw_watts || g.power_draw_watts || 0
+        };
+      } else {
+        this.hw.gpu = null;
+      }
+
+      // CPU: static from hardware.cpu, dynamic from metrics.cpu
+      if (met && met.cpu) {
+        this.hw.cpu.pct = Math.round(met.cpu.usage_percent || 0);
+      }
+
+      // RAM: static from hardware.ram, dynamic from metrics.ram
+      if (met && met.ram) {
+        const mt = met.ram.total_mib || 0;
+        const mu = met.ram.used_mib || 0;
+        this.hw.mem = {
+          pct: mt > 0 ? Math.round(mu / mt * 100) : 0,
+          used: this.fmtMiB(mu),
+          total: this.fmtMiB(mt)
+        };
+      } else if (hw && hw.ram) {
+        const mt = hw.ram.total_mib || 0;
+        const avail = hw.ram.available_mib || 0;
+        const mu = mt - avail;
+        this.hw.mem = {
+          pct: mt > 0 ? Math.round(mu / mt * 100) : 0,
+          used: this.fmtMiB(mu),
+          total: this.fmtMiB(mt)
+        };
+      }
+    },
+
+    // engine.list returns: [{ id, type, image, tag, available, ... }, ...]
+    async pollEngines() {
+      const data = await this.callTool('engine.list');
+      if (data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.engines = list.map(e => ({
+        id: e.id || (e.type + (e.tag || '')),
+        type: e.type || 'unknown',
+        variant: e.tag || '',
+        available: e.available !== false
+      }));
+    },
+
+    // model.list returns: [{ name, type, size_bytes, format, ... }, ...]
+    async pollModels() {
+      const data = await this.callTool('model.list');
+      if (data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.models = list.map(m => ({
+        name: m.name || 'unknown',
+        size: this.fmtModelSize(m.size_bytes || 0, m.format || '')
+      }));
+    },
+
+    // deploy.list returns: [{ name, phase, ready, address, runtime, ... }, ...]
+    async pollDeployments() {
+      const data = await this.callTool('deploy.list');
+      if (data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.deployments = list.map(d => ({
+        name: d.name || 'unknown',
+        phase: d.phase || 'unknown',
+        detail: [d.runtime, d.address].filter(Boolean).join(' ')
+      }));
+    },
+
+    // fleet.list_devices returns: [{ id, name, addr_v4, port, models, online, self }, ...]
+    async pollFleet() {
+      const data = await this.callTool('fleet.list_devices');
+      if (data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.fleet = list.map(d => ({
+        id: d.id || d.name || 'unknown',
+        name: d.name || d.id || 'unknown',
+        online: d.online !== false,
+        meta: (d.models && d.models.length > 0) ? d.models.join(', ') : (d.addr_v4 || '')
+      }));
+    },
+
+    // agent.status returns: { zeroclaw_available, zeroclaw_healthy }
+    // L3a Go Agent availability depends on LLM endpoint — heuristic: if system.status succeeds,
+    // try agent.ask with empty query and see if it fails with "no LLM" vs succeeds.
+    // Simpler approach: always show Direct Mode unless we've confirmed agent works.
+    async pollAgentStatus() {
+      const data = await this.callTool('agent.status');
+      if (data._err) {
+        this.agentAvailable = false;
+        return;
+      }
+      // agent.status only reports zeroclaw. L3a availability requires an LLM backend.
+      // We'll optimistically show "Agent Ready" if zeroclaw is available,
+      // or if we've previously had a successful agent.ask call.
+      this.agentAvailable = data.zeroclaw_available === true || this._agentConfirmed === true;
+    },
+    _agentConfirmed: false,
+
+    // ── Chat ──
+
+    async send() {
+      const text = this.input.trim();
+      if (!text || this.thinking) return;
+      this.input = '';
+      this.messages.push({ role: 'user', text });
+      this.thinking = true;
+      this.scrollChat();
+
+      // Always try agent.ask first — it will fail gracefully if no LLM
+      await this.sendAgent(text);
+
+      this.thinking = false;
+      this.scrollChat();
+      this.$nextTick(() => { if (this.$refs.chatInput) this.$refs.chatInput.focus(); });
+    },
+
+    async sendAgent(text) {
+      const params = { query: text };
+      if (this.sessionId) params.session_id = this.sessionId;
+      const data = await this.callTool('agent.ask', params);
+
+      if (data._err) {
+        // Agent not available — fall back to direct tool mode
+        this._agentConfirmed = false;
+        this.agentAvailable = false;
+        await this.sendDirect(text);
+        return;
+      }
+
+      this._agentConfirmed = true;
+      this.agentAvailable = true;
+      // agent.ask returns: { result: "...", session_id: "..." }
+      if (data.session_id) this.sessionId = data.session_id;
+      const result = data.result || data._raw || JSON.stringify(data);
+      this.messages.push({ role: 'ai', text: result });
+    },
+
+    async sendDirect(text) {
+      const toolMap = {
+        'status': 'system.status',
+        'hardware': 'hardware.detect',
+        'detect': 'hardware.detect',
+        'metrics': 'hardware.metrics',
+        'models': 'model.list',
+        'engines': 'engine.list',
+        'deployments': 'deploy.list',
+        'deploys': 'deploy.list',
+        'fleet': 'fleet.list_devices',
+        'devices': 'fleet.list_devices'
+      };
+
+      const lower = text.toLowerCase().trim();
+
+      if (lower === 'help' || lower === '?') {
+        this.messages.push({ role: 'ai', text: 'Direct Mode Commands:\n  status      - System status\n  hardware    - Hardware detection\n  metrics     - Hardware metrics\n  models      - List models\n  engines     - List engines\n  deployments - List deployments\n  fleet       - List fleet devices' });
+        return;
+      }
+
+      if (toolMap[lower]) {
+        const data = await this.callTool(toolMap[lower]);
+        if (data._err) {
+          this.messages.push({ role: 'error', text: 'Error: ' + data._err });
+        } else {
+          this.messages.push({ role: 'ai', text: JSON.stringify(data, null, 2) });
+        }
+        return;
+      }
+
+      this.messages.push({ role: 'error', text: 'Agent not available. Type "help" for direct commands.' });
+    },
+
+    scrollChat() {
+      this.$nextTick(() => {
+        const el = this.$refs.chatMessages;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    // ── Key modal ──
+
+    saveKey() {
+      this.apiKey = this.apiKeyInput;
+      localStorage.setItem('aima_api_key', this.apiKey);
+      this.showKeyModal = false;
+      this.pollSystemStatus();
+    },
+
+    clearKey() {
+      this.apiKey = '';
+      this.apiKeyInput = '';
+      localStorage.removeItem('aima_api_key');
+      this.showKeyModal = false;
+    },
+
+    // Mobile tab
+    setMobileTab(tab) {
+      this.mobileTab = this.mobileTab === tab ? 'chat' : tab;
+    },
+
+    // Global keyboard shortcut
+    handleGlobalKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        if (this.$refs.chatInput) this.$refs.chatInput.focus();
+      }
+    },
+
+    // ── Helpers ──
+
+    fmtMiB(mib) {
+      if (!mib || mib <= 0) return '0M';
+      if (mib >= 1024) return (mib / 1024).toFixed(1) + 'G';
+      return mib + 'M';
+    },
+
+    fmtModelSize(bytes, format) {
+      if (bytes > 0) {
+        const gb = bytes / (1024 * 1024 * 1024);
+        return gb >= 1 ? gb.toFixed(1) + 'G' : (bytes / (1024 * 1024)).toFixed(0) + 'M';
+      }
+      return format || '';
+    }
+  };
+}
+</script>
+</body>
+</html>

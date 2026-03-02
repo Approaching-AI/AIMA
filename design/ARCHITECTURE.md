@@ -102,7 +102,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
 │   56 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
-│   mDNS 多网卡发现 · 硬件检测 · Native Runtime · 审计+回滚       │
+│   Web UI (嵌入式 SPA) · mDNS 多网卡发现 · 硬件检测 · 审计+回滚  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,6 +123,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 | MCP | [docs/mcp.md](../docs/mcp.md) | MCP 服务器、工具定义 |
 | CLI | [docs/cli.md](../docs/cli.md) | 命令行接口 |
 | Agent | [docs/agent.md](../docs/agent.md) | Go Agent、ZeroClaw Sidecar |
+| Web UI | — | 嵌入式 SPA 仪表盘 (Alpine.js, 同端口 :6188) |
 
 ---
 

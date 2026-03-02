@@ -23,22 +23,22 @@ func (d *DB) RawDB() *sql.DB {
 }
 
 type Model struct {
-	ID               string
-	Name             string
-	Type             string
-	Path             string
-	Format           string
-	SizeBytes        int64
-	DetectedArch     string
-	DetectedParams   string
-	ModelClass       string
-	TotalParams      int64
-	ActiveParams     int64
-	Quantization     string
-	QuantSrc         string
-	Status           string
-	DownloadProgress float64
-	CreatedAt        time.Time
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Type             string    `json:"type"`
+	Path             string    `json:"path"`
+	Format           string    `json:"format"`
+	SizeBytes        int64     `json:"size_bytes"`
+	DetectedArch     string    `json:"detected_arch"`
+	DetectedParams   string    `json:"detected_params"`
+	ModelClass       string    `json:"model_class"`
+	TotalParams      int64     `json:"total_params"`
+	ActiveParams     int64     `json:"active_params"`
+	Quantization     string    `json:"quantization"`
+	QuantSrc         string    `json:"quant_src"`
+	Status           string    `json:"status"`
+	DownloadProgress float64   `json:"download_progress"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type Engine struct {
@@ -55,75 +55,75 @@ type Engine struct {
 }
 
 type KnowledgeNote struct {
-	ID              string
-	Title           string
-	Tags            []string
-	HardwareProfile string
-	Model           string
-	Engine          string
-	Content         string
-	Confidence      string
-	CreatedAt       time.Time
+	ID              string    `json:"id"`
+	Title           string    `json:"title"`
+	Tags            []string  `json:"tags"`
+	HardwareProfile string    `json:"hardware_profile"`
+	Model           string    `json:"model"`
+	Engine          string    `json:"engine"`
+	Content         string    `json:"content"`
+	Confidence      string    `json:"confidence"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type NoteFilter struct {
-	HardwareProfile string
-	Model           string
-	Engine          string
+	HardwareProfile string `json:"hardware_profile"`
+	Model           string `json:"model"`
+	Engine          string `json:"engine"`
 }
 
 type AuditEntry struct {
-	AgentType     string
-	ToolName      string
-	Arguments     string
-	ResultSummary string
+	AgentType     string `json:"agent_type"`
+	ToolName      string `json:"tool_name"`
+	Arguments     string `json:"arguments"`
+	ResultSummary string `json:"result_summary"`
 }
 
 // Configuration represents a tested Hardware×Engine×Model×Config combination.
 type Configuration struct {
-	ID          string
-	HardwareID  string
-	EngineID    string
-	ModelID     string
-	Slot        string
-	Config      string // JSON
-	ConfigHash  string
-	DerivedFrom string
-	Status      string
-	Tags        []string
-	Source      string
-	DeviceID    string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          string    `json:"id"`
+	HardwareID  string    `json:"hardware_id"`
+	EngineID    string    `json:"engine_id"`
+	ModelID     string    `json:"model_id"`
+	Slot        string    `json:"slot"`
+	Config      string    `json:"config"` // JSON
+	ConfigHash  string    `json:"config_hash"`
+	DerivedFrom string    `json:"derived_from"`
+	Status      string    `json:"status"`
+	Tags        []string  `json:"tags"`
+	Source      string    `json:"source"`
+	DeviceID    string    `json:"device_id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // BenchmarkResult stores multi-dimensional performance data for a configuration.
 type BenchmarkResult struct {
-	ID              string
-	ConfigID        string
-	Concurrency     int
-	InputLenBucket  string
-	OutputLenBucket string
-	Modality        string
-	TTFTP50ms       float64
-	TTFTP95ms       float64
-	TTFTP99ms       float64
-	TPOTP50ms       float64
-	TPOTP95ms       float64
-	ThroughputTPS   float64
-	QPS             float64
-	VRAMUsageMiB    int
-	RAMUsageMiB     int
-	PowerDrawWatts  float64
-	GPUUtilPct      float64
-	ErrorRate       float64
-	OOMOccurred     bool
-	Stability       string
-	DurationS       int
-	SampleCount     int
-	TestedAt        time.Time
-	AgentModel      string
-	Notes           string
+	ID              string    `json:"id"`
+	ConfigID        string    `json:"config_id"`
+	Concurrency     int       `json:"concurrency"`
+	InputLenBucket  string    `json:"input_len_bucket"`
+	OutputLenBucket string    `json:"output_len_bucket"`
+	Modality        string    `json:"modality"`
+	TTFTP50ms       float64   `json:"ttft_p50_ms"`
+	TTFTP95ms       float64   `json:"ttft_p95_ms"`
+	TTFTP99ms       float64   `json:"ttft_p99_ms"`
+	TPOTP50ms       float64   `json:"tpot_p50_ms"`
+	TPOTP95ms       float64   `json:"tpot_p95_ms"`
+	ThroughputTPS   float64   `json:"throughput_tps"`
+	QPS             float64   `json:"qps"`
+	VRAMUsageMiB    int       `json:"vram_usage_mib"`
+	RAMUsageMiB     int       `json:"ram_usage_mib"`
+	PowerDrawWatts  float64   `json:"power_draw_watts"`
+	GPUUtilPct      float64   `json:"gpu_util_pct"`
+	ErrorRate       float64   `json:"error_rate"`
+	OOMOccurred     bool      `json:"oom_occurred"`
+	Stability       string    `json:"stability"`
+	DurationS       int       `json:"duration_s"`
+	SampleCount     int       `json:"sample_count"`
+	TestedAt        time.Time `json:"tested_at"`
+	AgentModel      string    `json:"agent_model"`
+	Notes           string    `json:"notes"`
 }
 
 func Open(ctx context.Context, dbPath string) (*DB, error) {

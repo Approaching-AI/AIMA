@@ -14,7 +14,10 @@ import (
 // Local backends (Remote==false) always take priority — remote models with the
 // same name are skipped. localPort is the proxy's own listen port; services
 // on a local IP with the same port are skipped to prevent self-discovery loops.
+// The proxy's API key is forwarded to remote /v1/models queries so that
+// authenticated peers respond correctly.
 func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredService, localPort int) {
+	apiKey := s.APIKey()
 	// Collect local model names (Remote==false)
 	localModels := make(map[string]bool)
 	for name, b := range s.ListBackends() {
@@ -44,7 +47,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			continue
 		}
 
-		models := queryRemoteModels(ctx, addr, svc.Port)
+		models := queryRemoteModels(ctx, addr, svc.Port, apiKey)
 		for _, model := range models {
 			// Local always wins
 			if localModels[model] {
@@ -106,8 +109,9 @@ func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Dura
 }
 
 // queryRemoteModels fetches /v1/models from a remote aima instance.
+// apiKey is sent as Bearer token when non-empty so authenticated peers respond.
 // Returns nil on any error (non-fatal).
-func queryRemoteModels(ctx context.Context, addr string, port int) []string {
+func queryRemoteModels(ctx context.Context, addr string, port int, apiKey string) []string {
 	url := fmt.Sprintf("http://%s:%d/v1/models", addr, port)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -116,6 +120,9 @@ func queryRemoteModels(ctx context.Context, addr string, port int) []string {
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

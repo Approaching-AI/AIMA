@@ -2,7 +2,6 @@ package ui
 
 import (
 	"io/fs"
-	"log"
 	"net/http"
 )
 
@@ -10,7 +9,8 @@ import (
 func RegisterRoutes() func(*http.ServeMux) {
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
-		log.Fatalf("ui: embed sub fs: %v", err) // compile-time guarantee; should never happen
+		// go:embed guarantees "static" exists at compile time; this cannot fail.
+		panic("ui: embed sub fs: " + err.Error())
 	}
 	fileServer := http.FileServer(http.FS(sub))
 	return func(mux *http.ServeMux) {

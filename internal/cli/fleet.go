@@ -1,17 +1,24 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jguan/aima/internal/proxy"
 )
 
 func newFleetCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fleet",
 		Short: "Manage fleet of AIMA devices on the LAN",
-		Long:  "Query and manage AIMA devices discovered on the LAN.\nRequires a running 'aima serve' instance with --mdns --discover.",
+		Long:  "Discover and manage AIMA devices on the LAN via mDNS.\nRuns a quick mDNS scan before each command.",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return fleetDiscover(cmd.Context(), app)
+		},
 	}
 
 	cmd.AddCommand(
@@ -23,13 +30,26 @@ func newFleetCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// fleetDiscover runs a one-shot mDNS scan and populates the fleet registry.
+func fleetDiscover(ctx context.Context, app *App) error {
+	if app.FleetRegistry == nil {
+		return fmt.Errorf("fleet registry not initialized")
+	}
+	services, err := proxy.Discover(ctx, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("mDNS discovery: %w", err)
+	}
+	app.FleetRegistry.Update(services)
+	return nil
+}
+
 func newFleetDevicesCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "devices",
 		Short: "List all discovered AIMA devices",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps == nil || app.ToolDeps.FleetListDevices == nil {
-				return fmt.Errorf("fleet not available (is 'aima serve --mdns --discover' running?)")
+				return fmt.Errorf("fleet not available")
 			}
 			data, err := app.ToolDeps.FleetListDevices(cmd.Context())
 			if err != nil {
@@ -48,7 +68,7 @@ func newFleetInfoCmd(app *App) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps == nil || app.ToolDeps.FleetDeviceInfo == nil {
-				return fmt.Errorf("fleet not available (is 'aima serve --mdns --discover' running?)")
+				return fmt.Errorf("fleet not available")
 			}
 			data, err := app.ToolDeps.FleetDeviceInfo(cmd.Context(), args[0])
 			if err != nil {
@@ -67,7 +87,7 @@ func newFleetToolsCmd(app *App) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps == nil || app.ToolDeps.FleetDeviceTools == nil {
-				return fmt.Errorf("fleet not available (is 'aima serve --mdns --discover' running?)")
+				return fmt.Errorf("fleet not available")
 			}
 			data, err := app.ToolDeps.FleetDeviceTools(cmd.Context(), args[0])
 			if err != nil {
@@ -86,7 +106,7 @@ func newFleetExecCmd(app *App) *cobra.Command {
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps == nil || app.ToolDeps.FleetExecTool == nil {
-				return fmt.Errorf("fleet not available (is 'aima serve --mdns --discover' running?)")
+				return fmt.Errorf("fleet not available")
 			}
 			var params json.RawMessage = json.RawMessage(`{}`)
 			if len(args) >= 3 {

@@ -17,7 +17,7 @@ type ZeroClawClient interface {
 type DispatchOption struct {
 	ForceLocal bool   // --local flag: force L3a
 	ForceDeep  bool   // --deep flag: force L3b
-	SessionID  string // --session flag: continue ZeroClaw session
+	SessionID  string // --session flag: continue L3a or L3b session
 }
 
 // Dispatcher routes queries to L3a (Go Agent) or L3b (ZeroClaw).
@@ -35,30 +35,44 @@ func NewDispatcher(goAgent *Agent, zeroclaw ZeroClawClient) *Dispatcher {
 }
 
 // Ask routes the query to the appropriate agent based on options and heuristics.
-func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption) (string, error) {
+// Returns (result, sessionID, error). sessionID is always returned for L3a sessions.
+func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption) (string, string, error) {
 	// Force local → L3a
 	if opts.ForceLocal {
-		return d.goAgent.Ask(ctx, query)
+		return d.goAgent.Ask(ctx, opts.SessionID, query)
 	}
 
-	// Force deep or session → L3b
-	if opts.ForceDeep || opts.SessionID != "" {
+	// Force deep → L3b (no session fallback)
+	if opts.ForceDeep {
 		if !d.zeroClawAvailable() {
-			return "", fmt.Errorf("ZeroClaw (L3b) is not available")
+			return "", "", fmt.Errorf("ZeroClaw (L3b) is not available")
 		}
 		if opts.SessionID != "" {
-			return d.zeroclaw.AskWithSession(ctx, opts.SessionID, query)
+			r, err := d.zeroclaw.AskWithSession(ctx, opts.SessionID, query)
+			return r, opts.SessionID, err
 		}
-		return d.zeroclaw.Ask(ctx, query)
+		r, err := d.zeroclaw.Ask(ctx, query)
+		return r, "", err
+	}
+
+	// Session ID without force-deep → try L3b, fall back to L3a
+	if opts.SessionID != "" {
+		if d.zeroClawAvailable() {
+			r, err := d.zeroclaw.AskWithSession(ctx, opts.SessionID, query)
+			return r, opts.SessionID, err
+		}
+		// Graceful degradation: L3b unavailable → use L3a session
+		return d.goAgent.Ask(ctx, opts.SessionID, query)
 	}
 
 	// Auto-route: if ZeroClaw available and query looks complex, use L3b
 	if d.zeroClawAvailable() && isComplexQuery(query) {
-		return d.zeroclaw.Ask(ctx, query)
+		r, err := d.zeroclaw.Ask(ctx, query)
+		return r, "", err
 	}
 
 	// Default: L3a
-	return d.goAgent.Ask(ctx, query)
+	return d.goAgent.Ask(ctx, "", query)
 }
 
 func (d *Dispatcher) zeroClawAvailable() bool {

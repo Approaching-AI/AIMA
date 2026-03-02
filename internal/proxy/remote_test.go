@@ -137,7 +137,7 @@ func TestQueryRemoteModels(t *testing.T) {
 	defer ts.Close()
 
 	addr, port := splitHostPort(t, ts)
-	models := queryRemoteModels(context.Background(), addr, port)
+	models := queryRemoteModels(context.Background(), addr, port, "")
 
 	if len(models) != 3 {
 		t.Fatalf("expected 3 models, got %d: %v", len(models), models)
@@ -153,7 +153,7 @@ func TestQueryRemoteModels(t *testing.T) {
 
 func TestQueryRemoteModels_Unreachable(t *testing.T) {
 	// Query a port that nothing is listening on
-	models := queryRemoteModels(context.Background(), "127.0.0.1", 1)
+	models := queryRemoteModels(context.Background(), "127.0.0.1", 1, "")
 	if models != nil {
 		t.Errorf("expected nil for unreachable host, got %v", models)
 	}
@@ -176,6 +176,36 @@ func TestSyncRemoteBackends_SkipsSelf(t *testing.T) {
 	backends := s.ListBackends()
 	if len(backends) != 0 {
 		t.Fatalf("expected 0 backends (self filtered), got %d", len(backends))
+	}
+}
+
+func TestQueryRemoteModels_WithAPIKey(t *testing.T) {
+	// Server that requires Bearer auth
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data":   []map[string]string{{"id": "secure-model", "object": "model"}},
+		})
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+
+	// Without key → no models
+	noKey := queryRemoteModels(context.Background(), addr, port, "")
+	if len(noKey) != 0 {
+		t.Errorf("expected 0 models without key, got %d", len(noKey))
+	}
+
+	// With correct key → 1 model
+	withKey := queryRemoteModels(context.Background(), addr, port, "test-key")
+	if len(withKey) != 1 || withKey[0] != "secure-model" {
+		t.Errorf("expected [secure-model] with key, got %v", withKey)
 	}
 }
 

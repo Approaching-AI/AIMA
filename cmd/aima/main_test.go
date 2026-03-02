@@ -99,6 +99,29 @@ func TestMCPToolAdapter_BlocksHighRiskTool(t *testing.T) {
 	}
 }
 
+func TestFleetBlockedTools(t *testing.T) {
+	// All destructive tools must be in the fleet denylist
+	mustBlock := []string{
+		"model.remove", "engine.remove", "deploy.delete",
+		"agent.install", "stack.init", "agent.rollback", "shell.exec",
+	}
+	for _, tool := range mustBlock {
+		if _, ok := fleetBlockedTools[tool]; !ok {
+			t.Errorf("fleetBlockedTools missing %q", tool)
+		}
+	}
+
+	// Safe tools must not be blocked
+	safe := []string{
+		"hardware.detect", "model.list", "deploy.list", "knowledge.resolve",
+	}
+	for _, tool := range safe {
+		if _, ok := fleetBlockedTools[tool]; ok {
+			t.Errorf("fleetBlockedTools should not block %q", tool)
+		}
+	}
+}
+
 func TestQueryGoldenOverrides(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")

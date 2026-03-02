@@ -76,6 +76,13 @@ func (s *Server) SetAPIKey(key string) {
 	s.apiKey = key
 }
 
+// APIKey returns the configured API key (empty string if none).
+func (s *Server) APIKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.apiKey
+}
+
 // SetExtraRoutes configures additional routes to register on the mux. Must be called before Start.
 func (s *Server) SetExtraRoutes(fn func(*http.ServeMux)) {
 	s.mu.Lock()

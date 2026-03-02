@@ -253,6 +253,10 @@ func run() error {
 		if strings.HasPrefix(toolName, "fleet.") {
 			return nil, fmt.Errorf("cannot execute fleet tools remotely (recursive call blocked): %s", toolName)
 		}
+		// Block destructive tools from fleet execution path (matches agent guardrails)
+		if reason, ok := fleetBlockedTools[toolName]; ok {
+			return nil, fmt.Errorf("fleet.exec_tool: %s is blocked (%s)", toolName, reason)
+		}
 		d := fleetRegistry.Get(deviceID)
 		if d == nil {
 			return nil, fmt.Errorf("device %q not found", deviceID)
@@ -403,6 +407,18 @@ func validateOverlayAssetName(name string) error {
 		return fmt.Errorf("invalid name %q: only letters, digits, dot, underscore, and dash are allowed", name)
 	}
 	return nil
+}
+
+// fleetBlockedTools lists MCP tools that cannot be executed via fleet.exec_tool.
+// Destructive operations must be performed locally, not via remote fleet calls.
+var fleetBlockedTools = map[string]string{
+	"model.remove":   "destructive: deletes model data",
+	"engine.remove":  "destructive: deletes engine image",
+	"deploy.delete":  "destructive: stops running deployment",
+	"agent.install":  "infrastructure: installs agent binary",
+	"stack.init":     "infrastructure: modifies system services",
+	"agent.rollback": "destructive: rolls back state",
+	"shell.exec":     "arbitrary command execution",
 }
 
 // blockedAgentTools lists MCP tools that the Agent must not call directly.

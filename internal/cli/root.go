@@ -44,6 +44,7 @@ func NewRootCmd(app *App) *cobra.Command {
 		newBenchmarkCmd(app),
 		newAskCmd(app),
 		newAgentCmd(app),
+		newConfigCmd(app),
 		newServeCmd(app),
 		newDiscoverCmd(app),
 		newFleetCmd(app),

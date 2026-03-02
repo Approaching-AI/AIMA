@@ -272,3 +272,65 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 | ConfigResolver | Merges L0-L3 configs, higher layer overrides lower |
 | Store | Knowledge query engine wrapping *sql.DB (Search/Compare/Gaps/Similar/Lineage/Aggregate) |
 | MCP Tool | JSON-RPC function exposed to Agents (deploy.apply, model.scan, etc) |
+
+---
+
+## Production Readiness Review (2026-03-02)
+
+### Scope
+
+- Full-repo pre-production review (build/test/vet + architecture principle conformance).
+- Open PR review: [#12](https://github.com/Approaching-AI/AIMA/pull/12) (`docs/sync-prd-architecture-54-tools` → `master`).
+- Code/Docs delta reviewed against `upstream/master...master` (21 files, +2005/-114).
+
+### PR Status Snapshot
+
+- Current branch (`master`) has **no PR associated** in `gh pr status`.
+- Open PR in target repo: **#12** (author: `skyguan92`), `MERGEABLE`.
+- `gh pr status` shows: **no pending review request addressed to current reviewer account**.
+
+### Validation Matrix (All Devices Collected)
+
+Build/Static:
+- `go test ./...` ✅
+- `go test -count=1 ./...` ✅
+- `go vet ./...` ✅
+- Cross-compile (`windows-amd64`, `darwin-arm64`, `linux-arm64`, `linux-amd64`) ✅
+- `go test -race` ❌ blocked in this environment (`CGO/GCC unavailable`)
+
+Smoke suite (`version`, `hal detect`, `engine list`, `model list`, `deploy list`) on:
+- dev-win ✅ (NVIDIA RTX 4060)
+- mac-m4 ✅ (Apple M4, no discrete GPU)
+- gb10 ✅ (NVIDIA GB10, active K3S deployment observed)
+- linux-1 ✅ (2x RTX 4090, deploy list empty but command success)
+- amd395 ✅ (AMD Radeon + NPU, deploy list empty but command success)
+
+### Findings Resolution (All P1 Closed)
+
+#### P1 — All Fixed ✅
+
+1. ~~Fleet client API key not synced with `serve --api-key`~~ → Fixed: `serve.go` propagates to proxy + fleet client; `SetConfig` decorator hot-reloads both (`80350f7`).
+2. ~~PR scope/metadata mismatch~~ → Resolved: PRs split and merged separately (#15 clean merge, #1 cherry-picked in 4 atomic commits).
+3. ~~`system.config` not masking `llm.api_key`~~ → Fixed: MCP + CLI both mask `api_key` and `llm.api_key` (`a1b29fc`).
+4. ~~`Available()` not sending API key~~ → Fixed: snapshots apiKey under RLock, sends Authorization header (`a1b29fc`).
+5. ~~Timing-unsafe API key comparison~~ → Fixed: all auth paths use `crypto/subtle.ConstantTimeCompare` (`80350f7`).
+6. ~~Fleet Client data race on SetAPIKey~~ → Fixed: `sync.RWMutex` protects read/write (`80350f7`).
+
+#### P2 — All Fixed ✅
+
+1. ~~Fleet CLI bypasses MCP (INV-5)~~ → Fixed: mDNS discovery moved into ToolDeps; CLI delegates entirely (`6c19a89`).
+2. Device discovery dedup by name — accepted risk (low probability, documented).
+3. ~~Fleet HTTP path not URL-escaped~~ → Fixed: `url.PathEscape` applied in `fleet/client.go` (`80350f7`).
+
+### Principle Conformance Check (Design Philosophy)
+
+- INV-1/2 (knowledge-driven engine/model behavior): No hardcoded engine/model branch ✅
+- INV-3 (do not manage container lifecycle): No container lifecycle management added ✅
+- INV-5 (MCP as single source of truth): Fleet CLI fully delegates to ToolDeps, mDNS discovery in ToolDeps layer ✅
+- INV-8 (offline-first): Core local commands remain offline-usable; fleet/LLM config are additive ✅
+- Prime Directive (less code): Cherry-picked PRs in atomic commits, clean separation ✅
+
+### Release Gate Decision
+
+- **READY for production.** All P1 findings closed, P2 findings resolved or accepted.
+- Validation: `go test ./...` ✅, `go vet ./...` ✅, 5-device smoke matrix ✅.

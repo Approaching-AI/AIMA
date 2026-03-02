@@ -992,9 +992,10 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	return engines, rows.Err()
 }
 
-// MarkEnginesUnavailableExcept sets available=false for all engines whose ID is not in keepIDs.
-// Called after a full scan to clean stale entries (deleted images, renamed patterns, etc.).
-func (d *DB) MarkEnginesUnavailableExcept(ctx context.Context, keepIDs []string) error {
+// MarkEnginesUnavailableExcept sets available=false for engines whose ID is not in keepIDs.
+// When runtimeType is non-empty, only engines of that runtime type are affected — this
+// prevents a filtered scan (e.g. --runtime native) from wiping engines of the other type.
+func (d *DB) MarkEnginesUnavailableExcept(ctx context.Context, keepIDs []string, runtimeType string) error {
 	if len(keepIDs) == 0 {
 		// No scan results — don't wipe everything (might be a permission issue)
 		return nil
@@ -1007,6 +1008,10 @@ func (d *DB) MarkEnginesUnavailableExcept(ctx context.Context, keepIDs []string)
 	}
 	query := fmt.Sprintf(`UPDATE engines SET available = 0 WHERE id NOT IN (%s)`,
 		strings.Join(placeholders, ","))
+	if runtimeType != "" {
+		query += " AND runtime_type = ?"
+		args = append(args, runtimeType)
+	}
 	_, err := d.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("mark stale engines unavailable: %w", err)

@@ -927,7 +927,7 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 	if hw, err := hal.Detect(ctx); err == nil {
 		if hw.GPU != nil {
 			hwInfo.GPUArch = hw.GPU.Arch
-			hwInfo.GPUVRAMMiB = hw.GPU.VRAMMiB
+			hwInfo.GPUVRAMMiB = hw.GPU.TotalVRAMMiB
 			hwInfo.GPUCount = hw.GPU.Count
 			hwInfo.UnifiedMemory = hw.GPU.UnifiedMemory
 		}
@@ -1051,7 +1051,8 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 	}
 
 	// L2: query golden config using canonical name and merge as middle layer (L0 < L2 < L1)
-	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, engineType, canonicalName)
+	// Use resolved.Engine (not raw engineType) to avoid cross-engine injection when engineType is empty.
+	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, resolved.Engine, canonicalName)
 	if len(goldenConfig) > 0 {
 		for k, v := range goldenConfig {
 			if !userKeys[k] {
@@ -1126,8 +1127,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				})
 			}
 		}
-		// Mark engines not found in this scan as unavailable (handles renamed/deleted images)
-		_ = db.MarkEnginesUnavailableExcept(ctx, scannedIDs)
+		// Mark engines not found in this scan as unavailable (handles renamed/deleted images).
+		// Scope to the filtered runtime type so scanning one runtime doesn't wipe the other.
+		scopeRT := ""
+		if runtimeFilter != "auto" {
+			scopeRT = runtimeFilter
+		}
+		_ = db.MarkEnginesUnavailableExcept(ctx, scannedIDs, scopeRT)
 		return json.Marshal(filtered)
 	}
 	return &mcp.ToolDeps{
@@ -1467,6 +1473,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						modelPath = f
 					}
 				}
+			}
+
+			// Validate model path exists before deploying — fail early with actionable message.
+			if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+				return nil, fmt.Errorf("model path %q does not exist; run 'aima model pull %s' or 'aima model import' first", modelPath, modelName)
 			}
 
 			req := &runtime.DeployRequest{
@@ -2053,10 +2064,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			} else {
 				return nil, fmt.Errorf("detect hardware: %w", err)
 			}
-			// Non-fatal: K3S may not be running
+			// Non-fatal: K3S may not be running — report error if it fails
 			if pods, err := rt.List(ctx); err == nil {
 				if b, e := json.Marshal(pods); e == nil {
 					status["deployments"] = b
+				}
+			} else {
+				if errMsg, e := json.Marshal(err.Error()); e == nil {
+					status["deployments_error"] = errMsg
 				}
 			}
 			if nativeRt != nil && nativeRt != rt {
@@ -2064,11 +2079,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					if b, e := json.Marshal(nativePods); e == nil {
 						status["native_deployments"] = b
 					}
+				} else if err != nil {
+					if errMsg, e := json.Marshal(err.Error()); e == nil {
+						status["native_deployments_error"] = errMsg
+					}
 				}
 			}
 			if m, err := hal.CollectMetrics(ctx); err == nil {
 				if b, e := json.Marshal(m); e == nil {
 					status["metrics"] = b
+				}
+			} else {
+				if errMsg, e := json.Marshal(err.Error()); e == nil {
+					status["metrics_error"] = errMsg
 				}
 			}
 			return json.Marshal(status)

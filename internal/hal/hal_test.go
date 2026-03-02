@@ -224,6 +224,15 @@ func TestParseNvidiaGPU(t *testing.T) {
 			if gpu.Count != tt.wantCount {
 				t.Errorf("Count = %d, want %d", gpu.Count, tt.wantCount)
 			}
+			// Single GPU: TotalVRAMMiB == VRAMMiB, len(GPUs) == 1
+			if tt.wantCount == 1 {
+				if gpu.TotalVRAMMiB != tt.wantVRAM {
+					t.Errorf("TotalVRAMMiB = %d, want %d (same as VRAMMiB for single GPU)", gpu.TotalVRAMMiB, tt.wantVRAM)
+				}
+				if len(gpu.GPUs) != 1 {
+					t.Errorf("len(GPUs) = %d, want 1", len(gpu.GPUs))
+				}
+			}
 		})
 	}
 }
@@ -241,6 +250,58 @@ func TestParseNvidiaGPUMultiGPU(t *testing.T) {
 	}
 	if gpu.Name != "NVIDIA GeForce RTX 4090" {
 		t.Errorf("Name = %q, want %q", gpu.Name, "NVIDIA GeForce RTX 4090")
+	}
+	if gpu.VRAMMiB != 24564 {
+		t.Errorf("VRAMMiB = %d, want 24564 (first GPU)", gpu.VRAMMiB)
+	}
+	if gpu.TotalVRAMMiB != 49128 {
+		t.Errorf("TotalVRAMMiB = %d, want 49128 (sum of 2 GPUs)", gpu.TotalVRAMMiB)
+	}
+	if len(gpu.GPUs) != 2 {
+		t.Fatalf("len(GPUs) = %d, want 2", len(gpu.GPUs))
+	}
+	if gpu.GPUs[0].VRAMMiB != 24564 || gpu.GPUs[1].VRAMMiB != 24564 {
+		t.Errorf("per-GPU VRAMMiB = [%d, %d], want [24564, 24564]", gpu.GPUs[0].VRAMMiB, gpu.GPUs[1].VRAMMiB)
+	}
+	if gpu.GPUs[0].TemperatureCelsius != 42.0 || gpu.GPUs[1].TemperatureCelsius != 40.0 {
+		t.Errorf("per-GPU temps = [%.1f, %.1f], want [42.0, 40.0]", gpu.GPUs[0].TemperatureCelsius, gpu.GPUs[1].TemperatureCelsius)
+	}
+}
+
+func TestParseNvidiaGPUMetrics_MultiGPU(t *testing.T) {
+	output := "85, 18432, 24564, 72.0, 280.50\n" +
+		"60, 12000, 24564, 65.0, 200.00\n"
+
+	r := parseNvidiaGPUMetrics(output)
+	if r == nil || r.aggregate == nil {
+		t.Fatal("expected non-nil metrics result")
+	}
+	m := r.aggregate
+	// Memory: sum
+	if m.MemoryUsedMiB != 30432 {
+		t.Errorf("MemoryUsedMiB = %d, want 30432", m.MemoryUsedMiB)
+	}
+	if m.MemoryTotalMiB != 49128 {
+		t.Errorf("MemoryTotalMiB = %d, want 49128", m.MemoryTotalMiB)
+	}
+	// Utilization: max
+	if m.UtilizationPercent != 85 {
+		t.Errorf("UtilizationPercent = %d, want 85 (max)", m.UtilizationPercent)
+	}
+	// Temperature: max
+	if m.TemperatureCelsius != 72.0 {
+		t.Errorf("TemperatureCelsius = %f, want 72.0 (max)", m.TemperatureCelsius)
+	}
+	// Power: sum
+	if m.PowerDrawWatts != 480.50 {
+		t.Errorf("PowerDrawWatts = %f, want 480.50 (sum)", m.PowerDrawWatts)
+	}
+	// Per-device
+	if len(r.perDevice) != 2 {
+		t.Fatalf("len(perDevice) = %d, want 2", len(r.perDevice))
+	}
+	if r.perDevice[0].MemoryUsedMiB != 18432 || r.perDevice[1].MemoryUsedMiB != 12000 {
+		t.Errorf("per-GPU MemUsed = [%d, %d], want [18432, 12000]", r.perDevice[0].MemoryUsedMiB, r.perDevice[1].MemoryUsedMiB)
 	}
 }
 
@@ -481,16 +542,17 @@ func TestParseNvidiaGPUMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := parseNvidiaGPUMetrics(tt.output)
+			r := parseNvidiaGPUMetrics(tt.output)
 			if tt.wantNil {
-				if m != nil {
-					t.Fatalf("expected nil, got %+v", m)
+				if r != nil {
+					t.Fatalf("expected nil, got %+v", r)
 				}
 				return
 			}
-			if m == nil {
+			if r == nil || r.aggregate == nil {
 				t.Fatal("expected non-nil GPUMetrics")
 			}
+			m := r.aggregate
 			if m.UtilizationPercent != tt.wantUtil {
 				t.Errorf("UtilizationPercent = %d, want %d", m.UtilizationPercent, tt.wantUtil)
 			}
@@ -584,7 +646,7 @@ func TestParseAMDGPU(t *testing.T) {
 			output:   `{"card0": {"Card Series": "AMD Instinct MI250X", "VRAM Total Memory (B)": "137438953472"}, "card1": {"Card Series": "AMD Instinct MI250X", "VRAM Total Memory (B)": "137438953472"}}`,
 			wantName: "AMD Instinct MI250X",
 			wantArch: "CDNA2",
-			wantVRAM: 131072,
+			wantVRAM: 131072, // first GPU
 		},
 		{
 			name:      "Radeon 8060S APU via GFX version",
@@ -635,7 +697,37 @@ func TestParseAMDGPU(t *testing.T) {
 			if tt.wantPower > 0 && gpu.PowerDrawWatts != tt.wantPower {
 				t.Errorf("PowerDrawWatts = %f, want %f", gpu.PowerDrawWatts, tt.wantPower)
 			}
+			// All cases: TotalVRAMMiB >= VRAMMiB and GPUs slice populated
+			if gpu.TotalVRAMMiB < gpu.VRAMMiB {
+				t.Errorf("TotalVRAMMiB = %d < VRAMMiB = %d", gpu.TotalVRAMMiB, gpu.VRAMMiB)
+			}
+			if len(gpu.GPUs) != gpu.Count {
+				t.Errorf("len(GPUs) = %d, want %d (Count)", len(gpu.GPUs), gpu.Count)
+			}
 		})
+	}
+}
+
+func TestParseAMDGPU_MultiGPU(t *testing.T) {
+	output := `{"card0": {"Card Series": "AMD Instinct MI250X", "VRAM Total Memory (B)": "137438953472"}, "card1": {"Card Series": "AMD Instinct MI250X", "VRAM Total Memory (B)": "137438953472"}}`
+	gpu := parseAMDGPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want 2", gpu.Count)
+	}
+	if gpu.VRAMMiB != 131072 {
+		t.Errorf("VRAMMiB = %d, want 131072 (first GPU)", gpu.VRAMMiB)
+	}
+	if gpu.TotalVRAMMiB != 262144 {
+		t.Errorf("TotalVRAMMiB = %d, want 262144 (sum of 2 GPUs)", gpu.TotalVRAMMiB)
+	}
+	if len(gpu.GPUs) != 2 {
+		t.Fatalf("len(GPUs) = %d, want 2", len(gpu.GPUs))
+	}
+	if gpu.GPUs[0].VRAMMiB != 131072 || gpu.GPUs[1].VRAMMiB != 131072 {
+		t.Errorf("per-GPU VRAMMiB = [%d, %d], want [131072, 131072]", gpu.GPUs[0].VRAMMiB, gpu.GPUs[1].VRAMMiB)
 	}
 }
 
@@ -702,7 +794,37 @@ func TestParseIntelGPU(t *testing.T) {
 			if gpu.VRAMMiB != tt.wantVRAM {
 				t.Errorf("VRAMMiB = %d, want %d", gpu.VRAMMiB, tt.wantVRAM)
 			}
+			// All cases: TotalVRAMMiB >= VRAMMiB and GPUs slice populated
+			if gpu.TotalVRAMMiB < gpu.VRAMMiB {
+				t.Errorf("TotalVRAMMiB = %d < VRAMMiB = %d", gpu.TotalVRAMMiB, gpu.VRAMMiB)
+			}
+			if len(gpu.GPUs) != gpu.Count {
+				t.Errorf("len(GPUs) = %d, want %d (Count)", len(gpu.GPUs), gpu.Count)
+			}
 		})
+	}
+}
+
+func TestParseIntelGPU_MultiDevice(t *testing.T) {
+	output := `[{"device_id": 0, "device_name": "Intel(R) Data Center GPU Max 1550", "memory_physical_size_byte": 68719476736}, {"device_id": 1, "device_name": "Intel(R) Data Center GPU Max 1550", "memory_physical_size_byte": 68719476736}]`
+	gpu := parseIntelGPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want 2", gpu.Count)
+	}
+	if gpu.VRAMMiB != 65536 {
+		t.Errorf("VRAMMiB = %d, want 65536 (first GPU)", gpu.VRAMMiB)
+	}
+	if gpu.TotalVRAMMiB != 131072 {
+		t.Errorf("TotalVRAMMiB = %d, want 131072 (sum of 2 GPUs)", gpu.TotalVRAMMiB)
+	}
+	if len(gpu.GPUs) != 2 {
+		t.Fatalf("len(GPUs) = %d, want 2", len(gpu.GPUs))
+	}
+	if gpu.GPUs[0].VRAMMiB != 65536 || gpu.GPUs[1].VRAMMiB != 65536 {
+		t.Errorf("per-GPU VRAMMiB = [%d, %d], want [65536, 65536]", gpu.GPUs[0].VRAMMiB, gpu.GPUs[1].VRAMMiB)
 	}
 }
 
@@ -769,7 +891,37 @@ func TestParseHuaweiNPU(t *testing.T) {
 			if gpu.VRAMMiB != tt.wantVRAM {
 				t.Errorf("VRAMMiB = %d, want %d", gpu.VRAMMiB, tt.wantVRAM)
 			}
+			// All cases: TotalVRAMMiB >= VRAMMiB and GPUs slice populated
+			if gpu.TotalVRAMMiB < gpu.VRAMMiB {
+				t.Errorf("TotalVRAMMiB = %d < VRAMMiB = %d", gpu.TotalVRAMMiB, gpu.VRAMMiB)
+			}
+			if len(gpu.GPUs) != gpu.Count {
+				t.Errorf("len(GPUs) = %d, want %d (Count)", len(gpu.GPUs), gpu.Count)
+			}
 		})
+	}
+}
+
+func TestParseHuaweiNPU_MultiNPU(t *testing.T) {
+	output := `{"NPU": [{"Name": "Ascend 910B", "HBM Capacity(MB)": 65536}, {"Name": "Ascend 910B", "HBM Capacity(MB)": 65536}]}`
+	gpu := parseHuaweiNPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want 2", gpu.Count)
+	}
+	if gpu.VRAMMiB != 65536 {
+		t.Errorf("VRAMMiB = %d, want 65536 (first NPU)", gpu.VRAMMiB)
+	}
+	if gpu.TotalVRAMMiB != 131072 {
+		t.Errorf("TotalVRAMMiB = %d, want 131072 (sum of 2 NPUs)", gpu.TotalVRAMMiB)
+	}
+	if len(gpu.GPUs) != 2 {
+		t.Fatalf("len(GPUs) = %d, want 2", len(gpu.GPUs))
+	}
+	if gpu.GPUs[0].VRAMMiB != 65536 || gpu.GPUs[1].VRAMMiB != 65536 {
+		t.Errorf("per-NPU VRAMMiB = [%d, %d], want [65536, 65536]", gpu.GPUs[0].VRAMMiB, gpu.GPUs[1].VRAMMiB)
 	}
 }
 
@@ -829,7 +981,37 @@ func TestParseMThreadsGPU(t *testing.T) {
 			if gpu.VRAMMiB != tt.wantVRAM {
 				t.Errorf("VRAMMiB = %d, want %d", gpu.VRAMMiB, tt.wantVRAM)
 			}
+			// All cases: TotalVRAMMiB >= VRAMMiB and GPUs slice populated
+			if gpu.TotalVRAMMiB < gpu.VRAMMiB {
+				t.Errorf("TotalVRAMMiB = %d < VRAMMiB = %d", gpu.TotalVRAMMiB, gpu.VRAMMiB)
+			}
+			if len(gpu.GPUs) != gpu.Count {
+				t.Errorf("len(GPUs) = %d, want %d (Count)", len(gpu.GPUs), gpu.Count)
+			}
 		})
+	}
+}
+
+func TestParseMThreadsGPU_MultiGPU(t *testing.T) {
+	output := `{"gpus": [{"product_name": "MTT S4000", "memory_total": "32768 MiB", "temperature": "45 C", "power_draw": "150.0 W"}, {"product_name": "MTT S4000", "memory_total": "32768 MiB", "temperature": "42 C", "power_draw": "140.0 W"}]}`
+	gpu := parseMThreadsGPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want 2", gpu.Count)
+	}
+	if gpu.VRAMMiB != 32768 {
+		t.Errorf("VRAMMiB = %d, want 32768 (first GPU)", gpu.VRAMMiB)
+	}
+	if gpu.TotalVRAMMiB != 65536 {
+		t.Errorf("TotalVRAMMiB = %d, want 65536 (sum of 2 GPUs)", gpu.TotalVRAMMiB)
+	}
+	if len(gpu.GPUs) != 2 {
+		t.Fatalf("len(GPUs) = %d, want 2", len(gpu.GPUs))
+	}
+	if gpu.GPUs[0].VRAMMiB != 32768 || gpu.GPUs[1].VRAMMiB != 32768 {
+		t.Errorf("per-GPU VRAMMiB = [%d, %d], want [32768, 32768]", gpu.GPUs[0].VRAMMiB, gpu.GPUs[1].VRAMMiB)
 	}
 }
 
@@ -1215,8 +1397,15 @@ func TestDetectWithRunner_UnifiedMemoryBackfill(t *testing.T) {
 	if hw.GPU.VRAMMiB != hw.RAM.TotalMiB {
 		t.Errorf("VRAMMiB = %d, want %d (RAM total)", hw.GPU.VRAMMiB, hw.RAM.TotalMiB)
 	}
+	if hw.GPU.TotalVRAMMiB != hw.RAM.TotalMiB {
+		t.Errorf("TotalVRAMMiB = %d, want %d (RAM total after backfill)", hw.GPU.TotalVRAMMiB, hw.RAM.TotalMiB)
+	}
 	if hw.GPU.VRAMMiB <= 0 {
 		t.Error("VRAMMiB should be > 0 after backfill")
+	}
+	// Per-GPU entry should also be backfilled
+	if len(hw.GPU.GPUs) == 1 && hw.GPU.GPUs[0].VRAMMiB != hw.RAM.TotalMiB {
+		t.Errorf("GPUs[0].VRAMMiB = %d, want %d (RAM total after backfill)", hw.GPU.GPUs[0].VRAMMiB, hw.RAM.TotalMiB)
 	}
 }
 

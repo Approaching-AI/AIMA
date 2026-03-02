@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -27,11 +28,17 @@ type gpuProbe struct {
 	parse  func(string) *GPUInfo
 }
 
+// gpuMetricsResult holds both aggregate and per-device metrics.
+type gpuMetricsResult struct {
+	aggregate *GPUMetrics
+	perDevice []GPUDeviceMetrics
+}
+
 type gpuMetricsProbe struct {
 	vendor string
 	cmd    string
 	args   []string
-	parse  func(string) *GPUMetrics
+	parse  func(string) *gpuMetricsResult
 }
 
 // NVIDIA args
@@ -93,14 +100,14 @@ func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
 	return nil
 }
 
-func collectGPUMetrics(ctx context.Context, runner CommandRunner) *GPUMetrics {
+func collectGPUMetrics(ctx context.Context, runner CommandRunner) *gpuMetricsResult {
 	for _, p := range gpuMetricsProbes {
 		out, err := runner.Run(ctx, p.cmd, p.args...)
 		if err != nil {
 			continue
 		}
-		if m := p.parse(string(out)); m != nil {
-			return m
+		if r := p.parse(string(out)); r != nil {
+			return r
 		}
 	}
 	return nil
@@ -118,6 +125,28 @@ func parseNvidiaGPU(output string) *GPUInfo {
 		return nil
 	}
 	gpu.Count = len(lines)
+
+	// Build per-GPU details and aggregate VRAM
+	gpu.GPUs = make([]GPUDetail, 0, len(lines))
+	totalVRAM := 0
+	for i, line := range lines {
+		parsed := parseNvidiaGPULine(line)
+		if parsed == nil {
+			continue
+		}
+		gpu.GPUs = append(gpu.GPUs, GPUDetail{
+			Index:              i,
+			Name:               parsed.Name,
+			VRAMMiB:            parsed.VRAMMiB,
+			ComputeID:          parsed.ComputeID,
+			TemperatureCelsius: parsed.TemperatureCelsius,
+			PowerDrawWatts:     parsed.PowerDrawWatts,
+			PowerLimitWatts:    parsed.PowerLimitWatts,
+		})
+		totalVRAM += parsed.VRAMMiB
+	}
+	gpu.TotalVRAMMiB = totalVRAM
+
 	return gpu
 }
 
@@ -175,18 +204,72 @@ func parseNvidiaGPULine(line string) *GPUInfo {
 	}
 }
 
-func parseNvidiaGPUMetrics(output string) *GPUMetrics {
+func parseNvidiaGPUMetrics(output string) *gpuMetricsResult {
 	lines := nonEmptyLines(output)
 	if len(lines) == 0 {
 		return nil
 	}
 
-	fields := splitCSV(lines[0])
+	first := parseNvidiaGPUMetricsLine(lines[0])
+	if first == nil {
+		return nil
+	}
+
+	// Single GPU fast path
+	if len(lines) == 1 {
+		return &gpuMetricsResult{aggregate: first}
+	}
+
+	// Multi-GPU: aggregate across all devices
+	totalUsed, totalTotal := first.MemoryUsedMiB, first.MemoryTotalMiB
+	maxUtil := first.UtilizationPercent
+	maxTemp := first.TemperatureCelsius
+	totalPower := first.PowerDrawWatts
+	perDevice := []GPUDeviceMetrics{{
+		Index: 0, UtilizationPercent: first.UtilizationPercent,
+		MemoryUsedMiB: first.MemoryUsedMiB, MemoryTotalMiB: first.MemoryTotalMiB,
+		TemperatureCelsius: first.TemperatureCelsius, PowerDrawWatts: first.PowerDrawWatts,
+	}}
+
+	for i, line := range lines[1:] {
+		m := parseNvidiaGPUMetricsLine(line)
+		if m == nil {
+			continue
+		}
+		totalUsed += m.MemoryUsedMiB
+		totalTotal += m.MemoryTotalMiB
+		totalPower += m.PowerDrawWatts
+		if m.UtilizationPercent > maxUtil {
+			maxUtil = m.UtilizationPercent
+		}
+		if m.TemperatureCelsius > maxTemp {
+			maxTemp = m.TemperatureCelsius
+		}
+		perDevice = append(perDevice, GPUDeviceMetrics{
+			Index: i + 1, UtilizationPercent: m.UtilizationPercent,
+			MemoryUsedMiB: m.MemoryUsedMiB, MemoryTotalMiB: m.MemoryTotalMiB,
+			TemperatureCelsius: m.TemperatureCelsius, PowerDrawWatts: m.PowerDrawWatts,
+		})
+	}
+
+	return &gpuMetricsResult{
+		aggregate: &GPUMetrics{
+			UtilizationPercent: maxUtil,
+			MemoryUsedMiB:      totalUsed,
+			MemoryTotalMiB:     totalTotal,
+			TemperatureCelsius: maxTemp,
+			PowerDrawWatts:     roundTo(totalPower, 2),
+		},
+		perDevice: perDevice,
+	}
+}
+
+func parseNvidiaGPUMetricsLine(line string) *GPUMetrics {
+	fields := splitCSV(line)
 	if len(fields) < 5 {
 		return nil
 	}
 
-	// If all critical fields are N/A, metrics are useless
 	if isNA(fields[0]) && isNA(fields[1]) && isNA(fields[2]) {
 		return nil
 	}
@@ -358,30 +441,32 @@ func parseAMDGPU(output string) *GPUInfo {
 		return nil
 	}
 
-	var firstCard map[string]interface{}
-	count := 0
+	// Collect all card entries, sort keys for determinism
+	type cardEntry struct {
+		key  string
+		data map[string]interface{}
+	}
+	var cards []cardEntry
 	for key, val := range raw {
 		if !strings.HasPrefix(key, "card") {
 			continue
 		}
-		count++
-		if firstCard == nil {
-			var data map[string]interface{}
-			if json.Unmarshal(val, &data) == nil {
-				firstCard = data
-			}
+		var data map[string]interface{}
+		if json.Unmarshal(val, &data) == nil {
+			cards = append(cards, cardEntry{key, data})
 		}
 	}
-	if firstCard == nil {
+	if len(cards) == 0 {
 		return nil
 	}
+	sort.Slice(cards, func(i, j int) bool { return cards[i].key < cards[j].key })
 
+	firstCard := cards[0].data
 	name := jsonStr(firstCard, "Card Series", "Card series")
 	if name == "" {
 		return nil
 	}
 
-	// Determine arch: prefer name matching, fall back to GFX version.
 	arch := amdGPUToArch(name)
 	if arch == "unknown" {
 		if gfxArch := gfxVersionToArch(jsonStr(firstCard, "GFX Version")); gfxArch != "" {
@@ -389,53 +474,114 @@ func parseAMDGPU(output string) *GPUInfo {
 		}
 	}
 
-	var vram int
+	var firstVRAM int
 	if b := jsonInt(firstCard, "VRAM Total Memory (B)"); b > 0 {
-		vram = int(b / (1024 * 1024))
+		firstVRAM = int(b / (1024 * 1024))
+	}
+
+	// Build per-GPU details and aggregate VRAM
+	gpus := make([]GPUDetail, 0, len(cards))
+	totalVRAM := 0
+	for i, c := range cards {
+		vram := 0
+		if b := jsonInt(c.data, "VRAM Total Memory (B)"); b > 0 {
+			vram = int(b / (1024 * 1024))
+		}
+		gpus = append(gpus, GPUDetail{
+			Index:              i,
+			Name:               jsonStr(c.data, "Card Series", "Card series"),
+			VRAMMiB:            vram,
+			ComputeID:          jsonStr(c.data, "GFX Version"),
+			TemperatureCelsius: jsonFloat(c.data, "Temperature (Sensor edge) (C)", "Temperature (Sensor junction) (C)"),
+			PowerDrawWatts:     jsonFloat(c.data, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"),
+		})
+		totalVRAM += vram
 	}
 
 	return &GPUInfo{
 		Name:               name,
 		Arch:               arch,
 		ComputeID:          jsonStr(firstCard, "GFX Version"),
-		VRAMMiB:            vram,
+		VRAMMiB:            firstVRAM,
+		TotalVRAMMiB:       totalVRAM,
+		GPUs:               gpus,
 		TemperatureCelsius: jsonFloat(firstCard, "Temperature (Sensor edge) (C)", "Temperature (Sensor junction) (C)"),
 		PowerDrawWatts:     jsonFloat(firstCard, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"),
-		Count:              count,
+		Count:              len(cards),
 	}
 }
 
-func parseAMDGPUMetrics(output string) *GPUMetrics {
+func parseAMDGPUMetrics(output string) *gpuMetricsResult {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(output), &raw); err != nil {
 		return nil
 	}
 
+	// Collect and sort card keys for determinism
+	type cardEntry struct {
+		key  string
+		data map[string]interface{}
+	}
+	var cards []cardEntry
 	for key, val := range raw {
 		if !strings.HasPrefix(key, "card") {
 			continue
 		}
 		var data map[string]interface{}
-		if json.Unmarshal(val, &data) != nil {
-			continue
-		}
-
-		util := int(jsonFloat(data, "GPU use (%)", "GPU Use (%)"))
-		memUsed := int(jsonInt(data, "VRAM Total Used Memory (B)") / (1024 * 1024))
-		memTotal := int(jsonInt(data, "VRAM Total Memory (B)") / (1024 * 1024))
-		if memTotal == 0 && util == 0 {
-			return nil
-		}
-
-		return &GPUMetrics{
-			UtilizationPercent: util,
-			MemoryUsedMiB:      memUsed,
-			MemoryTotalMiB:     memTotal,
-			TemperatureCelsius: jsonFloat(data, "Temperature (Sensor edge) (C)"),
-			PowerDrawWatts:     roundTo(jsonFloat(data, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)"), 2),
+		if json.Unmarshal(val, &data) == nil {
+			cards = append(cards, cardEntry{key, data})
 		}
 	}
-	return nil
+	if len(cards) == 0 {
+		return nil
+	}
+	sort.Slice(cards, func(i, j int) bool { return cards[i].key < cards[j].key })
+
+	var totalUsed, totalTotal, maxUtil int
+	var maxTemp, totalPower float64
+	var perDevice []GPUDeviceMetrics
+	valid := false
+
+	for i, c := range cards {
+		util := int(jsonFloat(c.data, "GPU use (%)", "GPU Use (%)"))
+		memUsed := int(jsonInt(c.data, "VRAM Total Used Memory (B)") / (1024 * 1024))
+		memTotal := int(jsonInt(c.data, "VRAM Total Memory (B)") / (1024 * 1024))
+		if memTotal == 0 && util == 0 {
+			continue
+		}
+		valid = true
+		temp := jsonFloat(c.data, "Temperature (Sensor edge) (C)")
+		power := jsonFloat(c.data, "Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)")
+
+		totalUsed += memUsed
+		totalTotal += memTotal
+		totalPower += power
+		if util > maxUtil {
+			maxUtil = util
+		}
+		if temp > maxTemp {
+			maxTemp = temp
+		}
+		perDevice = append(perDevice, GPUDeviceMetrics{
+			Index: i, UtilizationPercent: util,
+			MemoryUsedMiB: memUsed, MemoryTotalMiB: memTotal,
+			TemperatureCelsius: temp, PowerDrawWatts: roundTo(power, 2),
+		})
+	}
+	if !valid {
+		return nil
+	}
+
+	return &gpuMetricsResult{
+		aggregate: &GPUMetrics{
+			UtilizationPercent: maxUtil,
+			MemoryUsedMiB:      totalUsed,
+			MemoryTotalMiB:     totalTotal,
+			TemperatureCelsius: maxTemp,
+			PowerDrawWatts:     roundTo(totalPower, 2),
+		},
+		perDevice: perDevice,
+	}
 }
 
 func amdGPUToArch(name string) string {
@@ -505,20 +651,37 @@ func parseIntelGPU(output string) *GPUInfo {
 		return nil
 	}
 
-	var vram int
+	var firstVRAM int
 	if b := jsonInt(devices[0], "memory_physical_size_byte"); b > 0 {
-		vram = int(b / (1024 * 1024))
+		firstVRAM = int(b / (1024 * 1024))
+	}
+
+	gpus := make([]GPUDetail, 0, len(devices))
+	totalVRAM := 0
+	for i, dev := range devices {
+		vram := 0
+		if b := jsonInt(dev, "memory_physical_size_byte"); b > 0 {
+			vram = int(b / (1024 * 1024))
+		}
+		gpus = append(gpus, GPUDetail{
+			Index:   i,
+			Name:    jsonStr(dev, "device_name"),
+			VRAMMiB: vram,
+		})
+		totalVRAM += vram
 	}
 
 	return &GPUInfo{
-		Name:    name,
-		Arch:    intelGPUToArch(name),
-		VRAMMiB: vram,
-		Count:   len(devices),
+		Name:         name,
+		Arch:         intelGPUToArch(name),
+		VRAMMiB:      firstVRAM,
+		TotalVRAMMiB: totalVRAM,
+		GPUs:         gpus,
+		Count:        len(devices),
 	}
 }
 
-func parseIntelGPUMetrics(output string) *GPUMetrics {
+func parseIntelGPUMetrics(output string) *gpuMetricsResult {
 	var devices []map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &devices); err != nil {
 		return nil
@@ -527,20 +690,50 @@ func parseIntelGPUMetrics(output string) *GPUMetrics {
 		return nil
 	}
 
-	dev := devices[0]
-	util := int(jsonFloat(dev, "gpu_utilization"))
-	memUsed := int(jsonInt(dev, "memory_used_byte") / (1024 * 1024))
-	memTotal := int(jsonInt(dev, "memory_physical_size_byte") / (1024 * 1024))
-	if memTotal == 0 && util == 0 {
+	var totalUsed, totalTotal, maxUtil int
+	var maxTemp, totalPower float64
+	var perDevice []GPUDeviceMetrics
+	valid := false
+
+	for i, dev := range devices {
+		util := int(jsonFloat(dev, "gpu_utilization"))
+		memUsed := int(jsonInt(dev, "memory_used_byte") / (1024 * 1024))
+		memTotal := int(jsonInt(dev, "memory_physical_size_byte") / (1024 * 1024))
+		if memTotal == 0 && util == 0 {
+			continue
+		}
+		valid = true
+		temp := jsonFloat(dev, "gpu_temperature")
+		power := jsonFloat(dev, "power")
+
+		totalUsed += memUsed
+		totalTotal += memTotal
+		totalPower += power
+		if util > maxUtil {
+			maxUtil = util
+		}
+		if temp > maxTemp {
+			maxTemp = temp
+		}
+		perDevice = append(perDevice, GPUDeviceMetrics{
+			Index: i, UtilizationPercent: util,
+			MemoryUsedMiB: memUsed, MemoryTotalMiB: memTotal,
+			TemperatureCelsius: temp, PowerDrawWatts: roundTo(power, 2),
+		})
+	}
+	if !valid {
 		return nil
 	}
 
-	return &GPUMetrics{
-		UtilizationPercent: util,
-		MemoryUsedMiB:      memUsed,
-		MemoryTotalMiB:     memTotal,
-		TemperatureCelsius: jsonFloat(dev, "gpu_temperature"),
-		PowerDrawWatts:     roundTo(jsonFloat(dev, "power"), 2),
+	return &gpuMetricsResult{
+		aggregate: &GPUMetrics{
+			UtilizationPercent: maxUtil,
+			MemoryUsedMiB:      totalUsed,
+			MemoryTotalMiB:     totalTotal,
+			TemperatureCelsius: maxTemp,
+			PowerDrawWatts:     roundTo(totalPower, 2),
+		},
+		perDevice: perDevice,
 	}
 }
 
@@ -575,16 +768,32 @@ func parseHuaweiNPU(output string) *GPUInfo {
 		return nil
 	}
 
+	firstVRAM := int(jsonFloat(npu, "HBM Capacity(MB)"))
+	gpus := make([]GPUDetail, 0, len(raw.NPU))
+	totalVRAM := 0
+	for i, n := range raw.NPU {
+		vram := int(jsonFloat(n, "HBM Capacity(MB)"))
+		gpus = append(gpus, GPUDetail{
+			Index:              i,
+			Name:               jsonStr(n, "Name"),
+			VRAMMiB:            vram,
+			TemperatureCelsius: jsonFloat(n, "Temperature(C)"),
+		})
+		totalVRAM += vram
+	}
+
 	return &GPUInfo{
 		Name:               name,
 		Arch:               huaweiNPUToArch(name),
-		VRAMMiB:            int(jsonFloat(npu, "HBM Capacity(MB)")),
+		VRAMMiB:            firstVRAM,
+		TotalVRAMMiB:       totalVRAM,
+		GPUs:               gpus,
 		TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
 		Count:              len(raw.NPU),
 	}
 }
 
-func parseHuaweiNPUMetrics(output string) *GPUMetrics {
+func parseHuaweiNPUMetrics(output string) *gpuMetricsResult {
 	var raw struct {
 		NPU []map[string]interface{} `json:"NPU"`
 	}
@@ -595,20 +804,50 @@ func parseHuaweiNPUMetrics(output string) *GPUMetrics {
 		return nil
 	}
 
-	npu := raw.NPU[0]
-	util := int(jsonFloat(npu, "Aicore Usage(%)"))
-	memUsed := int(jsonFloat(npu, "HBM Usage(MB)"))
-	memTotal := int(jsonFloat(npu, "HBM Capacity(MB)"))
-	if memTotal == 0 && util == 0 {
+	var totalUsed, totalTotal, maxUtil int
+	var maxTemp, totalPower float64
+	var perDevice []GPUDeviceMetrics
+	valid := false
+
+	for i, npu := range raw.NPU {
+		util := int(jsonFloat(npu, "Aicore Usage(%)"))
+		memUsed := int(jsonFloat(npu, "HBM Usage(MB)"))
+		memTotal := int(jsonFloat(npu, "HBM Capacity(MB)"))
+		if memTotal == 0 && util == 0 {
+			continue
+		}
+		valid = true
+		temp := jsonFloat(npu, "Temperature(C)")
+		power := jsonFloat(npu, "Power(W)")
+
+		totalUsed += memUsed
+		totalTotal += memTotal
+		totalPower += power
+		if util > maxUtil {
+			maxUtil = util
+		}
+		if temp > maxTemp {
+			maxTemp = temp
+		}
+		perDevice = append(perDevice, GPUDeviceMetrics{
+			Index: i, UtilizationPercent: util,
+			MemoryUsedMiB: memUsed, MemoryTotalMiB: memTotal,
+			TemperatureCelsius: temp, PowerDrawWatts: roundTo(power, 2),
+		})
+	}
+	if !valid {
 		return nil
 	}
 
-	return &GPUMetrics{
-		UtilizationPercent: util,
-		MemoryUsedMiB:      memUsed,
-		MemoryTotalMiB:     memTotal,
-		TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
-		PowerDrawWatts:     roundTo(jsonFloat(npu, "Power(W)"), 2),
+	return &gpuMetricsResult{
+		aggregate: &GPUMetrics{
+			UtilizationPercent: maxUtil,
+			MemoryUsedMiB:      totalUsed,
+			MemoryTotalMiB:     totalTotal,
+			TemperatureCelsius: maxTemp,
+			PowerDrawWatts:     roundTo(totalPower, 2),
+		},
+		perDevice: perDevice,
 	}
 }
 
@@ -643,23 +882,40 @@ func parseMThreadsGPU(output string) *GPUInfo {
 		return nil
 	}
 
-	gpu := raw.GPUs[0]
-	name := jsonStr(gpu, "product_name")
+	first := raw.GPUs[0]
+	name := jsonStr(first, "product_name")
 	if name == "" {
 		return nil
+	}
+
+	firstVRAM := parseMiBString(jsonStr(first, "memory_total"))
+	gpus := make([]GPUDetail, 0, len(raw.GPUs))
+	totalVRAM := 0
+	for i, g := range raw.GPUs {
+		vram := parseMiBString(jsonStr(g, "memory_total"))
+		gpus = append(gpus, GPUDetail{
+			Index:              i,
+			Name:               jsonStr(g, "product_name"),
+			VRAMMiB:            vram,
+			TemperatureCelsius: parseFloatPrefix(jsonStr(g, "temperature")),
+			PowerDrawWatts:     parseFloatPrefix(jsonStr(g, "power_draw")),
+		})
+		totalVRAM += vram
 	}
 
 	return &GPUInfo{
 		Name:               name,
 		Arch:               mthreadsGPUToArch(name),
-		VRAMMiB:            parseMiBString(jsonStr(gpu, "memory_total")),
-		TemperatureCelsius: parseFloatPrefix(jsonStr(gpu, "temperature")),
-		PowerDrawWatts:     parseFloatPrefix(jsonStr(gpu, "power_draw")),
+		VRAMMiB:            firstVRAM,
+		TotalVRAMMiB:       totalVRAM,
+		GPUs:               gpus,
+		TemperatureCelsius: parseFloatPrefix(jsonStr(first, "temperature")),
+		PowerDrawWatts:     parseFloatPrefix(jsonStr(first, "power_draw")),
 		Count:              len(raw.GPUs),
 	}
 }
 
-func parseMThreadsGPUMetrics(output string) *GPUMetrics {
+func parseMThreadsGPUMetrics(output string) *gpuMetricsResult {
 	var raw struct {
 		GPUs []map[string]interface{} `json:"gpus"`
 	}
@@ -670,20 +926,50 @@ func parseMThreadsGPUMetrics(output string) *GPUMetrics {
 		return nil
 	}
 
-	gpu := raw.GPUs[0]
-	util := int(parseFloatPrefix(jsonStr(gpu, "gpu_utilization")))
-	memUsed := parseMiBString(jsonStr(gpu, "memory_used"))
-	memTotal := parseMiBString(jsonStr(gpu, "memory_total"))
-	if memTotal == 0 && util == 0 {
+	var totalUsed, totalTotal, maxUtil int
+	var maxTemp, totalPower float64
+	var perDevice []GPUDeviceMetrics
+	valid := false
+
+	for i, g := range raw.GPUs {
+		util := int(parseFloatPrefix(jsonStr(g, "gpu_utilization")))
+		memUsed := parseMiBString(jsonStr(g, "memory_used"))
+		memTotal := parseMiBString(jsonStr(g, "memory_total"))
+		if memTotal == 0 && util == 0 {
+			continue
+		}
+		valid = true
+		temp := parseFloatPrefix(jsonStr(g, "temperature"))
+		power := parseFloatPrefix(jsonStr(g, "power_draw"))
+
+		totalUsed += memUsed
+		totalTotal += memTotal
+		totalPower += power
+		if util > maxUtil {
+			maxUtil = util
+		}
+		if temp > maxTemp {
+			maxTemp = temp
+		}
+		perDevice = append(perDevice, GPUDeviceMetrics{
+			Index: i, UtilizationPercent: util,
+			MemoryUsedMiB: memUsed, MemoryTotalMiB: memTotal,
+			TemperatureCelsius: temp, PowerDrawWatts: roundTo(power, 2),
+		})
+	}
+	if !valid {
 		return nil
 	}
 
-	return &GPUMetrics{
-		UtilizationPercent: util,
-		MemoryUsedMiB:      memUsed,
-		MemoryTotalMiB:     memTotal,
-		TemperatureCelsius: parseFloatPrefix(jsonStr(gpu, "temperature")),
-		PowerDrawWatts:     roundTo(parseFloatPrefix(jsonStr(gpu, "power_draw")), 2),
+	return &gpuMetricsResult{
+		aggregate: &GPUMetrics{
+			UtilizationPercent: maxUtil,
+			MemoryUsedMiB:      totalUsed,
+			MemoryTotalMiB:     totalTotal,
+			TemperatureCelsius: maxTemp,
+			PowerDrawWatts:     roundTo(totalPower, 2),
+		},
+		perDevice: perDevice,
 	}
 }
 

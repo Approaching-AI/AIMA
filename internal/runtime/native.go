@@ -273,12 +273,14 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 			}
 		}
 	} else {
-		// Recover from persisted metadata and kill by PID
+		// Recover from persisted metadata
 		meta, err := r.loadMeta(name)
 		if err != nil {
 			return fmt.Errorf("deployment %q not found", name)
 		}
-		if meta.PID > 0 {
+		// Only kill if the port is still alive — guards against PID reuse
+		// after the original process crashed and metadata became stale.
+		if portAlive(meta.Port) && meta.PID > 0 {
 			if p, err := os.FindProcess(meta.PID); err == nil {
 				if err := p.Kill(); err != nil {
 					slog.Warn("kill process", "name", name, "pid", meta.PID, "error", err)

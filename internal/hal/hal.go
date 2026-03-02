@@ -13,6 +13,8 @@ type HardwareInfo struct {
 }
 
 // GPUInfo describes a GPU or accelerator's capabilities.
+// For multi-GPU systems, scalar fields (Name, VRAMMiB, etc.) reflect the primary (first) GPU.
+// Use TotalVRAMMiB and the GPUs slice for aggregate and per-device data.
 type GPUInfo struct {
 	Vendor             string  `json:"vendor"`
 	Name               string  `json:"name"`
@@ -27,6 +29,19 @@ type GPUInfo struct {
 	TemperatureCelsius float64 `json:"temperature_celsius,omitempty"`
 	UnifiedMemory      bool    `json:"unified_memory"`
 	Count              int     `json:"count"`
+	TotalVRAMMiB       int     `json:"total_vram_mib"`       // Sum of all GPUs' VRAM
+	GPUs               []GPUDetail `json:"gpus,omitempty"`   // Per-GPU breakdown
+}
+
+// GPUDetail holds per-device information for a single GPU in a multi-GPU system.
+type GPUDetail struct {
+	Index              int     `json:"index"`
+	Name               string  `json:"name"`
+	VRAMMiB            int     `json:"vram_mib"`
+	ComputeID          string  `json:"compute_id,omitempty"`
+	TemperatureCelsius float64 `json:"temperature_celsius,omitempty"`
+	PowerDrawWatts     float64 `json:"power_draw_watts,omitempty"`
+	PowerLimitWatts    float64 `json:"power_limit_watts,omitempty"`
 }
 
 // NPUInfo describes a Neural Processing Unit (AI accelerator co-processor).
@@ -80,13 +95,25 @@ type OSInfo struct {
 
 // Metrics holds real-time utilization data.
 type Metrics struct {
-	GPU *GPUMetrics `json:"gpu,omitempty"`
-	CPU CPUMetrics  `json:"cpu"`
-	RAM RAMMetrics  `json:"ram"`
+	GPU  *GPUMetrics        `json:"gpu,omitempty"`
+	GPUs []GPUDeviceMetrics `json:"gpus,omitempty"` // Per-GPU metrics breakdown
+	CPU  CPUMetrics         `json:"cpu"`
+	RAM  RAMMetrics         `json:"ram"`
 }
 
-// GPUMetrics holds real-time GPU utilization.
+// GPUMetrics holds aggregated real-time GPU utilization.
+// For multi-GPU: memory fields are sums, utilization/temperature are max, power is sum.
 type GPUMetrics struct {
+	UtilizationPercent int     `json:"utilization_percent"`
+	MemoryUsedMiB      int     `json:"memory_used_mib"`
+	MemoryTotalMiB     int     `json:"memory_total_mib"`
+	TemperatureCelsius float64 `json:"temperature_celsius"`
+	PowerDrawWatts     float64 `json:"power_draw_watts"`
+}
+
+// GPUDeviceMetrics holds real-time metrics for a single GPU device.
+type GPUDeviceMetrics struct {
+	Index              int     `json:"index"`
 	UtilizationPercent int     `json:"utilization_percent"`
 	MemoryUsedMiB      int     `json:"memory_used_mib"`
 	MemoryTotalMiB     int     `json:"memory_total_mib"`

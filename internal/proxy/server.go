@@ -238,6 +238,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	backends := s.ListBackends()
 	data := make([]map[string]string, 0, len(backends))
 	for _, b := range backends {
+		if !b.Ready {
+			continue
+		}
 		data = append(data, map[string]string{
 			"id":       b.ModelName,
 			"object":   "model",

@@ -32,6 +32,12 @@ func detectWithRunner(ctx context.Context, runner CommandRunner) (*HardwareInfo,
 	// NVIDIA: detected by memIsNA in parseNvidiaGPULine (VRAMMiB == 0).
 	if hw.GPU != nil && hw.GPU.UnifiedMemory && hw.GPU.VRAMMiB == 0 {
 		hw.GPU.VRAMMiB = hw.RAM.TotalMiB
+		hw.GPU.TotalVRAMMiB = hw.RAM.TotalMiB
+		for i := range hw.GPU.GPUs {
+			if hw.GPU.GPUs[i].VRAMMiB == 0 {
+				hw.GPU.GPUs[i].VRAMMiB = hw.RAM.TotalMiB
+			}
+		}
 	}
 
 	// AMD APUs (e.g., Ryzen AI MAX): rocm-smi reports full physical memory as VRAM.
@@ -141,7 +147,10 @@ func detectStorage() StorageInfo {
 func collectMetricsWithRunner(ctx context.Context, runner CommandRunner) (*Metrics, error) {
 	m := &Metrics{}
 
-	m.GPU = collectGPUMetrics(ctx, runner)
+	if result := collectGPUMetrics(ctx, runner); result != nil {
+		m.GPU = result.aggregate
+		m.GPUs = result.perDevice
+	}
 	m.CPU = collectCPUMetrics(ctx, runner)
 	m.RAM = collectRAMMetrics(ctx, runner)
 

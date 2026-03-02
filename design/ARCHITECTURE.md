@@ -229,10 +229,12 @@ Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 
 2. **自动发现**：`--discover` 开启 mDNS 扫描，每 10s 查询远程 `/v1/models` 并注册
 3. **防自发现**：`isLocalIP()` + 端口匹配过滤自身 mDNS 广播，避免路由回环
 4. **Stale 清理**：每轮发现后，移除不再存活的远程 backend
+5. **Agent LLM 端点降级**：Go Agent (L3a) 的 LLM 后端在本地无模型时，自动通过 mDNS 发现 Fleet 中的远程 LLM 端点并 hot-swap（`DiscoverFunc` 注入，懒触发，不持久化）
 
 ### mDNS 广播
 
 - 服务类型：`_llm._tcp`
+- **默认开启**：`aima serve` 默认启用 mDNS 广播（`--mdns=true`），可用 `--mdns=false` 关闭
 - IP 筛选：`lanIPs()` 排除 loopback、Docker bridge (172.16-31.x)、K3S overlay (10.x)
 - TXT 记录：`aima=1`, `models=a,b,c`
 

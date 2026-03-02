@@ -6,10 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 )
+
+// FleetEndpoint represents a discovered remote LLM endpoint.
+type FleetEndpoint struct {
+	BaseURL string // e.g., "http://100.105.58.16:6188/v1"
+	Model   string // first model ID
+}
+
+// DiscoverFunc discovers fleet LLM endpoints via mDNS.
+// Called lazily when the local endpoint has no models.
+type DiscoverFunc func(ctx context.Context, apiKey string) []FleetEndpoint
 
 // OpenAIClient implements LLMClient using the OpenAI-compatible chat completions API.
 type OpenAIClient struct {
@@ -17,6 +28,7 @@ type OpenAIClient struct {
 	model      string
 	apiKey     string
 	httpClient *http.Client
+	discoverFn DiscoverFunc
 
 	mu            sync.RWMutex
 	cachedModel   string
@@ -39,6 +51,11 @@ func WithAPIKey(key string) OpenAIOption {
 // WithHTTPClient sets a custom http.Client.
 func WithHTTPClient(hc *http.Client) OpenAIOption {
 	return func(c *OpenAIClient) { c.httpClient = hc }
+}
+
+// WithDiscoverFunc sets a fleet discovery function for LLM endpoint fallback.
+func WithDiscoverFunc(fn DiscoverFunc) OpenAIOption {
+	return func(c *OpenAIClient) { c.discoverFn = fn }
 }
 
 // NewOpenAIClient creates an OpenAI-compatible LLM client.
@@ -206,6 +223,10 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		// Local endpoint unreachable — try fleet discovery
+		if ep, fErr := c.discoverFleetEndpoint(ctx); fErr == nil {
+			return ep.Model, nil
+		}
 		return "", fmt.Errorf("fetch models: %w", err)
 	}
 	defer httpResp.Body.Close()
@@ -223,6 +244,10 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode models: %w", err)
 	}
 	if len(modelsResp.Data) == 0 {
+		// Local has no models — try fleet discovery
+		if ep, fErr := c.discoverFleetEndpoint(ctx); fErr == nil {
+			return ep.Model, nil
+		}
 		return "", fmt.Errorf("no models available at %s/models", baseURL)
 	}
 
@@ -233,6 +258,37 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 	result := c.cachedModel
 	c.mu.Unlock()
 	return result, nil
+}
+
+// discoverFleetEndpoint tries to find a remote LLM endpoint via fleet mDNS discovery.
+// On success, hot-swaps baseURL and caches the discovered model.
+func (c *OpenAIClient) discoverFleetEndpoint(ctx context.Context) (*FleetEndpoint, error) {
+	c.mu.RLock()
+	discoverFn := c.discoverFn
+	apiKey := c.apiKey
+	c.mu.RUnlock()
+
+	if discoverFn == nil {
+		return nil, fmt.Errorf("no discover function configured")
+	}
+
+	slog.Debug("local LLM endpoint has no models, trying fleet discovery")
+	endpoints := discoverFn(ctx, apiKey)
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("no fleet endpoints with models found")
+	}
+
+	ep := &endpoints[0]
+	slog.Info("discovered fleet LLM endpoint", "baseURL", ep.BaseURL, "model", ep.Model)
+
+	// Hot-swap to discovered endpoint
+	c.mu.Lock()
+	c.baseURL = ep.BaseURL
+	c.cachedModel = ep.Model
+	c.modelCachedAt = time.Now()
+	c.mu.Unlock()
+
+	return ep, nil
 }
 
 // Available checks if the LLM endpoint is reachable.

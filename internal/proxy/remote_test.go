@@ -137,7 +137,7 @@ func TestQueryRemoteModels(t *testing.T) {
 	defer ts.Close()
 
 	addr, port := splitHostPort(t, ts)
-	models := queryRemoteModels(context.Background(), addr, port, "")
+	models := QueryRemoteModels(context.Background(), addr, port, "")
 
 	if len(models) != 3 {
 		t.Fatalf("expected 3 models, got %d: %v", len(models), models)
@@ -153,7 +153,7 @@ func TestQueryRemoteModels(t *testing.T) {
 
 func TestQueryRemoteModels_Unreachable(t *testing.T) {
 	// Query a port that nothing is listening on
-	models := queryRemoteModels(context.Background(), "127.0.0.1", 1, "")
+	models := QueryRemoteModels(context.Background(), "127.0.0.1", 1, "")
 	if models != nil {
 		t.Errorf("expected nil for unreachable host, got %v", models)
 	}
@@ -197,13 +197,13 @@ func TestQueryRemoteModels_WithAPIKey(t *testing.T) {
 	addr, port := splitHostPort(t, ts)
 
 	// Without key → no models
-	noKey := queryRemoteModels(context.Background(), addr, port, "")
+	noKey := QueryRemoteModels(context.Background(), addr, port, "")
 	if len(noKey) != 0 {
 		t.Errorf("expected 0 models without key, got %d", len(noKey))
 	}
 
 	// With correct key → 1 model
-	withKey := queryRemoteModels(context.Background(), addr, port, "test-key")
+	withKey := QueryRemoteModels(context.Background(), addr, port, "test-key")
 	if len(withKey) != 1 || withKey[0] != "secure-model" {
 		t.Errorf("expected [secure-model] with key, got %v", withKey)
 	}

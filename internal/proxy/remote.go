@@ -47,7 +47,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			continue
 		}
 
-		models := queryRemoteModels(ctx, addr, svc.Port, apiKey)
+		models := QueryRemoteModels(ctx, addr, svc.Port, apiKey)
 		for _, model := range models {
 			// Local always wins
 			if localModels[model] {
@@ -108,10 +108,10 @@ func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Dura
 	}
 }
 
-// queryRemoteModels fetches /v1/models from a remote aima instance.
+// QueryRemoteModels fetches /v1/models from a remote aima instance.
 // apiKey is sent as Bearer token when non-empty so authenticated peers respond.
 // Returns nil on any error (non-fatal).
-func queryRemoteModels(ctx context.Context, addr string, port int, apiKey string) []string {
+func QueryRemoteModels(ctx context.Context, addr string, port int, apiKey string) []string {
 	url := fmt.Sprintf("http://%s:%d/v1/models", addr, port)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

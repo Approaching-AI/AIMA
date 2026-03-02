@@ -18,7 +18,7 @@ type OpenAIClient struct {
 	apiKey     string
 	httpClient *http.Client
 
-	mu            sync.Mutex
+	mu            sync.RWMutex
 	cachedModel   string
 	modelCachedAt time.Time
 }
@@ -54,8 +54,37 @@ func NewOpenAIClient(baseURL string, opts ...OpenAIOption) *OpenAIClient {
 	return c
 }
 
+// SetEndpoint updates the base URL at runtime (hot-swap, no restart).
+func (c *OpenAIClient) SetEndpoint(baseURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseURL = baseURL
+}
+
+// SetModel updates the model name at runtime and invalidates the cached model.
+func (c *OpenAIClient) SetModel(model string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.model = model
+	c.cachedModel = ""
+	c.modelCachedAt = time.Time{}
+}
+
+// SetAPIKey updates the API key at runtime.
+func (c *OpenAIClient) SetAPIKey(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.apiKey = key
+}
+
 // ChatCompletion sends a chat completion request with optional tool definitions.
 func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
+	// Snapshot mutable fields under read lock (don't hold during I/O)
+	c.mu.RLock()
+	baseURL := c.baseURL
+	apiKey := c.apiKey
+	c.mu.RUnlock()
+
 	model, err := c.resolveModel(ctx)
 	if err != nil {
 		return nil, err
@@ -103,13 +132,13 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	httpResp, err := c.httpClient.Do(httpReq)
@@ -149,23 +178,30 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 const modelCacheTTL = 30 * time.Second
 
 func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
-	if c.model != "" {
-		return c.model, nil
+	// Snapshot mutable fields under read lock
+	c.mu.RLock()
+	model := c.model
+	baseURL := c.baseURL
+	apiKey := c.apiKey
+	cached := c.cachedModel
+	cachedAt := c.modelCachedAt
+	c.mu.RUnlock()
+
+	if model != "" {
+		return model, nil
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.cachedModel != "" && time.Since(c.modelCachedAt) < modelCacheTTL {
-		return c.cachedModel, nil
+	if cached != "" && time.Since(cachedAt) < modelCacheTTL {
+		return cached, nil
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/models", nil)
+	// Fetch from /models endpoint (no lock held during I/O)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
 	if err != nil {
 		return "", fmt.Errorf("create models request: %w", err)
 	}
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	httpResp, err := c.httpClient.Do(httpReq)
@@ -187,20 +223,28 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode models: %w", err)
 	}
 	if len(modelsResp.Data) == 0 {
-		return "", fmt.Errorf("no models available at %s/models", c.baseURL)
+		return "", fmt.Errorf("no models available at %s/models", baseURL)
 	}
 
+	// Update cache under write lock
+	c.mu.Lock()
 	c.cachedModel = modelsResp.Data[0].ID
 	c.modelCachedAt = time.Now()
-	return c.cachedModel, nil
+	result := c.cachedModel
+	c.mu.Unlock()
+	return result, nil
 }
 
 // Available checks if the LLM endpoint is reachable.
 func (c *OpenAIClient) Available(ctx context.Context) bool {
+	c.mu.RLock()
+	baseURL := c.baseURL
+	c.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
 	if err != nil {
 		return false
 	}

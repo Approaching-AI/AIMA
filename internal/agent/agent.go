@@ -155,8 +155,5 @@ func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
 }
 
 func (a *Agent) buildSystemPrompt() string {
-	return "You are AIMA, an AI inference management assistant. " +
-		"You have access to tools that let you detect hardware, manage models and engines, " +
-		"deploy inference services, and query the knowledge base. " +
-		"Use these tools to help the user manage AI inference on their device."
+	return corePrompt
 }

@@ -172,6 +172,16 @@ func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 		}
 	}
 
+	// Container terminated (exited/crashed): always mark as failed.
+	if pod.ExitCode != nil {
+		phase = "failed"
+	}
+
+	// High restart count with not-ready container: unstable, mark failed.
+	if pod.RestartCount >= 3 && !pod.Ready {
+		phase = "failed"
+	}
+
 	return &DeploymentStatus{
 		Name:      pod.Name,
 		Phase:     phase,
@@ -181,6 +191,8 @@ func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 		StartTime: pod.StartTime,
 		Message:   pod.Message,
 		Runtime:   "k3s",
+		Restarts:  pod.RestartCount,
+		ExitCode:  pod.ExitCode,
 	}
 }
 

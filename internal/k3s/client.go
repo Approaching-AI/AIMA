@@ -33,6 +33,9 @@ type PodStatus struct {
 	StartTime     string            `json:"start_time"`
 	Message       string            `json:"message,omitempty"`
 	ContainerPort int               `json:"container_port,omitempty"`
+	RestartCount     int    `json:"restart_count,omitempty"`
+	ExitCode         *int  `json:"exit_code,omitempty"`         // from Terminated state
+	ContainerStarted string `json:"container_started,omitempty"` // when the current container instance started
 }
 
 // LogOptions configures log retrieval.
@@ -240,13 +243,30 @@ type kubePod struct {
 		StartTime         string `json:"startTime"`
 		Message           string `json:"message"`
 		ContainerStatuses []struct {
-			Ready bool `json:"ready"`
-			State struct {
+			Ready        bool `json:"ready"`
+			RestartCount int  `json:"restartCount"`
+			State        struct {
 				Waiting *struct {
 					Reason  string `json:"reason"`
 					Message string `json:"message"`
 				} `json:"waiting"`
+				Running *struct {
+					StartedAt string `json:"startedAt"`
+				} `json:"running"`
+				Terminated *struct {
+					ExitCode int    `json:"exitCode"`
+					Reason   string `json:"reason"`
+					Message  string `json:"message"`
+					Signal   int    `json:"signal"`
+				} `json:"terminated"`
 			} `json:"state"`
+			LastState struct {
+				Terminated *struct {
+					ExitCode int    `json:"exitCode"`
+					Reason   string `json:"reason"`
+					Message  string `json:"message"`
+				} `json:"terminated"`
+			} `json:"lastTerminationState"`
 		} `json:"containerStatuses"`
 	} `json:"status"`
 }
@@ -259,15 +279,38 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 
 	ready := false
 	msg := kp.Status.Message
+	restartCount := 0
+	var exitCode *int
+	containerStarted := ""
 	if len(kp.Status.ContainerStatuses) > 0 {
 		cs := kp.Status.ContainerStatuses[0]
 		ready = cs.Ready
+		restartCount = cs.RestartCount
 		// Use container waiting reason as message when pod-level message is empty
 		if msg == "" && cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
 			msg = cs.State.Waiting.Reason
 			if cs.State.Waiting.Message != "" {
 				msg += ": " + cs.State.Waiting.Message
 			}
+		}
+		// Terminated state: capture exit code and reason
+		if cs.State.Terminated != nil {
+			exitCode = &cs.State.Terminated.ExitCode
+			if msg == "" {
+				msg = cs.State.Terminated.Reason
+				if cs.State.Terminated.Message != "" {
+					msg += ": " + cs.State.Terminated.Message
+				}
+			}
+		}
+		// Running state: capture container start time
+		if cs.State.Running != nil {
+			containerStarted = cs.State.Running.StartedAt
+		}
+		// Last termination: if currently running but previously crashed, show the crash reason
+		if cs.LastState.Terminated != nil && msg == "" && restartCount > 0 {
+			msg = fmt.Sprintf("restarted %dx, last exit: %s (code %d)",
+				restartCount, cs.LastState.Terminated.Reason, cs.LastState.Terminated.ExitCode)
 		}
 	}
 
@@ -277,14 +320,17 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 	}
 
 	return &PodStatus{
-		Name:          kp.Metadata.Name,
-		Phase:         kp.Status.Phase,
-		Ready:         ready,
-		IP:            kp.Status.PodIP,
-		Labels:        kp.Metadata.Labels,
-		StartTime:     kp.Status.StartTime,
-		Message:       msg,
-		ContainerPort: containerPort,
+		Name:             kp.Metadata.Name,
+		Phase:            kp.Status.Phase,
+		Ready:            ready,
+		IP:               kp.Status.PodIP,
+		Labels:           kp.Metadata.Labels,
+		StartTime:        kp.Status.StartTime,
+		Message:          msg,
+		ContainerPort:    containerPort,
+		RestartCount:     restartCount,
+		ExitCode:         exitCode,
+		ContainerStarted: containerStarted,
 	}, nil
 }
 

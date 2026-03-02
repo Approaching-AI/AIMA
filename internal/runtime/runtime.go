@@ -44,13 +44,15 @@ type DeployRequest struct {
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
 	Name      string            `json:"name"`
-	Phase     string            `json:"phase"`   // running / stopped / failed
+	Phase     string            `json:"phase"`   // running / starting / stopped / failed
 	Ready     bool              `json:"ready"`
 	Address   string            `json:"address"` // host:port
 	Labels    map[string]string `json:"labels"`
 	StartTime string            `json:"start_time"`
 	Message   string            `json:"message,omitempty"`
 	Runtime   string            `json:"runtime"` // "k3s" or "native"
+	Restarts  int               `json:"restarts,omitempty"`
+	ExitCode  *int              `json:"exit_code,omitempty"`
 }
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.

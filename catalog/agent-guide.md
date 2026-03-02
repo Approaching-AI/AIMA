@@ -202,13 +202,13 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `deploy.apply` | `model`, `engine?`, `slot?`, `config?`, `dry_run?` | deployment status | Deploy model for inference. **Agent calls require approval** — returns plan + approval ID |
+| `deploy.apply` | `model`, `engine?`, `slot?`, `config?`, `dry_run?` | `{name, model, engine, slot, status, runtime}` | Deploy model for inference. `name` is the sanitized pod/process name. **Agent calls require approval** — returns plan + approval ID |
 | `deploy.approve` | `id` | deployment status | Approve and execute a pending deployment by approval ID |
 | `deploy.dry_run` | `model`, `engine?`, `slot?`, `config?` | fitness report + warnings | Preview deployment without executing |
 | `deploy.delete` | `name` | success | Remove a deployment |
-| `deploy.status` | `name` | pod/process status | Check deployment health |
+| `deploy.status` | `name` | pod/process status (phase/ready/restarts/exit_code) | Check deployment health. Accepts pod name or model name |
 | `deploy.list` | (none) | all deployments | List all active deployments |
-| `deploy.logs` | `name`, `tail_lines?` | log text | Get deployment logs |
+| `deploy.logs` | `name`, `tail_lines?` | log text | Get deployment logs. Accepts pod name or model name |
 
 **Deployment flow**:
 ```

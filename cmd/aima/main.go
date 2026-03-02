@@ -956,7 +956,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 				resolved.ModelPath = dbModel.Path
 			}
 		}
-		return resolved, modelName, nil
+		return resolved, resolved.ModelName, nil
 	}
 	if !strings.Contains(err.Error(), "not found in catalog") {
 		return nil, "", fmt.Errorf("resolve config: %w", err)
@@ -1537,7 +1537,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				EngineType: resolved.Engine,
 				Ready:      false,
 			})
+			deployName := knowledge.SanitizePodName(modelName + "-" + resolved.Engine)
 			result := map[string]any{
+				"name": deployName,
 				"model": modelName, "engine": resolved.Engine,
 				"slot": resolved.Slot, "status": "deploying",
 				"runtime": activeRt.Name(),
@@ -1644,6 +1646,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				s, err = nativeRt.Status(ctx, name)
 			}
 			if err != nil {
+				// Exact pod name failed — search by model label.
+				if deployments, listErr := rt.List(ctx); listErr == nil {
+					for _, d := range deployments {
+						if d.Labels["aima.dev/model"] == name || d.Name == name {
+							s = d
+							err = nil
+							break
+						}
+					}
+				}
+			}
+			if err != nil {
 				return nil, err
 			}
 			return json.Marshal(s)
@@ -1664,6 +1678,17 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			logs, err := rt.Logs(ctx, name, tailLines)
 			if err != nil && nativeRt != nil && nativeRt != rt {
 				logs, err = nativeRt.Logs(ctx, name, tailLines)
+			}
+			if err != nil {
+				// Exact pod name failed — search by model label to find actual pod name.
+				if deployments, listErr := rt.List(ctx); listErr == nil {
+					for _, d := range deployments {
+						if d.Labels["aima.dev/model"] == name || d.Name == name {
+							logs, err = rt.Logs(ctx, d.Name, tailLines)
+							break
+						}
+					}
+				}
 			}
 			return logs, err
 		},

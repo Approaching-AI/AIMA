@@ -317,9 +317,24 @@ func TestAgent_SystemPrompt(t *testing.T) {
 	if len(sysPrompt) == 0 {
 		t.Fatal("system prompt is empty")
 	}
-	// System prompt should contain persona description
-	if !contains(sysPrompt, "AIMA") {
-		t.Error("system prompt missing AIMA persona")
+	// System prompt should be the embedded core prompt
+	if !contains(sysPrompt, "# AIMA Agent") {
+		t.Error("system prompt missing embedded core prompt header")
+	}
+	if !contains(sysPrompt, "agent.guide") {
+		t.Error("system prompt missing agent.guide pointer")
+	}
+	if !contains(sysPrompt, "## Tool Groups") {
+		t.Error("system prompt missing tool groups section")
+	}
+}
+
+func TestCorePromptEmbedded(t *testing.T) {
+	if len(corePrompt) == 0 {
+		t.Fatal("corePrompt embed is empty")
+	}
+	if !contains(corePrompt, "# AIMA Agent") {
+		t.Error("corePrompt missing header")
 	}
 }
 

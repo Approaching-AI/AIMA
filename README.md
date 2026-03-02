@@ -26,20 +26,73 @@ cd aima
 make build
 ```
 
-### First Run
+### Server Setup (Linux)
 
 ```bash
-# Detect your hardware
+# 1. Detect your hardware
 aima hal detect
 
-# List available models from the knowledge base
-aima model list
+# 2. Initialize infrastructure (installs K3S + HAMi + aima-serve daemon)
+#    Downloads airgap images for offline container startup.
+#    Requires root for systemd service installation.
+sudo aima init
 
-# Deploy a model (auto-resolves engine + config for your hardware)
+# 3. Deploy a model (auto-resolves engine + config for your hardware)
 aima deploy apply --model qwen3.5-35b-a3b
+```
 
-# Start the API server (OpenAI-compatible + MCP + Web UI on :6188)
-aima serve
+After `aima init`, three components are running as systemd services:
+
+| Component | What it does |
+|-----------|-------------|
+| K3S | Container orchestration (containerd, airgap images pre-loaded) |
+| HAMi | GPU virtualization for multi-model sharing (skipped on unsupported hardware) |
+| aima-serve | API server on `0.0.0.0:6188` with mDNS broadcast |
+
+The server is now discoverable on the LAN and ready to serve inference requests.
+
+### Client Usage (Any Platform)
+
+On another device with the AIMA binary — no `init` or `serve` needed:
+
+```bash
+# Discover servers on the LAN via mDNS (no IP needed)
+aima discover
+
+# List all discovered AIMA devices
+aima fleet devices
+
+# Query a remote device
+aima fleet exec <device-id> hardware.detect
+aima fleet exec <device-id> deploy.list
+
+# Call the OpenAI-compatible API directly
+curl http://<server-ip>:6188/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.5-35b-a3b","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Web UI
+
+Every AIMA server hosts a built-in Web UI at `http://<server-ip>:6188/ui/`.
+
+To discover the server IP first: `aima discover`.
+
+To get a Fleet dashboard that auto-discovers all LAN peers, run `aima serve --discover` on your own device and open `http://localhost:6188/ui/`.
+
+### Security
+
+`aima init` starts the server **without authentication** (LAN trust model). To enable API key authentication:
+
+```bash
+# Set API key (hot-reloads, no restart needed)
+aima config set api_key <your-key>
+
+# All API/MCP/Fleet requests now require: Authorization: Bearer <your-key>
+# Web UI will prompt for the key automatically.
+
+# Remote fleet commands with authentication
+aima fleet devices --api-key <your-key>
 ```
 
 ## Supported Hardware

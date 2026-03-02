@@ -26,20 +26,73 @@ cd aima
 make build
 ```
 
-### 首次运行
+### 服务器部署（Linux）
 
 ```bash
-# 检测硬件
+# 1. 检测硬件
 aima hal detect
 
-# 列出知识库中的可用模型
-aima model list
+# 2. 初始化基础设施（安装 K3S + HAMi + aima-serve 守护进程）
+#    自动下载 airgap 离线镜像包，容器启动无需联网。
+#    需要 root 权限安装 systemd 服务。
+sudo aima init
 
-# 部署模型（自动解析引擎和配置）
+# 3. 部署模型（自动匹配硬件和引擎）
 aima deploy apply --model qwen3.5-35b-a3b
+```
 
-# 启动 API 服务（OpenAI 兼容 + MCP + Web UI，端口 :6188）
-aima serve
+`aima init` 完成后，三个组件以 systemd 服务运行：
+
+| 组件 | 作用 |
+|------|------|
+| K3S | 容器编排（containerd 就绪，airgap 镜像已预加载） |
+| HAMi | GPU 虚拟化，支持多模型共享显存（不兼容的硬件自动跳过） |
+| aima-serve | API 服务监听 `0.0.0.0:6188`，mDNS 自动广播 |
+
+服务器现在可以被局域网内的设备自动发现，随时接受推理请求。
+
+### 客户端使用（任意平台）
+
+在另一台设备上只需要 AIMA 二进制，不需要 `init` 或 `serve`：
+
+```bash
+# 通过 mDNS 自动发现局域网中的服务器（无需知道 IP）
+aima discover
+
+# 列出所有已发现的 AIMA 设备
+aima fleet devices
+
+# 远程查询和操控
+aima fleet exec <device-id> hardware.detect
+aima fleet exec <device-id> deploy.list
+
+# 直接调用 OpenAI 兼容 API
+curl http://<服务器IP>:6188/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.5-35b-a3b","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Web UI
+
+每个 AIMA 服务器内置 Web UI，访问 `http://<服务器IP>:6188/ui/`。
+
+如何获取服务器 IP：运行 `aima discover`。
+
+如需 Fleet 全局仪表盘（自动发现局域网内所有节点），在自己的设备上运行 `aima serve --discover`，然后打开 `http://localhost:6188/ui/`。
+
+### 安全
+
+`aima init` 默认 **无认证启动**（局域网信任模型）。启用 API Key 认证：
+
+```bash
+# 设置 API Key（热更新，无需重启）
+aima config set api_key <your-key>
+
+# 之后所有 API/MCP/Fleet 请求都需要: Authorization: Bearer <your-key>
+# Web UI 会自动弹出 Key 输入框。
+
+# 远程 Fleet 命令带认证
+aima fleet devices --api-key <your-key>
 ```
 
 ## 支持硬件

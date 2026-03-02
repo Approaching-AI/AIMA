@@ -5,7 +5,7 @@ metadata:
 hardware:
   gpu:
     arch: Ada
-    vram_mib: 24576
+    vram_mib: 49152
     compute_id: "8.9"
     compute_units: 16384
     resource_name: "nvidia.com/gpu"
@@ -30,3 +30,5 @@ container:
     NVIDIA_VISIBLE_DEVICES: "all"
     NVIDIA_DRIVER_CAPABILITIES: "all"
     LD_LIBRARY_PATH: "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+  partition_remove_env:
+    - NVIDIA_VISIBLE_DEVICES

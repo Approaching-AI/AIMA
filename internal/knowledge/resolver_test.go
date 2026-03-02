@@ -170,9 +170,9 @@ func TestResolveWithSlotOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// Slot override is in config
-	if resolved.Config["slot"] != "secondary" {
-		t.Errorf("Config[slot] = %v, want secondary", resolved.Config["slot"])
+	// Slot override should not leak into config (handled via resolved.Slot)
+	if _, ok := resolved.Config["slot"]; ok {
+		t.Errorf("Config[slot] should not be set, but was %v", resolved.Config["slot"])
 	}
 }
 

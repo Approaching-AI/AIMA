@@ -145,7 +145,7 @@ variants:
       latency_first_token_ms: [41, 481]        # short 41ms → 2K 481ms
       tpot_ms: [5.7, 5.8]                      # measured: rock-solid 5.7-5.8ms across all context
       vram_mib: 88098                           # measured: 44030+44068 MiB (2 GPUs, gmu=0.85)
-      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), TP=2, FLASH_ATTN, no P2P/NVLink (custom allreduce disabled). Model load 32.86 GiB in 9.3s, torch.compile 22.9s, CUDA graph 13s. No MoE config for RTX 4090 (using default). 2026-03-01."
+      notes: "vLLM v0.16.0rc2 (qwen3_5-cu130), TP=2, FLASH_ATTN, no P2P/NVLink (custom allreduce disabled). Model load 32.86 GiB in 9.3s, torch.compile 22.9s, CUDA graph 13s. No MoE config for RTX 4090 (using default). Triple-model coexistence: gmu=0.78 (KV 2.58GiB/67K tok, ~40.6GiB/GPU, leaves ~7.8GiB/GPU for ASR+TTS). 2026-03-02."
       context_scaling:                          # measured: 1-concurrency, 128-token output
         # input_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
         1024:   [0.083, 173.7, 12337]

@@ -1,24 +1,21 @@
 kind: engine_asset
 metadata:
-  name: qwen-tts-fastapi
-  type: qwen-tts-fastapi
+  name: qwen-tts-fastapi-cuda
+  type: qwen-tts-fastapi-cuda
   version: "1.0"
 image:
-  # gb10 本地构建的 ARM64 CPU-only TTS 镜像 (FastAPI + qwen-tts)
-  # 已有 /v1/audio/speech (OpenAI compat) + /v1/tts + /health 端点
-  name: qujing-qwen3-tts-real
+  name: qwen3-tts-cuda-x86
   tag: "latest"
-  size_approx_mb: 2500
-  platforms: [linux/arm64]
+  size_approx_mb: 5000
+  platforms: [linux/amd64]
 patterns:
-  - "^qwen-tts-fastapi$"
-  - "qwen-tts"
-  - "tts-fastapi"
+  - "^qwen-tts-fastapi-cuda$"
+  - "tts-fastapi-cuda"
 hardware:
-  gpu_arch: "*"
-  vram_min_mib: 0
+  gpu_arch: Ada
+  vram_min_mib: 2048
 startup:
-  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--port", "8002", "--device", "cpu"]
+  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--port", "8002", "--device", "cuda"]
   init_commands:
     - "rm -rf /model && ln -s /models /model"
   default_args:
@@ -33,23 +30,22 @@ api:
   base_path: /v1
 amplifier:
   features:
-    - cpu_inference
+    - gpu_inference
     - openai_compatible_tts
-  performance_gain: "CPU-only TTS, RTF ~0.87"
+  performance_gain: "CUDA GPU TTS inference"
   resource_expansion:
     cpu_offload: false
     ssd_offload: false
     npu_offload: false
 partition_hints:
-  min_gpu_memory_mib: 0
-  recommended_gpu_cores_percent: 0
+  min_gpu_memory_mib: 2048
+  recommended_gpu_cores_percent: 7
 time_constraints:
   cold_start_s: [10, 30]
   model_switch_s: [10, 30]
 power_constraints:
-  typical_draw_watts: [15, 40]
+  typical_draw_watts: [30, 80]
 runtime:
   default: "container"
   platform_recommendations:
-    linux/arm64: "container"
     linux/amd64: "container"

@@ -29,6 +29,7 @@ type HardwareInfo struct {
 // PartitionSlot holds the resource allocation for a single deployment slot.
 type PartitionSlot struct {
 	Name            string
+	GPUCount        int
 	GPUMemoryMiB    int
 	GPUCoresPercent int
 	CPUCores        int
@@ -81,7 +82,11 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		return nil, err
 	}
 
-	partition := c.findPartition(hw)
+	var partitionName string
+	if pn, ok := userOverrides["partition"]; ok {
+		partitionName = fmt.Sprint(pn)
+	}
+	partition := c.findPartitionByName(hw, partitionName)
 	slot := pickSlot(partition, userOverrides)
 
 	config := make(map[string]any)
@@ -101,9 +106,9 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		}
 	}
 
-	// L1: User overrides (model_path is handled separately via resolved.ModelPath)
+	// L1: User overrides (model_path, partition, slot are handled separately)
 	for k, v := range userOverrides {
-		if k == "model_path" {
+		if k == "model_path" || k == "partition" || k == "slot" {
 			continue
 		}
 		config[k] = v
@@ -369,6 +374,17 @@ func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo
 	return nil, nil, fmt.Errorf("model %q not found in catalog", modelName)
 }
 
+func (c *Catalog) findPartitionByName(hw HardwareInfo, name string) *PartitionStrategy {
+	if name != "" {
+		for i := range c.PartitionStrategies {
+			if c.PartitionStrategies[i].Metadata.Name == name {
+				return &c.PartitionStrategies[i]
+			}
+		}
+	}
+	return c.findPartition(hw)
+}
+
 func (c *Catalog) findPartition(hw HardwareInfo) *PartitionStrategy {
 	// Try specific hardware_profile match first, then wildcard.
 	// Only considers single_model strategies (or those with no workload_pattern) —
@@ -415,6 +431,7 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 		if sd.Name == slotName {
 			return &PartitionSlot{
 				Name:            sd.Name,
+				GPUCount:        sd.GPU.Count,
 				GPUMemoryMiB:    sd.GPU.MemoryMiB,
 				GPUCoresPercent: sd.GPU.CoresPercent,
 				CPUCores:        sd.CPU.Cores,
@@ -428,6 +445,7 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 		if sd.Name != "system_reserved" {
 			return &PartitionSlot{
 				Name:            sd.Name,
+				GPUCount:        sd.GPU.Count,
 				GPUMemoryMiB:    sd.GPU.MemoryMiB,
 				GPUCoresPercent: sd.GPU.CoresPercent,
 				CPUCores:        sd.CPU.Cores,

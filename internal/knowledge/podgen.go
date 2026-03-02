@@ -178,10 +178,12 @@ func (d podData) HasAnnotations() bool {
 }
 
 // HasGPUResource reports whether a device-plugin GPU resource request should be added.
-// True only when there is a GPU resource name AND explicit GPU partitioning (HAMi-style).
-// False when GPUResourceName is unset or when using runtimeClassName without a device plugin.
+// Always false: GPU access is provided by runtimeClassName (e.g. "nvidia"), not by
+// device-plugin resource allocation. HAMi device-plugin intentionally reports
+// Allocatable:0 which blocks scheduling if nvidia.com/gpu is in resource requests.
+// GPU memory/core annotations (HasAnnotations) are kept for HAMi monitoring.
 func (d podData) HasGPUResource() bool {
-	return d.GPUResourceName != "" && (d.GPUMemoryMiB > 0 || d.GPUCoresPercent > 0)
+	return false
 }
 
 // HasComputeResources reports whether CPU or RAM limits should be set.
@@ -300,6 +302,17 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 
 	// Merge env: hardware container env (base) + engine env (override on conflict).
 	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
+
+	// When GPU partitioning (HAMi) is active, remove env vars that would
+	// bypass the device plugin's GPU allocation (declared in hardware YAML
+	// container.partition_remove_env).
+	if resolved.Partition != nil && (resolved.Partition.GPUMemoryMiB > 0 || resolved.Partition.GPUCoresPercent > 0) {
+		if resolved.Container != nil {
+			for _, key := range resolved.Container.PartitionRemoveEnv {
+				delete(mergedEnv, key)
+			}
+		}
+	}
 
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),

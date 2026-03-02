@@ -33,6 +33,8 @@ startup:
     max_model_len: 128000
     enable_chunked_prefill: true
     served_model_name: "{{.ModelName}}"
+    enable_auto_tool_choice: true
+    tool_call_parser: qwen3_xml
   health_check:
     path: /health
     timeout_s: 600

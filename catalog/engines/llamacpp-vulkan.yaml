@@ -72,4 +72,7 @@ source:
   download:
     linux/amd64: "https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
   mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
+    linux/amd64:
+      - "https://ghfast.top/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
+      - "https://cf.ghproxy.cc/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"
+      - "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/releases/download/b8157/llama-b8157-bin-ubuntu-vulkan-x64.tar.gz"

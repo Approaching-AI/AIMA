@@ -25,14 +25,26 @@ source:
     linux/amd64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
     linux/arm64: "https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
   mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
-    linux/arm64: "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+    linux/amd64:
+      - "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+      - "https://cf.ghproxy.cc/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+      - "https://gh-proxy.com/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+    linux/arm64:
+      - "https://ghfast.top/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+      - "https://cf.ghproxy.cc/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
+      - "https://gh-proxy.com/https://github.com/Project-HAMi/HAMi/releases/download/v2.4.1/hami-2.4.1.tgz"
   airgap_download:
     linux/amd64: "https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
     linux/arm64: "https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
   airgap_mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
-    linux/arm64: "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
+    linux/amd64:
+      - "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
+      - "https://cf.ghproxy.cc/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
+      - "https://gh-proxy.com/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-amd64.tar"
+    linux/arm64:
+      - "https://ghfast.top/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
+      - "https://cf.ghproxy.cc/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
+      - "https://gh-proxy.com/https://github.com/Approaching-AI/AIMA/releases/download/v0.1.0-images/hami-airgap-images-arm64.tar"
   airgap_sha256:
     linux/amd64: "090c689d0af72020b0afb18cff58a20e6aef8368ebd0b75c6e4b4bc736eb1ba4"
     linux/arm64: "bb2a453d4c5d9dbd04a46656a86d188e64739225c0e837ce8c9a339ae52b9371"

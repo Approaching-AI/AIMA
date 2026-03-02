@@ -29,10 +29,10 @@ func NewBinaryManager(distDir string) *BinaryManager {
 
 // BinarySource describes where to download a native binary.
 type BinarySource struct {
-	Binary    string            // e.g. "llama-server"
-	Platforms []string          // e.g. ["linux/amd64", "darwin/arm64"]
-	Download  map[string]string // platform -> URL
-	Mirror    map[string]string // platform -> mirror URL
+	Binary    string              // e.g. "llama-server"
+	Platforms []string            // e.g. ["linux/amd64", "darwin/arm64"]
+	Download  map[string]string   // platform -> URL
+	Mirror    map[string][]string // platform -> mirror URLs (tried in order)
 }
 
 // Supports reports whether this source supports the given platform string (e.g. "linux/amd64").
@@ -77,12 +77,12 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 
 	// 3. Download from source
 	url := source.Download[platform]
-	mirrorURL := source.Mirror[platform]
-	if url == "" && mirrorURL == "" {
+	mirrorURLs := source.Mirror[platform]
+	if url == "" && len(mirrorURLs) == 0 {
 		return "", fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	if err := m.download(ctx, url, mirrorURL, m.distDir, name); err != nil {
+	if err := m.download(ctx, url, mirrorURLs, m.distDir, name); err != nil {
 		return "", fmt.Errorf("download %s: %w", name, err)
 	}
 
@@ -110,24 +110,23 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource) erro
 	}
 
 	url := source.Download[platform]
-	mirrorURL := source.Mirror[platform]
-	if url == "" && mirrorURL == "" {
+	mirrorURLs := source.Mirror[platform]
+	if url == "" && len(mirrorURLs) == 0 {
 		return fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	return m.download(ctx, url, mirrorURL, m.distDir, source.Binary)
+	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary)
 }
 
-// download tries primary URL first, then mirror. Extracts zip/tar.gz archives.
-func (m *BinaryManager) download(ctx context.Context, url, mirrorURL, destDir, binaryName string) error {
+// download tries mirror URLs first, then primary. Extracts zip/tar.gz archives.
+func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []string, destDir, binaryName string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create dist dir: %w", err)
 	}
 
-	urls := []string{}
-	if mirrorURL != "" {
-		urls = append(urls, mirrorURL) // mirror first (typically faster for CN users)
-	}
+	// Mirrors first (typically faster for CN users), primary last
+	urls := make([]string, 0, len(mirrorURLs)+1)
+	urls = append(urls, mirrorURLs...)
 	if url != "" {
 		urls = append(urls, url)
 	}

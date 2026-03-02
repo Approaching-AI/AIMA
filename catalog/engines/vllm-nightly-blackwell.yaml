@@ -13,6 +13,7 @@ image:
   platforms: [linux/arm64, linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
+    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
 patterns:
   - "^vllm-nightly$"
   - "vllm-nightly"

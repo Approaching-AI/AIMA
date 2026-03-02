@@ -11,6 +11,7 @@ image:
   platforms: [linux/amd64]
   registries:
     - docker.io/vllm/vllm-openai
+    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai
 patterns:
   - "^vllm-nightly-audio$"
   - "vllm-nightly-audio"
@@ -20,7 +21,7 @@ hardware:
 startup:
   command: ["vllm", "serve", "{{.ModelPath}}"]
   init_commands:
-    - "pip install librosa soundfile --quiet --no-cache-dir"
+    - "pip install librosa soundfile --quiet --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
   default_args:
     port: 8000
     gpu_memory_utilization: 0.85

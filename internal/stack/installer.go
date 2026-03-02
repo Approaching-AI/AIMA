@@ -186,14 +186,14 @@ func (inst *Installer) Init(ctx context.Context, components []knowledge.StackCom
 
 // DownloadItem describes a file that needs to be downloaded.
 type DownloadItem struct {
-	Name       string `json:"name"`                  // component name
-	FileName   string `json:"file_name"`             // e.g. "k3s" or "hami-chart.tgz"
-	FilePath   string `json:"file_path"`             // full local path in dist/
-	URL        string `json:"url"`                   // download URL
-	MirrorURL  string `json:"mirror_url,omitempty"`  // fallback URL (e.g. ghproxy mirror)
-	SHA256     string `json:"sha256,omitempty"`       // expected SHA-256 hex digest (optional)
-	Executable bool   `json:"executable,omitempty"`  // chmod +x after download
-	Optional   bool   `json:"optional,omitempty"`    // if true, download failure won't abort init (e.g. airgap tars)
+	Name       string   `json:"name"`                   // component name
+	FileName   string   `json:"file_name"`              // e.g. "k3s" or "hami-chart.tgz"
+	FilePath   string   `json:"file_path"`              // full local path in dist/
+	URL        string   `json:"url"`                    // primary download URL
+	MirrorURLs []string `json:"mirror_urls,omitempty"`  // fallback URLs tried before primary (e.g. ghproxy mirrors)
+	SHA256     string   `json:"sha256,omitempty"`       // expected SHA-256 hex digest (optional)
+	Executable bool     `json:"executable,omitempty"`   // chmod +x after download
+	Optional   bool     `json:"optional,omitempty"`     // if true, download failure won't abort init (e.g. airgap tars)
 }
 
 // Preflight checks which components need files downloaded.
@@ -222,7 +222,7 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 						FileName:   fileName,
 						FilePath:   localPath,
 						URL:        url,
-						MirrorURL:  comp.Source.Mirror[platform],
+						MirrorURLs: comp.Source.Mirror[platform],
 						SHA256:     comp.Source.SHA256[platform],
 						Executable: comp.Source.Binary != "",
 					})
@@ -236,13 +236,13 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 			if _, err := os.Stat(airgapPath); err != nil {
 				if url := comp.Source.AirgapDownload[platform]; url != "" {
 					items = append(items, DownloadItem{
-						Name:      comp.Metadata.Name + "-airgap",
-						FileName:  comp.Source.Airgap,
-						FilePath:  airgapPath,
-						URL:       url,
-						MirrorURL: comp.Source.AirgapMirror[platform],
-						SHA256:    comp.Source.AirgapSHA256[platform],
-						Optional:  true,
+						Name:       comp.Metadata.Name + "-airgap",
+						FileName:   comp.Source.Airgap,
+						FilePath:   airgapPath,
+						URL:        url,
+						MirrorURLs: comp.Source.AirgapMirror[platform],
+						SHA256:     comp.Source.AirgapSHA256[platform],
+						Optional:   true,
 					})
 				}
 			}
@@ -254,7 +254,7 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 
 // DownloadItems downloads all items in parallel, creating directories as needed.
 // Each URL is retried up to 3 times with exponential backoff and HTTP Range resume.
-// If a primary URL fails after retries and a mirror URL is configured, it retries the mirror.
+// Mirror URLs are tried first (in order), then the primary URL as final fallback.
 // Optional items (e.g. airgap tars) log a warning on failure instead of aborting.
 // When SHA256 is set, the downloaded file is verified before being accepted.
 func DownloadItems(ctx context.Context, items []DownloadItem) error {
@@ -272,11 +272,20 @@ func DownloadItems(ctx context.Context, items []DownloadItem) error {
 		wg.Add(1)
 		go func(item DownloadItem) {
 			defer wg.Done()
-			slog.Info("downloading", "name", item.Name, "url", item.URL)
-			err := downloadFileRetry(ctx, item.URL, item.FilePath, item.SHA256)
-			if err != nil && item.MirrorURL != "" {
-				slog.Warn("primary download failed, trying mirror", "name", item.Name, "error", err, "mirror", item.MirrorURL)
-				err = downloadFileRetry(ctx, item.MirrorURL, item.FilePath, item.SHA256)
+
+			// Build URL list: mirrors first (faster in China), primary last
+			urls := make([]string, 0, len(item.MirrorURLs)+1)
+			urls = append(urls, item.MirrorURLs...)
+			urls = append(urls, item.URL)
+
+			var err error
+			for _, u := range urls {
+				slog.Info("downloading", "name", item.Name, "url", u)
+				err = downloadFileRetry(ctx, u, item.FilePath, item.SHA256)
+				if err == nil {
+					break
+				}
+				slog.Warn("download failed, trying next source", "name", item.Name, "url", u, "error", err)
 			}
 			if err != nil {
 				if item.Optional {

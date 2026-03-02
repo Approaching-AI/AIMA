@@ -450,7 +450,7 @@ func TestMixedSkipAndReady(t *testing.T) {
 	}
 }
 
-func TestPreflightPopulatesMirrorURL(t *testing.T) {
+func TestPreflightPopulatesMirrorURLs(t *testing.T) {
 	inst := NewInstaller(&mockRunner{}, t.TempDir())
 
 	components := []knowledge.StackComponent{
@@ -462,8 +462,11 @@ func TestPreflightPopulatesMirrorURL(t *testing.T) {
 				Download: map[string]string{
 					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/bin",
 				},
-				Mirror: map[string]string{
-					runtime.GOOS + "/" + runtime.GOARCH: "https://mirror.example.com/bin",
+				Mirror: map[string][]string{
+					runtime.GOOS + "/" + runtime.GOARCH: {
+						"https://mirror1.example.com/bin",
+						"https://mirror2.example.com/bin",
+					},
 				},
 			},
 		},
@@ -473,8 +476,11 @@ func TestPreflightPopulatesMirrorURL(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
-	if items[0].MirrorURL != "https://mirror.example.com/bin" {
-		t.Errorf("MirrorURL = %q, want %q", items[0].MirrorURL, "https://mirror.example.com/bin")
+	if len(items[0].MirrorURLs) != 2 {
+		t.Fatalf("MirrorURLs len = %d, want 2", len(items[0].MirrorURLs))
+	}
+	if items[0].MirrorURLs[0] != "https://mirror1.example.com/bin" {
+		t.Errorf("MirrorURLs[0] = %q, want %q", items[0].MirrorURLs[0], "https://mirror1.example.com/bin")
 	}
 }
 
@@ -506,11 +512,11 @@ func TestDownloadItemsFallbackToMirror(t *testing.T) {
 
 	items := []DownloadItem{
 		{
-			Name:      "test",
-			FileName:  "downloaded",
-			FilePath:  destPath,
-			URL:       base + "/primary",
-			MirrorURL: base + "/mirror",
+			Name:       "test",
+			FileName:   "downloaded",
+			FilePath:   destPath,
+			URL:        base + "/primary",
+			MirrorURLs: []string{base + "/mirror"},
 		},
 	}
 
@@ -911,8 +917,8 @@ func TestPreflightIncludesAirgapTar(t *testing.T) {
 				AirgapDownload: map[string]string{
 					runtime.GOOS + "/" + runtime.GOARCH: "https://example.com/k3s-airgap.tar.zst",
 				},
-				AirgapMirror: map[string]string{
-					runtime.GOOS + "/" + runtime.GOARCH: "https://mirror.example.com/k3s-airgap.tar.zst",
+				AirgapMirror: map[string][]string{
+					runtime.GOOS + "/" + runtime.GOARCH: {"https://mirror.example.com/k3s-airgap.tar.zst"},
 				},
 			},
 		},
@@ -938,8 +944,8 @@ func TestPreflightIncludesAirgapTar(t *testing.T) {
 	if items[1].Executable {
 		t.Error("airgap item should have Executable=false")
 	}
-	if items[1].MirrorURL != "https://mirror.example.com/k3s-airgap.tar.zst" {
-		t.Errorf("airgap MirrorURL = %q", items[1].MirrorURL)
+	if len(items[1].MirrorURLs) != 1 || items[1].MirrorURLs[0] != "https://mirror.example.com/k3s-airgap.tar.zst" {
+		t.Errorf("airgap MirrorURLs = %v", items[1].MirrorURLs)
 	}
 }
 

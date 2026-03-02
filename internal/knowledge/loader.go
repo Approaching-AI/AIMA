@@ -106,10 +106,10 @@ type ContainerSecurity struct {
 
 // EngineSource describes how to obtain an engine binary for native runtime.
 type EngineSource struct {
-	Binary    string            `yaml:"binary,omitempty"    json:"binary,omitempty"`
-	Platforms []string          `yaml:"platforms,omitempty" json:"platforms,omitempty"`
-	Download  map[string]string `yaml:"download,omitempty"  json:"download,omitempty"`
-	Mirror    map[string]string `yaml:"mirror,omitempty"    json:"mirror,omitempty"`
+	Binary    string              `yaml:"binary,omitempty"    json:"binary,omitempty"`
+	Platforms []string            `yaml:"platforms,omitempty" json:"platforms,omitempty"`
+	Download  map[string]string   `yaml:"download,omitempty"  json:"download,omitempty"`
+	Mirror    map[string][]string `yaml:"mirror,omitempty"    json:"mirror,omitempty"`
 }
 
 // Supports reports whether this source supports the given platform (e.g. "linux/amd64").
@@ -289,16 +289,16 @@ type StackCompatibility struct {
 }
 
 type StackSource struct {
-	Binary         string            `yaml:"binary,omitempty"`
-	Chart          string            `yaml:"chart,omitempty"`
-	Airgap         string            `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
-	Platforms      []string          `yaml:"platforms"`
-	Download       map[string]string `yaml:"download,omitempty"`         // platform → URL
-	Mirror         map[string]string `yaml:"mirror,omitempty"`           // platform → fallback URL
-	SHA256         map[string]string `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
-	AirgapDownload map[string]string `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
-	AirgapMirror   map[string]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URL
-	AirgapSHA256   map[string]string `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
+	Binary         string              `yaml:"binary,omitempty"`
+	Chart          string              `yaml:"chart,omitempty"`
+	Airgap         string              `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
+	Platforms      []string            `yaml:"platforms"`
+	Download       map[string]string   `yaml:"download,omitempty"`         // platform → URL
+	Mirror         map[string][]string `yaml:"mirror,omitempty"`           // platform → fallback URLs (tried in order)
+	SHA256         map[string]string   `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
+	AirgapDownload map[string]string   `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
+	AirgapMirror   map[string][]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URLs (tried in order)
+	AirgapSHA256   map[string]string   `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
 }
 
 type StackInstall struct {

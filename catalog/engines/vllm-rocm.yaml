@@ -13,6 +13,7 @@ image:
   platforms: [linux/amd64]
   registries:
     - docker.io/kyuz0/vllm-therock-gfx1151
+    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-therock
 patterns:
   - "^vllm$"
   - "^vllm-"

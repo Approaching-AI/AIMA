@@ -12,6 +12,7 @@ import (
 
 const (
 	releaseBaseURL = "https://github.com/zeroclaw/zeroclaw/releases/latest/download"
+	mirrorBaseURL  = "https://ghfast.top/https://github.com/zeroclaw/zeroclaw/releases/latest/download"
 )
 
 // platformBinary returns the binary name for the current platform.
@@ -51,8 +52,12 @@ func Install(ctx context.Context, destDir string) (string, error) {
 }
 
 // InstallWith downloads the ZeroClaw binary using the given HTTP client.
-// This is useful for testing with a mock server.
+// Tries mirror first, then primary (for China network resilience).
 func InstallWith(ctx context.Context, destDir string, client *http.Client) (string, error) {
+	path, err := installFrom(ctx, destDir, client, mirrorBaseURL)
+	if err == nil {
+		return path, nil
+	}
 	return installFrom(ctx, destDir, client, releaseBaseURL)
 }
 

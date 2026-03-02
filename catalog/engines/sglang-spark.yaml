@@ -1,0 +1,72 @@
+kind: engine_asset
+metadata:
+  name: sglang-spark
+  type: sglang-spark
+  version: "cu13"
+  supported_formats: [safetensors]
+image:
+  # SGLang dev build for DGX Spark / GB10 Blackwell (ARM64 + CUDA 13.0)
+  # Speculative decoding (NEXTN) + Triton attention backend
+  name: lmsysorg/sglang
+  tag: "dev-arm64-cu13"
+  size_approx_mb: 10000
+  platforms: [linux/arm64]
+  registries:
+    - docker.io/lmsysorg/sglang
+    - registry.cn-hangzhou.aliyuncs.com/aima/sglang
+patterns:
+  - "^sglang-spark"
+  - "sglang-spark"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+startup:
+  command: ["python3", "-m", "sglang.launch_server", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
+  env:
+    SGLANG_DISABLE_CUDNN_CHECK: "1"
+  default_args:
+    port: 30000
+    tp_size: 1
+    mem_fraction_static: 0.90
+    context_length: 262144
+    reasoning_parser: qwen3
+    speculative_algo: NEXTN
+    speculative_num_steps: 4
+    speculative_eagle_topk: 2
+    speculative_num_draft_tokens: 8
+    attention_backend: triton           # ONLY option on Blackwell SM121a (flashinfer/fa4 blocked)
+    num_continuous_decode_steps: 3      # reduce scheduling overhead (default: 1)
+    triton_attention_num_kv_splits: 16  # better long-context attention (default: 8)
+  health_check:
+    path: /health
+    timeout_s: 300
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 60
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - continuous_batching
+    - speculative_decoding
+    - triton_attention
+  performance_gain: "SGLang NEXTN speculative decoding (8 draft tokens, topk=2, 4 steps), Triton attention backend. 45.5 tok/s @1K (vs vLLM 30.0). Note: radix_cache disabled with speculative decoding; flashinfer/fa4 blocked on SM121a."
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 4096
+  recommended_gpu_cores_percent: 50
+time_constraints:
+  cold_start_s: [60, 300]
+  model_switch_s: [60, 300]
+power_constraints:
+  typical_draw_watts: [40, 100]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

@@ -15,8 +15,14 @@ source:
     linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
     linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
   mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
-    linux/arm64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+    linux/amd64:
+      - "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+      - "https://cf.ghproxy.cc/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+      - "https://gh-proxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s"
+    linux/arm64:
+      - "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+      - "https://cf.ghproxy.cc/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
+      - "https://gh-proxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-arm64"
   sha256:
     linux/amd64: "74897e4af26ea383ce50f445752f40ca63a0aef0d90994fb74073c43063eeeb2"
     linux/arm64: "eff4cc82c8c057bd2dc432025b933616637dcf3df91e9e06720d9208743640d3"
@@ -24,8 +30,14 @@ source:
     linux/amd64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
     linux/arm64: "https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
   airgap_mirror:
-    linux/amd64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
-    linux/arm64: "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
+    linux/amd64:
+      - "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+      - "https://cf.ghproxy.cc/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+      - "https://gh-proxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+    linux/arm64:
+      - "https://ghfast.top/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
+      - "https://cf.ghproxy.cc/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
+      - "https://gh-proxy.com/https://github.com/k3s-io/k3s/releases/download/v1.31.4%2Bk3s1/k3s-airgap-images-arm64.tar.zst"
   airgap_sha256:
     linux/amd64: "f7a94dc28b3a8da063a41360f480ace1de3040ffd9c9228283975c8dca74d3b7"
     linux/arm64: "02694da4fb6831757f8d198dd5d9f11fcc435bce468426a56109b9d94a025877"
@@ -106,6 +118,7 @@ registries:
     ghcr.io:
       endpoint:
         - "https://ghcr.nju.edu.cn"          # 南京大学
+        - "https://ghcr.m.daocloud.io"       # DaoCloud
     nvcr.io:
       endpoint:
         - "https://nvcr.io"                  # NGC 无国内 mirror，直连

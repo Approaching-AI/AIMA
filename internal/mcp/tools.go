@@ -75,6 +75,7 @@ type ToolDeps struct {
 	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error)
 	AgentInstall    func(ctx context.Context) (json.RawMessage, error)
 	AgentStatus     func(ctx context.Context) (json.RawMessage, error)
+	AgentGuide      func(ctx context.Context) (json.RawMessage, error)
 	RollbackList    func(ctx context.Context) (json.RawMessage, error)
 	RollbackRestore func(ctx context.Context, id int64) (json.RawMessage, error)
 
@@ -1247,6 +1248,23 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.AgentStatus(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("agent status: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// agent.guide
+	s.RegisterTool(&Tool{
+		Name:        "agent.guide",
+		Description: "Return the full AIMA Agent Usage Guide (all tool parameters, workflows, API details). Call this when you need detailed reference beyond the core system prompt.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AgentGuide == nil {
+				return ErrorResult("agent.guide not implemented"), nil
+			}
+			data, err := deps.AgentGuide(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("agent guide: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

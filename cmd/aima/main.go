@@ -13,6 +13,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jguan/aima/catalog"
@@ -119,20 +120,26 @@ func run() error {
 	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir, factoryDigests)
 
 	// 9. Create agent (L3a Go Agent)
-	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db}
+	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db, pending: make(map[int64]*pendingApproval)}
 	llmClient := buildLLMClient(ctx, db)
 	sessionStore := agent.NewSessionStore()
 	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
 
 	// 9b. Wire agent-related ToolDeps (dispatcher/zeroclaw created after buildToolDeps)
-	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, string, error) {
+	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep, skipPerms bool, sessionID string) (json.RawMessage, string, error) {
+		if skipPerms {
+			ctx = context.WithValue(ctx, ctxKeySkipPerms, true)
+		}
 		result, sid, err := dispatcher.Ask(ctx, query, agent.DispatchOption{ForceLocal: forceLocal, ForceDeep: forceDeep, SessionID: sessionID})
 		if err != nil {
 			return nil, "", err
 		}
 		data, err := json.Marshal(map[string]string{"result": result})
 		return data, sid, err
+	}
+	deps.DeployApprove = func(ctx context.Context, id int64) (json.RawMessage, error) {
+		return toolAdapter.executeApproval(ctx, id)
 	}
 	deps.AgentInstall = func(ctx context.Context) (json.RawMessage, error) {
 		binPath, err := zeroclaw.Install(ctx, filepath.Join(dataDir, "bin"))
@@ -470,6 +477,13 @@ var fleetBlockedTools = map[string]string{
 	"shell.exec":     "arbitrary command execution",
 }
 
+// confirmableTools lists MCP tools that require user confirmation when called by the Agent.
+// These are NOT blocked: instead, the adapter runs a dry-run and returns NEEDS_APPROVAL.
+// The user can then approve via deploy.approve, or re-run with --dangerously-skip-permissions.
+var confirmableTools = map[string]string{
+	"deploy.apply": "creates or replaces inference deployment",
+}
+
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
@@ -523,11 +537,25 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 	return false, ""
 }
 
+type ctxKey string
+
+const ctxKeySkipPerms ctxKey = "skipPerms"
+
 // mcpToolAdapter bridges mcp.Server to agent.ToolExecutor interface.
-// It also enforces agent safety guardrails: destructive-op blocking and audit logging.
+// It also enforces agent safety guardrails: destructive-op blocking, confirmation gates, and audit logging.
 type mcpToolAdapter struct {
 	server *mcp.Server
 	db     *state.DB
+
+	mu      sync.Mutex
+	pending map[int64]*pendingApproval
+	nextID  int64
+}
+
+type pendingApproval struct {
+	toolName  string
+	arguments json.RawMessage
+	createdAt time.Time
 }
 
 func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
@@ -535,6 +563,29 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 	if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
 		msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
 		a.audit(ctx, name, string(arguments), "BLOCKED")
+		return &agent.ToolResult{Content: msg, IsError: true}, nil
+	}
+
+	// Gap 1b: Confirmable tools require user approval (unless --dangerously-skip-permissions).
+	skipPerms, _ := ctx.Value(ctxKeySkipPerms).(bool)
+	if reason, ok := confirmableTools[name]; ok && !skipPerms {
+		dryResult, drErr := a.server.ExecuteTool(ctx, "deploy.dry_run", arguments)
+		var planText string
+		if drErr == nil {
+			for _, c := range dryResult.Content {
+				planText += c.Text
+			}
+		} else {
+			planText = "dry-run unavailable: " + drErr.Error()
+		}
+
+		id := a.storePending(name, arguments)
+
+		msg := fmt.Sprintf("NEEDS_APPROVAL (id=%d): %s requires user approval (%s).\n\n"+
+			"Deployment plan:\n%s\n\n"+
+			"Present this plan to the user. If they approve, call deploy.approve with id=%d.",
+			id, name, reason, planText, id)
+		a.audit(ctx, name, string(arguments), fmt.Sprintf("NEEDS_APPROVAL id=%d", id))
 		return &agent.ToolResult{Content: msg, IsError: true}, nil
 	}
 
@@ -581,6 +632,60 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// storePending saves a pending approval and returns its ID. Expired entries (>30min) are pruned.
+func (a *mcpToolAdapter) storePending(tool string, args json.RawMessage) int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	for id, p := range a.pending {
+		if now.Sub(p.createdAt) > 30*time.Minute {
+			delete(a.pending, id)
+		}
+	}
+	a.nextID++
+	a.pending[a.nextID] = &pendingApproval{
+		toolName:  tool,
+		arguments: append(json.RawMessage{}, args...), // copy
+		createdAt: now,
+	}
+	return a.nextID
+}
+
+// executeApproval looks up a pending approval by ID, executes it on the MCP server
+// (bypassing the adapter's confirmation gate), and removes the entry.
+// Safety: blocked tools can never reach the pending map (blocked check runs first in ExecuteTool).
+func (a *mcpToolAdapter) executeApproval(ctx context.Context, id int64) (json.RawMessage, error) {
+	a.mu.Lock()
+	p, ok := a.pending[id]
+	if ok {
+		delete(a.pending, id)
+	}
+	a.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("approval %d not found or expired", id)
+	}
+
+	// Defense-in-depth: re-check blocked tools (should never happen since blocked check
+	// runs before confirmable check in ExecuteTool, but guard against future changes).
+	if blocked, reason := isBlockedAgentTool(p.toolName, p.arguments); blocked {
+		a.audit(ctx, "deploy.approve", fmt.Sprintf("id=%d", id), "BLOCKED: "+reason)
+		return nil, fmt.Errorf("approval %d references blocked tool %s: %s", id, p.toolName, reason)
+	}
+
+	a.audit(ctx, p.toolName, string(p.arguments), fmt.Sprintf("APPROVED via deploy.approve id=%d", id))
+	result, err := a.server.ExecuteTool(ctx, p.toolName, p.arguments)
+	if err != nil {
+		a.audit(ctx, p.toolName, string(p.arguments), "ERROR: "+err.Error())
+		return nil, err
+	}
+	var text string
+	for _, c := range result.Content {
+		text += c.Text
+	}
+	a.audit(ctx, p.toolName, string(p.arguments), truncateStr(text, 500))
+	return json.RawMessage(text), nil
 }
 
 func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {

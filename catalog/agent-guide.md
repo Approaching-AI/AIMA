@@ -276,12 +276,12 @@ deploy.apply("qwen3-0.6b")
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
 | `system.status` | (none) | full system state | Hardware + deployments + models + engines |
-
-> **Tip**: `system.status` = combined overview of everything (hardware + deployments + models + engines). `hardware.detect` = detailed hardware capability vector only. `hardware.metrics` = real-time GPU utilization and temperature. For a quick "what's going on?" question, use `system.status`. For deployment decisions, use `hardware.detect`. For monitoring GPU load, use `hardware.metrics`.
 | `system.exec` | `command` | output | Execute whitelisted shell command |
 | `system.config` (get) | `key` | value | Read persistent config (`api_key`/`llm.api_key` masked) |
 | `system.config` (set) | `key`, `value` | success | Write persistent config (`api_key` hot-reloads auth; `llm.*` hot-swaps Agent LLM client) |
 | `catalog.override` | `type`, `name`, `content` | success | Override YAML asset at runtime |
+
+> **Tip**: `system.status` = combined overview of everything (hardware + deployments + models + engines). `hardware.detect` = detailed hardware capability vector only. `hardware.metrics` = real-time GPU utilization and temperature. For a quick "what's going on?" question, use `system.status`. For deployment decisions, use `hardware.detect`. For monitoring GPU load, use `hardware.metrics`.
 
 **Whitelisted commands** for `system.exec`:
 `nvidia-smi`, `df`, `free`, `uname`, `kubectl get/describe/logs/top/version`

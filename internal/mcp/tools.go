@@ -1327,7 +1327,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// agent.rollback
 	s.RegisterTool(&Tool{
 		Name:        "agent.rollback",
-		Description: "Restore a resource from a rollback snapshot. For models/engines, restores the database record. For deployments, redeploys with the original config. Call agent.rollback_list first to get the snapshot ID.",
+		Description: "Restore a resource from a rollback snapshot. For models/engines, restores the database record. For deployments, redeploys with the original config. Call agent.rollback_list first to get the snapshot ID. Blocked for agent-initiated calls.",
 		InputSchema: schema(`"id":{"type":"integer","description":"Snapshot ID from agent.rollback_list"}`, "id"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RollbackRestore == nil {
@@ -1468,7 +1468,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// fleet.exec_tool
 	s.RegisterTool(&Tool{
 		Name:        "fleet.exec_tool",
-		Description: "Execute any MCP tool on a remote fleet device. Sends the tool call over HTTP and returns the remote result. Use after fleet.list_devices to identify the device and fleet.device_tools to verify the tool is available. Do not use for local tools — call them directly instead. Blocked tools (model.remove, engine.remove, deploy.delete, agent.install, stack.init, agent.rollback, shell.exec) will be rejected.",
+		Description: "Execute any MCP tool on a remote fleet device. Sends the tool call over HTTP and returns the remote result. Use after fleet.list_devices to identify the device and fleet.device_tools to verify the tool is available. Do not use for local tools — call them directly instead. Agent guardrails apply to the inner tool_name — blocked and confirmable tools are enforced consistently with local calls.",
 		InputSchema: schema(
 			`"device_id":{"type":"string","description":"Device ID from fleet.list_devices, e.g. 'gb10', 'linux-1'. Call fleet.list_devices first if unsure."},`+
 				`"tool_name":{"type":"string","description":"MCP tool name to execute remotely, e.g. 'hardware.detect', 'model.list', 'deploy.status'. Call fleet.device_tools first to see available tools."},`+

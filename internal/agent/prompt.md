@@ -10,7 +10,6 @@ You operate hardware detection, model/engine lifecycle, deployment, and knowledg
 - Need to know what hardware this device has (GPU, VRAM, CPU, NPU)? → `hardware.detect`
 - Need real-time GPU utilization, memory usage, temperature? → `hardware.metrics`
 - Need a quick overview of everything (hardware + deployments + models + engines)? → `system.status`
-- Need to run a shell command (nvidia-smi, df, free)? → `shell.exec`
 - Need to read or change a config setting (api_key, llm.endpoint)? → `system.config`
 
 ### Deploying a Model
@@ -90,6 +89,13 @@ User: "设备状态" / "system status"
 - **Confirmable tools**: `deploy.apply` returns a plan with an approval ID. Present it; call `deploy.approve` only after user approval.
 - **Audit**: every tool call is logged to `audit_log`.
 - **shell.exec**: only whitelisted commands (nvidia-smi, df, free, uname, kubectl read-only).
+- **Rollback**: destructive ops auto-snapshot; use `rollback_list` + `rollback` to undo.
+
+## L2 Golden Configs
+
+When `knowledge.resolve` returns a config, it may include L2 golden overrides—battle-tested settings
+from the knowledge base. These are auto-injected by hardware match. Use `knowledge.promote` to
+elevate a tested config to golden status.
 
 ## Need More Detail?
 

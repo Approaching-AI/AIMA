@@ -82,10 +82,11 @@ type HardwarePartition struct {
 // (devices, env vars, volumes, security) for GPU containers. Lives in
 // hardware profile YAML so adding a new GPU vendor = YAML only, no Go code.
 type ContainerAccess struct {
-	Devices  []string          `yaml:"devices,omitempty"`
-	Env      map[string]string `yaml:"env,omitempty"`
-	Volumes  []ContainerVolume `yaml:"volumes,omitempty"`
-	Security *ContainerSecurity `yaml:"security,omitempty"`
+	Devices             []string          `yaml:"devices,omitempty"`
+	Env                 map[string]string `yaml:"env,omitempty"`
+	PartitionRemoveEnv  []string          `yaml:"partition_remove_env,omitempty"`
+	Volumes             []ContainerVolume `yaml:"volumes,omitempty"`
+	Security            *ContainerSecurity `yaml:"security,omitempty"`
 }
 
 type ContainerVolume struct {

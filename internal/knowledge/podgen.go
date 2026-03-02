@@ -32,7 +32,7 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
-  schedulerName: {{ .SchedulerName }}
+  schedulerName: default-scheduler
   restartPolicy: Always
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
@@ -74,7 +74,7 @@ spec:
       resources:
         limits:
           {{- if .HasGPUResource }}
-          {{ .GPUResourceName }}: "{{ .GPUCount }}"
+          {{ .GPUResourceName }}: "1"
           {{- end }}
           {{- if gt .CPUCores 0 }}
           cpu: "{{ .CPUCores }}"
@@ -84,7 +84,7 @@ spec:
           {{- end }}
         {{- if .HasGPUResource }}
         requests:
-          {{ .GPUResourceName }}: "{{ .GPUCount }}"
+          {{ .GPUResourceName }}: "1"
         {{- end }}
       {{- end }}
       {{- if .HealthCheckPath }}
@@ -159,12 +159,10 @@ type podData struct {
 	Port             int
 	Args             []string          // command arguments (excluding binary name -- image entrypoint is used)
 	ExtraEnv         map[string]string // merged: hardware container env (base) + engine env (override)
-	GPUCount         int
 	GPUMemoryMiB     int
 	GPUCoresPercent  int
 	CPUCores         int
 	RAMMiB           int
-	SchedulerName          string             // e.g. "hami-scheduler" for HAMi GPU partitioning
 	HealthCheckPath        string
 	HealthCheckInitDelaySec int
 	ModelHostPath          string
@@ -305,22 +303,16 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	// Merge env: hardware container env (base) + engine env (override on conflict).
 	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
 
-	// When HAMi GPU partitioning is active, let HAMi control GPU visibility.
-	// NVIDIA_VISIBLE_DEVICES=all would bypass HAMi's device allocation.
+	// When GPU partitioning (HAMi) is active, remove env vars that would
+	// bypass the device plugin's GPU allocation (declared in hardware YAML
+	// container.partition_remove_env).
 	if resolved.Partition != nil && (resolved.Partition.GPUMemoryMiB > 0 || resolved.Partition.GPUCoresPercent > 0) {
-		delete(mergedEnv, "NVIDIA_VISIBLE_DEVICES")
+		if resolved.Container != nil {
+			for _, key := range resolved.Container.PartitionRemoveEnv {
+				delete(mergedEnv, key)
+			}
+		}
 	}
-
-	// GPU count: default to 1 when partition requests GPU resources.
-	gpuCount := 1
-	if resolved.Partition != nil && resolved.Partition.GPUCount > 0 {
-		gpuCount = resolved.Partition.GPUCount
-	}
-
-	// schedulerName: always "default-scheduler".
-	// When HAMi is active, the kube-scheduler calls HAMi as an extender
-	// (configured in KubeSchedulerConfiguration), not as a standalone scheduler.
-	schedulerName := "default-scheduler"
 
 	data := podData{
 		PodName:          sanitizePodName(resolved.ModelName + "-" + resolved.Engine),
@@ -331,8 +323,6 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		Port:             port,
 		Args:             args,
 		ExtraEnv:         mergedEnv,
-		GPUCount:         gpuCount,
-		SchedulerName:    schedulerName,
 		ModelHostPath:    modelHostPath,
 		GPUResourceName:  resolved.GPUResourceName,
 		RuntimeClassName: resolved.RuntimeClassName,

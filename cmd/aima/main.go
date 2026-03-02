@@ -120,7 +120,7 @@ func run() error {
 
 	// 9. Create agent (L3a Go Agent)
 	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db}
-	llmClient := buildLLMClient()
+	llmClient := buildLLMClient(ctx, db)
 	sessionStore := agent.NewSessionStore()
 	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
@@ -279,10 +279,20 @@ func run() error {
 		if err := baseSetConfig(ctx, key, value); err != nil {
 			return err
 		}
-		if key == "api_key" {
+		switch key {
+		case "api_key":
 			proxyServer.SetAPIKey(value)
 			fleetClient.SetAPIKey(value)
 			slog.Info("API key hot-reloaded via system.config")
+		case "llm.endpoint":
+			llmClient.SetEndpoint(value)
+			slog.Info("LLM endpoint hot-swapped via system.config", "endpoint", value)
+		case "llm.model":
+			llmClient.SetModel(value)
+			slog.Info("LLM model hot-swapped via system.config", "model", value)
+		case "llm.api_key":
+			llmClient.SetAPIKey(value)
+			slog.Info("LLM API key hot-swapped via system.config")
 		}
 		return nil
 	}
@@ -691,16 +701,25 @@ func buildNativeRuntime(dataDir string) runtime.Runtime {
 
 // buildLLMClient creates an OpenAI-compatible LLM client for the Go Agent.
 // Endpoint defaults to localhost proxy; model auto-discovered from /v1/models.
-func buildLLMClient() agent.LLMClient {
+func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
+	// Precedence: env var > SQLite > default
 	endpoint := os.Getenv("AIMA_LLM_ENDPOINT")
 	if endpoint == "" {
-		endpoint = fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort)
+		if v, err := db.GetConfig(ctx, "llm.endpoint"); err == nil && v != "" {
+			endpoint = v
+		} else {
+			endpoint = fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort)
+		}
 	}
 	var opts []agent.OpenAIOption
 	if m := os.Getenv("AIMA_LLM_MODEL"); m != "" {
 		opts = append(opts, agent.WithModel(m))
+	} else if m, err := db.GetConfig(ctx, "llm.model"); err == nil && m != "" {
+		opts = append(opts, agent.WithModel(m))
 	}
 	if k := os.Getenv("AIMA_API_KEY"); k != "" {
+		opts = append(opts, agent.WithAPIKey(k))
+	} else if k, err := db.GetConfig(ctx, "llm.api_key"); err == nil && k != "" {
 		opts = append(opts, agent.WithAPIKey(k))
 	}
 	return agent.NewOpenAIClient(endpoint, opts...)

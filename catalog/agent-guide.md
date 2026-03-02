@@ -311,6 +311,7 @@ deploy.apply("qwen3-0.6b")
 | `fleet.exec_tool` | `id`, `tool`, `params` | tool result | Execute MCP tool on remote device |
 
 **Fleet enables**: one Agent managing multiple edge devices, each running AIMA.
+`fleet.exec_tool` applies the same agent safety guardrails (blocked/confirmable) to the inner `tool_name` as local calls — the Agent cannot bypass restrictions by routing through fleet.
 
 ### agent — AI Agent
 

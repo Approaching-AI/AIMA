@@ -145,6 +145,13 @@ func run() error {
 			"zeroclaw_healthy":   zeroClawMgr.Health(),
 		})
 	}
+	deps.AgentGuide = func(ctx context.Context) (json.RawMessage, error) {
+		guide, err := catalog.FS.ReadFile("agent-guide.md")
+		if err != nil {
+			return nil, fmt.Errorf("read agent guide: %w", err)
+		}
+		return json.Marshal(map[string]string{"guide": string(guide)})
+	}
 
 	// 9c. Wire rollback tools
 	deps.RollbackList = func(ctx context.Context) (json.RawMessage, error) {

@@ -3,8 +3,9 @@ build/
 /aima
 /aima.exe
 
-# Claude Code local config
-.claude/
+# Claude Code local config (keep skills tracked)
+.claude/*
+!.claude/skills/
 
 # IDE / editor
 .idea/

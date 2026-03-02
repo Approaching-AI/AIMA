@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 	"github.com/jguan/aima/internal/stack"
+	"github.com/jguan/aima/internal/ui"
 	"github.com/jguan/aima/internal/zeroclaw"
 
 	state "github.com/jguan/aima/internal"
@@ -230,7 +232,12 @@ func run() error {
 			return json.Marshal(map[string]string{"status": "ok"})
 		},
 	}
-	proxyServer.SetExtraRoutes(fleet.RegisterRoutes(fleetDeps))
+	fleetRoutes := fleet.RegisterRoutes(fleetDeps)
+	uiRoutes := ui.RegisterRoutes()
+	proxyServer.SetExtraRoutes(func(mux *http.ServeMux) {
+		fleetRoutes(mux)
+		uiRoutes(mux)
+	})
 
 	// fleetEnsureDiscovery runs a one-shot mDNS scan if the registry is empty.
 	// This ensures fleet MCP tools work without serve --discover (INV-5 parity).

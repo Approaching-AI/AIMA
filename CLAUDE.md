@@ -151,6 +151,7 @@ internal/
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
+  ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
 catalog/                      # Knowledge assets (go:embed, 编译时嵌入)
   embed.go
   hardware/                   # Hardware Profile YAML (incl. gpu.resource_name)

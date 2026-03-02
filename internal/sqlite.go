@@ -23,22 +23,22 @@ func (d *DB) RawDB() *sql.DB {
 }
 
 type Model struct {
-	ID               string
-	Name             string
-	Type             string
-	Path             string
-	Format           string
-	SizeBytes        int64
-	DetectedArch     string
-	DetectedParams   string
-	ModelClass       string
-	TotalParams      int64
-	ActiveParams     int64
-	Quantization     string
-	QuantSrc         string
-	Status           string
-	DownloadProgress float64
-	CreatedAt        time.Time
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Type             string    `json:"type"`
+	Path             string    `json:"path"`
+	Format           string    `json:"format"`
+	SizeBytes        int64     `json:"size_bytes"`
+	DetectedArch     string    `json:"detected_arch"`
+	DetectedParams   string    `json:"detected_params"`
+	ModelClass       string    `json:"model_class"`
+	TotalParams      int64     `json:"total_params"`
+	ActiveParams     int64     `json:"active_params"`
+	Quantization     string    `json:"quantization"`
+	QuantSrc         string    `json:"quant_src"`
+	Status           string    `json:"status"`
+	DownloadProgress float64   `json:"download_progress"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type Engine struct {

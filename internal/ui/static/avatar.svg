@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Outer hexagon frame -->
+  <polygon points="32,2 58,17 58,47 32,62 6,47 6,17" stroke="#38bdf8" stroke-width="1.5" fill="rgba(56,189,248,0.08)"/>
+  <!-- Inner circuit lines -->
+  <line x1="32" y1="12" x2="32" y2="22" stroke="#22d3ee" stroke-width="1" opacity="0.6"/>
+  <line x1="32" y1="42" x2="32" y2="52" stroke="#22d3ee" stroke-width="1" opacity="0.6"/>
+  <line x1="14" y1="27" x2="22" y2="27" stroke="#22d3ee" stroke-width="1" opacity="0.6"/>
+  <line x1="42" y1="27" x2="50" y2="27" stroke="#22d3ee" stroke-width="1" opacity="0.6"/>
+  <!-- Core circle -->
+  <circle cx="32" cy="32" r="12" stroke="#38bdf8" stroke-width="1.5" fill="rgba(56,189,248,0.12)"/>
+  <!-- Eyes -->
+  <circle cx="27" cy="30" r="2" fill="#22d3ee"/>
+  <circle cx="37" cy="30" r="2" fill="#22d3ee"/>
+  <!-- Mouth arc -->
+  <path d="M26,36 Q32,40 38,36" stroke="#22d3ee" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <!-- Corner nodes -->
+  <circle cx="32" cy="12" r="2" fill="#38bdf8" opacity="0.8"/>
+  <circle cx="32" cy="52" r="2" fill="#38bdf8" opacity="0.8"/>
+  <circle cx="14" cy="27" r="2" fill="#38bdf8" opacity="0.8"/>
+  <circle cx="50" cy="27" r="2" fill="#38bdf8" opacity="0.8"/>
+</svg>

@@ -19,6 +19,7 @@
 | MCP | [mcp.md](mcp.md) | MCP 服务器、工具定义 |
 | CLI | [cli.md](cli.md) | 命令行接口 |
 | Agent | [agent.md](agent.md) | Go Agent、ZeroClaw Sidecar |
+| Web UI | — | 嵌入式 SPA 仪表盘 (:6188/ui/, Alpine.js, 科幻驾驶舱风格) |
 
 ## 文档约定
 

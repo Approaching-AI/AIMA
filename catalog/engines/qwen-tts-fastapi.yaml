@@ -12,6 +12,7 @@ image:
   platforms: [linux/arm64]
 patterns:
   - "^qwen-tts-fastapi$"
+  - "qwen3-tts"
   - "qwen-tts"
   - "tts-fastapi"
 hardware:

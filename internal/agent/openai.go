@@ -239,6 +239,7 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 func (c *OpenAIClient) Available(ctx context.Context) bool {
 	c.mu.RLock()
 	baseURL := c.baseURL
+	apiKey := c.apiKey
 	c.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -247,6 +248,9 @@ func (c *OpenAIClient) Available(ctx context.Context) bool {
 	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
 	if err != nil {
 		return false
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

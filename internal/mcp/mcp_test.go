@@ -550,7 +550,7 @@ func TestShellExecToolWhitelist(t *testing.T) {
 }
 
 func TestSystemConfigTool(t *testing.T) {
-	store := map[string]string{"key1": "val1"}
+	store := map[string]string{"llm.endpoint": "http://localhost:8080"}
 	s := NewServer()
 	deps := &ToolDeps{
 		GetConfig: func(ctx context.Context, key string) (string, error) {
@@ -567,27 +567,37 @@ func TestSystemConfigTool(t *testing.T) {
 	}
 	RegisterAllTools(s, deps)
 
-	// Get
-	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.config","arguments":{"key":"key1"}}}`
+	// Get valid key
+	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.config","arguments":{"key":"llm.endpoint"}}}`
 	resp, _ := s.HandleMessage(context.Background(), []byte(msg))
 	var r jsonrpcResponse
 	json.Unmarshal(resp, &r)
 	raw, _ := json.Marshal(r.Result)
 	var tr ToolResult
 	json.Unmarshal(raw, &tr)
-	if tr.Content[0].Text != "val1" {
-		t.Errorf("get config = %q, want val1", tr.Content[0].Text)
+	if tr.Content[0].Text != "http://localhost:8080" {
+		t.Errorf("get config = %q, want http://localhost:8080", tr.Content[0].Text)
 	}
 
-	// Set
-	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"system.config","arguments":{"key":"key2","value":"val2"}}}`
+	// Set valid key
+	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"system.config","arguments":{"key":"llm.model","value":"qwen3"}}}`
 	resp, _ = s.HandleMessage(context.Background(), []byte(msg))
 	json.Unmarshal(resp, &r)
 	if r.Error != nil {
 		t.Fatalf("set error: %+v", r.Error)
 	}
-	if store["key2"] != "val2" {
-		t.Errorf("store[key2] = %q, want val2", store["key2"])
+	if store["llm.model"] != "qwen3" {
+		t.Errorf("store[llm.model] = %q, want qwen3", store["llm.model"])
+	}
+
+	// Reject unknown key
+	msg = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"system.config","arguments":{"key":"bogus_key","value":"x"}}}`
+	resp, _ = s.HandleMessage(context.Background(), []byte(msg))
+	json.Unmarshal(resp, &r)
+	raw, _ = json.Marshal(r.Result)
+	json.Unmarshal(raw, &tr)
+	if !tr.IsError {
+		t.Error("unknown key should be rejected")
 	}
 }
 

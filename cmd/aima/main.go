@@ -44,8 +44,35 @@ func main() {
 	}
 }
 
+// isLightweightInvocation returns true if os.Args indicate a command that
+// doesn't need the full init (DB, catalog, runtime selection).
+// This avoids side effects (creating ~/.aima, opening DB) for --help, version, etc.
+func isLightweightInvocation() bool {
+	for _, a := range os.Args[1:] {
+		switch a {
+		case "-h", "--help", "help", "completion":
+			return true
+		case "version":
+			return true
+		}
+		// Stop at first non-flag arg (the subcommand)
+		if !strings.HasPrefix(a, "-") {
+			return false
+		}
+	}
+	// No subcommand at all → root help
+	return true
+}
+
 func run() error {
 	ctx := context.Background()
+
+	// Fast path: --help, version, completion don't need DB/catalog/runtime.
+	if isLightweightInvocation() {
+		app := &cli.App{} // nil deps — version/help don't use them
+		rootCmd := cli.NewRootCmd(app)
+		return rootCmd.ExecuteContext(ctx)
+	}
 
 	// 1. Determine data directory
 	dataDir := os.Getenv("AIMA_DATA_DIR")

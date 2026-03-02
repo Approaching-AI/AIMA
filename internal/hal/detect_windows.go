@@ -4,6 +4,7 @@ package hal
 
 import (
 	"context"
+	"log/slog"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ func detectCPU(ctx context.Context, runner CommandRunner) CPUInfo {
 
 	out, err := runner.Run(ctx, "wmic", "cpu", "get", "Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed", "/format:csv")
 	if err != nil {
+		slog.Warn("wmic cpu detection failed, using defaults", "error", err)
 		return info
 	}
 
@@ -67,6 +69,7 @@ func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 
 	out, err := runner.Run(ctx, "wmic", "os", "get", "TotalVisibleMemorySize,FreePhysicalMemory", "/format:csv")
 	if err != nil {
+		slog.Warn("wmic RAM detection failed, using defaults", "error", err)
 		return info
 	}
 
@@ -104,6 +107,7 @@ func parseWMICRAM(output string, info *RAMInfo) {
 func collectCPUMetrics(ctx context.Context, runner CommandRunner) CPUMetrics {
 	out, err := runner.Run(ctx, "wmic", "cpu", "get", "LoadPercentage", "/format:csv")
 	if err != nil {
+		slog.Warn("wmic CPU metrics failed, using defaults", "error", err)
 		return CPUMetrics{}
 	}
 

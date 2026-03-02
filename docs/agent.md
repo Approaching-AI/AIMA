@@ -95,7 +95,7 @@ AIMA Go Binary
   │
   └── 两条通信通道:
         1. stdio pipe (AIMA → ZeroClaw): 发送任务请求
-        2. MCP client (ZeroClaw → AIMA): 调用 54 个 MCP 工具
+        2. MCP client (ZeroClaw → AIMA): 调用 56 个 MCP 工具
 ```
 
 **优雅之处：ZeroClaw 本身就是 MCP Client，AIMA 本身就是 MCP Server。

@@ -35,7 +35,7 @@ Authorization: Bearer <KEY>
 │       └──────┬───────┘       └──────────────────────┘  │
 │              │                        │                 │
 │       ┌──────▼───────┐        ┌───────▼──────┐         │
-│       │  37 MCP Tools │        │  Backends    │         │
+│       │  56 MCP Tools │        │  Backends    │         │
 │       │  (single      │        │  local K3S   │         │
 │       │   source of   │        │  local native│         │
 │       │   truth)      │        │  remote mDNS │         │
@@ -202,7 +202,8 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `deploy.apply` | `model`, `engine?`, `slot?`, `config?`, `dry_run?` | deployment status | Deploy model for inference |
+| `deploy.apply` | `model`, `engine?`, `slot?`, `config?`, `dry_run?` | deployment status | Deploy model for inference. **Agent calls require approval** — returns plan + approval ID |
+| `deploy.approve` | `id` | deployment status | Approve and execute a pending deployment by approval ID |
 | `deploy.dry_run` | `model`, `engine?`, `slot?`, `config?` | fitness report + warnings | Preview deployment without executing |
 | `deploy.delete` | `name` | success | Remove a deployment |
 | `deploy.status` | `name` | pod/process status | Check deployment health |
@@ -303,9 +304,10 @@ deploy.apply("qwen3-0.6b")
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `agent.ask` | `query`, `local?`, `deep?`, `session?` | response | Route query to L3a/L3b agent |
+| `agent.ask` | `query`, `local?`, `deep?`, `dangerously_skip_permissions?`, `session?` | response | Route query to L3a/L3b agent |
 | `agent.install` | (none) | status | Install ZeroClaw sidecar (L3b) |
 | `agent.status` | (none) | availability | Check agent layer availability |
+| `agent.guide` | (none) | full reference | Get complete agent usage guide |
 
 **Intelligence levels**:
 | Level | Name | What it does |
@@ -520,7 +522,8 @@ POST http://coordinator:6188/v1/chat/completions
 | Mechanism | Description |
 |-----------|-------------|
 | **Audit log** | Every MCP tool call logged with args + result |
-| **Destructive-op blocking** | Agent cannot run dangerous shell commands |
+| **Blocked tools** | `model.remove`, `engine.remove`, `deploy.delete` completely blocked for agents |
+| **Deployment approval** | `deploy.apply` requires user approval — returns plan + approval ID; call `deploy.approve(id)` after user confirms. Use `dangerously_skip_permissions` to bypass |
 | **Rollback snapshots** | Auto-snapshot before destructive operations |
 | **Whitelisted shell** | `system.exec` only allows safe commands |
 | **Auth middleware** | Bearer token on all non-health endpoints |

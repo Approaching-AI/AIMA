@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,10 @@ func (r *K3SRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		// Pod spec has immutable fields that changed (e.g. QoS class, schedulerName).
 		// Delete the existing pod and recreate it.
 		podName := knowledge.SanitizePodName(req.Name + "-" + req.Engine)
-		_ = r.client.Delete(ctx, podName)
+		slog.Warn("deploy: immutable field conflict, deleting and recreating pod", "pod", podName)
+		if delErr := r.client.Delete(ctx, podName); delErr != nil {
+			slog.Error("deploy: failed to delete conflicting pod", "pod", podName, "error", delErr)
+		}
 		err = r.client.Apply(ctx, podYAML)
 	}
 	return err

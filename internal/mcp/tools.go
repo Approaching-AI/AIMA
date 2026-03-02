@@ -71,8 +71,11 @@ type ToolDeps struct {
 	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
 
+	// Deploy approval
+	DeployApprove func(ctx context.Context, id int64) (json.RawMessage, error)
+
 	// Agent
-	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, string, error)
+	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep, skipPerms bool, sessionID string) (json.RawMessage, string, error)
 	AgentInstall    func(ctx context.Context) (json.RawMessage, error)
 	AgentStatus     func(ctx context.Context) (json.RawMessage, error)
 	AgentGuide      func(ctx context.Context) (json.RawMessage, error)
@@ -531,6 +534,29 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.DeployDryRun(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
 				return nil, fmt.Errorf("deploy dry run %s: %w", p.Model, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// deploy.approve
+	s.RegisterTool(&Tool{
+		Name:        "deploy.approve",
+		Description: "Approve and execute a pending deployment by approval ID. Call this after the user confirms a NEEDS_APPROVAL plan.",
+		InputSchema: schema(`"id":{"type":"integer","description":"Approval ID from the NEEDS_APPROVAL response"}`, "id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DeployApprove == nil {
+				return ErrorResult("deploy.approve not implemented"), nil
+			}
+			var p struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			data, err := deps.DeployApprove(ctx, p.ID)
+			if err != nil {
+				return nil, fmt.Errorf("deploy approve %d: %w", p.ID, err)
 			}
 			return TextResult(string(data)), nil
 		},
@@ -1193,6 +1219,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			`"query":{"type":"string","description":"The question to ask"},`+
 				`"force_local":{"type":"boolean","description":"Force use of Go Agent (L3a)"},`+
 				`"force_deep":{"type":"boolean","description":"Force use of ZeroClaw (L3b)"},`+
+				`"dangerously_skip_permissions":{"type":"boolean","description":"Skip deploy approval gate (use with caution)"},`+
 				`"session_id":{"type":"string","description":"Session ID to continue a conversation (works with both L3a and L3b)"}`,
 			"query"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -1200,9 +1227,10 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return ErrorResult("agent.ask not implemented"), nil
 			}
 			var p struct {
-				Query      string `json:"query"`
+				Query     string `json:"query"`
 				ForceLocal bool   `json:"force_local"`
 				ForceDeep  bool   `json:"force_deep"`
+				SkipPerms  bool   `json:"dangerously_skip_permissions"`
 				SessionID  string `json:"session_id"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
@@ -1211,7 +1239,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Query == "" {
 				return ErrorResult("query is required"), nil
 			}
-			data, sid, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SessionID)
+			data, sid, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SkipPerms, p.SessionID)
 			if err != nil {
 				return nil, fmt.Errorf("agent ask: %w", err)
 			}

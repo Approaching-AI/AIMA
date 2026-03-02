@@ -101,7 +101,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   K3S (轻量 Kubernetes) + HAMi (GPU 虚拟化中间件)              │
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
-│   54 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
+│   56 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
 │   mDNS 多网卡发现 · 硬件检测 · Native Runtime · 审计+回滚       │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -187,7 +187,7 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
 所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `config`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
 Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 每次自动扫描，其余 fleet 工具懒发现），CLI 和 MCP Agent 走完全相同的代码路径。
-当前共 54 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 6 + Knowledge 15 + Benchmark 1 + Stack 3 + Catalog 2 + System 3 + Discovery 1 + Agent 5 + Fleet 4)。
+当前共 56 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 7 + Knowledge 15 + Benchmark 1 + Stack 3 + Catalog 2 + System 3 + Discovery 1 + Agent 6 + Fleet 4)。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
 
@@ -313,13 +313,22 @@ Server 端为每个 LAN 接口创建独立的 mdns.Server 实例，Client 端并
 破坏性操作 (`model.remove`, `engine.remove`, `deploy.delete`) 执行前自动保存快照到 `rollback_snapshots` 表。
 `agent.rollback_list` 查看可回滚操作，`agent.rollback` 一键恢复。
 
-### 破坏性操作拦截
+### 破坏性操作拦截 (blockedAgentTools)
 
-Agent (L3a/L3b) 调用以下工具时被 blockedAgentTools 拦截，需人类确认:
+Agent (L3a/L3b) 调用以下工具时被完全拦截，返回错误:
 - `model.remove` — 删除模型记录
 - `engine.remove` — 删除引擎镜像
 - `deploy.delete` — 停止部署
 - `agent.install` — 安装 ZeroClaw sidecar
+
+### 部署审批门控 (confirmableTools)
+
+Agent 调用以下工具时需要用户批准才能执行:
+- `deploy.apply` — 创建或替换推理部署
+
+流程: Agent 调用 `deploy.apply` → adapter 拦截 → 内部调 `deploy.dry_run` 获取部署计划 → 返回 NEEDS_APPROVAL + plan + approval_id → Agent 展示计划给用户 → 用户在同一会话中回复 "approved" → Agent 调用 `deploy.approve(id)` → 执行部署。
+
+`--dangerously-skip-permissions` (CLI) 或 `dangerously_skip_permissions` (MCP agent.ask 参数) 可跳过审批门控。
 
 ### 工具调用上限
 
@@ -327,4 +336,4 @@ Agent 单次决策循环限制 ≤ 30 轮工具调用 (可配置)，防止无限
 
 ---
 
-*最后更新：2026-03-02 (LLM config persistence + fleet MCP auto-discovery + INV-5 parity)*
+*最后更新：2026-03-02 (deploy.apply permission gate + deploy.approve + fleet auto-discovery + LLM config persistence)*

@@ -11,6 +11,7 @@ func newAskCmd(app *App) *cobra.Command {
 	var (
 		forceLocal bool
 		forceDeep  bool
+		skipPerms  bool
 		sessionID  string
 	)
 
@@ -23,7 +24,7 @@ func newAskCmd(app *App) *cobra.Command {
 			ctx := cmd.Context()
 			query := strings.Join(args, " ")
 
-			data, sid, err := app.ToolDeps.DispatchAsk(ctx, query, forceLocal, forceDeep, sessionID)
+			data, sid, err := app.ToolDeps.DispatchAsk(ctx, query, forceLocal, forceDeep, skipPerms, sessionID)
 			if err != nil {
 				return fmt.Errorf("ask: %w", err)
 			}
@@ -38,6 +39,7 @@ func newAskCmd(app *App) *cobra.Command {
 
 	cmd.Flags().BoolVar(&forceLocal, "local", false, "Force use of Go Agent (L3a)")
 	cmd.Flags().BoolVar(&forceDeep, "deep", false, "Force use of ZeroClaw (L3b)")
+	cmd.Flags().BoolVar(&skipPerms, "dangerously-skip-permissions", false, "Skip deploy approval gate (use with caution)")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Continue a conversation by session ID")
 
 	return cmd

@@ -176,7 +176,7 @@ internal/
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager
   stack/                      # Infrastructure stack installer (K3S + HAMi, airgap, parallel downloads)
-  mcp/                        # MCP server + 54 tool implementations
+  mcp/                        # MCP server + 56 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)

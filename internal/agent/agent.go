@@ -59,6 +59,7 @@ type Agent struct {
 	llm      LLMClient
 	tools    ToolExecutor
 	maxTurns int
+	sessions *SessionStore
 }
 
 // AgentOption configures the Agent.
@@ -68,6 +69,13 @@ type AgentOption func(*Agent)
 func WithMaxTurns(n int) AgentOption {
 	return func(a *Agent) {
 		a.maxTurns = n
+	}
+}
+
+// WithSessions enables multi-turn session memory.
+func WithSessions(s *SessionStore) AgentOption {
+	return func(a *Agent) {
+		a.sessions = s
 	}
 }
 
@@ -90,32 +98,48 @@ func (a *Agent) Available() bool {
 }
 
 // Ask processes a user query through the agent loop and returns the final text response.
-func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
+// If sessionID is empty, a new session is created. Returns (result, sessionID, error).
+func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, string, error) {
 	if a.llm == nil {
-		return "", fmt.Errorf("no LLM backend configured: deploy a model and run 'aima serve', or set AIMA_LLM_ENDPOINT")
+		return "", "", fmt.Errorf("no LLM backend configured: deploy a model and run 'aima serve', or set AIMA_LLM_ENDPOINT")
 	}
 
-	tools := a.tools.ListTools()
-	messages := []Message{
-		{Role: "system", Content: a.buildSystemPrompt()},
-		{Role: "user", Content: query},
+	// Session management: load or create
+	if sessionID == "" {
+		sessionID = GenerateID()
 	}
+	var messages []Message
+	if a.sessions != nil {
+		if prev, ok := a.sessions.Get(sessionID); ok {
+			messages = prev
+		}
+	}
+	if len(messages) == 0 {
+		messages = []Message{{Role: "system", Content: a.buildSystemPrompt()}}
+	}
+	messages = append(messages, Message{Role: "user", Content: query})
+
+	tools := a.tools.ListTools()
 
 	for turn := 0; turn < a.maxTurns; turn++ {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", "", ctx.Err()
 		default:
 		}
 
 		resp, err := a.llm.ChatCompletion(ctx, messages, tools)
 		if err != nil {
-			return "", fmt.Errorf("chat completion (turn %d): %w", turn, err)
+			return "", "", fmt.Errorf("chat completion (turn %d): %w", turn, err)
 		}
 
 		// If no tool calls, return the text response
 		if len(resp.ToolCalls) == 0 {
-			return resp.Content, nil
+			messages = append(messages, Message{Role: "assistant", Content: resp.Content})
+			if a.sessions != nil {
+				a.sessions.Save(sessionID, messages)
+			}
+			return resp.Content, sessionID, nil
 		}
 
 		// Append assistant message with tool calls
@@ -151,7 +175,7 @@ func (a *Agent) Ask(ctx context.Context, query string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("agent exceeded maximum turns (%d)", a.maxTurns)
+	return "", "", fmt.Errorf("agent exceeded maximum turns (%d)", a.maxTurns)
 }
 
 func (a *Agent) buildSystemPrompt() string {

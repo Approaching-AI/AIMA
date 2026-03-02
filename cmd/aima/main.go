@@ -121,16 +121,18 @@ func run() error {
 	// 9. Create agent (L3a Go Agent)
 	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db}
 	llmClient := buildLLMClient()
-	goAgent := agent.NewAgent(llmClient, toolAdapter)
+	sessionStore := agent.NewSessionStore()
+	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
 
 	// 9b. Wire agent-related ToolDeps (dispatcher/zeroclaw created after buildToolDeps)
-	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error) {
-		result, err := dispatcher.Ask(ctx, query, agent.DispatchOption{ForceLocal: forceLocal, ForceDeep: forceDeep, SessionID: sessionID})
+	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, string, error) {
+		result, sid, err := dispatcher.Ask(ctx, query, agent.DispatchOption{ForceLocal: forceLocal, ForceDeep: forceDeep, SessionID: sessionID})
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return json.Marshal(map[string]string{"result": result})
+		data, err := json.Marshal(map[string]string{"result": result})
+		return data, sid, err
 	}
 	deps.AgentInstall = func(ctx context.Context) (json.RawMessage, error) {
 		binPath, err := zeroclaw.Install(ctx, filepath.Join(dataDir, "bin"))

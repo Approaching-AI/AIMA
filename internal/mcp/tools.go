@@ -72,7 +72,7 @@ type ToolDeps struct {
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
 
 	// Agent
-	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, error)
+	DispatchAsk     func(ctx context.Context, query string, forceLocal, forceDeep bool, sessionID string) (json.RawMessage, string, error)
 	AgentInstall    func(ctx context.Context) (json.RawMessage, error)
 	AgentStatus     func(ctx context.Context) (json.RawMessage, error)
 	AgentGuide      func(ctx context.Context) (json.RawMessage, error)
@@ -1193,7 +1193,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			`"query":{"type":"string","description":"The question to ask"},`+
 				`"force_local":{"type":"boolean","description":"Force use of Go Agent (L3a)"},`+
 				`"force_deep":{"type":"boolean","description":"Force use of ZeroClaw (L3b)"},`+
-				`"session_id":{"type":"string","description":"Continue a ZeroClaw session by ID"}`,
+				`"session_id":{"type":"string","description":"Session ID to continue a conversation (works with both L3a and L3b)"}`,
 			"query"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DispatchAsk == nil {
@@ -1211,11 +1211,20 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Query == "" {
 				return ErrorResult("query is required"), nil
 			}
-			data, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SessionID)
+			data, sid, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SessionID)
 			if err != nil {
 				return nil, fmt.Errorf("agent ask: %w", err)
 			}
-			return TextResult(string(data)), nil
+			// Merge session_id into the response
+			var resp map[string]any
+			if err := json.Unmarshal(data, &resp); err != nil {
+				resp = map[string]any{"result": string(data)}
+			}
+			if sid != "" {
+				resp["session_id"] = sid
+			}
+			merged, _ := json.Marshal(resp)
+			return TextResult(string(merged)), nil
 		},
 	})
 

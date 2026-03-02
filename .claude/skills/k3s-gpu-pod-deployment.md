@@ -1,8 +1,8 @@
 # K3S GPU Pod 部署经验
 
-> 覆盖 vLLM / 通用 GPU 推理容器在 K3S 上的部署调试经验
+> 覆盖 vLLM / SGLang / 通用 GPU 推理容器在 K3S 上的部署调试经验
 > 基于：gb10 (GB10 Grace-Blackwell arm64) + linux-1 (2× RTX 4090 x86_64) + amd395 (AMD Ryzen AI MAX+ 395)
-> 日期：2026-02-28（更新：2026-03-01 linux-1 TP=2 双卡部署 + CLI bugs）
+> 日期：2026-02-28（更新：2026-03-02 Qwen3.5-27B SGLang + deploy 自动导入）
 
 ---
 
@@ -1323,4 +1323,42 @@ WARNING: Unknown vLLM environment variable detected: VLLM_USE_TRITON_FLASH_ATTN
 TheRock v0.16.1rc1 不再识别此变量。ROCm 自动选择 Triton Attention backend，无需显式指定。
 Engine YAML 中的此 env 可移除（无害但产生警告）。
 
-更新：2026-03-01（linux-1 TP=2 双卡部署 + CLI bugs + AMD395 ROCm vLLM 死胡同 + 跨设备性能对比）
+---
+
+## 二十二、SGLang v0.5.9 Qwen3.5-27B 部署（linux-1, 2026-03-02）
+
+### 配置
+
+| 项目 | 值 |
+|------|-----|
+| 模型 | Qwen3.5-27B (dense, Gated-DeltaNet hybrid, BF16 ~54GB) |
+| 引擎 | SGLang v0.5.9 (`lmsysorg/sglang:v0.5.9`) |
+| TP | 2 (2× RTX 4090 48GB) |
+| VRAM | GPU0: 42.7 GiB, GPU1: 42.3 GiB (~87%) |
+| 性能 | ~32.4 tok/s |
+
+### 关键参数
+
+```yaml
+tp_size: 2
+dtype: bfloat16
+mem_fraction_static: 0.85
+context_length: 65536
+reasoning_parser: qwen3
+tool_call_parser: qwen3_coder
+```
+
+### 部署要点
+
+1. **CuDNN 检查**：v0.5.9 要求 CuDNN ≥ 9.15，通过 `SGLANG_DISABLE_CUDNN_CHECK=1` 绕过
+2. **镜像导入**：38.7GB 镜像，deploy 自动 Docker→containerd import 或预拉取
+3. **Tool calling**：`qwen3_coder` parser，v0.5.9 参数可能截断
+4. **已知 bug**：重复循环 (#19393)，复杂推理 prompt 可能死循环
+
+### 完整经验
+
+详见 `.claude/skills/sglang-qwen35-27b-deployment.md`（11 bugs 完整分析）。
+
+---
+
+更新：2026-03-02（Qwen3.5-27B SGLang + deploy 自动导入 + K3S 镜像源更新）

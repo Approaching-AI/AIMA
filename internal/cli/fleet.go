@@ -1,15 +1,11 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jguan/aima/internal/proxy"
 )
 
 func newFleetCmd(app *App) *cobra.Command {
@@ -24,7 +20,7 @@ func newFleetCmd(app *App) *cobra.Command {
 			if apiKey != "" && app.FleetClient != nil {
 				app.FleetClient.SetAPIKey(apiKey)
 			}
-			return fleetDiscover(cmd.Context(), app)
+			return nil
 		},
 	}
 
@@ -38,19 +34,6 @@ func newFleetCmd(app *App) *cobra.Command {
 		newFleetExecCmd(app),
 	)
 	return cmd
-}
-
-// fleetDiscover runs a one-shot mDNS scan and populates the fleet registry.
-func fleetDiscover(ctx context.Context, app *App) error {
-	if app.FleetRegistry == nil {
-		return fmt.Errorf("fleet registry not initialized")
-	}
-	services, err := proxy.Discover(ctx, 3*time.Second)
-	if err != nil {
-		return fmt.Errorf("mDNS discovery: %w", err)
-	}
-	app.FleetRegistry.Update(services)
-	return nil
 }
 
 func newFleetDevicesCmd(app *App) *cobra.Command {

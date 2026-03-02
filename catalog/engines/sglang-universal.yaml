@@ -2,11 +2,11 @@ kind: engine_asset
 metadata:
   name: sglang-universal
   type: sglang
-  version: "0.5.7"
+  version: "0.5.9"
   supported_formats: [safetensors]
 image:
   name: lmsysorg/sglang
-  tag: "v0.5.7"
+  tag: "v0.5.9"
   size_approx_mb: 6000
   platforms: [linux/amd64, linux/arm64]
   registries:
@@ -25,6 +25,8 @@ hardware:
   vram_min_mib: 4096
 startup:
   command: ["python3", "-m", "sglang.launch_server", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
+  env:
+    SGLANG_DISABLE_CUDNN_CHECK: "1"
   default_args:
     port: 30000
     mem_fraction_static: 0.80

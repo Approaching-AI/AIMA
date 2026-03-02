@@ -58,6 +58,7 @@ type ResolvedConfig struct {
 	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
 	CPUArch               string            // CPU architecture (e.g. "amd64", "arm64") — for platform-specific paths
 	Container             *ContainerAccess  // vendor-specific container access (devices, env, volumes, security) from hardware profile
+	EngineRegistries      []string          // container image registries from engine YAML (for pre-pull fallback)
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -116,19 +117,20 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	}
 
 	resolved := &ResolvedConfig{
-		Engine:       engineType,
-		EngineImage:  engine.Image.Name + ":" + engine.Image.Tag,
-		ModelName:    model.Metadata.Name,
-		Slot:         slot.Name,
-		Config:       config,
-		Provenance:   provenance,
-		Partition:    slot,
-		Command:      engine.Startup.Command,
-		InitCommands: engine.Startup.InitCommands,
-		ExtraVolumes: engine.Startup.ExtraVolumes,
-		Env:          engine.Startup.Env,
-		HealthCheck:  &engine.Startup.HealthCheck,
-		Source:       engine.Source,
+		Engine:           engineType,
+		EngineImage:      engine.Image.Name + ":" + engine.Image.Tag,
+		ModelName:        model.Metadata.Name,
+		Slot:             slot.Name,
+		Config:           config,
+		Provenance:       provenance,
+		Partition:        slot,
+		Command:          engine.Startup.Command,
+		InitCommands:     engine.Startup.InitCommands,
+		ExtraVolumes:     engine.Startup.ExtraVolumes,
+		Env:              engine.Startup.Env,
+		HealthCheck:      &engine.Startup.HealthCheck,
+		Source:           engine.Source,
+		EngineRegistries: engine.Image.Registries,
 	}
 	if engine.Startup.Warmup.Enabled {
 		resolved.Warmup = &engine.Startup.Warmup

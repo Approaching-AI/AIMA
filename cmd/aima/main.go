@@ -1514,12 +1514,31 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
 				activeRt = nativeRt
 			}
-			// Pre-flight: warn if image is only in Docker (not importable without root).
+			// Pre-flight: ensure image is available in containerd for K3S deployments.
+			// Auto-import from Docker or pre-pull from registries if needed.
 			if activeRt.Name() == "k3s" && req.Image != "" {
-				if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
-					slog.Info("image found in Docker; K3S uses separate containerd store",
-						"image", req.Image,
-						"hint", "if pod fails ImagePullBackOff, run: sudo aima init")
+				if !engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{}) {
+					if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
+						slog.Info("auto-importing image from Docker to containerd", "image", req.Image)
+						if importErr := engine.ImportDockerToContainerd(ctx, req.Image, &execRunner{}); importErr != nil {
+							slog.Warn("auto-import failed, K3S will try registries.yaml", "image", req.Image, "error", importErr)
+						}
+					} else if len(resolved.EngineRegistries) > 0 {
+						slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
+						imgParts := strings.SplitN(req.Image, ":", 2)
+						imgName, imgTag := imgParts[0], "latest"
+						if len(imgParts) == 2 {
+							imgTag = imgParts[1]
+						}
+						if pullErr := engine.Pull(ctx, engine.PullOptions{
+							Image:      imgName,
+							Tag:        imgTag,
+							Registries: resolved.EngineRegistries,
+							Runner:     &execRunner{},
+						}); pullErr != nil {
+							slog.Warn("pre-pull failed, K3S will try registries.yaml", "image", req.Image, "error", pullErr)
+						}
+					}
 				}
 			}
 			if err := activeRt.Deploy(ctx, req); err != nil {

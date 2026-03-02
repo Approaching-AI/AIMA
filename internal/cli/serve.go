@@ -53,6 +53,9 @@ func newServeCmd(app *App) *cobra.Command {
 			// Apply API key authentication if configured
 			if apiKey != "" {
 				app.Proxy.SetAPIKey(apiKey)
+				if app.FleetClient != nil {
+					app.FleetClient.SetAPIKey(apiKey)
+				}
 				slog.Info("API key authentication enabled")
 			}
 

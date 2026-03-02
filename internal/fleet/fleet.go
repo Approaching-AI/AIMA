@@ -40,12 +40,20 @@ func NewRegistry(localPort int) *Registry {
 }
 
 // Update reconciles the registry with freshly discovered services.
+// Uses compound key (name + addr + port) for dedup to prevent two distinct
+// devices with colliding normalized names from overwriting each other.
 func (r *Registry) Update(services []proxy.DiscoveredService) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	seen := make(map[string]bool)
 	now := time.Now().UTC().Format(time.RFC3339)
+
+	// First pass: detect name collisions by grouping services by normalized name.
+	nameCount := make(map[string]int)
+	for _, svc := range services {
+		nameCount[normalizeID(svc.Name)]++
+	}
 
 	for _, svc := range services {
 		addr := svc.AddrV4
@@ -56,7 +64,12 @@ func (r *Registry) Update(services []proxy.DiscoveredService) {
 			continue
 		}
 
-		id := normalizeID(svc.Name)
+		baseName := normalizeID(svc.Name)
+		id := baseName
+		// Disambiguate when multiple devices share the same normalized name.
+		if nameCount[baseName] > 1 {
+			id = fmt.Sprintf("%s-%s-%d", baseName, addr, svc.Port)
+		}
 		seen[id] = true
 
 		self := svc.Port == r.localPort && proxy.IsLocalIP(addr)

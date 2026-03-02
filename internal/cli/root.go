@@ -18,6 +18,7 @@ type App struct {
 	MCP           *mcp.Server
 	ToolDeps      *mcp.ToolDeps
 	FleetRegistry *fleet.Registry
+	FleetClient   *fleet.Client
 }
 
 // NewRootCmd creates the root aima command with all subcommands.

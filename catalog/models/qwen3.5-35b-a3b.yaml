@@ -88,13 +88,13 @@ variants:
     engine: vllm-spark
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.65
-      max_model_len: 32768
+      gpu_memory_utilization: 0.9
+      max_model_len: 262144
       dtype: bfloat16
       enable_chunked_prefill: true
     expected_performance:
       vram_mib: 67100
-      notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.65 for multi-model (LLM+ASR+TTS) coexistence."
+      notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.9, 262K context, tool calling enabled (qwen3_xml parser)."
 
   # --- amd395 (RDNA3.5, 62GB unified, native Vulkan) ---
   # GGUF Q4_K_M ~22GB, 62GB unified 余量充足 (40GB for KV cache + system)

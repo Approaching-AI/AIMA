@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -12,14 +13,23 @@ import (
 )
 
 func newFleetCmd(app *App) *cobra.Command {
+	var apiKey string
+
 	cmd := &cobra.Command{
 		Use:   "fleet",
 		Short: "Manage fleet of AIMA devices on the LAN",
 		Long:  "Discover and manage AIMA devices on the LAN via mDNS.\nRuns a quick mDNS scan before each command.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Sync API key to fleet client so remote calls authenticate
+			if apiKey != "" && app.FleetClient != nil {
+				app.FleetClient.SetAPIKey(apiKey)
+			}
 			return fleetDiscover(cmd.Context(), app)
 		},
 	}
+
+	defaultKey := os.Getenv("AIMA_API_KEY")
+	cmd.PersistentFlags().StringVar(&apiKey, "api-key", defaultKey, "API key for remote device authentication (or set AIMA_API_KEY env)")
 
 	cmd.AddCommand(
 		newFleetDevicesCmd(app),

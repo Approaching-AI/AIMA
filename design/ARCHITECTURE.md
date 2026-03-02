@@ -291,8 +291,11 @@ Server 端为每个 LAN 接口创建独立的 mdns.Server 实例，Client 端并
 
 ### 安全
 
-`fleet.exec_tool` 在远程执行时屏蔽破坏性工具 (`model.remove`, `engine.remove`, `deploy.delete`, `agent.install`)，
-防止 Agent 通过远程 Fleet 调用绕过本地安全护栏。
+- **Fleet 工具拦截**: `fleet.exec_tool` 在远程执行时屏蔽破坏性工具 (`model.remove`, `engine.remove`, `deploy.delete`, `agent.install`, `stack.init`, `agent.rollback`, `shell.exec`)，防止 Agent 通过远程 Fleet 调用绕过本地安全护栏。
+- **API Key 热更新**: `system.config set api_key <KEY>` 立即传播到 Proxy、MCP Server、Fleet Client 三条认证路径，无需重启。
+- **Timing-safe 比较**: 所有 Bearer token 校验使用 `crypto/subtle.ConstantTimeCompare`，防止侧信道攻击。
+- **Fleet Client 并发安全**: `fleet.Client.SetAPIKey()` 使用 `sync.RWMutex` 保护，支持运行时热更新。
+- **敏感值脱敏**: `system.config` 读写 `api_key` 时响应中显示 `***`，不回显明文。
 
 ---
 
@@ -321,4 +324,4 @@ Agent 单次决策循环限制 ≤ 30 轮工具调用 (可配置)，防止无限
 
 ---
 
-*最后更新：2026-03-02 (Fleet + Agent Safety + tool count update to 53)*
+*最后更新：2026-03-02 (API key hot-reload + timing-safe auth + fleet security hardening)*

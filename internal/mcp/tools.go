@@ -1341,7 +1341,11 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				if err := deps.SetConfig(ctx, p.Key, *p.Value); err != nil {
 					return nil, fmt.Errorf("set config %s: %w", p.Key, err)
 				}
-				return TextResult(fmt.Sprintf("config %s set to %s", p.Key, *p.Value)), nil
+				display := *p.Value
+				if p.Key == "api_key" {
+					display = "***"
+				}
+				return TextResult(fmt.Sprintf("config %s set to %s", p.Key, display)), nil
 			}
 
 			// Get
@@ -1351,6 +1355,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			val, err := deps.GetConfig(ctx, p.Key)
 			if err != nil {
 				return nil, fmt.Errorf("get config %s: %w", p.Key, err)
+			}
+			if p.Key == "api_key" {
+				val = "***"
 			}
 			return TextResult(val), nil
 		},

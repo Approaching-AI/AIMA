@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -112,9 +113,8 @@ func newServeCmd(app *App) *cobra.Command {
 					slog.Info("starting MCP server (HTTP)", "addr", mcpAddr)
 					mux := http.NewServeMux()
 					var handler http.Handler = app.MCP
-					if apiKey != "" {
-						handler = apiKeyAuth(apiKey, handler)
-					}
+					// Wrap with dynamic API key auth (reads from proxy on each request)
+					handler = apiKeyAuth(app.Proxy.APIKey, handler)
 					mux.Handle("/mcp", handler)
 					server := &http.Server{Addr: mcpAddr, Handler: mux}
 					go func() {
@@ -204,13 +204,21 @@ func backendModelNames(s *proxy.Server) []string {
 	return names
 }
 
-// apiKeyAuth wraps an HTTP handler with Bearer token authentication.
-func apiKeyAuth(key string, next http.Handler) http.Handler {
+// apiKeyAuth wraps an HTTP handler with dynamic Bearer token authentication.
+// keyFn is called on each request, enabling hot-reload of the API key.
+// When keyFn returns empty string, all requests pass through.
+func apiKeyAuth(keyFn func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := keyFn()
+		if key == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+key {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte("Bearer "+key)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintln(w, `{"error":"unauthorized"}`)
 			return
 		}
 		next.ServeHTTP(w, r)

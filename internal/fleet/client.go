@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -40,7 +41,7 @@ func (c *Client) ListTools(ctx context.Context, d *Device) (json.RawMessage, err
 
 // CallTool calls POST /api/v1/tools/{name} on a remote device.
 func (c *Client) CallTool(ctx context.Context, d *Device, toolName string, params json.RawMessage) (json.RawMessage, error) {
-	url := fmt.Sprintf("http://%s:%d/api/v1/tools/%s", d.AddrV4, d.Port, toolName)
+	url := fmt.Sprintf("http://%s:%d/api/v1/tools/%s", d.AddrV4, d.Port, url.PathEscape(toolName))
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
@@ -99,6 +100,11 @@ func (c *Client) doPost(ctx context.Context, url string, payload json.RawMessage
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 	return json.RawMessage(body), nil
+}
+
+// SetAPIKey updates the API key used for authenticating fleet requests.
+func (c *Client) SetAPIKey(key string) {
+	c.apiKey = key
 }
 
 func (c *Client) setAuth(req *http.Request) {

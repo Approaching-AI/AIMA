@@ -107,6 +107,31 @@ func (m *mockMCP) ListToolDefs() json.RawMessage {
 	return m.toolsJSON
 }
 
+func TestRegistryCollisionDedup(t *testing.T) {
+	r := NewRegistry(6188)
+
+	// Two services with the same mDNS name but different addresses
+	services := []proxy.DiscoveredService{
+		{Name: "aima._llm._tcp.local.", AddrV4: "10.0.0.1", Port: 6188},
+		{Name: "aima._llm._tcp.local.", AddrV4: "10.0.0.2", Port: 6188},
+	}
+	r.Update(services)
+
+	list := r.List()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 devices (collision-deduped), got %d", len(list))
+	}
+
+	// Both should be reachable by their disambiguated IDs
+	found := make(map[string]bool)
+	for _, d := range list {
+		found[d.AddrV4] = true
+	}
+	if !found["10.0.0.1"] || !found["10.0.0.2"] {
+		t.Errorf("expected both addresses present, got %v", found)
+	}
+}
+
 func TestHandlerLocalTools(t *testing.T) {
 	toolsJSON, _ := json.Marshal([]map[string]string{
 		{"name": "hardware.detect", "description": "Detect HW"},

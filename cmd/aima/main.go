@@ -278,6 +278,7 @@ func run() error {
 		MCP:           mcpServer,
 		ToolDeps:      deps,
 		FleetRegistry: fleetRegistry,
+		FleetClient:   fleetClient,
 	}
 
 	rootCmd := cli.NewRootCmd(app)

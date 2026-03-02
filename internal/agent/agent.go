@@ -14,10 +14,11 @@ type LLMClient interface {
 
 // Message represents a chat message in the conversation.
 type Message struct {
-	Role       string     `json:"role"` // system, user, assistant, tool
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"` // system, user, assistant, tool
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // preserved for providers that use thinking (e.g. Kimi)
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall represents a tool invocation requested by the LLM.
@@ -29,8 +30,9 @@ type ToolCall struct {
 
 // Response is what the LLM returns.
 type Response struct {
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ToolExecutor executes MCP tools (provided by mcp.Server).
@@ -135,7 +137,7 @@ func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, strin
 
 		// If no tool calls, return the text response
 		if len(resp.ToolCalls) == 0 {
-			messages = append(messages, Message{Role: "assistant", Content: resp.Content})
+			messages = append(messages, Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ReasoningContent})
 			if a.sessions != nil {
 				a.sessions.Save(sessionID, messages)
 			}
@@ -144,9 +146,10 @@ func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, strin
 
 		// Append assistant message with tool calls
 		messages = append(messages, Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			Role:             "assistant",
+			Content:          resp.Content,
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        resp.ToolCalls,
 		})
 
 		// Execute each tool call and append results

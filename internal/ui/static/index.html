@@ -780,6 +780,7 @@ body {
       <div class="modal">
         <h3>API Key</h3>
         <input type="password" x-model="apiKeyInput" placeholder="Enter API key (optional)" @keydown.enter="saveKey()">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">Stored in browser localStorage on this device only.</div>
         <div class="modal-actions">
           <button class="modal-btn" @click="clearKey()">Clear</button>
           <button class="modal-btn primary" @click="saveKey()">Save</button>
@@ -889,21 +890,6 @@ function aimaApp() {
       return raw;
     },
 
-    async fetchJSON(path) {
-      const headers = {};
-      if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
-      try {
-        const resp = await fetch(path, { headers });
-        if (resp.status === 401) {
-          this.showKeyModal = true;
-          return { _err: 'unauthorized' };
-        }
-        return await resp.json();
-      } catch (e) {
-        return { _err: e.message };
-      }
-    },
-
     // ── Polling functions ──
 
     // system.status returns:
@@ -1000,11 +986,12 @@ function aimaApp() {
       }));
     },
 
-    // GET /api/v1/devices returns: [{ id, name, addr_v4, port, models, online, self }, ...]
+    // fleet.list_devices returns: [{ id, name, addr_v4, port, models, online, self }, ...]
     async pollFleet() {
-      const data = await this.fetchJSON('/api/v1/devices');
-      if (data._err || !Array.isArray(data)) return;
-      this.fleet = data.map(d => ({
+      const data = await this.callTool('fleet.list_devices');
+      if (data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.fleet = list.map(d => ({
         id: d.id || d.name || 'unknown',
         name: d.name || d.id || 'unknown',
         online: d.online !== false,
@@ -1077,19 +1064,15 @@ function aimaApp() {
         'models': 'model.list',
         'engines': 'engine.list',
         'deployments': 'deploy.list',
-        'deploys': 'deploy.list'
+        'deploys': 'deploy.list',
+        'fleet': 'fleet.list_devices',
+        'devices': 'fleet.list_devices'
       };
 
       const lower = text.toLowerCase().trim();
 
       if (lower === 'help' || lower === '?') {
         this.messages.push({ role: 'ai', text: 'Direct Mode Commands:\n  status      - System status\n  hardware    - Hardware detection\n  metrics     - Hardware metrics\n  models      - List models\n  engines     - List engines\n  deployments - List deployments\n  fleet       - List fleet devices' });
-        return;
-      }
-
-      if (lower === 'fleet' || lower === 'devices') {
-        const data = await this.fetchJSON('/api/v1/devices');
-        this.messages.push({ role: 'ai', text: JSON.stringify(data, null, 2) });
         return;
       }
 

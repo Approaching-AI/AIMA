@@ -203,8 +203,9 @@ func TestOpenAIClient_ToolDefinitionsSent(t *testing.T) {
 	if len(receivedTools) != 1 {
 		t.Fatalf("tools sent = %d, want 1", len(receivedTools))
 	}
-	if receivedTools[0].Function.Name != "hw.detect" {
-		t.Errorf("tool name = %q, want hw.detect", receivedTools[0].Function.Name)
+	// Wire name should be sanitized: "hw.detect" → "hw__detect"
+	if receivedTools[0].Function.Name != "hw__detect" {
+		t.Errorf("tool name = %q, want hw__detect", receivedTools[0].Function.Name)
 	}
 }
 

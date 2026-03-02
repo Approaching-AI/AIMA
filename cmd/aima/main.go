@@ -330,6 +330,9 @@ func run() error {
 		case "llm.api_key":
 			llmClient.SetAPIKey(value)
 			slog.Info("LLM API key hot-swapped via system.config")
+		case "llm.user_agent":
+			llmClient.SetUserAgent(value)
+			slog.Info("LLM User-Agent hot-swapped via system.config", "user_agent", value)
 		}
 		return nil
 	}
@@ -856,6 +859,11 @@ func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
 		opts = append(opts, agent.WithAPIKey(k))
 	} else if k, err := db.GetConfig(ctx, "llm.api_key"); err == nil && k != "" {
 		opts = append(opts, agent.WithAPIKey(k))
+	}
+	if ua := os.Getenv("AIMA_LLM_USER_AGENT"); ua != "" {
+		opts = append(opts, agent.WithUserAgent(ua))
+	} else if ua, err := db.GetConfig(ctx, "llm.user_agent"); err == nil && ua != "" {
+		opts = append(opts, agent.WithUserAgent(ua))
 	}
 	opts = append(opts, agent.WithDiscoverFunc(discoverFleetLLM))
 	return agent.NewOpenAIClient(endpoint, opts...)

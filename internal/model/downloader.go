@@ -180,10 +180,11 @@ func downloadHuggingFace(ctx context.Context, repo, destPath string) error {
 	}
 
 	// Prefer huggingface-cli if available (handles auth, multi-file, resume).
-	// Users in China can set HF_ENDPOINT=https://hf-mirror.com for the CLI too.
 	if hfCLI, err := exec.LookPath("huggingface-cli"); err == nil {
-		slog.Info("downloading via huggingface-cli", "repo", repo, "dest", destPath)
+		endpoints := hfEndpoints()
+		slog.Info("downloading via huggingface-cli", "repo", repo, "dest", destPath, "endpoint", endpoints[0])
 		cmd := exec.CommandContext(ctx, hfCLI, "download", repo, "--local-dir", destPath)
+		cmd.Env = append(os.Environ(), "HF_ENDPOINT="+endpoints[0])
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()

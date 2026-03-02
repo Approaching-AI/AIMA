@@ -1,8 +1,8 @@
 # Docker ↔ K3S Containerd 镜像互通经验
 
 > 覆盖 Docker / K3S containerd 双存储问题、镜像导入、registries.yaml 同步
-> 基于：amd395 (Docker + K3S 共存) + gb10 (Docker + K3S 共存)
-> 日期：2026-02-28
+> 基于：amd395 (Docker + K3S 共存) + gb10 (Docker + K3S 共存) + linux-1 (Docker + K3S, 2× RTX 4090)
+> 日期：2026-02-28（更新：2026-03-02 deploy 自动导入 + 镜像源更新）
 
 ---
 
@@ -118,10 +118,11 @@ func ImportDockerToContainerd(ctx context.Context, image string, runner CommandR
 mirrors:
   docker.io:
     endpoint:
-      - "https://docker.m.daocloud.io"
-      - "https://docker.1ms.run"
-      - "https://docker.nju.edu.cn"
-      - "https://docker.rainbond.cc"
+      - "https://docker.m.daocloud.io"   # DaoCloud — 稳定
+      - "https://docker.1ms.run"          # 1ms.run — 快速
+      - "https://hub.rat.dev"             # rat.dev — 稳定
+      - "https://proxy.vvvv.ee"           # vvvv.ee — 稳定
+      - "https://dockerproxy.net"         # dockerproxy — 稳定
   ghcr.io:
     endpoint:
       - "https://ghcr.nju.edu.cn"
@@ -129,6 +130,9 @@ mirrors:
     endpoint:
       - "https://nvcr.io"
 ```
+
+> **2026-03-02 更新**：移除 `docker.nju.edu.cn` (403) 和 `docker.rainbond.cc` (000)，
+> 替换为 3 个已验证可用的镜像源。
 
 ### 关键行为
 
@@ -169,16 +173,27 @@ aima init → stack.Installer.writeRegistries() → 写入 /etc/rancher/k3s/regi
    - 有权限 → `docker save | k3s ctr import`（自动导入）
    - 无权限 → WARN 打印手动修复命令（**不尝试 docker save，避免大镜像阻塞**）
 
-### deploy 前置检查（只读）
+### deploy 前置检查（自动导入 + 预拉取，2026-03-02 更新）
 
 ```
-deploy 时判断 activeRt.Name() == "k3s"
-→ ImageExistsInDocker(image)? → Docker 有 → INFO 提示
-→ 不做任何导入操作（deploy 非 root，没有 containerd 写权限）
-→ Pod 使用 imagePullPolicy: IfNotPresent，kubelet（root）直接检查 containerd
+deploy 时判断 activeRt.Name() == "k3s" && image != ""
+→ ImageExistsInContainerd(image)? → 已存在 → 跳过
+→ ImageExistsInDocker(image)? → Docker 有 → 自动 ImportDockerToContainerd()
+→ len(EngineRegistries) > 0? → 都没有 → engine.Pull() 预拉取
+→ 以上全失败 → slog.Warn (非致命) → K3S 靠 registries.yaml 兜底
 ```
 
-**设计原则**：deploy 路径不使用 sudo，不做 containerd 写操作。镜像导入属于 init 或 engine scan（有 root 时）的职责。
+**关键函数**：
+- `ImageExistsInContainerd()` — 只查 crictl（K3S fallback），不查 Docker
+- `ImportDockerToContainerd()` — `docker save | k3s ctr -n k8s.io images import -`
+- `engine.Pull()` — 使用 `resolved.EngineRegistries`（从 engine YAML 传递）
+
+**设计原则**：
+- 所有 import/pull 错误非致命（Warn），不阻塞 deploy
+- K3S registries.yaml 仍是最后一道防线（kubelet root 权限拉取）
+- `EngineRegistries` 从 engine YAML 透传，不硬编码（INV-1 合规）
+
+**变更历史**：旧版（2026-02-28）deploy 路径只读不写；新版（2026-03-02）主动尝试导入/拉取，失败不阻塞。
 
 ---
 
@@ -186,7 +201,7 @@ deploy 时判断 activeRt.Name() == "k3s"
 
 | 问题 | 原因 | 解法 |
 |------|------|------|
-| ImagePullBackOff (本地有镜像) | 镜像在 Docker，不在 K3S containerd | `sudo docker save \| sudo k3s ctr import` 或 `sudo aima engine scan` |
+| ImagePullBackOff (本地有镜像) | 镜像在 Docker，不在 K3S containerd | deploy 自动 import；手动: `sudo docker save \| sudo k3s ctr import` |
 | imagePullPolicy Always | K8s 默认对 :latest tag Always 拉取 | podgen 已设 `imagePullPolicy: IfNotPresent` |
 | registries.yaml 过时 | 手动维护，未与 catalog 同步 | 重新运行 `sudo aima init` |
 | engine scan 扫不到 NGC 镜像 | 同 type 多 YAML patterns 覆盖 | 已修复：patterns append 合并 |
@@ -311,4 +326,4 @@ cat /tmp/import-vllm.log
 df -h / | tail -1
 ```
 
-更新：2026-03-01（linux-1 19.6GB 镜像导入 + reference format 不匹配 + nohup sudo 经验）
+更新：2026-03-02（deploy 自动导入 + 预拉取 + K3S 镜像源更新 5 个已验证源）

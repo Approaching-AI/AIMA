@@ -1,0 +1,46 @@
+kind: model_asset
+metadata:
+  name: qwen3.5-27b
+  type: llm
+  family: qwen
+  parameter_count: "27B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3.5-27B
+      format: safetensors
+    - type: modelscope
+      repo: Qwen/Qwen3.5-27B
+      format: safetensors
+variants:
+  # --- linux-1 (Ada, 2× RTX 4090 = 96GB total, TP=2) ---
+  # BF16 weights ~54GB, TP=2: each GPU holds ~27GB weights
+  # Remaining per GPU: ~21GB for KV cache + overhead
+  # Qwen3.5-27B = dense Gated-DeltaNet hybrid arch, requires SGLang >= v0.5.9
+  # Tool calling: --tool-call-parser qwen3_coder, --reasoning-parser qwen3
+  # SGLang v0.5.9 has known repetition bug (PR #19411) — upgrade when v0.5.10 releases
+  - name: qwen3.5-27b-ada-sglang-bf16
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 20480
+      unified_memory: false
+    engine: sglang
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3.5-27B
+    default_config:
+      tp_size: 2
+      dtype: bfloat16
+      mem_fraction_static: 0.85
+      context_length: 65536
+      reasoning_parser: qwen3
+      tool_call_parser: qwen3_coder
+      port: 30000
+    expected_performance:
+      tokens_per_second: [30, 40]
+      latency_first_token_ms: [50, 300]
+      vram_mib: 85000
+      notes: "SGLang v0.5.9, BF16 dense 27B (Gated-DeltaNet hybrid), TP=2, 2x RTX 4090 48GB each. Measured 32.4 tok/s. Tool calling enabled (qwen3_coder). WARNING: v0.5.9 has repetition bug (#19393), upgrade to v0.5.10+ when available."

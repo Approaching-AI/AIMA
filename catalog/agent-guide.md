@@ -121,7 +121,21 @@ system.config set api_key NEW_KEY
 ```
 
 This propagates immediately to all three auth paths (proxy, MCP, fleet client).
-The `system.config` tool masks `api_key` values in both get and set responses.
+The `system.config` tool masks `api_key` and `llm.api_key` values in both get and set responses.
+
+### LLM Config Persistence
+
+The Go Agent's LLM endpoint, model, and API key persist in SQLite and can be hot-swapped:
+
+```
+system.config set llm.endpoint http://remote-gpu:6188/v1
+system.config set llm.model qwen3-8b
+system.config set llm.api_key sk-remote-key
+```
+
+**Precedence**: environment variable > SQLite config > default (`localhost:6188/v1`).
+Changes take effect immediately — the OpenAIClient is updated without restart.
+CLI equivalent: `aima config set llm.endpoint http://remote-gpu:6188/v1`.
 
 ### Where the key is enforced
 
@@ -254,8 +268,8 @@ deploy.apply("qwen3-0.6b")
 |------|-----------|---------|-------------|
 | `system.status` | (none) | full system state | Hardware + deployments + models + engines |
 | `system.exec` | `command` | output | Execute whitelisted shell command |
-| `system.config` (get) | `key` | value | Read persistent config (`api_key` masked) |
-| `system.config` (set) | `key`, `value` | success | Write persistent config (setting `api_key` hot-reloads auth) |
+| `system.config` (get) | `key` | value | Read persistent config (`api_key`/`llm.api_key` masked) |
+| `system.config` (set) | `key`, `value` | success | Write persistent config (`api_key` hot-reloads auth; `llm.*` hot-swaps Agent LLM client) |
 | `catalog.override` | `type`, `name`, `content` | success | Override YAML asset at runtime |
 
 **Whitelisted commands** for `system.exec`:
@@ -434,6 +448,8 @@ catalog/
 | `AIMA_LLM_ENDPOINT` | LLM API for Go Agent (L3a) | `http://localhost:6188/v1` |
 | `AIMA_LLM_MODEL` | Model name for Agent reasoning | (auto-discover) |
 
+**Precedence**: env var > SQLite (`aima config set llm.*`) > default. Environment variables take effect at startup; `system.config set llm.*` hot-swaps at runtime.
+
 ---
 
 ## Common Agent Workflows
@@ -462,8 +478,11 @@ catalog/
 
 ### Workflow 3: Fleet-wide model deployment
 
+Fleet MCP tools include built-in mDNS discovery — no need for `serve --discover` or CLI pre-scan.
+A cloud-based Agent can manage LAN devices directly via MCP.
+
 ```
-1. fleet.list_devices        → discover all devices
+1. fleet.list_devices        → mDNS scan + list all devices (always fresh)
 2. fleet.device_info(id)     → check each device's hardware
 3. fleet.exec_tool(id, "knowledge.resolve", {model})  → resolve per-device
 4. fleet.exec_tool(id, "deploy.apply", {model})        → deploy per-device

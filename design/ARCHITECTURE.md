@@ -185,7 +185,8 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-4: 职责分离的状态存储。** AIMA 系统状态在 `aima.db`，Agent 记忆在 `zeroclaw.db`。
 
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
-所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
+所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `config`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
+Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 每次自动扫描，其余 fleet 工具懒发现），CLI 和 MCP Agent 走完全相同的代码路径。
 当前共 54 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 6 + Knowledge 15 + Benchmark 1 + Stack 3 + Catalog 2 + System 3 + Discovery 1 + Agent 5 + Fleet 4)。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
@@ -293,9 +294,11 @@ Server 端为每个 LAN 接口创建独立的 mdns.Server 实例，Client 端并
 
 - **Fleet 工具拦截**: `fleet.exec_tool` 在远程执行时屏蔽破坏性工具 (`model.remove`, `engine.remove`, `deploy.delete`, `agent.install`, `stack.init`, `agent.rollback`, `shell.exec`)，防止 Agent 通过远程 Fleet 调用绕过本地安全护栏。
 - **API Key 热更新**: `system.config set api_key <KEY>` 立即传播到 Proxy、MCP Server、Fleet Client 三条认证路径，无需重启。
+- **LLM Config 热更新**: `system.config set llm.endpoint/llm.model/llm.api_key` 立即热替换 OpenAIClient，无需重启。LLM 配置持久化在 SQLite，优先级: env var > SQLite > default。
 - **Timing-safe 比较**: 所有 Bearer token 校验使用 `crypto/subtle.ConstantTimeCompare`，防止侧信道攻击。
 - **Fleet Client 并发安全**: `fleet.Client.SetAPIKey()` 使用 `sync.RWMutex` 保护，支持运行时热更新。
-- **敏感值脱敏**: `system.config` 读写 `api_key` 时响应中显示 `***`，不回显明文。
+- **敏感值脱敏**: `system.config` 读写 `api_key` 和 `llm.api_key` 时响应中显示 `***`，不回显明文。CLI `aima config get/set` 同样脱敏。
+- **Fleet 自动发现**: Fleet MCP 工具自带 mDNS 发现能力，`fleet.list_devices` 每次调用都执行扫描，其余 fleet 工具在 registry 为空时自动触发发现。云端 Agent 通过 MCP 即可直接管理 LAN 设备，无需 CLI 或 `serve --discover`。
 
 ---
 
@@ -324,4 +327,4 @@ Agent 单次决策循环限制 ≤ 30 轮工具调用 (可配置)，防止无限
 
 ---
 
-*最后更新：2026-03-02 (API key hot-reload + timing-safe auth + fleet security hardening)*
+*最后更新：2026-03-02 (LLM config persistence + fleet MCP auto-discovery + INV-5 parity)*

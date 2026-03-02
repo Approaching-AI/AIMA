@@ -72,8 +72,11 @@ AIMA_LLM_ENDPOINT=http://<pod-ip>:8000/v1 AIMA_LLM_MODEL=<model> ./aima ask --lo
 
 ### Config 相关
 - Config 存储在 `aima.db` 的 `config` 表，不是 `state.db`
-- REST endpoint: GET `/config?key=X`, PUT `/config` body `{"key":"X","value":"Y"}`
-- Hot-swap 通过 `internal/agent/openai.go` 的 `SetEndpoint/SetModel` (RWMutex 保护)
+- CLI: `aima config get/set <key> [value]` (薄包装 ToolDeps)
+- MCP: `system.config` get/set (api_key/llm.api_key 脱敏)
+- REST `/config` endpoint 未实现 (违反 INV-5, 通过 MCP/CLI 替代)
+- Hot-swap 通过 `internal/agent/openai.go` 的 `SetEndpoint/SetModel/SetAPIKey` (RWMutex 保护)
+- LLM 配置优先级: env var > SQLite > default (localhost:6188/v1)
 
 ### Guardrails 架构
 - `destructiveTools` map 在 `cmd/aima/main.go` — 工具级阻断

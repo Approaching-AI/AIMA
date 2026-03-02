@@ -110,7 +110,18 @@ A single shared secret protects all APIs.
 | Environment variable | `export AIMA_API_KEY=sk-my-secret` |
 | CLI flag | `aima serve --api-key sk-my-secret` |
 
-The key is a plain string. No generation tool, no expiry, no rotation.
+The key is a plain string. No generation tool, no expiry.
+
+### Hot-reload
+
+The API key can be changed at runtime without restarting the server:
+
+```
+system.config set api_key NEW_KEY
+```
+
+This propagates immediately to all three auth paths (proxy, MCP, fleet client).
+The `system.config` tool masks `api_key` values in both get and set responses.
 
 ### Where the key is enforced
 
@@ -132,6 +143,7 @@ Authorization: Bearer <API_KEY>
 
 - Non-loopback bind address (`0.0.0.0`, LAN IP) **requires** `--api-key` or `--allow-insecure-no-auth`
 - Loopback (`127.0.0.1`, `localhost`) works without auth
+- All auth endpoints use timing-safe comparison (`crypto/subtle`)
 
 ---
 
@@ -242,8 +254,8 @@ deploy.apply("qwen3-0.6b")
 |------|-----------|---------|-------------|
 | `system.status` | (none) | full system state | Hardware + deployments + models + engines |
 | `system.exec` | `command` | output | Execute whitelisted shell command |
-| `config.get` | `key` | value | Read persistent config |
-| `config.set` | `key`, `value` | success | Write persistent config |
+| `system.config` (get) | `key` | value | Read persistent config (`api_key` masked) |
+| `system.config` (set) | `key`, `value` | success | Write persistent config (setting `api_key` hot-reloads auth) |
 | `catalog.override` | `type`, `name`, `content` | success | Override YAML asset at runtime |
 
 **Whitelisted commands** for `system.exec`:

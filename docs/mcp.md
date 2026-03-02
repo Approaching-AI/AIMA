@@ -141,7 +141,7 @@ SQLite 关系查询驱动，支持多维分析:
 | 工具 | 功能 |
 |------|------|
 | `system.status` | 设备全景: 硬件 + 部署列表 + 实时指标 |
-| `system.config` | 读写 AIMA 配置 (get/set) |
+| `system.config` | 读写 AIMA 配置 (get/set); `api_key` 支持热更新且响应脱敏 |
 | `shell.exec` | 执行 shell 命令 (白名单 + 审计日志) |
 
 ### 发现 — Discovery (1)

@@ -516,6 +516,62 @@ func TestProxyForwardsRequestBody(t *testing.T) {
 	}
 }
 
+func TestAPIKeyHotReload(t *testing.T) {
+	s := NewServer()
+	handler := s.handler() // build handler once, just like Start() does
+
+	doReq := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// No key configured → all requests pass
+	if code := doReq(""); code != http.StatusOK {
+		t.Fatalf("no key: expected 200, got %d", code)
+	}
+
+	// Set key after handler was built → should take effect immediately
+	s.SetAPIKey("secret-1")
+	if code := doReq(""); code != http.StatusUnauthorized {
+		t.Fatalf("after set key, no auth: expected 401, got %d", code)
+	}
+	if code := doReq("wrong"); code != http.StatusUnauthorized {
+		t.Fatalf("after set key, wrong auth: expected 401, got %d", code)
+	}
+	if code := doReq("secret-1"); code != http.StatusOK {
+		t.Fatalf("after set key, correct auth: expected 200, got %d", code)
+	}
+
+	// Rotate key → old key rejected, new key accepted
+	s.SetAPIKey("secret-2")
+	if code := doReq("secret-1"); code != http.StatusUnauthorized {
+		t.Fatalf("after rotate, old key: expected 401, got %d", code)
+	}
+	if code := doReq("secret-2"); code != http.StatusOK {
+		t.Fatalf("after rotate, new key: expected 200, got %d", code)
+	}
+
+	// Clear key → all requests pass again
+	s.SetAPIKey("")
+	if code := doReq(""); code != http.StatusOK {
+		t.Fatalf("after clear key: expected 200, got %d", code)
+	}
+
+	// /health always exempt regardless of key
+	s.SetAPIKey("secret-3")
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("/health should be exempt from auth, got %d", w.Code)
+	}
+}
+
 func TestBackendWithBasePath(t *testing.T) {
 	var receivedPath string
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {

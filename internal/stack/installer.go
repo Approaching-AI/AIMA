@@ -2,6 +2,7 @@ package stack
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -190,6 +191,7 @@ type DownloadItem struct {
 	FilePath   string `json:"file_path"`             // full local path in dist/
 	URL        string `json:"url"`                   // download URL
 	MirrorURL  string `json:"mirror_url,omitempty"`  // fallback URL (e.g. ghproxy mirror)
+	SHA256     string `json:"sha256,omitempty"`       // expected SHA-256 hex digest (optional)
 	Executable bool   `json:"executable,omitempty"`  // chmod +x after download
 	Optional   bool   `json:"optional,omitempty"`    // if true, download failure won't abort init (e.g. airgap tars)
 }
@@ -221,6 +223,7 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 						FilePath:   localPath,
 						URL:        url,
 						MirrorURL:  comp.Source.Mirror[platform],
+						SHA256:     comp.Source.SHA256[platform],
 						Executable: comp.Source.Binary != "",
 					})
 				}
@@ -238,6 +241,7 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 						FilePath:  airgapPath,
 						URL:       url,
 						MirrorURL: comp.Source.AirgapMirror[platform],
+						SHA256:    comp.Source.AirgapSHA256[platform],
 						Optional:  true,
 					})
 				}
@@ -249,8 +253,10 @@ func (inst *Installer) Preflight(components []knowledge.StackComponent) []Downlo
 }
 
 // DownloadItems downloads all items in parallel, creating directories as needed.
-// If a primary URL fails and a mirror URL is configured, it retries with the mirror.
+// Each URL is retried up to 3 times with exponential backoff and HTTP Range resume.
+// If a primary URL fails after retries and a mirror URL is configured, it retries the mirror.
 // Optional items (e.g. airgap tars) log a warning on failure instead of aborting.
+// When SHA256 is set, the downloaded file is verified before being accepted.
 func DownloadItems(ctx context.Context, items []DownloadItem) error {
 	if len(items) == 0 {
 		return nil
@@ -267,10 +273,10 @@ func DownloadItems(ctx context.Context, items []DownloadItem) error {
 		go func(item DownloadItem) {
 			defer wg.Done()
 			slog.Info("downloading", "name", item.Name, "url", item.URL)
-			err := downloadFile(ctx, item.URL, item.FilePath)
+			err := downloadFileRetry(ctx, item.URL, item.FilePath, item.SHA256)
 			if err != nil && item.MirrorURL != "" {
 				slog.Warn("primary download failed, trying mirror", "name", item.Name, "error", err, "mirror", item.MirrorURL)
-				err = downloadFile(ctx, item.MirrorURL, item.FilePath)
+				err = downloadFileRetry(ctx, item.MirrorURL, item.FilePath, item.SHA256)
 			}
 			if err != nil {
 				if item.Optional {
@@ -300,15 +306,50 @@ func DownloadItems(ctx context.Context, items []DownloadItem) error {
 	return firstErr
 }
 
-// downloadFile downloads url to destPath via a .partial temp file.
-func downloadFile(ctx context.Context, url, destPath string) error {
+const downloadMaxRetries = 3
+
+// downloadFileRetry wraps downloadFile with retry + exponential backoff.
+func downloadFileRetry(ctx context.Context, url, destPath, expectSHA256 string) error {
+	var lastErr error
+	for attempt := range downloadMaxRetries {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s
+			slog.Info("retrying download", "url", url, "attempt", attempt+1, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		lastErr = downloadFile(ctx, url, destPath, expectSHA256)
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
+// downloadFile downloads url to destPath via a .partial temp file with HTTP Range resume.
+// If expectSHA256 is non-empty, the downloaded file is verified against the expected hex digest.
+func downloadFile(ctx context.Context, url, destPath, expectSHA256 string) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return fmt.Errorf("create dir: %w", err)
+	}
+
+	partial := destPath + ".partial"
+
+	// Check for existing partial download for resume
+	var existingSize int64
+	if info, err := os.Stat(partial); err == nil {
+		existingSize = info.Size()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
+	}
+	if existingSize > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existingSize))
 	}
 
 	client := &http.Client{Timeout: 30 * time.Minute}
@@ -318,24 +359,42 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	var flags int
+	switch resp.StatusCode {
+	case http.StatusOK:
+		existingSize = 0
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	case http.StatusPartialContent:
+		flags = os.O_WRONLY | os.O_APPEND
+	default:
 		return fmt.Errorf("http %d from %s", resp.StatusCode, url)
 	}
 
-	partial := destPath + ".partial"
-	f, err := os.Create(partial)
+	f, err := os.OpenFile(partial, flags, 0o644)
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		f.Close()
-		os.Remove(partial)
 		return fmt.Errorf("write file: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(partial)
 		return fmt.Errorf("close file: %w", err)
+	}
+
+	// Verify SHA-256 if expected digest is provided
+	if expectSHA256 != "" {
+		actual, err := fileSHA256(partial)
+		if err != nil {
+			os.Remove(partial)
+			return fmt.Errorf("compute sha256: %w", err)
+		}
+		if actual != expectSHA256 {
+			os.Remove(partial)
+			return fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", url, expectSHA256, actual)
+		}
+		slog.Info("sha256 verified", "file", filepath.Base(destPath))
 	}
 
 	if err := os.Rename(partial, destPath); err != nil {
@@ -344,6 +403,20 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 	}
 
 	return nil
+}
+
+// fileSHA256 computes the hex-encoded SHA-256 digest of a file.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // Status checks whether all stack components are installed and ready.

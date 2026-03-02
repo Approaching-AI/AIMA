@@ -295,8 +295,10 @@ type StackSource struct {
 	Platforms      []string          `yaml:"platforms"`
 	Download       map[string]string `yaml:"download,omitempty"`         // platform → URL
 	Mirror         map[string]string `yaml:"mirror,omitempty"`           // platform → fallback URL
+	SHA256         map[string]string `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
 	AirgapDownload map[string]string `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
 	AirgapMirror   map[string]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URL
+	AirgapSHA256   map[string]string `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
 }
 
 type StackInstall struct {

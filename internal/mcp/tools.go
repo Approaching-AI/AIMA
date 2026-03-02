@@ -98,6 +98,20 @@ type ToolDeps struct {
 	FleetExecTool    func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error)
 }
 
+// validConfigKeys is the whitelist for system.config get/set.
+var validConfigKeys = map[string]bool{
+	"api_key":        true,
+	"llm.endpoint":   true,
+	"llm.model":      true,
+	"llm.api_key":    true,
+	"llm.user_agent": true,
+}
+
+// IsValidConfigKey reports whether key is a recognized configuration key.
+func IsValidConfigKey(key string) bool {
+	return validConfigKeys[key]
+}
+
 // isCommandAllowed checks if a command is in the whitelist.
 func isCommandAllowed(command string) bool {
 	// allowedCommands is the whitelist for shell.exec.
@@ -1368,6 +1382,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			}
 			if p.Key == "" {
 				return ErrorResult("key is required"), nil
+			}
+			if !IsValidConfigKey(p.Key) {
+				return ErrorResult(fmt.Sprintf("unknown config key %q; supported keys: api_key, llm.endpoint, llm.model, llm.api_key, llm.user_agent", p.Key)), nil
 			}
 
 			if p.Value != nil {

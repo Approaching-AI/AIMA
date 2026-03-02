@@ -97,6 +97,27 @@ body {
   box-shadow: 0 0 8px var(--cyan-glow);
 }
 
+/* Language selector */
+.lang-select {
+  background: transparent;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.lang-select:hover { border-color: var(--cyan); }
+.lang-select:focus { border-color: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
+.lang-select option {
+  background: #0d1117;
+  color: var(--text);
+}
+
 /* Main content area */
 .main {
   display: grid;
@@ -204,6 +225,34 @@ body {
 .fleet-device:last-child { border-bottom: none; }
 .fleet-device .name { font-family: var(--font-mono); }
 .fleet-device .meta { font-size: 10px; color: var(--text-dim); }
+
+/* Agent info rows */
+.agent-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+}
+.agent-info-row:last-child { border-bottom: none; }
+.agent-info-label { color: var(--text-dim); }
+.agent-info-value {
+  font-family: var(--font-mono);
+  color: var(--text);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.agent-info-value.clickable {
+  color: var(--cyan);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--cyan-dim);
+}
+.agent-info-value.clickable:hover { text-decoration-color: var(--cyan); }
 
 /* ===== Center: Agent Chat ===== */
 .center {
@@ -347,7 +396,7 @@ body {
 }
 .bottom-temp { color: var(--text-dim); font-family: var(--font-mono); white-space: nowrap; }
 
-/* ===== API Key Modal ===== */
+/* ===== Settings Modal ===== */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -363,15 +412,40 @@ body {
   border-radius: 8px;
   box-shadow: 0 0 30px var(--cyan-glow);
   padding: 24px;
-  width: 340px;
+  width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
 }
 .modal h3 {
   font-size: 14px;
   color: var(--cyan);
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   font-family: var(--font-mono);
 }
-.modal input {
+.modal-section {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.1);
+}
+.modal-section:last-of-type { border-bottom: none; margin-bottom: 12px; padding-bottom: 0; }
+.modal-section-title {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(56, 189, 248, 0.6);
+  margin-bottom: 10px;
+}
+.modal-field { margin-bottom: 10px; }
+.modal-field:last-child { margin-bottom: 0; }
+.modal-field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.modal input[type="text"],
+.modal input[type="password"],
+.modal input[type="url"] {
   width: 100%;
   background: var(--bg-deep);
   border: var(--panel-border);
@@ -381,7 +455,6 @@ body {
   font-size: 13px;
   padding: 8px 10px;
   outline: none;
-  margin-bottom: 12px;
 }
 .modal input:focus { border-color: var(--cyan); }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -398,6 +471,21 @@ body {
 }
 .modal-btn:hover { background: rgba(56,189,248,0.1); }
 .modal-btn.primary { background: rgba(56,189,248,0.15); border-color: var(--cyan); }
+.modal-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.modal-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.modal-feedback {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+.modal-feedback.success { color: var(--green); background: rgba(74,222,128,0.08); }
+.modal-feedback.error { color: var(--red); background: rgba(248,113,113,0.08); }
 
 /* ===== Mobile ===== */
 .mobile-tabs {
@@ -495,9 +583,18 @@ body {
     <div class="topbar-right">
       <span class="status-text">
         <span class="status-dot" :class="systemOnline ? 'online' : 'offline'"></span>
-        <span x-text="systemOnline ? 'System Online' : 'Connecting...'"></span>
+        <span x-text="systemOnline ? t('system_online') : t('connecting')"></span>
       </span>
-      <button class="btn-icon" @click="showKeyModal = true" title="API Key">&#x2699;</button>
+      <select class="lang-select" x-model="lang" @change="saveLang()">
+        <option value="en">EN</option>
+        <option value="zh">&#x4E2D;&#x6587;</option>
+        <option value="ja">&#x65E5;&#x672C;&#x8A9E;</option>
+        <option value="ko">&#xD55C;&#xAD6D;&#xC5B4;</option>
+        <option value="es">ES</option>
+        <option value="fr">FR</option>
+        <option value="de">DE</option>
+      </select>
+      <button class="btn-icon" @click="openSettings()" :title="t('settings')">&#x2699;</button>
     </div>
   </div>
 
@@ -528,7 +625,7 @@ body {
 
       <!-- Hardware Panel -->
       <div class="panel">
-        <div class="panel-title">&#x25A0; Hardware</div>
+        <div class="panel-title">&#x25A0; <span x-text="t('hardware')"></span></div>
         <template x-if="hw.gpu">
           <div>
             <div class="gauge">
@@ -556,7 +653,7 @@ body {
           </div>
         </template>
         <template x-if="!hw.gpu">
-          <div class="empty">No discrete GPU</div>
+          <div class="empty" x-text="t('no_gpu')"></div>
         </template>
         <div class="gauge" style="margin-top:8px">
           <div class="gauge-label"><span>CPU</span><span x-text="hw.cpu.pct + '%'"></span></div>
@@ -577,9 +674,9 @@ body {
 
       <!-- Engines Panel -->
       <div class="panel">
-        <div class="panel-title">&#x25B6; Engines</div>
+        <div class="panel-title">&#x25B6; <span x-text="t('engines')"></span></div>
         <template x-if="engines.length === 0">
-          <div class="empty">No engines detected</div>
+          <div class="empty" x-text="t('no_engines')"></div>
         </template>
         <ul class="panel-list">
           <template x-for="e in engines" :key="e.id">
@@ -594,9 +691,9 @@ body {
 
       <!-- Models Panel -->
       <div class="panel">
-        <div class="panel-title">&#x25C6; Models</div>
+        <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
         <template x-if="models.length === 0">
-          <div class="empty">No models found</div>
+          <div class="empty" x-text="t('no_models')"></div>
         </template>
         <ul class="panel-list">
           <template x-for="m in models" :key="m.name">
@@ -618,7 +715,7 @@ body {
           <div class="agent-name">AIMA Agent</div>
           <div class="agent-mode">
             <span class="status-dot" :class="agentAvailable ? 'online' : 'offline'" style="width:6px;height:6px"></span>
-            <span x-text="agentAvailable ? 'L3a Agent Ready' : 'Direct Mode'"></span>
+            <span x-text="agentAvailable ? t('agent_ready') : t('direct_mode')"></span>
           </div>
         </div>
       </div>
@@ -649,22 +746,56 @@ body {
           x-ref="chatInput"
           x-model="input"
           @keydown.enter="send()"
-          placeholder="Ask AIMA or run a command..."
+          :placeholder="t('chat_placeholder')"
           :disabled="thinking"
           autocomplete="off"
           spellcheck="false">
-        <button class="chat-send" @click="send()" :disabled="thinking || !input.trim()">Send</button>
+        <button class="chat-send" @click="send()" :disabled="thinking || !input.trim()" x-text="t('send')"></button>
       </div>
     </div>
 
-    <!-- Right Sidebar: Fleet + Deployments -->
+    <!-- Right Sidebar: Agent Status + Fleet + Deployments -->
     <div class="sidebar-right">
+
+      <!-- Agent Status Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25CE; <span x-text="t('agent_status')"></span></div>
+        <div class="agent-info-row">
+          <span class="agent-info-label" x-text="t('mode')"></span>
+          <span class="agent-info-value">
+            <span class="status-dot" :class="agentAvailable ? 'online' : agentInfo.llmEndpoint ? 'online' : 'offline'" style="width:6px;height:6px;vertical-align:middle"></span>
+            <span x-text="agentInfo.zeroclawHealthy ? 'L3b ZeroClaw' : (agentInfo.llmEndpoint ? 'L3a Agent' : t('direct_mode'))"></span>
+          </span>
+        </div>
+        <div class="agent-info-row">
+          <span class="agent-info-label" x-text="t('llm_model')"></span>
+          <span class="agent-info-value" x-text="agentInfo.llmModel || t('not_configured')" :title="agentInfo.llmModel || ''"></span>
+        </div>
+        <div class="agent-info-row">
+          <span class="agent-info-label" x-text="t('llm_endpoint')"></span>
+          <span class="agent-info-value" x-text="agentInfo.llmEndpoint ? truncateUrl(agentInfo.llmEndpoint) : t('not_configured')" :title="agentInfo.llmEndpoint || ''"></span>
+        </div>
+        <div class="agent-info-row">
+          <span class="agent-info-label" x-text="t('session')"></span>
+          <span class="agent-info-value" x-text="sessionId ? sessionId.substring(0, 8) + '...' : t('none')"></span>
+        </div>
+        <div class="agent-info-row">
+          <span class="agent-info-label">ZeroClaw</span>
+          <span class="agent-info-value">
+            <span class="status-dot" :class="agentInfo.zeroclawHealthy ? 'online' : agentInfo.zeroclawAvailable ? 'offline' : 'offline'" style="width:6px;height:6px;vertical-align:middle"></span>
+            <span x-text="agentInfo.zeroclawHealthy ? t('healthy') : agentInfo.zeroclawAvailable ? t('unhealthy') : t('unavailable')"></span>
+          </span>
+        </div>
+        <div style="margin-top:8px;text-align:right">
+          <span class="agent-info-value clickable" @click="openSettings()" x-text="t('configure')"></span>
+        </div>
+      </div>
 
       <!-- Fleet Panel -->
       <div class="panel">
-        <div class="panel-title">&#x25C9; Fleet</div>
+        <div class="panel-title">&#x25C9; <span x-text="t('fleet')"></span></div>
         <template x-if="fleet.length === 0">
-          <div class="empty">No devices discovered</div>
+          <div class="empty" x-text="t('no_fleet')"></div>
         </template>
         <template x-for="d in fleet" :key="d.id">
           <div class="fleet-device">
@@ -679,9 +810,9 @@ body {
 
       <!-- Deployments Panel -->
       <div class="panel">
-        <div class="panel-title">&#x25B2; Deployments</div>
+        <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span></div>
         <template x-if="deployments.length === 0">
-          <div class="empty">No active deployments</div>
+          <div class="empty" x-text="t('no_deployments')"></div>
         </template>
         <ul class="panel-list">
           <template x-for="dep in deployments" :key="dep.name">
@@ -730,17 +861,32 @@ body {
 
   <!-- Mobile Tabs -->
   <div class="mobile-tabs">
-    <button :class="mobileTab === 'chat' ? 'active' : ''" @click="setMobileTab('chat')">Agent</button>
-    <button :class="mobileTab === 'dashboard' ? 'active' : ''" @click="setMobileTab('dashboard')">Dashboard</button>
-    <button :class="mobileTab === 'fleet' ? 'active' : ''" @click="setMobileTab('fleet')">Fleet</button>
+    <button :class="mobileTab === 'chat' ? 'active' : ''" @click="setMobileTab('chat')" x-text="t('agent')"></button>
+    <button :class="mobileTab === 'dashboard' ? 'active' : ''" @click="setMobileTab('dashboard')" x-text="t('dashboard')"></button>
+    <button :class="mobileTab === 'fleet' ? 'active' : ''" @click="setMobileTab('fleet')" x-text="t('fleet')"></button>
   </div>
 
   <!-- Mobile Panel Overlay -->
   <div class="mobile-panel" :class="mobileTab !== 'chat' ? 'show' : ''" x-show="mobileTab !== 'chat'">
     <template x-if="mobileTab === 'dashboard'">
       <div style="display:flex;flex-direction:column;gap:8px">
+        <!-- Mobile Agent Status -->
         <div class="panel">
-          <div class="panel-title">&#x25A0; Hardware</div>
+          <div class="panel-title">&#x25CE; <span x-text="t('agent_status')"></span></div>
+          <div class="agent-info-row">
+            <span class="agent-info-label" x-text="t('mode')"></span>
+            <span class="agent-info-value" x-text="agentInfo.zeroclawHealthy ? 'L3b' : (agentInfo.llmEndpoint ? 'L3a' : t('direct_mode'))"></span>
+          </div>
+          <div class="agent-info-row">
+            <span class="agent-info-label" x-text="t('llm_model')"></span>
+            <span class="agent-info-value" x-text="agentInfo.llmModel || t('not_configured')"></span>
+          </div>
+          <div style="margin-top:6px;text-align:right">
+            <span class="agent-info-value clickable" @click="openSettings()" x-text="t('configure')"></span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">&#x25A0; <span x-text="t('hardware')"></span></div>
           <template x-if="hw.gpu">
             <div>
               <div class="gauge"><div class="gauge-label"><span x-text="'GPU ' + hw.gpu.name"></span><span x-text="hw.gpu.util + '%'"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.gpu.util + '%'"></div></div></div>
@@ -751,11 +897,11 @@ body {
           <div class="gauge"><div class="gauge-label"><span>RAM</span><span x-text="hw.mem.used + '/' + hw.mem.total"></span></div><div class="gauge-bar"><div class="gauge-fill" :style="'width:' + hw.mem.pct + '%'"></div></div></div>
         </div>
         <div class="panel">
-          <div class="panel-title">&#x25B6; Engines</div>
+          <div class="panel-title">&#x25B6; <span x-text="t('engines')"></span></div>
           <ul class="panel-list"><template x-for="e in engines" :key="e.id"><li><span class="dot" :class="e.available ? 'dot-green' : 'dot-dim'"></span><span x-text="e.type"></span></li></template></ul>
         </div>
         <div class="panel">
-          <div class="panel-title">&#x25C6; Models</div>
+          <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
           <ul class="panel-list"><template x-for="m in models" :key="m.name"><li><span class="dot dot-green"></span><span x-text="m.name"></span></li></template></ul>
         </div>
       </div>
@@ -763,27 +909,64 @@ body {
     <template x-if="mobileTab === 'fleet'">
       <div style="display:flex;flex-direction:column;gap:8px">
         <div class="panel">
-          <div class="panel-title">&#x25C9; Fleet</div>
+          <div class="panel-title">&#x25C9; <span x-text="t('fleet')"></span></div>
           <template x-for="d in fleet" :key="d.id"><div class="fleet-device"><span class="status-dot" :class="d.online ? 'online' : 'offline'" style="width:6px;height:6px"></span><div><div class="name" x-text="d.name || d.id"></div><div class="meta" x-text="d.meta || ''"></div></div></div></template>
         </div>
         <div class="panel">
-          <div class="panel-title">&#x25B2; Deployments</div>
+          <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span></div>
           <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name"><li><span class="dot" :class="dep.phase === 'running' ? 'dot-green' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase"></span></li></template></ul>
         </div>
       </div>
     </template>
   </div>
 
-  <!-- API Key Modal -->
-  <template x-if="showKeyModal">
-    <div class="modal-overlay" @click.self="showKeyModal = false">
+  <!-- Settings Modal -->
+  <template x-if="showSettings">
+    <div class="modal-overlay" @click.self="showSettings = false">
       <div class="modal">
-        <h3>API Key</h3>
-        <input type="password" x-model="apiKeyInput" placeholder="Enter API key (optional)" @keydown.enter="saveKey()">
-        <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">Stored in browser localStorage on this device only.</div>
+        <h3 x-text="t('settings')"></h3>
+
+        <!-- Feedback -->
+        <template x-if="settingsFeedback">
+          <div class="modal-feedback" :class="settingsFeedback.type" x-text="settingsFeedback.text"></div>
+        </template>
+
+        <!-- Section: AIMA Access -->
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('access_auth')"></div>
+          <div class="modal-field">
+            <label x-text="t('api_key')"></label>
+            <input type="password" x-model="settingsForm.apiKey" :placeholder="t('api_key_hint')">
+            <div class="modal-hint" x-text="t('api_key_local')"></div>
+          </div>
+        </div>
+
+        <!-- Section: LLM Backend -->
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('llm_backend')"></div>
+          <div class="modal-field">
+            <label x-text="t('llm_endpoint')"></label>
+            <input type="url" x-model="settingsForm.llmEndpoint" placeholder="http://localhost:6188/v1">
+          </div>
+          <div class="modal-field">
+            <label x-text="t('llm_model')"></label>
+            <input type="text" x-model="settingsForm.llmModel" placeholder="qwen3-8b">
+          </div>
+          <div class="modal-field">
+            <label x-text="t('llm_api_key')"></label>
+            <input type="password" x-model="settingsForm.llmApiKey" :placeholder="t('llm_api_key_hint')">
+          </div>
+          <div class="modal-field">
+            <label x-text="t('llm_user_agent')"></label>
+            <input type="text" x-model="settingsForm.llmUserAgent" placeholder="claude-code/2.1.5">
+            <div class="modal-hint" x-text="t('llm_config_hint')"></div>
+          </div>
+        </div>
+
         <div class="modal-actions">
-          <button class="modal-btn" @click="clearKey()">Clear</button>
-          <button class="modal-btn primary" @click="saveKey()">Save</button>
+          <button class="modal-btn" @click="showSettings = false" x-text="t('cancel')"></button>
+          <button class="modal-btn" @click="clearSettings()" x-text="t('clear')"></button>
+          <button class="modal-btn primary" @click="saveSettings()" :disabled="settingsSaving" x-text="settingsSaving ? t('saving') : t('save')"></button>
         </div>
       </div>
     </div>
@@ -795,21 +978,403 @@ body {
 <script src="alpine.min.js" defer></script>
 
 <script>
+// ===== i18n Translation Dictionary =====
+var I18N = {
+  en: {
+    system_online: 'System Online',
+    connecting: 'Connecting...',
+    settings: 'Settings',
+    hardware: 'Hardware',
+    engines: 'Engines',
+    models: 'Models',
+    fleet: 'Fleet',
+    deployments: 'Deployments',
+    agent_status: 'Agent Status',
+    agent_ready: 'L3a Agent Ready',
+    direct_mode: 'Direct Mode',
+    mode: 'Mode',
+    llm_model: 'LLM Model',
+    llm_endpoint: 'LLM Endpoint',
+    session: 'Session',
+    none: 'None',
+    not_configured: 'Not configured',
+    configure: 'Configure',
+    healthy: 'Healthy',
+    unhealthy: 'Unhealthy',
+    unavailable: 'Unavailable',
+    no_gpu: 'No discrete GPU',
+    no_engines: 'No engines detected',
+    no_models: 'No models found',
+    no_fleet: 'No devices discovered',
+    no_deployments: 'No active deployments',
+    chat_placeholder: 'Ask AIMA or run a command...',
+    send: 'Send',
+    agent: 'Agent',
+    dashboard: 'Dashboard',
+    welcome: 'Welcome to AIMA. Type a command or ask a question.',
+    help_text: 'Direct Mode Commands:\n  status      - System status\n  hardware    - Hardware detection\n  metrics     - Hardware metrics\n  models      - List models\n  engines     - List engines\n  deployments - List deployments\n  fleet       - List fleet devices',
+    agent_unavailable: 'Agent not available. Type "help" for direct commands.',
+    access_auth: 'Access Authentication',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'Enter API key (optional)',
+    api_key_local: 'Stored in browser localStorage only.',
+    llm_backend: 'LLM Backend',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: 'API key for remote LLM service',
+    llm_user_agent: 'User-Agent',
+    llm_config_hint: 'Saved to server via system.config. Takes effect immediately.',
+    save: 'Save',
+    saving: 'Saving...',
+    clear: 'Clear',
+    cancel: 'Cancel',
+    settings_saved: 'Settings saved successfully.',
+    settings_error: 'Failed to save settings.',
+    settings_cleared: 'Settings cleared.',
+  },
+  zh: {
+    system_online: '\u7CFB\u7EDF\u5728\u7EBF',
+    connecting: '\u8FDE\u63A5\u4E2D...',
+    settings: '\u8BBE\u7F6E',
+    hardware: '\u786C\u4EF6',
+    engines: '\u5F15\u64CE',
+    models: '\u6A21\u578B',
+    fleet: '\u8BBE\u5907\u7FA4',
+    deployments: '\u90E8\u7F72',
+    agent_status: 'Agent \u72B6\u6001',
+    agent_ready: 'L3a Agent \u5C31\u7EEA',
+    direct_mode: '\u76F4\u63A5\u6A21\u5F0F',
+    mode: '\u6A21\u5F0F',
+    llm_model: 'LLM \u6A21\u578B',
+    llm_endpoint: 'LLM \u7AEF\u70B9',
+    session: '\u4F1A\u8BDD',
+    none: '\u65E0',
+    not_configured: '\u672A\u914D\u7F6E',
+    configure: '\u914D\u7F6E',
+    healthy: '\u5065\u5EB7',
+    unhealthy: '\u5F02\u5E38',
+    unavailable: '\u4E0D\u53EF\u7528',
+    no_gpu: '\u65E0\u72EC\u7ACB\u663E\u5361',
+    no_engines: '\u672A\u68C0\u6D4B\u5230\u5F15\u64CE',
+    no_models: '\u672A\u53D1\u73B0\u6A21\u578B',
+    no_fleet: '\u672A\u53D1\u73B0\u8BBE\u5907',
+    no_deployments: '\u65E0\u6D3B\u52A8\u90E8\u7F72',
+    chat_placeholder: '\u8F93\u5165\u95EE\u9898\u6216\u547D\u4EE4...',
+    send: '\u53D1\u9001',
+    agent: 'Agent',
+    dashboard: '\u4EEA\u8868\u76D8',
+    welcome: '\u6B22\u8FCE\u4F7F\u7528 AIMA\u3002\u8F93\u5165\u547D\u4EE4\u6216\u63D0\u95EE\u3002',
+    help_text: '\u76F4\u63A5\u6A21\u5F0F\u547D\u4EE4:\n  status      - \u7CFB\u7EDF\u72B6\u6001\n  hardware    - \u786C\u4EF6\u68C0\u6D4B\n  metrics     - \u786C\u4EF6\u6307\u6807\n  models      - \u6A21\u578B\u5217\u8868\n  engines     - \u5F15\u64CE\u5217\u8868\n  deployments - \u90E8\u7F72\u5217\u8868\n  fleet       - \u8BBE\u5907\u5217\u8868',
+    agent_unavailable: 'Agent \u4E0D\u53EF\u7528\u3002\u8F93\u5165 "help" \u67E5\u770B\u76F4\u63A5\u547D\u4EE4\u3002',
+    access_auth: '\u8BBF\u95EE\u8BA4\u8BC1',
+    api_key: 'AIMA API Key',
+    api_key_hint: '\u8F93\u5165 API Key\uFF08\u53EF\u9009\uFF09',
+    api_key_local: '\u4EC5\u5B58\u50A8\u5728\u6D4F\u89C8\u5668 localStorage\u3002',
+    llm_backend: 'LLM \u540E\u7AEF',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: '\u8FDC\u7A0B LLM \u670D\u52A1\u7684 API Key',
+    llm_config_hint: '\u901A\u8FC7 system.config \u4FDD\u5B58\u5230\u670D\u52A1\u5668\uFF0C\u7ACB\u5373\u751F\u6548\u3002',
+    save: '\u4FDD\u5B58',
+    saving: '\u4FDD\u5B58\u4E2D...',
+    clear: '\u6E05\u9664',
+    cancel: '\u53D6\u6D88',
+    settings_saved: '\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002',
+    settings_error: '\u4FDD\u5B58\u8BBE\u7F6E\u5931\u8D25\u3002',
+    settings_cleared: '\u8BBE\u7F6E\u5DF2\u6E05\u9664\u3002',
+  },
+  ja: {
+    system_online: '\u30B7\u30B9\u30C6\u30E0\u30AA\u30F3\u30E9\u30A4\u30F3',
+    connecting: '\u63A5\u7D9A\u4E2D...',
+    settings: '\u8A2D\u5B9A',
+    hardware: '\u30CF\u30FC\u30C9\u30A6\u30A7\u30A2',
+    engines: '\u30A8\u30F3\u30B8\u30F3',
+    models: '\u30E2\u30C7\u30EB',
+    fleet: '\u30C7\u30D0\u30A4\u30B9\u7FA4',
+    deployments: '\u30C7\u30D7\u30ED\u30A4',
+    agent_status: 'Agent \u30B9\u30C6\u30FC\u30BF\u30B9',
+    agent_ready: 'L3a Agent \u6E96\u5099\u5B8C\u4E86',
+    direct_mode: '\u30C0\u30A4\u30EC\u30AF\u30C8\u30E2\u30FC\u30C9',
+    mode: '\u30E2\u30FC\u30C9',
+    llm_model: 'LLM \u30E2\u30C7\u30EB',
+    llm_endpoint: 'LLM \u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8',
+    session: '\u30BB\u30C3\u30B7\u30E7\u30F3',
+    none: '\u306A\u3057',
+    not_configured: '\u672A\u8A2D\u5B9A',
+    configure: '\u8A2D\u5B9A',
+    healthy: '\u6B63\u5E38',
+    unhealthy: '\u7570\u5E38',
+    unavailable: '\u5229\u7528\u4E0D\u53EF',
+    no_gpu: '\u30C7\u30A3\u30B9\u30AF\u30EA\u30FC\u30C8GPU\u306A\u3057',
+    no_engines: '\u30A8\u30F3\u30B8\u30F3\u672A\u691C\u51FA',
+    no_models: '\u30E2\u30C7\u30EB\u672A\u691C\u51FA',
+    no_fleet: '\u30C7\u30D0\u30A4\u30B9\u672A\u691C\u51FA',
+    no_deployments: '\u30A2\u30AF\u30C6\u30A3\u30D6\u306A\u30C7\u30D7\u30ED\u30A4\u306A\u3057',
+    chat_placeholder: '\u8CEA\u554F\u3084\u30B3\u30DE\u30F3\u30C9\u3092\u5165\u529B...',
+    send: '\u9001\u4FE1',
+    agent: 'Agent',
+    dashboard: '\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9',
+    welcome: 'AIMA \u3078\u3088\u3046\u3053\u305D\u3002\u30B3\u30DE\u30F3\u30C9\u3084\u8CEA\u554F\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+    help_text: '\u30C0\u30A4\u30EC\u30AF\u30C8\u30E2\u30FC\u30C9\u30B3\u30DE\u30F3\u30C9:\n  status      - \u30B7\u30B9\u30C6\u30E0\u30B9\u30C6\u30FC\u30BF\u30B9\n  hardware    - \u30CF\u30FC\u30C9\u30A6\u30A7\u30A2\u691C\u51FA\n  metrics     - \u30CF\u30FC\u30C9\u30A6\u30A7\u30A2\u6307\u6A19\n  models      - \u30E2\u30C7\u30EB\u4E00\u89A7\n  engines     - \u30A8\u30F3\u30B8\u30F3\u4E00\u89A7\n  deployments - \u30C7\u30D7\u30ED\u30A4\u4E00\u89A7\n  fleet       - \u30C7\u30D0\u30A4\u30B9\u4E00\u89A7',
+    agent_unavailable: 'Agent\u304C\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002"help"\u3067\u30B3\u30DE\u30F3\u30C9\u4E00\u89A7\u3092\u8868\u793A\u3002',
+    access_auth: '\u30A2\u30AF\u30BB\u30B9\u8A8D\u8A3C',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'API Key\u3092\u5165\u529B\uFF08\u4EFB\u610F\uFF09',
+    api_key_local: '\u30D6\u30E9\u30A6\u30B6\u306ElocalStorage\u306B\u306E\u307F\u4FDD\u5B58\u3002',
+    llm_backend: 'LLM \u30D0\u30C3\u30AF\u30A8\u30F3\u30C9',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: '\u30EA\u30E2\u30FC\u30C8LLM\u30B5\u30FC\u30D3\u30B9\u306EAPI Key',
+    llm_config_hint: 'system.config\u3067\u30B5\u30FC\u30D0\u30FC\u306B\u4FDD\u5B58\u3002\u5373\u6642\u53CD\u6620\u3002',
+    save: '\u4FDD\u5B58',
+    saving: '\u4FDD\u5B58\u4E2D...',
+    clear: '\u30AF\u30EA\u30A2',
+    cancel: '\u30AD\u30E3\u30F3\u30BB\u30EB',
+    settings_saved: '\u8A2D\u5B9A\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002',
+    settings_error: '\u8A2D\u5B9A\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002',
+    settings_cleared: '\u8A2D\u5B9A\u3092\u30AF\u30EA\u30A2\u3057\u307E\u3057\u305F\u3002',
+  },
+  ko: {
+    system_online: '\uC2DC\uC2A4\uD15C \uC628\uB77C\uC778',
+    connecting: '\uC5F0\uACB0 \uC911...',
+    settings: '\uC124\uC815',
+    hardware: '\uD558\uB4DC\uC6E8\uC5B4',
+    engines: '\uC5D4\uC9C4',
+    models: '\uBAA8\uB378',
+    fleet: '\uB514\uBC14\uC774\uC2A4\uAD70',
+    deployments: '\uBC30\uD3EC',
+    agent_status: 'Agent \uC0C1\uD0DC',
+    agent_ready: 'L3a Agent \uC900\uBE44\uB428',
+    direct_mode: '\uC9C1\uC811 \uBAA8\uB4DC',
+    mode: '\uBAA8\uB4DC',
+    llm_model: 'LLM \uBAA8\uB378',
+    llm_endpoint: 'LLM \uC5D4\uB4DC\uD3EC\uC778\uD2B8',
+    session: '\uC138\uC158',
+    none: '\uC5C6\uC74C',
+    not_configured: '\uBBF8\uC124\uC815',
+    configure: '\uC124\uC815',
+    healthy: '\uC815\uC0C1',
+    unhealthy: '\uBE44\uC815\uC0C1',
+    unavailable: '\uC0AC\uC6A9 \uBD88\uAC00',
+    no_gpu: '\uB514\uC2A4\uD06C\uB9AC\uD2B8 GPU \uC5C6\uC74C',
+    no_engines: '\uC5D4\uC9C4 \uBBF8\uAC10\uC9C0',
+    no_models: '\uBAA8\uB378 \uBBF8\uBC1C\uACAC',
+    no_fleet: '\uB514\uBC14\uC774\uC2A4 \uBBF8\uBC1C\uACAC',
+    no_deployments: '\uD65C\uC131 \uBC30\uD3EC \uC5C6\uC74C',
+    chat_placeholder: '\uC9C8\uBB38\uC774\uB098 \uBA85\uB839\uC5B4\uB97C \uC785\uB825...',
+    send: '\uC804\uC1A1',
+    agent: 'Agent',
+    dashboard: '\uB300\uC2DC\uBCF4\uB4DC',
+    welcome: 'AIMA\uC5D0 \uC624\uC2E0 \uAC83\uC744 \uD658\uC601\uD569\uB2C8\uB2E4. \uBA85\uB839\uC5B4\uB098 \uC9C8\uBB38\uC744 \uC785\uB825\uD558\uC138\uC694.',
+    help_text: '\uC9C1\uC811 \uBAA8\uB4DC \uBA85\uB839\uC5B4:\n  status      - \uC2DC\uC2A4\uD15C \uC0C1\uD0DC\n  hardware    - \uD558\uB4DC\uC6E8\uC5B4 \uAC10\uC9C0\n  metrics     - \uD558\uB4DC\uC6E8\uC5B4 \uC9C0\uD45C\n  models      - \uBAA8\uB378 \uBAA9\uB85D\n  engines     - \uC5D4\uC9C4 \uBAA9\uB85D\n  deployments - \uBC30\uD3EC \uBAA9\uB85D\n  fleet       - \uB514\uBC14\uC774\uC2A4 \uBAA9\uB85D',
+    agent_unavailable: 'Agent\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. "help"\uB85C \uBA85\uB839\uC5B4\uB97C \uD655\uC778\uD558\uC138\uC694.',
+    access_auth: '\uC561\uC138\uC2A4 \uC778\uC99D',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'API Key \uC785\uB825 (\uC120\uD0DD)',
+    api_key_local: '\uBE0C\uB77C\uC6B0\uC800 localStorage\uC5D0\uB9CC \uC800\uC7A5\uB429\uB2C8\uB2E4.',
+    llm_backend: 'LLM \uBC31\uC5D4\uB4DC',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: '\uC6D0\uACA9 LLM \uC11C\uBE44\uC2A4 API Key',
+    llm_config_hint: 'system.config\uB85C \uC11C\uBC84\uC5D0 \uC800\uC7A5. \uC989\uC2DC \uC801\uC6A9.',
+    save: '\uC800\uC7A5',
+    saving: '\uC800\uC7A5 \uC911...',
+    clear: '\uCD08\uAE30\uD654',
+    cancel: '\uCDE8\uC18C',
+    settings_saved: '\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
+    settings_error: '\uC124\uC815 \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.',
+    settings_cleared: '\uC124\uC815\uC774 \uCD08\uAE30\uD654\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
+  },
+  es: {
+    system_online: 'Sistema en l\u00EDnea',
+    connecting: 'Conectando...',
+    settings: 'Configuraci\u00F3n',
+    hardware: 'Hardware',
+    engines: 'Motores',
+    models: 'Modelos',
+    fleet: 'Flota',
+    deployments: 'Despliegues',
+    agent_status: 'Estado del Agent',
+    agent_ready: 'L3a Agent listo',
+    direct_mode: 'Modo directo',
+    mode: 'Modo',
+    llm_model: 'Modelo LLM',
+    llm_endpoint: 'Endpoint LLM',
+    session: 'Sesi\u00F3n',
+    none: 'Ninguna',
+    not_configured: 'No configurado',
+    configure: 'Configurar',
+    healthy: 'Saludable',
+    unhealthy: 'No saludable',
+    unavailable: 'No disponible',
+    no_gpu: 'Sin GPU discreta',
+    no_engines: 'No se detectaron motores',
+    no_models: 'No se encontraron modelos',
+    no_fleet: 'No se descubrieron dispositivos',
+    no_deployments: 'Sin despliegues activos',
+    chat_placeholder: 'Pregunte a AIMA o ejecute un comando...',
+    send: 'Enviar',
+    agent: 'Agent',
+    dashboard: 'Panel',
+    welcome: 'Bienvenido a AIMA. Escriba un comando o haga una pregunta.',
+    help_text: 'Comandos de modo directo:\n  status      - Estado del sistema\n  hardware    - Detecci\u00F3n de hardware\n  metrics     - M\u00E9tricas de hardware\n  models      - Lista de modelos\n  engines     - Lista de motores\n  deployments - Lista de despliegues\n  fleet       - Lista de dispositivos',
+    agent_unavailable: 'Agent no disponible. Escriba "help" para comandos directos.',
+    access_auth: 'Autenticaci\u00F3n de acceso',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'Ingrese API Key (opcional)',
+    api_key_local: 'Almacenado solo en localStorage del navegador.',
+    llm_backend: 'Backend LLM',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: 'API Key del servicio LLM remoto',
+    llm_config_hint: 'Guardado en servidor v\u00EDa system.config. Efecto inmediato.',
+    save: 'Guardar',
+    saving: 'Guardando...',
+    clear: 'Limpiar',
+    cancel: 'Cancelar',
+    settings_saved: 'Configuraci\u00F3n guardada correctamente.',
+    settings_error: 'Error al guardar la configuraci\u00F3n.',
+    settings_cleared: 'Configuraci\u00F3n eliminada.',
+  },
+  fr: {
+    system_online: 'Syst\u00E8me en ligne',
+    connecting: 'Connexion...',
+    settings: 'Param\u00E8tres',
+    hardware: 'Mat\u00E9riel',
+    engines: 'Moteurs',
+    models: 'Mod\u00E8les',
+    fleet: 'Flotte',
+    deployments: 'D\u00E9ploiements',
+    agent_status: 'Statut de l\'Agent',
+    agent_ready: 'L3a Agent pr\u00EAt',
+    direct_mode: 'Mode direct',
+    mode: 'Mode',
+    llm_model: 'Mod\u00E8le LLM',
+    llm_endpoint: 'Point d\'acc\u00E8s LLM',
+    session: 'Session',
+    none: 'Aucune',
+    not_configured: 'Non configur\u00E9',
+    configure: 'Configurer',
+    healthy: 'Sain',
+    unhealthy: 'D\u00E9faillant',
+    unavailable: 'Indisponible',
+    no_gpu: 'Pas de GPU discret',
+    no_engines: 'Aucun moteur d\u00E9tect\u00E9',
+    no_models: 'Aucun mod\u00E8le trouv\u00E9',
+    no_fleet: 'Aucun appareil d\u00E9couvert',
+    no_deployments: 'Aucun d\u00E9ploiement actif',
+    chat_placeholder: 'Posez une question ou ex\u00E9cutez une commande...',
+    send: 'Envoyer',
+    agent: 'Agent',
+    dashboard: 'Tableau de bord',
+    welcome: 'Bienvenue sur AIMA. Tapez une commande ou posez une question.',
+    help_text: 'Commandes en mode direct :\n  status      - Statut syst\u00E8me\n  hardware    - D\u00E9tection mat\u00E9riel\n  metrics     - M\u00E9triques mat\u00E9riel\n  models      - Liste des mod\u00E8les\n  engines     - Liste des moteurs\n  deployments - Liste des d\u00E9ploiements\n  fleet       - Liste des appareils',
+    agent_unavailable: 'Agent indisponible. Tapez "help" pour les commandes directes.',
+    access_auth: 'Authentification d\'acc\u00E8s',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'Entrez la cl\u00E9 API (optionnel)',
+    api_key_local: 'Stock\u00E9 uniquement dans le localStorage du navigateur.',
+    llm_backend: 'Backend LLM',
+    llm_api_key: 'Cl\u00E9 API LLM',
+    llm_api_key_hint: 'Cl\u00E9 API du service LLM distant',
+    llm_config_hint: 'Enregistr\u00E9 sur le serveur via system.config. Effet imm\u00E9diat.',
+    save: 'Enregistrer',
+    saving: 'Enregistrement...',
+    clear: 'Effacer',
+    cancel: 'Annuler',
+    settings_saved: 'Param\u00E8tres enregistr\u00E9s avec succ\u00E8s.',
+    settings_error: 'Erreur lors de l\'enregistrement des param\u00E8tres.',
+    settings_cleared: 'Param\u00E8tres effac\u00E9s.',
+  },
+  de: {
+    system_online: 'System online',
+    connecting: 'Verbinde...',
+    settings: 'Einstellungen',
+    hardware: 'Hardware',
+    engines: 'Engines',
+    models: 'Modelle',
+    fleet: 'Ger\u00E4teflotte',
+    deployments: 'Deployments',
+    agent_status: 'Agent-Status',
+    agent_ready: 'L3a Agent bereit',
+    direct_mode: 'Direktmodus',
+    mode: 'Modus',
+    llm_model: 'LLM-Modell',
+    llm_endpoint: 'LLM-Endpunkt',
+    session: 'Sitzung',
+    none: 'Keine',
+    not_configured: 'Nicht konfiguriert',
+    configure: 'Konfigurieren',
+    healthy: 'Gesund',
+    unhealthy: 'Fehlerhaft',
+    unavailable: 'Nicht verf\u00FCgbar',
+    no_gpu: 'Keine dedizierte GPU',
+    no_engines: 'Keine Engines erkannt',
+    no_models: 'Keine Modelle gefunden',
+    no_fleet: 'Keine Ger\u00E4te entdeckt',
+    no_deployments: 'Keine aktiven Deployments',
+    chat_placeholder: 'Frage stellen oder Befehl ausf\u00FChren...',
+    send: 'Senden',
+    agent: 'Agent',
+    dashboard: 'Dashboard',
+    welcome: 'Willkommen bei AIMA. Geben Sie einen Befehl ein oder stellen Sie eine Frage.',
+    help_text: 'Direktmodus-Befehle:\n  status      - Systemstatus\n  hardware    - Hardwareerkennung\n  metrics     - Hardwaremetriken\n  models      - Modellliste\n  engines     - Engine-Liste\n  deployments - Deployment-Liste\n  fleet       - Ger\u00E4teliste',
+    agent_unavailable: 'Agent nicht verf\u00FCgbar. Geben Sie "help" f\u00FCr direkte Befehle ein.',
+    access_auth: 'Zugangsauthentifizierung',
+    api_key: 'AIMA API Key',
+    api_key_hint: 'API Key eingeben (optional)',
+    api_key_local: 'Nur im Browser-localStorage gespeichert.',
+    llm_backend: 'LLM-Backend',
+    llm_api_key: 'LLM API Key',
+    llm_api_key_hint: 'API Key f\u00FCr Remote-LLM-Dienst',
+    llm_config_hint: '\u00DCber system.config auf Server gespeichert. Sofortige Wirkung.',
+    save: 'Speichern',
+    saving: 'Speichern...',
+    clear: 'L\u00F6schen',
+    cancel: 'Abbrechen',
+    settings_saved: 'Einstellungen erfolgreich gespeichert.',
+    settings_error: 'Fehler beim Speichern der Einstellungen.',
+    settings_cleared: 'Einstellungen gel\u00F6scht.',
+  }
+};
+
 function aimaApp() {
   return {
+    // i18n
+    lang: localStorage.getItem('aima_lang') || 'en',
+
+    t(key) {
+      var dict = I18N[this.lang] || I18N.en;
+      return dict[key] || I18N.en[key] || key;
+    },
+
+    saveLang() {
+      localStorage.setItem('aima_lang', this.lang);
+      // Update welcome message to match language
+      if (this.messages.length === 1 && this.messages[0].role === 'system') {
+        this.messages[0].text = this.t('welcome');
+      }
+    },
+
     // State
     systemOnline: false,
     agentAvailable: false,
-    showKeyModal: false,
+    showSettings: false,
     apiKey: localStorage.getItem('aima_api_key') || '',
-    apiKeyInput: localStorage.getItem('aima_api_key') || '',
     input: '',
     thinking: false,
-    messages: [
-      { role: 'system', text: 'Welcome to AIMA. Type a command or ask a question.' }
-    ],
+    messages: [],
     sessionId: '',
     mobileTab: 'chat',
+
+    // Settings modal form
+    settingsForm: { apiKey: '', llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '' },
+    settingsSaving: false,
+    settingsFeedback: null,
+
+    // Agent info
+    agentInfo: {
+      llmEndpoint: '',
+      llmModel: '',
+      llmUserAgent: '',
+      zeroclawAvailable: false,
+      zeroclawHealthy: false
+    },
 
     // Dashboard data
     hw: {
@@ -826,19 +1391,22 @@ function aimaApp() {
     _timers: [],
 
     init() {
+      // Set welcome message in current language
+      this.messages = [{ role: 'system', text: this.t('welcome') }];
+
       this.pollSystemStatus();
       this.pollEngines();
       this.pollModels();
       this.pollDeployments();
       this.pollFleet();
-      this.pollAgentStatus();
+      this.pollAgentInfo();
 
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
       this._timers.push(setInterval(() => this.pollDeployments(), 10000));
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
-      this._timers.push(setInterval(() => this.pollAgentStatus(), 30000));
+      this._timers.push(setInterval(() => this.pollAgentInfo(), 30000));
 
       this.$nextTick(() => {
         if (this.$refs.chatInput) this.$refs.chatInput.focus();
@@ -852,7 +1420,6 @@ function aimaApp() {
 
     // ── API helpers ──
 
-    // callToolRaw: calls POST /api/v1/tools/{name}, returns the raw ToolResult envelope.
     async callToolRaw(name, params) {
       const headers = { 'Content-Type': 'application/json' };
       if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
@@ -864,7 +1431,7 @@ function aimaApp() {
         });
         if (resp.status === 401) {
           this.systemOnline = false;
-          this.showKeyModal = true;
+          this.showSettings = true;
           return { _err: 'unauthorized' };
         }
         return await resp.json();
@@ -874,28 +1441,37 @@ function aimaApp() {
       }
     },
 
-    // callTool: calls an MCP tool and unwraps the ToolResult envelope.
-    // MCP tools return: {"content":[{"type":"text","text":"...json..."}],"isError":false}
-    // This function extracts and parses the inner JSON text.
     async callTool(name, params) {
       const raw = await this.callToolRaw(name, params);
       if (raw._err) return { _err: raw._err };
-      // Unwrap MCP ToolResult envelope
       if (raw.content && Array.isArray(raw.content) && raw.content.length > 0) {
         const text = raw.content[0].text || '';
         if (raw.isError) return { _err: text };
         try { return JSON.parse(text); } catch { return { _raw: text }; }
       }
-      // Fallback: already unwrapped or unexpected format
       return raw;
+    },
+
+    // Helper to get a single config value (returns string or null)
+    async getConfig(key) {
+      const raw = await this.callToolRaw('system.config', { key: key });
+      if (raw._err) return null;
+      if (raw.content && Array.isArray(raw.content) && raw.content.length > 0) {
+        var text = raw.content[0].text || '';
+        if (raw.isError) return null;
+        // system.config get returns plain text like the value, or JSON with a value field
+        try {
+          var parsed = JSON.parse(text);
+          return parsed.value !== undefined ? String(parsed.value) : text;
+        } catch {
+          return text;
+        }
+      }
+      return null;
     },
 
     // ── Polling functions ──
 
-    // system.status returns:
-    //   hardware: { gpu?: GPUInfo, cpu: CPUInfo, ram: RAMInfo, ... }
-    //   metrics:  { gpu?: GPUMetrics, cpu: CPUMetrics, ram: RAMMetrics }
-    //   deployments: [DeploymentStatus, ...]
     async pollSystemStatus() {
       const data = await this.callTool('system.status');
       if (data._err) return;
@@ -904,7 +1480,6 @@ function aimaApp() {
       const hw = data.hardware;
       const met = data.metrics;
 
-      // GPU: static info from hardware.gpu, dynamic from metrics.gpu
       if (hw && hw.gpu) {
         const g = hw.gpu;
         const gm = (met && met.gpu) || {};
@@ -924,12 +1499,10 @@ function aimaApp() {
         this.hw.gpu = null;
       }
 
-      // CPU: static from hardware.cpu, dynamic from metrics.cpu
       if (met && met.cpu) {
         this.hw.cpu.pct = Math.round(met.cpu.usage_percent || 0);
       }
 
-      // RAM: static from hardware.ram, dynamic from metrics.ram
       if (met && met.ram) {
         const mt = met.ram.total_mib || 0;
         const mu = met.ram.used_mib || 0;
@@ -950,7 +1523,6 @@ function aimaApp() {
       }
     },
 
-    // engine.list returns: [{ id, type, image, tag, available, ... }, ...]
     async pollEngines() {
       const data = await this.callTool('engine.list');
       if (data._err) return;
@@ -963,7 +1535,6 @@ function aimaApp() {
       }));
     },
 
-    // model.list returns: [{ name, type, size_bytes, format, ... }, ...]
     async pollModels() {
       const data = await this.callTool('model.list');
       if (data._err) return;
@@ -974,7 +1545,6 @@ function aimaApp() {
       }));
     },
 
-    // deploy.list returns: [{ name, phase, ready, address, runtime, ... }, ...]
     async pollDeployments() {
       const data = await this.callTool('deploy.list');
       if (data._err) return;
@@ -986,7 +1556,6 @@ function aimaApp() {
       }));
     },
 
-    // fleet.list_devices returns: [{ id, name, addr_v4, port, models, online, self }, ...]
     async pollFleet() {
       const data = await this.callTool('fleet.list_devices');
       if (data._err) return;
@@ -999,20 +1568,29 @@ function aimaApp() {
       }));
     },
 
-    // agent.status returns: { zeroclaw_available, zeroclaw_healthy }
-    // L3a Go Agent availability depends on LLM endpoint — heuristic: if system.status succeeds,
-    // try agent.ask with empty query and see if it fails with "no LLM" vs succeeds.
-    // Simpler approach: always show Direct Mode unless we've confirmed agent works.
-    async pollAgentStatus() {
-      const data = await this.callTool('agent.status');
-      if (data._err) {
-        this.agentAvailable = false;
-        return;
+    // Combined agent status + LLM config polling
+    async pollAgentInfo() {
+      // Fetch agent.status
+      const statusData = await this.callTool('agent.status');
+      if (!statusData._err) {
+        this.agentInfo.zeroclawAvailable = statusData.zeroclaw_available === true;
+        this.agentInfo.zeroclawHealthy = statusData.zeroclaw_healthy === true;
       }
-      // agent.status only reports zeroclaw. L3a availability requires an LLM backend.
-      // We'll optimistically show "Agent Ready" if zeroclaw is available,
-      // or if we've previously had a successful agent.ask call.
-      this.agentAvailable = data.zeroclaw_available === true || this._agentConfirmed === true;
+
+      // Fetch LLM config from system.config
+      var endpoint = await this.getConfig('llm.endpoint');
+      if (endpoint && endpoint !== '***') this.agentInfo.llmEndpoint = endpoint;
+
+      var model = await this.getConfig('llm.model');
+      if (model && model !== '***') this.agentInfo.llmModel = model;
+
+      var ua = await this.getConfig('llm.user_agent');
+      if (ua && ua !== '***') this.agentInfo.llmUserAgent = ua;
+
+      // Update agentAvailable based on combined info
+      this.agentAvailable = this.agentInfo.zeroclawAvailable === true ||
+        this._agentConfirmed === true ||
+        (this.agentInfo.llmEndpoint !== '' && this.agentInfo.llmModel !== '');
     },
     _agentConfirmed: false,
 
@@ -1026,7 +1604,6 @@ function aimaApp() {
       this.thinking = true;
       this.scrollChat();
 
-      // Always try agent.ask first — it will fail gracefully if no LLM
       await this.sendAgent(text);
 
       this.thinking = false;
@@ -1040,7 +1617,6 @@ function aimaApp() {
       const data = await this.callTool('agent.ask', params);
 
       if (data._err) {
-        // Agent not available — fall back to direct tool mode
         this._agentConfirmed = false;
         this.agentAvailable = false;
         await this.sendDirect(text);
@@ -1049,7 +1625,6 @@ function aimaApp() {
 
       this._agentConfirmed = true;
       this.agentAvailable = true;
-      // agent.ask returns: { result: "...", session_id: "..." }
       if (data.session_id) this.sessionId = data.session_id;
       const result = data.result || data._raw || JSON.stringify(data);
       this.messages.push({ role: 'ai', text: result });
@@ -1072,7 +1647,7 @@ function aimaApp() {
       const lower = text.toLowerCase().trim();
 
       if (lower === 'help' || lower === '?') {
-        this.messages.push({ role: 'ai', text: 'Direct Mode Commands:\n  status      - System status\n  hardware    - Hardware detection\n  metrics     - Hardware metrics\n  models      - List models\n  engines     - List engines\n  deployments - List deployments\n  fleet       - List fleet devices' });
+        this.messages.push({ role: 'ai', text: this.t('help_text') });
         return;
       }
 
@@ -1086,7 +1661,7 @@ function aimaApp() {
         return;
       }
 
-      this.messages.push({ role: 'error', text: 'Agent not available. Type "help" for direct commands.' });
+      this.messages.push({ role: 'error', text: this.t('agent_unavailable') });
     },
 
     scrollChat() {
@@ -1096,20 +1671,73 @@ function aimaApp() {
       });
     },
 
-    // ── Key modal ──
+    // ── Settings modal ──
 
-    saveKey() {
-      this.apiKey = this.apiKeyInput;
-      localStorage.setItem('aima_api_key', this.apiKey);
-      this.showKeyModal = false;
-      this.pollSystemStatus();
+    async openSettings() {
+      this.settingsFeedback = null;
+      this.settingsForm.apiKey = this.apiKey;
+      this.settingsForm.llmEndpoint = this.agentInfo.llmEndpoint || '';
+      this.settingsForm.llmModel = this.agentInfo.llmModel || '';
+      this.settingsForm.llmApiKey = '';
+      this.settingsForm.llmUserAgent = this.agentInfo.llmUserAgent || '';
+      this.showSettings = true;
     },
 
-    clearKey() {
+    async saveSettings() {
+      this.settingsSaving = true;
+      this.settingsFeedback = null;
+      var errors = [];
+
+      // Save AIMA API key to localStorage
+      this.apiKey = this.settingsForm.apiKey;
+      if (this.apiKey) {
+        localStorage.setItem('aima_api_key', this.apiKey);
+      } else {
+        localStorage.removeItem('aima_api_key');
+      }
+
+      // Save LLM config to server via system.config set
+      // Always send these (empty string = reset to default)
+      var r = await this.callTool('system.config', { key: 'llm.endpoint', value: this.settingsForm.llmEndpoint });
+      if (r._err) errors.push('llm.endpoint: ' + r._err);
+      var r2 = await this.callTool('system.config', { key: 'llm.model', value: this.settingsForm.llmModel });
+      if (r2._err) errors.push('llm.model: ' + r2._err);
+      // Only send api_key if non-empty (empty = "don't change", form starts blank for security)
+      if (this.settingsForm.llmApiKey) {
+        var r3 = await this.callTool('system.config', { key: 'llm.api_key', value: this.settingsForm.llmApiKey });
+        if (r3._err) errors.push('llm.api_key: ' + r3._err);
+      }
+      var r4 = await this.callTool('system.config', { key: 'llm.user_agent', value: this.settingsForm.llmUserAgent });
+      if (r4._err) errors.push('llm.user_agent: ' + r4._err);
+
+      this.settingsSaving = false;
+
+      if (errors.length > 0) {
+        this.settingsFeedback = { type: 'error', text: this.t('settings_error') + ' ' + errors.join('; ') };
+      } else {
+        this.settingsFeedback = { type: 'success', text: this.t('settings_saved') };
+        // Refresh agent info
+        await this.pollAgentInfo();
+        // Auto-close after brief delay
+        setTimeout(() => { this.showSettings = false; this.settingsFeedback = null; }, 1200);
+      }
+    },
+
+    async clearSettings() {
       this.apiKey = '';
-      this.apiKeyInput = '';
       localStorage.removeItem('aima_api_key');
-      this.showKeyModal = false;
+      this.settingsForm = { apiKey: '', llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '' };
+
+      // Clear server-side config
+      await this.callTool('system.config', { key: 'llm.endpoint', value: '' });
+      await this.callTool('system.config', { key: 'llm.model', value: '' });
+      await this.callTool('system.config', { key: 'llm.api_key', value: '' });
+      await this.callTool('system.config', { key: 'llm.user_agent', value: '' });
+
+      this.agentInfo.llmEndpoint = '';
+      this.agentInfo.llmModel = '';
+      this.settingsFeedback = { type: 'success', text: this.t('settings_cleared') };
+      setTimeout(() => { this.settingsFeedback = null; }, 2000);
     },
 
     // Mobile tab
@@ -1126,6 +1754,13 @@ function aimaApp() {
     },
 
     // ── Helpers ──
+
+    truncateUrl(url) {
+      if (!url) return '';
+      // Remove protocol prefix for display
+      var short = url.replace(/^https?:\/\//, '');
+      return short.length > 24 ? short.substring(0, 22) + '...' : short;
+    },
 
     fmtMiB(mib) {
       if (!mib || mib <= 0) return '0M';

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,6 +28,7 @@ type OpenAIClient struct {
 	baseURL    string
 	model      string
 	apiKey     string
+	userAgent  string
 	httpClient *http.Client
 	discoverFn DiscoverFunc
 
@@ -46,6 +48,11 @@ func WithModel(model string) OpenAIOption {
 // WithAPIKey sets the API key for authenticated endpoints.
 func WithAPIKey(key string) OpenAIOption {
 	return func(c *OpenAIClient) { c.apiKey = key }
+}
+
+// WithUserAgent sets a custom User-Agent header (some providers require this).
+func WithUserAgent(ua string) OpenAIOption {
+	return func(c *OpenAIClient) { c.userAgent = ua }
 }
 
 // WithHTTPClient sets a custom http.Client.
@@ -94,12 +101,20 @@ func (c *OpenAIClient) SetAPIKey(key string) {
 	c.apiKey = key
 }
 
+// SetUserAgent updates the User-Agent header at runtime.
+func (c *OpenAIClient) SetUserAgent(ua string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.userAgent = ua
+}
+
 // ChatCompletion sends a chat completion request with optional tool definitions.
 func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	// Snapshot mutable fields under read lock (don't hold during I/O)
 	c.mu.RLock()
 	baseURL := c.baseURL
 	apiKey := c.apiKey
+	userAgent := c.userAgent
 	c.mu.RUnlock()
 
 	model, err := c.resolveModel(ctx)
@@ -122,20 +137,25 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 				ID:   tc.ID,
 				Type: "function",
 				Function: chatFunction{
-					Name:      tc.Name,
+					Name:      sanitizeToolName(tc.Name),
 					Arguments: tc.Arguments,
 				},
 			})
 		}
 	}
 
+	// Some LLM providers (e.g. Kimi) reject dots in function names.
+	// Sanitize: "deploy.apply" → "deploy__apply", and build a reverse map.
+	wireToOrig := make(map[string]string, len(tools))
 	if len(tools) > 0 {
 		apiTools := make([]chatTool, len(tools))
 		for i, t := range tools {
+			wireName := sanitizeToolName(t.Name)
+			wireToOrig[wireName] = t.Name
 			apiTools[i] = chatTool{
 				Type: "function",
 				Function: chatToolDef{
-					Name:        t.Name,
+					Name:        wireName,
 					Description: t.Description,
 					Parameters:  t.InputSchema,
 				},
@@ -156,6 +176,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if userAgent != "" {
+		httpReq.Header.Set("User-Agent", userAgent)
 	}
 
 	httpResp, err := c.httpClient.Do(httpReq)
@@ -181,11 +204,16 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 	}
 
 	msg := chatResp.Choices[0].Message
-	resp := &Response{Content: msg.Content}
+	resp := &Response{Content: msg.Content, ReasoningContent: msg.ReasoningContent}
 	for _, tc := range msg.ToolCalls {
+		name := tc.Function.Name
+		// Reverse-map sanitized name back to original (e.g. "deploy__apply" → "deploy.apply")
+		if orig, ok := wireToOrig[name]; ok {
+			name = orig
+		}
 		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
 			ID:        tc.ID,
-			Name:      tc.Function.Name,
+			Name:      name,
 			Arguments: tc.Function.Arguments,
 		})
 	}
@@ -200,6 +228,7 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 	model := c.model
 	baseURL := c.baseURL
 	apiKey := c.apiKey
+	userAgent := c.userAgent
 	cached := c.cachedModel
 	cachedAt := c.modelCachedAt
 	c.mu.RUnlock()
@@ -219,6 +248,9 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 	}
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if userAgent != "" {
+		httpReq.Header.Set("User-Agent", userAgent)
 	}
 
 	httpResp, err := c.httpClient.Do(httpReq)
@@ -296,6 +328,7 @@ func (c *OpenAIClient) Available(ctx context.Context) bool {
 	c.mu.RLock()
 	baseURL := c.baseURL
 	apiKey := c.apiKey
+	userAgent := c.userAgent
 	c.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -307,6 +340,9 @@ func (c *OpenAIClient) Available(ctx context.Context) bool {
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -325,10 +361,11 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
 }
 
 type chatToolCall struct {
@@ -367,4 +404,14 @@ type modelsResponse struct {
 
 type modelData struct {
 	ID string `json:"id"`
+}
+
+// sanitizeToolName converts MCP dot-separated names to LLM-compatible names.
+// "deploy.apply" → "deploy__apply" (double underscore to avoid collision with
+// names that naturally contain single underscores like "fleet.list_devices").
+func sanitizeToolName(name string) string {
+	if !strings.Contains(name, ".") {
+		return name
+	}
+	return strings.ReplaceAll(name, ".", "__")
 }

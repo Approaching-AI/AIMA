@@ -9,7 +9,7 @@
 **远程强 LLM+Agent 框架 与 本地轻量 Agent 并不冲突，可以共存。**
 
 AIMA 实现两级本地 Agent：
-- **L3a: Go Agent** — 内置于 AIMA 二进制，无状态/会话级，处理简单查询
+- **L3a: Go Agent** — 内置于 AIMA 二进制，进程内会话记忆（30min TTL），处理简单查询和多轮对话
 - **L3b: ZeroClaw Sidecar** — 可选的独立进程，持久记忆+跨会话学习，处理复杂任务
 
 两者共享同一套 MCP 工具，对外部 Agent（Claude Code / GPT 等）完全透明。
@@ -34,11 +34,11 @@ Go Agent Loop (最多 30 轮):
 
 ### 特性
 
-- ~400 行 Go 代码，无外部依赖
-- 无持久记忆 (每次对话独立)
+- ~500 行 Go 代码，无外部依赖
+- 进程内会话记忆 (SessionStore: 30min TTL, 50 条消息上限, 重启即清零)
 - 单一 LLM 后端 (最近一次检测到的可用模型)
 - ~0 额外内存开销
-- 适合：简单查询、一次性操作、快速响应
+- 适合：简单查询、多轮追问、一次性操作、快速响应
 
 ### LLM Provider 检测优先级
 
@@ -70,8 +70,8 @@ ZeroClaw 是 Rust 实现的轻量 AI Agent 运行时 (~8.8 MB 二进制, <5 MB R
 
 | 能力 | Go Agent (L3a) | ZeroClaw (L3b) |
 |------|---------------|----------------|
-| 持久记忆 | 无 (文件级对话存储) | SQLite + FTS5 + 向量相似度 + 混合排序 |
-| 跨会话学习 | 无 | 完整记忆系统，跨对话积累经验 |
+| 会话记忆 | 进程内 (30min TTL, 重启清零) | SQLite + FTS5 + 向量相似度 + 混合排序 |
+| 跨会话学习 | 无 (进程重启丢失) | 完整记忆系统，跨对话积累经验 |
 | 安全沙箱 | 工具白名单 | 配对认证 + 沙箱 + 白名单 + 工作区限制 |
 | 多 LLM Provider | 单一后端 | 22+ 模型服务开箱即用 |
 | Agent 人格 | 无 | Markdown 格式 Identity 角色定义 |
@@ -109,9 +109,9 @@ AIMA Go Binary
 
 ```bash
 aima ask "..."                # 自动路由 (简单→L3a, 复杂→L3b)
-aima ask --local "..."        # 强制 L3a (Go Agent, 快速, 无状态)
+aima ask --local "..."        # 强制 L3a (Go Agent, 快速)
 aima ask --deep "..."         # 强制 L3b (ZeroClaw, 持久记忆)
-aima ask --session abc "..."  # 继续 ZeroClaw 会话 (跨对话记忆)
+aima ask --session abc "..."  # 继续会话 (L3b 优先, L3b 不可用则降级 L3a)
 ```
 
 ### 路由启发式
@@ -122,7 +122,8 @@ aima ask --session abc "..."  # 继续 ZeroClaw 会话 (跨对话记忆)
 | 多步推理 ("为什么模型慢?", "优化所有配置") | L3b |
 | 需要历史上下文 ("上次调优结果如何?") | L3b |
 | 需要规划 ("为5个模型规划GPU分配") | L3b |
-| ZeroClaw 不可用 | L3a (降级) |
+| 多轮追问 ("刚才说的 Qwen3 7B") | L3a (会话记忆) 或 L3b |
+| ZeroClaw 不可用 | L3a (降级, 含会话记忆) |
 | 无可用 LLM | L2 (知识解析, 无 Agent) |
 
 ### 任务路由决策矩阵
@@ -133,7 +134,7 @@ aima ask --session abc "..."  # 继续 ZeroClaw 会话 (跨对话记忆)
 | `aima ask "部署 qwen3-8b"` | **首选** | 过度 |
 | `aima ask "为什么我的模型慢?"` | 可用 | **更好** |
 | `aima ask "优化所有模型配置"` | 不足 | **首选** |
-| `aima ask "分析上周性能趋势"` | 不能(无记忆) | **首选** |
+| `aima ask "分析上周性能趋势"` | 不足(无持久记忆) | **首选** |
 | `aima ask "为5个模型规划GPU分配"` | 勉强 | **首选** |
 
 ---
@@ -141,10 +142,11 @@ aima ask --session abc "..."  # 继续 ZeroClaw 会话 (跨对话记忆)
 ## 相关文件
 
 - `internal/agent/agent.go` - Go Agent Loop (L3a)
+- `internal/agent/session.go` - 会话记忆 (SessionStore, 进程内)
 - `internal/agent/dispatcher.go` - L3a/L3b 路由决策
 - `internal/zeroclaw/manager.go` - ZeroClaw Lifecycle Manager
 - `internal/zeroclaw/installer.go` - ZeroClaw 下载安装
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-03-02*

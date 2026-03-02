@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // mockLLM is a test double that returns predefined responses in sequence.
@@ -78,7 +79,7 @@ func TestAgent_SimpleQuery(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	result, err := agent.Ask(context.Background(), "Hi")
+	result, _, err := agent.Ask(context.Background(), "", "Hi")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestAgent_SingleToolCall(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	result, err := agent.Ask(context.Background(), "What GPU do I have?")
+	result, _, err := agent.Ask(context.Background(), "", "What GPU do I have?")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestAgent_MultiTurnToolCalling(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	result, err := agent.Ask(context.Background(), "Deploy the best model")
+	result, _, err := agent.Ask(context.Background(), "", "Deploy the best model")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -189,7 +190,7 @@ func TestAgent_MaxTurnsExceeded(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools, WithMaxTurns(3))
-	_, err := agent.Ask(context.Background(), "test")
+	_, _, err := agent.Ask(context.Background(), "", "test")
 	if err == nil {
 		t.Fatal("expected error for max turns exceeded")
 	}
@@ -208,7 +209,7 @@ func TestAgent_ContextCancellation(t *testing.T) {
 	tools := &mockTools{}
 
 	agent := NewAgent(llm, tools)
-	_, err := agent.Ask(ctx, "test")
+	_, _, err := agent.Ask(ctx, "", "test")
 	if err == nil {
 		t.Fatal("expected context cancellation error")
 	}
@@ -229,7 +230,7 @@ func TestAgent_ToolExecutionError(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	result, err := agent.Ask(context.Background(), "do something")
+	result, _, err := agent.Ask(context.Background(), "", "do something")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -273,7 +274,7 @@ func TestAgent_ToolResultIsError(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	result, err := agent.Ask(context.Background(), "delete everything")
+	result, _, err := agent.Ask(context.Background(), "", "delete everything")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -304,7 +305,7 @@ func TestAgent_SystemPrompt(t *testing.T) {
 	}
 
 	agent := NewAgent(llm, tools)
-	agent.Ask(context.Background(), "test")
+	agent.Ask(context.Background(), "", "test")
 
 	if len(llm.messages) < 1 {
 		t.Fatal("no LLM calls recorded")
@@ -355,7 +356,7 @@ func TestDispatcher_ForceLocal(t *testing.T) {
 	zc := &mockZeroClaw{available: true, response: "from L3b"}
 	d := NewDispatcher(goAgent, zc)
 
-	result, err := d.Ask(context.Background(), "optimize everything", DispatchOption{ForceLocal: true})
+	result, _, err := d.Ask(context.Background(), "optimize everything", DispatchOption{ForceLocal: true})
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -374,7 +375,7 @@ func TestDispatcher_ForceDeep(t *testing.T) {
 	zc := &mockZeroClaw{available: true, response: "from L3b"}
 	d := NewDispatcher(goAgent, zc)
 
-	result, err := d.Ask(context.Background(), "simple query", DispatchOption{ForceDeep: true})
+	result, _, err := d.Ask(context.Background(), "simple query", DispatchOption{ForceDeep: true})
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -393,7 +394,7 @@ func TestDispatcher_ForceDeepUnavailable(t *testing.T) {
 	zc := &mockZeroClaw{available: false}
 	d := NewDispatcher(goAgent, zc)
 
-	_, err := d.Ask(context.Background(), "test", DispatchOption{ForceDeep: true})
+	_, _, err := d.Ask(context.Background(), "test", DispatchOption{ForceDeep: true})
 	if err == nil {
 		t.Fatal("expected error when forcing deep with unavailable ZeroClaw")
 	}
@@ -412,12 +413,39 @@ func TestDispatcher_SessionRouting(t *testing.T) {
 	}
 	d := NewDispatcher(goAgent, zc)
 
-	result, err := d.Ask(context.Background(), "continue", DispatchOption{SessionID: "sess-1"})
+	result, sid, err := d.Ask(context.Background(), "continue", DispatchOption{SessionID: "sess-1"})
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
 	if result != "session response" {
 		t.Errorf("result = %q, want session response", result)
+	}
+	if sid != "sess-1" {
+		t.Errorf("sessionID = %q, want sess-1", sid)
+	}
+}
+
+func TestDispatcher_SessionFallbackToL3a(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "from L3a with session"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	store := NewSessionStore()
+	goAgent := NewAgent(llm, tools, WithSessions(store))
+
+	// ZeroClaw unavailable → session falls back to L3a
+	zc := &mockZeroClaw{available: false}
+	d := NewDispatcher(goAgent, zc)
+
+	result, sid, err := d.Ask(context.Background(), "continue", DispatchOption{SessionID: "my-session"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result != "from L3a with session" {
+		t.Errorf("result = %q, want from L3a with session", result)
+	}
+	if sid != "my-session" {
+		t.Errorf("sessionID = %q, want my-session", sid)
 	}
 }
 
@@ -449,7 +477,7 @@ func TestDispatcher_ComplexQueryRouting(t *testing.T) {
 			zc := &mockZeroClaw{available: tt.zcAvailable, response: "from L3b"}
 			d := NewDispatcher(goAgent, zc)
 
-			result, err := d.Ask(context.Background(), tt.query, DispatchOption{})
+			result, _, err := d.Ask(context.Background(), tt.query, DispatchOption{})
 			if err != nil {
 				t.Fatalf("Ask: %v", err)
 			}
@@ -474,7 +502,7 @@ func TestDispatcher_NilZeroClaw(t *testing.T) {
 	d := NewDispatcher(goAgent, nil)
 
 	// Should fall back to L3a even with complex query
-	result, err := d.Ask(context.Background(), "optimize everything", DispatchOption{})
+	result, _, err := d.Ask(context.Background(), "optimize everything", DispatchOption{})
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -492,7 +520,7 @@ func TestDispatcher_NilZeroClaw_ForceDeep(t *testing.T) {
 
 	d := NewDispatcher(goAgent, nil)
 
-	_, err := d.Ask(context.Background(), "test", DispatchOption{ForceDeep: true})
+	_, _, err := d.Ask(context.Background(), "test", DispatchOption{ForceDeep: true})
 	if err == nil {
 		t.Fatal("expected error when forcing deep with nil ZeroClaw")
 	}
@@ -529,7 +557,7 @@ func TestAgent_NilLLM(t *testing.T) {
 	tools := &mockTools{tools: []ToolDefinition{}}
 	agent := NewAgent(nil, tools)
 
-	_, err := agent.Ask(context.Background(), "test")
+	_, _, err := agent.Ask(context.Background(), "", "test")
 	if err == nil {
 		t.Fatal("expected error with nil LLM, not panic")
 	}
@@ -558,7 +586,7 @@ func TestDispatcher_NoLLM_ReturnsError(t *testing.T) {
 	goAgent := NewAgent(nil, tools)
 	d := NewDispatcher(goAgent, nil)
 
-	_, err := d.Ask(context.Background(), "test", DispatchOption{})
+	_, _, err := d.Ask(context.Background(), "test", DispatchOption{})
 	if err == nil {
 		t.Fatal("expected error when agent has no LLM")
 	}
@@ -572,9 +600,193 @@ func TestDispatcher_ForceLocal_NoLLM(t *testing.T) {
 	goAgent := NewAgent(nil, tools)
 	d := NewDispatcher(goAgent, nil)
 
-	_, err := d.Ask(context.Background(), "test", DispatchOption{ForceLocal: true})
+	_, _, err := d.Ask(context.Background(), "test", DispatchOption{ForceLocal: true})
 	if err == nil {
 		t.Fatal("expected error when forcing local with no LLM")
+	}
+}
+
+// --- Session-specific tests ---
+
+func TestSession_NewSessionReturnsID(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "hello"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	store := NewSessionStore()
+	agent := NewAgent(llm, tools, WithSessions(store))
+
+	_, sid, err := agent.Ask(context.Background(), "", "Hi")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if sid == "" {
+		t.Error("expected non-empty session ID")
+	}
+}
+
+func TestSession_ContinuationIncludesHistory(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{
+			{Content: "Which model?"},
+			{Content: "Pulling Qwen3 7B now."},
+		},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	store := NewSessionStore()
+	agent := NewAgent(llm, tools, WithSessions(store))
+
+	// First turn
+	_, sid, err := agent.Ask(context.Background(), "", "Download a model")
+	if err != nil {
+		t.Fatalf("Ask turn 1: %v", err)
+	}
+
+	// Second turn with same session
+	_, sid2, err := agent.Ask(context.Background(), sid, "Qwen3 7B")
+	if err != nil {
+		t.Fatalf("Ask turn 2: %v", err)
+	}
+	if sid2 != sid {
+		t.Errorf("session ID changed: %q → %q", sid, sid2)
+	}
+
+	// Verify LLM received history in second call
+	if len(llm.messages) < 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(llm.messages))
+	}
+	secondCallMsgs := llm.messages[1]
+	// Should contain: system, user("Download a model"), assistant("Which model?"), user("Qwen3 7B")
+	if len(secondCallMsgs) != 4 {
+		t.Errorf("second call messages = %d, want 4", len(secondCallMsgs))
+	}
+	if secondCallMsgs[0].Role != "system" {
+		t.Errorf("msg[0].Role = %q, want system", secondCallMsgs[0].Role)
+	}
+	if secondCallMsgs[1].Content != "Download a model" {
+		t.Errorf("msg[1].Content = %q, want 'Download a model'", secondCallMsgs[1].Content)
+	}
+	if secondCallMsgs[2].Content != "Which model?" {
+		t.Errorf("msg[2].Content = %q, want 'Which model?'", secondCallMsgs[2].Content)
+	}
+	if secondCallMsgs[3].Content != "Qwen3 7B" {
+		t.Errorf("msg[3].Content = %q, want 'Qwen3 7B'", secondCallMsgs[3].Content)
+	}
+}
+
+func TestSession_ExpiredTreatedAsNew(t *testing.T) {
+	store := &SessionStore{
+		sessions: make(map[string]*session),
+		ttl:      1 * time.Millisecond, // expire almost immediately
+		maxMsgs:  50,
+	}
+	store.Save("old-session", []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "old question"},
+		{Role: "assistant", Content: "old answer"},
+	})
+
+	// Wait for TTL to pass
+	time.Sleep(5 * time.Millisecond)
+
+	msgs, ok := store.Get("old-session")
+	if ok {
+		t.Errorf("expected expired session to return false, got %d messages", len(msgs))
+	}
+}
+
+func TestSession_MissedIDTreatedAsNew(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "fresh start"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	store := NewSessionStore()
+	agent := NewAgent(llm, tools, WithSessions(store))
+
+	// Use a non-existent session ID — should start fresh
+	_, sid, err := agent.Ask(context.Background(), "nonexistent-session", "Hello")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if sid != "nonexistent-session" {
+		t.Errorf("session ID = %q, want nonexistent-session", sid)
+	}
+
+	// Verify only 2 messages sent to LLM (system + user), no history
+	if len(llm.messages) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(llm.messages))
+	}
+	if len(llm.messages[0]) != 2 {
+		t.Errorf("messages = %d, want 2 (system + user)", len(llm.messages[0]))
+	}
+}
+
+func TestSessionStore_TrimToMaxMsgs(t *testing.T) {
+	store := &SessionStore{
+		sessions: make(map[string]*session),
+		ttl:      30 * time.Minute,
+		maxMsgs:  5,
+	}
+
+	msgs := []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	store.Save("sess", msgs)
+
+	got, ok := store.Get("sess")
+	if !ok {
+		t.Fatal("expected session to exist")
+	}
+	if len(got) != 5 {
+		t.Errorf("stored messages = %d, want 5", len(got))
+	}
+	// First should still be system prompt
+	if got[0].Role != "system" {
+		t.Errorf("got[0].Role = %q, want system", got[0].Role)
+	}
+	// Last should be the newest message
+	if got[len(got)-1].Content != "a3" {
+		t.Errorf("last message = %q, want a3", got[len(got)-1].Content)
+	}
+}
+
+func TestAgent_NoSessionStore_StillWorks(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "works"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+
+	// Agent without WithSessions — backward compatible
+	agent := NewAgent(llm, tools)
+	result, sid, err := agent.Ask(context.Background(), "", "Hi")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result != "works" {
+		t.Errorf("result = %q, want works", result)
+	}
+	if sid == "" {
+		t.Error("expected non-empty session ID even without store")
+	}
+}
+
+func TestGenerateID(t *testing.T) {
+	id1 := GenerateID()
+	id2 := GenerateID()
+	if id1 == "" || id2 == "" {
+		t.Error("GenerateID returned empty string")
+	}
+	if id1 == id2 {
+		t.Error("GenerateID returned duplicate IDs")
+	}
+	if len(id1) != 32 {
+		t.Errorf("GenerateID length = %d, want 32 hex chars", len(id1))
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,7 @@ import (
 type Client struct {
 	http   *http.Client
 	apiKey string
+	mu     sync.RWMutex
 }
 
 // NewClient creates a fleet HTTP client.
@@ -103,12 +105,18 @@ func (c *Client) doPost(ctx context.Context, url string, payload json.RawMessage
 }
 
 // SetAPIKey updates the API key used for authenticating fleet requests.
+// Safe to call while requests are in flight.
 func (c *Client) SetAPIKey(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.apiKey = key
 }
 
 func (c *Client) setAuth(req *http.Request) {
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.mu.RLock()
+	key := c.apiKey
+	c.mu.RUnlock()
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 }

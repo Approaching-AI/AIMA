@@ -271,7 +271,21 @@ func run() error {
 		return fleetClient.CallTool(ctx, d, toolName, params)
 	}
 
-	// 9f. Register all tools (after all deps are fully wired)
+	// 9f. Wrap SetConfig for API key hot-reload (needs proxyServer + fleetClient in scope)
+	baseSetConfig := deps.SetConfig
+	deps.SetConfig = func(ctx context.Context, key, value string) error {
+		if err := baseSetConfig(ctx, key, value); err != nil {
+			return err
+		}
+		if key == "api_key" {
+			proxyServer.SetAPIKey(value)
+			fleetClient.SetAPIKey(value)
+			slog.Info("API key hot-reloaded via system.config")
+		}
+		return nil
+	}
+
+	// 9g. Register all tools (after all deps are fully wired)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 10. Build App and run CLI

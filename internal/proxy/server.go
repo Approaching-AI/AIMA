@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,7 +70,7 @@ func (s *Server) SetAddr(addr string) {
 	s.addr = addr
 }
 
-// SetAPIKey configures API key authentication. Must be called before Start.
+// SetAPIKey configures API key authentication. Safe to call while server is running.
 func (s *Server) SetAPIKey(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,25 +179,28 @@ func (s *Server) handler() http.Handler {
 	}
 
 	var h http.Handler = mux
-	s.mu.RLock()
-	key := s.apiKey
-	s.mu.RUnlock()
-	if key != "" {
-		h = apiKeyMiddleware(key, h)
-	}
+	// Always wrap with API key middleware — reads key dynamically so
+	// SetAPIKey() takes effect immediately on a running server.
+	h = s.apiKeyMiddleware(h)
 	return corsMiddleware(h)
 }
 
-// apiKeyMiddleware rejects requests without a valid Bearer token.
-// The /health endpoint is exempt for load balancer probes.
-func apiKeyMiddleware(key string, next http.Handler) http.Handler {
+// apiKeyMiddleware reads the API key from s on each request, enabling hot-reload.
+// When no key is configured, all requests pass through.
+// The /health endpoint is always exempt for load balancer probes.
+func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
+		key := s.APIKey()
+		if key == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+key {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte("Bearer "+key)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprintln(w, `{"error":"unauthorized"}`)

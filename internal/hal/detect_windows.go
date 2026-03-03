@@ -74,7 +74,31 @@ func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 	}
 
 	parseWMICRAM(string(out), &info)
+
+	// Detect swap (pagefile) size
+	if swapOut, err := runner.Run(ctx, "wmic", "pagefile", "get", "AllocatedBaseSize", "/format:csv"); err == nil {
+		parseWMICSwap(string(swapOut), &info)
+	}
+
 	return info
+}
+
+func parseWMICSwap(output string, info *RAMInfo) {
+	lines := nonEmptyLines(output)
+	if len(lines) < 2 {
+		return
+	}
+	header := splitCSV(lines[0])
+	colIdx := make(map[string]int)
+	for i, h := range header {
+		colIdx[strings.TrimSpace(h)] = i
+	}
+	fields := splitCSV(lines[1])
+	if idx, ok := colIdx["AllocatedBaseSize"]; ok && idx < len(fields) {
+		if mb, err := strconv.Atoi(strings.TrimSpace(fields[idx])); err == nil {
+			info.SwapTotalMiB = mb
+		}
+	}
 }
 
 func parseWMICRAM(output string, info *RAMInfo) {

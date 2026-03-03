@@ -51,6 +51,7 @@ type CPUInfo struct {
 type RAMInfo struct {
 	TotalMiB     int `json:"total_mib"`
 	AvailableMiB int `json:"available_mib"`
+	SwapTotalMiB int `json:"swap_total_mib,omitempty"`
 }
 
 // StorageInfo describes disk space for the AIMA data directory and all volumes.

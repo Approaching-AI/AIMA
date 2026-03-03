@@ -1069,6 +1069,7 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 		hwInfo.CPUCores = hw.CPU.Cores
 		hwInfo.RAMTotalMiB = hw.RAM.TotalMiB
 		hwInfo.RAMAvailMiB = hw.RAM.AvailableMiB
+		hwInfo.SwapTotalMiB = hw.RAM.SwapTotalMiB
 	}
 	// Dynamic layer: collect runtime GPU metrics (failure is non-fatal)
 	if m, err := hal.CollectMetrics(ctx); err == nil && m.GPU != nil {

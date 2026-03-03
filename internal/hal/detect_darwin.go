@@ -56,7 +56,32 @@ func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 		info.AvailableMiB = parseVMStatAvailable(string(out))
 	}
 
+	// Parse swap from "sysctl vm.swapusage" — e.g. "total = 2048.00M  used = ..."
+	if out, err := runner.Run(ctx, "sysctl", "vm.swapusage"); err == nil {
+		info.SwapTotalMiB = parseSwapUsage(string(out))
+	}
+
 	return info
+}
+
+// parseSwapUsage extracts total swap from sysctl vm.swapusage output.
+// Example: "vm.swapusage: total = 2048.00M  used = 1024.00M  free = 1024.00M ..."
+func parseSwapUsage(output string) int {
+	idx := strings.Index(output, "total = ")
+	if idx < 0 {
+		return 0
+	}
+	rest := output[idx+len("total = "):]
+	// Find the number before 'M'
+	mIdx := strings.Index(rest, "M")
+	if mIdx < 0 {
+		return 0
+	}
+	valStr := strings.TrimSpace(rest[:mIdx])
+	if mb, err := strconv.ParseFloat(valStr, 64); err == nil {
+		return int(mb)
+	}
+	return 0
 }
 
 func parseVMStatAvailable(output string) int {

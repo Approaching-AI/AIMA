@@ -20,6 +20,7 @@ type HardwareInfo struct {
 	HardwareProfile string // Name of a matching HardwareProfile, if known
 	Platform        string // "linux/amd64", "darwin/arm64", etc.
 	RuntimeType     string // "k3s" or "native"
+	SwapTotalMiB int // Total swap space (0 = unknown or none)
 	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
 	GPUMemUsedMiB int // Currently used GPU memory
 	GPUMemFreeMiB int // Currently free GPU memory
@@ -560,6 +561,10 @@ type FitReport struct {
 	Reason      string         // if Fit==false, why
 }
 
+// gmuKeys lists the config keys that control GPU memory fraction across engines.
+// vLLM uses gpu_memory_utilization, SGLang uses mem_fraction_static.
+var gmuKeys = []string{"gpu_memory_utilization", "mem_fraction_static"}
+
 // CheckFit validates a resolved config against hardware capabilities and runtime state.
 // Static layer: VRAM sufficiency (already handled by variant filtering in findModelVariant).
 // Dynamic layer: adjusts gpu_memory_utilization based on available GPU memory.
@@ -567,27 +572,85 @@ type FitReport struct {
 func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 	r := &FitReport{Fit: true, Adjustments: make(map[string]any)}
 
-	// Dynamic layer: adjust gpu_memory_utilization based on free GPU memory
+	// Unified memory guard: GPU allocation directly reduces available system memory.
+	// Enforce minimum OS reserve to prevent starvation / swap thrashing.
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		const (
+			minReserveLargeMiB = 16384 // ≥64GB systems reserve 16GB for OS
+			minReserveSmallMiB = 8192  // <64GB systems reserve 8GB for OS
+			largeSystemMiB     = 65536 // 64GB threshold
+		)
+		reserveMiB := minReserveLargeMiB
+		if hw.RAMTotalMiB < largeSystemMiB {
+			reserveMiB = minReserveSmallMiB
+		}
+
+		for _, key := range gmuKeys {
+			val, ok := resolved.Config[key]
+			if !ok {
+				continue
+			}
+			gmu := toFloat64(val)
+			if gmu <= 0 {
+				continue
+			}
+
+			allocMiB := int(float64(hw.RAMTotalMiB) * gmu)
+			remainMiB := hw.RAMTotalMiB - allocMiB
+
+			if remainMiB < reserveMiB {
+				maxSafe := math.Floor(float64(hw.RAMTotalMiB-reserveMiB)/float64(hw.RAMTotalMiB)*100) / 100
+				if maxSafe < 0.1 {
+					r.Fit = false
+					r.Reason = fmt.Sprintf("unified memory: %s=%.2f leaves only %d MiB for OS (need at least %d MiB)",
+						key, gmu, remainMiB, reserveMiB)
+					return r
+				}
+				r.Adjustments[key] = maxSafe
+				r.Warnings = append(r.Warnings, fmt.Sprintf(
+					"unified memory: %s %.2f -> %.2f (OS available %d -> %d MiB, total %d MiB)",
+					key, gmu, maxSafe, remainMiB,
+					hw.RAMTotalMiB-int(float64(hw.RAMTotalMiB)*maxSafe), hw.RAMTotalMiB))
+			}
+			break // each engine uses only one gmu parameter
+		}
+	}
+
+	// Dynamic layer: adjust memory fraction based on free GPU memory.
+	// Checks both vLLM (gpu_memory_utilization) and SGLang (mem_fraction_static).
 	if hw.GPUMemFreeMiB > 0 {
 		totalVRAM := hw.GPUVRAMMiB
 		if totalVRAM == 0 {
 			totalVRAM = hw.GPUMemFreeMiB + hw.GPUMemUsedMiB
 		}
-		if gmu, ok := resolved.Config["gpu_memory_utilization"]; ok && totalVRAM > 0 {
-			currentGMU := toFloat64(gmu)
-			const safetyMiB = 512
-			maxSafeGMU := float64(hw.GPUMemFreeMiB-safetyMiB) / float64(totalVRAM)
-			if maxSafeGMU < 0.1 {
-				r.Fit = false
-				r.Reason = fmt.Sprintf("GPU memory insufficient: %d MiB free, need > %d MiB", hw.GPUMemFreeMiB, safetyMiB)
-				return r
-			}
-			if currentGMU > maxSafeGMU {
-				adjusted := math.Floor(maxSafeGMU*100) / 100
-				r.Adjustments["gpu_memory_utilization"] = adjusted
-				r.Warnings = append(r.Warnings, fmt.Sprintf(
-					"gpu_memory_utilization: %.2f -> %.2f (GPU %d/%d MiB free)",
-					currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
+		if totalVRAM > 0 {
+			for _, key := range gmuKeys {
+				gmu, ok := resolved.Config[key]
+				if !ok {
+					continue
+				}
+				currentGMU := toFloat64(gmu)
+				if currentGMU <= 0 {
+					continue
+				}
+				safetyMiB := 512
+				if hw.UnifiedMemory {
+					safetyMiB = 4096 // unified memory needs larger dynamic safety margin
+				}
+				maxSafeGMU := float64(hw.GPUMemFreeMiB-safetyMiB) / float64(totalVRAM)
+				if maxSafeGMU < 0.1 {
+					r.Fit = false
+					r.Reason = fmt.Sprintf("GPU memory insufficient: %d MiB free, need > %d MiB", hw.GPUMemFreeMiB, safetyMiB)
+					return r
+				}
+				if currentGMU > maxSafeGMU {
+					adjusted := math.Floor(maxSafeGMU*100) / 100
+					r.Adjustments[key] = adjusted
+					r.Warnings = append(r.Warnings, fmt.Sprintf(
+						"%s: %.2f -> %.2f (GPU %d/%d MiB free)",
+						key, currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
+				}
+				break // each engine uses only one gmu parameter
 			}
 		}
 	}
@@ -595,6 +658,14 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 	// RAM check
 	if hw.RAMAvailMiB > 0 && hw.RAMAvailMiB < 2048 {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("low available RAM: %d MiB", hw.RAMAvailMiB))
+	}
+
+	// Unified memory + swap warning: swap prevents clean OOM-kill,
+	// leading to swap thrashing instead when gmu is high.
+	if hw.UnifiedMemory && hw.SwapTotalMiB > 0 {
+		r.Warnings = append(r.Warnings, fmt.Sprintf(
+			"unified memory system has swap enabled (%d MiB); high gmu may cause swap thrashing instead of clean OOM-kill",
+			hw.SwapTotalMiB))
 	}
 
 	return r

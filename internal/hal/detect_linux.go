@@ -144,6 +144,8 @@ func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 			info.TotalMiB = int(kb / 1024)
 		case "MemAvailable":
 			info.AvailableMiB = int(kb / 1024)
+		case "SwapTotal":
+			info.SwapTotalMiB = int(kb / 1024)
 		}
 	}
 

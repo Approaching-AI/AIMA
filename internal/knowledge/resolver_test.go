@@ -636,6 +636,148 @@ func TestCheckFitLowRAMWarning(t *testing.T) {
 	}
 }
 
+func TestCheckFitUnifiedMemoryGuard(t *testing.T) {
+	// GB10-like: 128GB unified memory, gmu=0.9 leaves only ~13GB for OS (<16GB reserve)
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.90},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: true,
+		RAMTotalMiB:   131072, // 128 GB
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true with adjustment, got Reason=%q", fit.Reason)
+	}
+	adj, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok {
+		t.Fatal("expected gpu_memory_utilization adjustment for unified memory guard")
+	}
+	adjVal := toFloat64(adj)
+	// maxSafe = floor((131072-16384)/131072 * 100) / 100 = floor(87.5) / 100 = 0.87
+	if adjVal < 0.85 || adjVal > 0.88 {
+		t.Errorf("adjusted gmu = %.2f, want ~0.87", adjVal)
+	}
+	if len(fit.Warnings) == 0 || !strings.Contains(fit.Warnings[0], "unified memory") {
+		t.Errorf("expected unified memory warning, got %v", fit.Warnings)
+	}
+}
+
+func TestCheckFitUnifiedMemoryBlock(t *testing.T) {
+	// Tiny unified memory system where even minimum gmu can't leave enough for OS
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.99},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: true,
+		RAMTotalMiB:   8192, // 8GB — reserve 8GB means maxSafe < 0.1
+	}
+
+	fit := CheckFit(resolved, hw)
+	if fit.Fit {
+		t.Fatal("expected Fit=false for tiny unified memory system with high gmu")
+	}
+	if !strings.Contains(fit.Reason, "unified memory") {
+		t.Errorf("Reason = %q, want substring 'unified memory'", fit.Reason)
+	}
+}
+
+func TestCheckFitUnifiedMemorySmallSystem(t *testing.T) {
+	// mac-m4-like: 16GB unified memory, gmu=0.9 leaves 1.6GB (<8GB reserve)
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.90},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: true,
+		RAMTotalMiB:   16384, // 16GB
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true with adjustment, got Reason=%q", fit.Reason)
+	}
+	adj, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok {
+		t.Fatal("expected gpu_memory_utilization adjustment for 16GB unified memory")
+	}
+	adjVal := toFloat64(adj)
+	// maxSafe = floor((16384-8192)/16384 * 100) / 100 = 0.50
+	if adjVal != 0.50 {
+		t.Errorf("adjusted gmu = %.2f, want 0.50", adjVal)
+	}
+}
+
+func TestCheckFitUnifiedMemoryDiscreteUnaffected(t *testing.T) {
+	// Discrete GPU system: unified memory guard should NOT trigger
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.90},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: false,
+		RAMTotalMiB:   131072, // 128GB system RAM, but discrete GPU
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true for discrete GPU, got Reason=%q", fit.Reason)
+	}
+	if _, ok := fit.Adjustments["gpu_memory_utilization"]; ok {
+		t.Error("expected no gmu adjustment for discrete GPU system")
+	}
+}
+
+func TestCheckFitSGLangMemFraction(t *testing.T) {
+	// SGLang uses mem_fraction_static instead of gpu_memory_utilization
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"mem_fraction_static": 0.90},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: true,
+		RAMTotalMiB:   131072, // 128GB
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true with adjustment, got Reason=%q", fit.Reason)
+	}
+	adj, ok := fit.Adjustments["mem_fraction_static"]
+	if !ok {
+		t.Fatal("expected mem_fraction_static adjustment for unified memory guard")
+	}
+	adjVal := toFloat64(adj)
+	if adjVal < 0.85 || adjVal > 0.88 {
+		t.Errorf("adjusted mem_fraction_static = %.2f, want ~0.87", adjVal)
+	}
+}
+
+func TestCheckFitSwapWarning(t *testing.T) {
+	// Unified memory system with swap enabled should produce a warning
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.80},
+	}
+	hw := HardwareInfo{
+		UnifiedMemory: true,
+		RAMTotalMiB:   131072,
+		SwapTotalMiB:  16384, // 16GB swap
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected Fit=true, got Reason=%q", fit.Reason)
+	}
+	var found bool
+	for _, w := range fit.Warnings {
+		if strings.Contains(w, "swap") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected swap warning for unified memory system, got %v", fit.Warnings)
+	}
+}
+
 func TestResolveVariantForPull(t *testing.T) {
 	cat := mustLoadCatalog(t)
 

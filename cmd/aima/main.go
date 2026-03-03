@@ -1017,10 +1017,16 @@ func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint 
 	return endpoints
 }
 
-// selectRuntime picks the best runtime: K3S on Linux if available, else native.
+// selectRuntime picks the best runtime: K3S (cluster) → Docker (single-node container) → Native (bare process).
 func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.Runtime, engineAssets []knowledge.EngineAsset) runtime.Runtime {
 	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
 		return runtime.NewK3SRuntime(k3sClient, runtime.WithEngineAssets(engineAssets))
+	}
+	// Docker on macOS/Windows (Docker Desktop) doesn't support GPU passthrough
+	// (--gpus flag requires NVIDIA Container Toolkit on Linux), so inference
+	// containers can't access the GPU. Only enable Docker runtime on Linux.
+	if goruntime.GOOS == "linux" && runtime.DockerAvailable(ctx) {
+		return runtime.NewDockerRuntime(engineAssets)
 	}
 	return nativeRt
 }

@@ -8,7 +8,7 @@
 
 - **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Apple Silicon), CPU, and RAM
 - **Knowledge-driven deployment** — YAML catalog of hardware profiles, engines, models, and partition strategies; no engine-specific code branches
-- **Multi-runtime** — K3S (Pod) for containerized workloads, Native (exec) for bare-metal inference
+- **Multi-runtime** — K3S (Pod) for clusters, Docker for single-node containers, Native (exec) for bare-metal inference
 - **56 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more
 - **Fleet management** — mDNS-based auto-discovery of LAN peers; remote tool execution across heterogeneous devices
 - **Offline-first** — all core functions work with zero network; network is enhancement, not requirement
@@ -134,7 +134,7 @@ cmd/aima/          Entry point
 internal/
   hal/             Hardware detection
   knowledge/       YAML knowledge base + SQLite resolver
-  runtime/         K3S (Pod) + Native (exec) runtimes
+  runtime/         K3S (Pod) + Docker (container) + Native (exec) runtimes
   mcp/             56 MCP tool implementations
   agent/           Go Agent loop (L3a)
   cli/             Cobra CLI (thin wrappers over MCP tools)

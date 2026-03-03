@@ -11,7 +11,7 @@
 | 核心原则 | [ARCHITECTURE.md](../design/ARCHITECTURE.md) | 设计原则、架构全景 |
 | Model | [model.md](model.md) | 模型扫描、导入、删除、元数据 |
 | Engine | [engine.md](engine.md) | 引擎镜像、拉取、导入、Native 二进制 |
-| Runtime | [runtime.md](runtime.md) | K3S Runtime、Native Runtime、Multi-Runtime 抽象 |
+| Runtime | [runtime.md](runtime.md) | K3S Runtime、Docker Runtime、Native Runtime、Multi-Runtime 抽象 |
 | Knowledge | [knowledge.md](knowledge.md) | 知识库、配置解析、Pod 生成 |
 | HAL | [hal.md](hal.md) | 硬件检测、能力向量 |
 | K3S | [k3s.md](k3s.md) | K8s 集成、Pod 管理、HAMi |

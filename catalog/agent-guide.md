@@ -45,7 +45,8 @@ Authorization: Bearer <KEY>
 │  │           │                                   │     │
 │  ▼           ▼              ▼            ▼       │     │
 │ SQLite    Knowledge      Runtime       Fleet     │     │
-│ (state)   (YAML catalog) (K3S/native)  (LAN)    │     │
+│ (state)   (YAML catalog) (K3S/Docker/  (LAN)    │     │
+│                          native)                │     │
 └──────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -221,7 +222,7 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 deploy.apply("qwen3-0.6b")
   → hardware.detect
   → knowledge.resolve (find best engine + config)
-  → runtime.Deploy (K3S Pod or native process)
+  → runtime.Deploy (K3S Pod, Docker container, or native process)
   → proxy registers backend automatically (5s sync)
   → model available at /v1/chat/completions
 ```
@@ -372,7 +373,7 @@ curl http://localhost:6188/v1/chat/completions \
 
 The proxy routes by model name to the best available backend:
 
-1. **Local deployment** (K3S Pod or native process) — always preferred
+1. **Local deployment** (K3S Pod, Docker container, or native process) — always preferred
 2. **Remote mDNS** (discovered from LAN) — fallback
 
 If the same model is available locally and remotely, local always wins.
@@ -552,7 +553,7 @@ POST http://coordinator:6188/v1/chat/completions
 | **Engine** | Inference runtime (vLLM, llama.cpp, etc.) defined in YAML |
 | **Model** | AI model files (SafeTensors, GGUF, etc.) |
 | **Hardware Profile** | YAML describing device capabilities |
-| **Deployment** | Running inference service (K3S Pod or native process) |
+| **Deployment** | Running inference service (K3S Pod, Docker container, or native process) |
 | **Backend** | Proxy route target (local or remote) |
 | **Knowledge Note** | Agent exploration record |
 | **Configuration** | Tested hardware×engine×model×config combo |

@@ -81,13 +81,13 @@ Go Agent (直接调用)，保证行为一致。
 
 | 工具 | 功能 |
 |------|------|
-| `deploy.apply` | hal detect → knowledge resolve → CheckFit → 部署 (K3S Pod 或 Native 进程)。**Agent 调用需审批**：返回部署计划 + approval ID，用户确认后调 `deploy.approve` 执行 |
+| `deploy.apply` | hal detect → knowledge resolve → CheckFit → 部署 (K3S Pod / Docker 容器 / Native 进程)。**Agent 调用需审批**：返回部署计划 + approval ID，用户确认后调 `deploy.approve` 执行 |
 | `deploy.approve` | 批准并执行挂起的部署 (通过 approval ID)。仅在 `deploy.apply` 返回 NEEDS_APPROVAL 后使用 |
 | `deploy.dry_run` | 同 apply 但不执行，预览生成的配置和 Pod YAML |
 | `deploy.delete` | 删除部署 (**需审计+回滚快照**) |
 | `deploy.status` | 查询部署状态 (支持 pod 名或模型名查找, 返回 phase/ready/restarts/exit_code) |
 | `deploy.list` | 列出所有活跃部署及资源使用 |
-| `deploy.logs` | 查看部署日志 (支持 pod 名或模型名查找, K3S kubectl logs / native stdout) |
+| `deploy.logs` | 查看部署日志 (支持 pod 名或模型名查找, K3S kubectl logs / Docker docker logs / Native stdout) |
 
 ### 知识核心 — Knowledge Core (8)
 

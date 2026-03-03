@@ -142,7 +142,7 @@ internal/
   knowledge/                  # go:embed YAML + SQLite relational loader + L0-L3 resolver
                               #   + query engine (query.go) + vector similarity (similarity.go)
                               #   + Pod YAML generator (dynamic GPU resource names)
-  runtime/                    # Multi-Runtime: K3S (Pod) + Native (exec + warmup)
+  runtime/                    # Multi-Runtime: K3S (Pod) + Docker (container) + Native (exec + warmup)
   state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager

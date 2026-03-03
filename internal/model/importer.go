@@ -51,8 +51,10 @@ func Import(ctx context.Context, srcPath, destDir string) (*ModelInfo, error) {
 		return nil, fmt.Errorf("scan imported model: %w", err)
 	}
 
+	prefix := modelDir + string(filepath.Separator)
 	for _, m := range models {
-		if m.Path == modelDir {
+		// Match directory path (safetensors/pytorch) or file within it (GGUF)
+		if m.Path == modelDir || strings.HasPrefix(m.Path, prefix) {
 			return m, nil
 		}
 	}

@@ -1370,7 +1370,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "system.config",
 		Description: "Get or set a persistent system configuration value. Supported keys: api_key (auth token), llm.endpoint (Agent LLM URL), llm.model (Agent LLM model name), llm.api_key (Agent LLM auth), llm.extra_params (JSON object merged into every LLM request, e.g. temperature/top_p). Values for api_key and llm.api_key are masked in responses. Setting api_key hot-reloads auth; setting llm.* hot-swaps the Agent LLM client. Omit value to read, provide value to write.",
 		InputSchema: schema(
-			`"key":{"type":"string","description":"Configuration key: 'api_key', 'llm.endpoint', 'llm.model', or 'llm.api_key'"},`+
+			`"key":{"type":"string","description":"Configuration key: 'api_key', 'llm.endpoint', 'llm.model', 'llm.api_key', 'llm.user_agent', or 'llm.extra_params'"},`+
 				`"value":{"type":"string","description":"Value to set. Omit this field to read the current value."}`,
 			"key"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {

@@ -62,3 +62,33 @@ variants:
         vllm-nightly-qwen3_5-cu130: "NOT supported (Transformers <5, glm4_moe_lite unrecognized)"
         aima-vllm-qwen3-omni: "NOT supported (vLLM v0.14.0, same Transformers issue)"
         vllm-blackwell-ngc-26.01: "NOT supported (vLLM too old, no Glm4MoeLite model code)"
+
+  # --- linux-1 (Ada, 2× RTX 4090 = 96GB VRAM, KTransformers hybrid) ---
+  # BF16 weights ~59GB, KT offloads inactive experts to CPU (AMX/AVX-512)
+  # Active params ~3.6B on GPU, rest offloaded to 503GB system RAM
+  # 64 routed experts + 1 shared, 4 experts/tok, glm4_moe_lite arch
+  # Measured: ~43 tok/s decode on linux-1
+  - name: glm-4.7-flash-ada-sglang-kt-bf16
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 4096
+      unified_memory: false
+    engine: sglang-kt
+    format: safetensors
+    source:
+      type: huggingface
+      repo: THUDM/GLM-4.7-Flash
+    default_config:
+      kt_num_gpu_experts: 6
+      kt_method: BF16
+      kt_cpuinfer: 40
+      kt_threadpool_count: 1
+      tp_size: 2
+      mem_fraction_static: 0.85
+      disable_shared_experts_fusion: true
+      enable_p2p_check: true
+      context_length: 65536
+    expected_performance:
+      tokens_per_second: [35, 43]
+      vram_mib: 20000
+      notes: "KTransformers + SGLang hybrid, 2× RTX 4090 + Xeon 8488C AMX. ~43 tok/s measured."

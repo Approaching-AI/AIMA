@@ -1,0 +1,81 @@
+kind: engine_asset
+metadata:
+  name: sglang-kt-ada
+  type: sglang-kt
+  version: "0.5.9-kt0.5.1"
+  supported_formats: [safetensors]
+image:
+  # KTransformers + SGLang: CPU-GPU hybrid MoE inference
+  # kt-kernel 0.5.1 (AMX/AVX-512 CPU expert offloading)
+  # Built from lmsysorg/sglang:v0.5.9 + kt-kernel + transformers 5
+  name: aima/sglang-kt
+  tag: "v0.5.9-kt0.5.1"
+  size_approx_mb: 42000
+  platforms: [linux/amd64]
+  registries:
+    - registry.cn-hangzhou.aliyuncs.com/aima/sglang-kt
+patterns:
+  - "^sglang-kt"
+  - "sglang-kt"
+  - "ktransformers"
+hardware:
+  gpu_arch: Ada
+  vram_min_mib: 4096
+startup:
+  command: ["python3", "-m", "sglang.launch_server", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
+  env:
+    KT_AVAILABLE: "1"
+    OMP_NUM_THREADS: "1"
+    SGLANG_DISABLE_CUDNN_CHECK: "1"
+    PYTORCH_ALLOC_CONF: "expandable_segments:True"
+  default_args:
+    port: 30000
+    trust_remote_code: true
+    # KTransformers-specific args
+    kt_weight_path: "{{.ModelPath}}"
+    kt_cpuinfer: 40
+    kt_threadpool_count: 1
+    kt_num_gpu_experts: 6
+    kt_method: BF16
+    # SGLang standard args
+    mem_fraction_static: 0.85
+    tp_size: 2
+    disable_shared_experts_fusion: true
+    enable_p2p_check: true
+    chunked_prefill_size: 32768
+    max_running_requests: 16
+    watchdog_timeout: 3000
+  health_check:
+    path: /health
+    timeout_s: 600
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 120
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - cpu_gpu_hybrid_moe
+    - amx_avx512_offload
+    - continuous_batching
+    - radix_attention
+  performance_gain: "KTransformers CPU-GPU hybrid MoE: offloads inactive experts to CPU via AMX/AVX-512, enabling large MoE models on limited GPU VRAM"
+  resource_expansion:
+    cpu_offload: true
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 4096
+  recommended_gpu_cores_percent: 100
+time_constraints:
+  cold_start_s: [120, 600]
+  model_switch_s: [120, 600]
+power_constraints:
+  typical_draw_watts: [200, 700]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

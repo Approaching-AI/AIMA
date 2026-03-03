@@ -2072,7 +2072,6 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if !validStatuses[status] {
 				return nil, fmt.Errorf("invalid status %q: must be golden, experiment, or archived", status)
 			}
-			// Fetch current config to return old status
 			cfg, err := db.GetConfiguration(ctx, configID)
 			if err != nil {
 				return nil, fmt.Errorf("get configuration: %w", err)
@@ -2086,6 +2085,23 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				"old_status": oldStatus,
 				"new_status": status,
 				"message":    fmt.Sprintf("Configuration %s promoted from %s to %s", configID, oldStatus, status),
+			})
+		},
+		UpdateConfigParams: func(ctx context.Context, configID string, config json.RawMessage) (json.RawMessage, error) {
+			cfg, err := db.GetConfiguration(ctx, configID)
+			if err != nil {
+				return nil, fmt.Errorf("get configuration: %w", err)
+			}
+			if err := db.UpdateConfigurationConfig(ctx, configID, string(config)); err != nil {
+				return nil, fmt.Errorf("update config params: %w", err)
+			}
+			return json.Marshal(map[string]any{
+				"config_id": configID,
+				"hardware":  cfg.HardwareID,
+				"engine":    cfg.EngineID,
+				"model":     cfg.ModelID,
+				"config":    json.RawMessage(config),
+				"message":   fmt.Sprintf("Configuration %s params updated", configID),
 			})
 		},
 

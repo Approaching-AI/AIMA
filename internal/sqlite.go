@@ -2,7 +2,9 @@ package state
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1029,6 +1031,11 @@ func (d *DB) DeleteEngine(ctx context.Context, id string) error {
 // Knowledge Notes CRUD
 
 func (d *DB) InsertNote(ctx context.Context, n *KnowledgeNote) error {
+	if n.ID == "" {
+		b := make([]byte, 8)
+		rand.Read(b)
+		n.ID = hex.EncodeToString(b)
+	}
 	tagsJSON, err := json.Marshal(n.Tags)
 	if err != nil {
 		return fmt.Errorf("marshal tags for note %s: %w", n.ID, err)
@@ -1120,6 +1127,21 @@ func (d *DB) UpdateConfigStatus(ctx context.Context, configID, status string) er
 		status, configID)
 	if err != nil {
 		return fmt.Errorf("update config status %s: %w", configID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("configuration %q not found", configID)
+	}
+	return nil
+}
+
+// UpdateConfigurationConfig updates a configuration's config JSON (engine parameters).
+func (d *DB) UpdateConfigurationConfig(ctx context.Context, configID, configJSON string) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE configurations SET config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		configJSON, configID)
+	if err != nil {
+		return fmt.Errorf("update config params %s: %w", configID, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

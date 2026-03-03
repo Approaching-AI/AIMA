@@ -77,6 +77,54 @@ variants:
           128: [59.60, 131477]
           255: [157.20, 261906]          # 逼近 262K context limit
 
+  # --- GB10 SGLang variant (speculative decoding, NEXTN) ---
+  # SGLang dev-arm64-cu13, aggressive speculative decoding for highest throughput
+  # NEXTN algo: 8 draft tokens, topk=2, 4 speculative steps, Triton attention backend
+  # Optimized: num_continuous_decode_steps=3, triton_attention_num_kv_splits=16
+  # Attention backend constraint: ONLY triton works on Blackwell SM121a hybrid GDN models
+  #   flashinfer → AssertionError (only triton/trtllm_mha/fa4 for hybrid GDN)
+  #   fa4 → AssertionError (compute_capability 12.1 not in [9,10,11])
+  # gmu=0.9 required for 256K context; gmu=0.80 OOMs with aggressive spec params
+  # 4-config experiment matrix (A/B/C/D): Exp-C (aggressive spec) is optimal for 1K-64K
+  - name: qwen3.5-35b-a3b-blackwell-sglang-spark-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: sglang-spark
+    format: safetensors
+    default_config:
+      mem_fraction_static: 0.90
+      context_length: 262144
+      reasoning_parser: qwen3
+      speculative_algo: NEXTN
+      speculative_num_steps: 4
+      speculative_eagle_topk: 2
+      speculative_num_draft_tokens: 8
+      attention_backend: triton
+      num_continuous_decode_steps: 3
+      triton_attention_num_kv_splits: 16
+    expected_performance:
+      tokens_per_second: [10.3, 45.5]   # decode 45.5 tok/s @1K → 10.3 tok/s @256K
+      latency_first_token_ms: [471, 185200] # short-context TTFT 471ms → 256K 185.2s
+      tpot_ms: [22, 97]                 # measured: TPOT 22ms @1K → 97ms @256K
+      vram_mib: 67100                   # same model weights as vLLM variant
+      notes: "SGLang dev-arm64-cu13 (2026-03-02). Exp-C optimal config: NEXTN aggressive spec (8 draft, topk=2, 4 steps), gmu=0.9, Triton attention (ONLY option on SM121a). Decode 52% faster than vLLM @1K, 17% @32K. Crossover ~64K (vLLM faster above). 256K verified at gmu=0.9. For 128K+ workloads, consider no-spec config (Exp-D): 18.9 tok/s @128K, 14.1 tok/s @256K."
+      context_scaling:                   # measured: Exp-C, gmu=0.9, 1-concurrency, 128-token output
+        # input_tokens: [ttft_s, decode_tok_s]
+        1024:   [0.471,  45.5]
+        8192:   [1.674,  41.7]
+        32768:  [7.783,  33.3]
+        65536:  [19.401, 25.0]
+        131072: [56.544, 17.9]           # 128K: 100% success (3/3)
+        262144: [185.2,  10.3]           # 256K: verified working at gmu=0.9
+      concurrency_scaling:               # measured: Exp-C, @1K input, 128-token output
+        # concurrency: [ttft_s, decode_tok_s]
+        1: [0.471, 45.5]
+        2: [0.471, 31.3]
+        4: [0.471, 28.6]
+        8: [0.471, 27.0]
+
   # --- GB10 vllm-spark variant (vllm-spark-tf5 镜像, 已在 containerd) ---
   # 与 vllm-nightly 相同模型, 但使用 vllm-spark 引擎 (Transformers 5, FlashInfer)
   # 支持多模型共存时用较低 gmu; 单独部署默认 gmu=0.85

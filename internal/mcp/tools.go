@@ -48,8 +48,9 @@ type ToolDeps struct {
 	ListModelAssets  func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
-	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	PromoteConfig   func(ctx context.Context, configID, status string) (json.RawMessage, error)
+	RecordBenchmark    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	PromoteConfig      func(ctx context.Context, configID, status string) (json.RawMessage, error)
+	UpdateConfigParams func(ctx context.Context, configID string, config json.RawMessage) (json.RawMessage, error)
 
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -1079,6 +1080,36 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.PromoteConfig(ctx, p.ConfigID, p.Status)
 			if err != nil {
 				return nil, fmt.Errorf("promote config: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.update_config
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.update_config",
+		Description: "Update a Configuration's engine parameters (the config JSON field). Use after benchmark experiments to attach the optimal parameters to a Configuration before promoting it to golden. These parameters are auto-injected as L2 defaults on future deployments.",
+		InputSchema: schema(
+			`"config_id":{"type":"string","description":"Configuration ID to update"},`+
+				`"config":{"type":"object","description":"Engine parameters to store (e.g. mem_fraction_static, speculative_algo, attention_backend, etc.)"}`,
+			"config_id", "config"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.UpdateConfigParams == nil {
+				return ErrorResult("knowledge.update_config not implemented"), nil
+			}
+			var p struct {
+				ConfigID string          `json:"config_id"`
+				Config   json.RawMessage `json:"config"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ConfigID == "" || len(p.Config) == 0 {
+				return ErrorResult("config_id and config are required"), nil
+			}
+			data, err := deps.UpdateConfigParams(ctx, p.ConfigID, p.Config)
+			if err != nil {
+				return nil, fmt.Errorf("update config params: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

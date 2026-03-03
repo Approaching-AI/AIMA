@@ -1,0 +1,50 @@
+kind: stack_component
+metadata:
+  name: docker
+  version: "27.5.1"
+  description: "Docker Engine via static binaries for container inference"
+
+compatibility:
+  aima_min: "0.1.0"
+
+source:
+  archive: "docker-27.5.1.tgz"
+  extract_binaries:
+    - "docker/dockerd"
+    - "docker/containerd"
+    - "docker/containerd-shim-runc-v2"
+    - "docker/ctr"
+    - "docker/runc"
+    - "docker/docker"
+    - "docker/docker-init"
+    - "docker/docker-proxy"
+  platforms: [linux/amd64, linux/arm64]
+  download:
+    linux/amd64: "https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz"
+    linux/arm64: "https://download.docker.com/linux/static/stable/aarch64/docker-27.5.1.tgz"
+  mirror:
+    linux/amd64:
+      - "https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable/x86_64/docker-27.5.1.tgz"
+      - "https://mirrors.aliyun.com/docker-ce/linux/static/stable/x86_64/docker-27.5.1.tgz"
+    linux/arm64:
+      - "https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable/aarch64/docker-27.5.1.tgz"
+      - "https://mirrors.aliyun.com/docker-ce/linux/static/stable/aarch64/docker-27.5.1.tgz"
+
+install:
+  method: archive
+  daemon: true
+  priority: 5
+  tier: docker
+  systemd_units:
+    - name: containerd
+      exec: /usr/local/bin/containerd
+      type: notify
+    - name: docker
+      exec: /usr/local/bin/dockerd
+      type: notify
+      after: containerd.service
+
+verify:
+  command: "docker version --format {{.Server.Version}}"
+  ready_condition: "27.5.1"
+  timeout_s: 30

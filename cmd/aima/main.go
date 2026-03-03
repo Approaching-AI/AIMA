@@ -139,14 +139,24 @@ func run() error {
 		zeroclaw.WithDataDir(dataDir),
 	)
 
-	// 7. Select runtime: K3S if available (Linux), else native process
+	// 7. Build all available runtimes, select default (K3S > Docker > Native)
 	nativeRt := buildNativeRuntime(dataDir, cat.EngineAssets)
-	rt := selectRuntime(ctx, k3sClient, nativeRt, cat.EngineAssets)
-	slog.Info("runtime selected", "runtime", rt.Name())
+	var dockerRt, k3sRt runtime.Runtime
+	if goruntime.GOOS == "linux" {
+		if runtime.DockerAvailable(ctx) {
+			dockerRt = runtime.NewDockerRuntime(cat.EngineAssets)
+		}
+		if runtime.K3SAvailable(ctx, k3sClient) {
+			k3sRt = runtime.NewK3SRuntime(k3sClient, runtime.WithEngineAssets(cat.EngineAssets))
+		}
+	}
+	rt := selectDefaultRuntime(k3sRt, dockerRt, nativeRt)
+	slog.Info("runtime selected", "runtime", rt.Name(),
+		"docker_available", dockerRt != nil, "k3s_available", k3sRt != nil)
 
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
-	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, proxyServer, k3sClient, dataDir, factoryDigests)
+	deps := buildToolDeps(cat, db, knowledgeStore, rt, nativeRt, dockerRt, k3sRt, proxyServer, k3sClient, dataDir, factoryDigests)
 
 	// 9. Create agent (L3a Go Agent)
 	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db, pending: make(map[int64]*pendingApproval)}
@@ -1017,18 +1027,56 @@ func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint 
 	return endpoints
 }
 
-// selectRuntime picks the best runtime: K3S (cluster) → Docker (single-node container) → Native (bare process).
-func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.Runtime, engineAssets []knowledge.EngineAsset) runtime.Runtime {
-	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
-		return runtime.NewK3SRuntime(k3sClient, runtime.WithEngineAssets(engineAssets))
+// selectDefaultRuntime picks the best available runtime: K3S > Docker > Native.
+func selectDefaultRuntime(k3sRt, dockerRt, nativeRt runtime.Runtime) runtime.Runtime {
+	if k3sRt != nil {
+		return k3sRt
 	}
-	// Docker on macOS/Windows (Docker Desktop) doesn't support GPU passthrough
-	// (--gpus flag requires NVIDIA Container Toolkit on Linux), so inference
-	// containers can't access the GPU. Only enable Docker runtime on Linux.
-	if goruntime.GOOS == "linux" && runtime.DockerAvailable(ctx) {
-		return runtime.NewDockerRuntime(engineAssets)
+	if dockerRt != nil {
+		return dockerRt
 	}
 	return nativeRt
+}
+
+// pickRuntimeForDeployment selects the runtime for a specific deployment based on
+// the engine's runtime recommendation and available runtimes.
+//
+//	"native"    → nativeRt
+//	"docker"    → dockerRt > nativeRt
+//	"k3s"       → k3sRt > error
+//	"container" → k3sRt > dockerRt (needs partition? k3s required)
+//	"auto" / "" → defaultRt
+func pickRuntimeForDeployment(recommendation string, k3sRt, dockerRt, nativeRt, defaultRt runtime.Runtime, hasPartition bool) (runtime.Runtime, error) {
+	switch recommendation {
+	case "native":
+		return nativeRt, nil
+	case "docker":
+		if dockerRt != nil {
+			return dockerRt, nil
+		}
+		return nativeRt, nil
+	case "k3s":
+		if k3sRt != nil {
+			return k3sRt, nil
+		}
+		return nil, fmt.Errorf("K3S runtime required but not available. Run 'aima init --k3s' to install")
+	case "container":
+		if hasPartition {
+			if k3sRt != nil {
+				return k3sRt, nil
+			}
+			return nil, fmt.Errorf("GPU partitioning requires K3S. Run 'aima init --k3s' to install")
+		}
+		if k3sRt != nil {
+			return k3sRt, nil
+		}
+		if dockerRt != nil {
+			return dockerRt, nil
+		}
+		return nativeRt, nil
+	default: // "auto" or ""
+		return defaultRt, nil
+	}
 }
 
 func catalogSize(cat *knowledge.Catalog) int {
@@ -1154,13 +1202,12 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	return resolved, dbModel.Name, nil
 }
 
-// resolvedDeployment holds the shared result of resolve + CheckFit + runtime selection,
+// resolvedDeployment holds the shared result of resolve + CheckFit,
 // used by both DeployApply and DeployDryRun.
 type resolvedDeployment struct {
-	ModelName   string
-	Resolved    *knowledge.ResolvedConfig
-	Fit         *knowledge.FitReport
-	RuntimeName string
+	ModelName string
+	Resolved  *knowledge.ResolvedConfig
+	Fit       *knowledge.FitReport
 }
 
 // queryGoldenOverrides returns config overrides from the best golden configuration
@@ -1194,8 +1241,9 @@ func queryGoldenOverrides(ctx context.Context, kStore *knowledge.Store, hwProfil
 	return cfg
 }
 
-// resolveDeployment performs the common resolve → CheckFit → runtime selection sequence.
-func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, hwInfo knowledge.HardwareInfo, rt, nativeRt runtime.Runtime, modelName, engineType, slot string, overrides map[string]any, dataDir string) (*resolvedDeployment, error) {
+// resolveDeployment performs the common resolve → CheckFit sequence.
+// Runtime selection is done separately by callers via pickRuntimeForDeployment.
+func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, hwInfo knowledge.HardwareInfo, modelName, engineType, slot string, overrides map[string]any, dataDir string) (*resolvedDeployment, error) {
 	if overrides == nil {
 		overrides = map[string]any{}
 	}
@@ -1231,22 +1279,16 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		resolved.Provenance[k] = "L0-auto"
 	}
 
-	runtimeName := rt.Name()
-	if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
-		runtimeName = nativeRt.Name()
-	}
-
 	return &resolvedDeployment{
-		ModelName:   canonicalName,
-		Resolved:    resolved,
-		Fit:         fit,
-		RuntimeName: runtimeName,
+		ModelName: canonicalName,
+		Resolved:  resolved,
+		Fit:       fit,
 	}, nil
 }
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
-// nativeRt is always provided so DeployApply can use it when the engine recommends native runtime.
-func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string, factoryDigests map[string]string) *mcp.ToolDeps {
+// All runtime variants are provided so DeployApply can select per-deployment.
+func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, dockerRt runtime.Runtime, k3sRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string, factoryDigests map[string]string) *mcp.ToolDeps {
 	scanEnginesCore := func(ctx context.Context, runtimeFilter string, autoImport bool) (json.RawMessage, error) {
 		assetPatterns := make(map[string][]string)
 		binaryAssets := make(map[string]string)
@@ -1596,7 +1638,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, rt, nativeRt, modelName, engineType, slot, configOverrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
@@ -1681,10 +1723,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 			}
 
-			// Use native runtime when the engine explicitly recommends it (e.g. Vulkan on AMD).
-			activeRt := rt
-			if resolved.RuntimeRecommendation == "native" && nativeRt != nil {
-				activeRt = nativeRt
+			// Select runtime based on engine recommendation and available runtimes.
+			hasPartition := req.Partition != nil
+			activeRt, rtErr := pickRuntimeForDeployment(resolved.RuntimeRecommendation, k3sRt, dockerRt, nativeRt, rt, hasPartition)
+			if rtErr != nil {
+				return nil, rtErr
 			}
 			// Pre-flight: ensure image is available in containerd for K3S deployments.
 			// Auto-import from Docker or pre-pull from registries if needed.
@@ -1732,19 +1775,28 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 		DeployDryRun: func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
 			hwInfo := buildHardwareInfo(ctx, rt.Name())
-			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, rt, nativeRt, modelName, engineType, slot, overrides, dataDir)
+			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, overrides, dataDir)
 			if err != nil {
 				return nil, err
 			}
 
+			// Select runtime for display
+			resolved := rd.Resolved
+			hasPartition := resolved.Partition != nil
+			selectedRt, rtErr := pickRuntimeForDeployment(resolved.RuntimeRecommendation, k3sRt, dockerRt, nativeRt, rt, hasPartition)
+			if rtErr != nil {
+				return nil, rtErr
+			}
+			runtimeName := selectedRt.Name()
+
 			result := map[string]any{
 				"model":        rd.ModelName,
-				"engine":       rd.Resolved.Engine,
-				"engine_image": rd.Resolved.EngineImage,
-				"slot":         rd.Resolved.Slot,
-				"runtime":      rd.RuntimeName,
-				"config":       rd.Resolved.Config,
-				"provenance":   rd.Resolved.Provenance,
+				"engine":       resolved.Engine,
+				"engine_image": resolved.EngineImage,
+				"slot":         resolved.Slot,
+				"runtime":      runtimeName,
+				"config":       resolved.Config,
+				"provenance":   resolved.Provenance,
 				"fit_report": map[string]any{
 					"fit":         rd.Fit.Fit,
 					"reason":      rd.Fit.Reason,
@@ -1759,8 +1811,8 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				warnings = append(warnings, "WILL NOT DEPLOY: "+rd.Fit.Reason)
 			}
 
-			if rd.RuntimeName == "k3s" {
-				if podYAML, podErr := knowledge.GeneratePod(rd.Resolved); podErr == nil {
+			if runtimeName == "k3s" {
+				if podYAML, podErr := knowledge.GeneratePod(resolved); podErr == nil {
 					result["pod_yaml"] = string(podYAML)
 				} else {
 					warnings = append(warnings, "pod generation failed: "+podErr.Error())
@@ -2130,27 +2182,29 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		},
 
 		// Stack management
-		StackPreflight: func(ctx context.Context) (json.RawMessage, error) {
+		StackPreflight: func(ctx context.Context, tier string) (json.RawMessage, error) {
 			installer := stack.NewInstaller(&execRunner{}, dataDir).
 				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
 			hwProfile := detectHWProfile(ctx)
-			items := installer.Preflight(ctx, cat.StackComponents, hwProfile)
+			components := stack.FilterByTier(cat.StackComponents, tier)
+			items := installer.Preflight(ctx, components, hwProfile)
 			return json.Marshal(items)
 		},
-		StackInit: func(ctx context.Context, allowDownload bool) (json.RawMessage, error) {
+		StackInit: func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error) {
 			installer := stack.NewInstaller(&execRunner{}, dataDir).
 				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
-			if err := installer.PreCheck(ctx, cat.StackComponents); err != nil {
+			components := stack.FilterByTier(cat.StackComponents, tier)
+			if err := installer.PreCheck(ctx, components); err != nil {
 				return nil, err
 			}
 			hwProfile := detectHWProfile(ctx)
 			if allowDownload {
-				missing := installer.Preflight(ctx, cat.StackComponents, hwProfile)
+				missing := installer.Preflight(ctx, components, hwProfile)
 				if err := stack.DownloadItems(ctx, missing); err != nil {
 					return nil, fmt.Errorf("download: %w", err)
 				}
 			}
-			result, err := installer.Init(ctx, cat.StackComponents, hwProfile)
+			result, err := installer.Init(ctx, components, hwProfile)
 			if err != nil {
 				return nil, err
 			}

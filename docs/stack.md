@@ -2,7 +2,32 @@
 
 > AI-Inference-Managed-by-AI
 
-本文档描述 AIMA 的基础设施栈管理（K3S、HAMi、ZeroClaw 安装）。
+本文档描述 AIMA 的基础设施栈管理（Docker、NVIDIA CTK、K3S、HAMi、aima-serve 安装）。
+
+## 分层初始化 (Tiered Init)
+
+AIMA 采用分层初始化，按需安装：
+
+```
+Tier 0: (no init)         Native only — 零开销，全平台
+Tier 1: aima init         Docker + nvidia-ctk + aima-serve — 轻量容器推理
+Tier 2: aima init --k3s   + K3S + HAMi — GPU 分区、多模型调度
+```
+
+Tier 2 是 Tier 1 的 **超集**（K3S 有自己的 containerd，但 Docker 共存用于 build/debug/镜像源）。
+
+每个 Stack Component YAML 通过 `install.tier` 声明所属层级：
+
+| Priority | Component | Tier | Method | Daemon |
+|----------|-----------|------|--------|--------|
+| 5 | docker | docker | archive | yes (containerd + dockerd) |
+| 6 | nvidia-ctk | docker | archive | no (post_install: dpkg + CDI generate) |
+| 10 | k3s | k3s | binary | yes |
+| 20 | hami | k3s | helm | no |
+| 30 | aima-serve | docker | binary | yes |
+
+`FilterByTier("docker")` → 只安装 tier=docker 的组件。
+`FilterByTier("k3s")` → 安装 tier=docker **和** tier=k3s 的组件（超集）。
 
 ## 接口定义
 
@@ -10,7 +35,9 @@
 
 | 命令 | 功能 |
 |------|------|
-| `aima init` | 安装+配置基础设施栈 |
+| `aima init` | 安装 Docker 层基础设施（Docker + nvidia-ctk + aima-serve） |
+| `aima init --k3s` | 安装全栈（Docker 层 + K3S + HAMi） |
+| `aima init --yes` | 跳过下载确认提示 |
 
 ---
 
@@ -109,25 +136,51 @@ Agent 可以自动处理 `open_questions`，在真机上实验并将结果写回
 ## aima init 工作流
 
 ```
-aima init
+aima init [--k3s] [--yes]
   │
   ├── 1. 读 catalog/stack/*.yaml (知道要装什么、什么版本、什么配置)
-  ├── 2. hardware.detect (检测当前硬件，选择对应 profile)
-  ├── 3. PreCheck: 快速失败检查
-  │      └── Linux 上 daemon 组件 (K3S) 需 root 权限 → 提前报错
-  ├── 4. Preflight: 计算缺失文件列表
-  │      ├── 主制品: binary / chart → 必须下载
+  ├── 2. FilterByTier: 根据 tier 过滤组件
+  │      ├── 默认 tier="docker" → docker, nvidia-ctk, aima-serve
+  │      └── --k3s  tier="k3s"  → 以上 + k3s, hami
+  ├── 3. hardware.detect (检测当前硬件，选择对应 profile)
+  ├── 4. PreCheck: 快速失败检查
+  │      ├── Linux 上 daemon 组件需 root 权限 → 提前报错
+  │      └── 多 systemd_units 组件逐个检查 (docker: containerd + dockerd)
+  ├── 5. Preflight: 计算缺失文件列表
+  │      ├── 主制品: binary / chart / archive → 必须下载
+  │      ├── Archive 制品不标记 Executable (不 chmod +x)
   │      └── Airgap 镜像包: .tar / .tar.zst → Optional (失败不中断)
-  ├── 5. DownloadItems: 并行下载所有缺失文件
+  ├── 6. DownloadItems: 并行下载所有缺失文件
   │      ├── 主 URL 失败 → 自动切换 mirror URL
   │      └── Optional 项失败 → 仅 WARN，不 abort
-  ├── 6. 按 priority 排序后逐项安装:
+  ├── 7. 按 priority 排序后逐项安装:
   │      ├── writeRegistries → 写容器镜像 mirror 配置
   │      ├── prepareAirgapImages → 导入离线镜像包
   │      ├── checkComponent → 已就绪则跳过
-  │      ├── installBinary / installHelm → 安装
+  │      ├── installBinary / installArchive / installHelm → 安装
+  │      ├── post_install → 安装后命令 (非致命, 支持 {{.DistDir}} 变量)
   │      └── verify → 验证就绪条件
-  └── 7. 输出就绪状态
+  ├── 8. (--k3s only) Auto-import Docker images to K3S containerd
+  └── 9. 输出就绪状态
+```
+
+### installArchive 方法
+
+Docker 组件使用 `method: archive` — 从 .tar.gz 提取二进制文件到 `/usr/local/bin/`，
+创建多个 systemd unit（containerd → docker 依赖链），daemon-reload + enable --now。
+
+nvidia-ctk 组件也使用 `method: archive` 但 `extract_binaries` 为空 — archive 包含 .deb 包，
+由 `post_install` 命令处理解包和 dpkg 安装。`{{.DistDir}}` 变量在运行时替换为实际路径。
+
+### 升级路径 (Docker → K3S)
+
+```
+1. aima init --k3s (已有 Docker)
+2. Docker + nvidia-ctk 已 Ready → 跳过 (幂等)
+3. K3S 安装 (自有 containerd，与 Docker 共存)
+4. HAMi 安装到 K3S
+5. Auto-import: Docker 镜像导入 K3S containerd
+6. 下次 aima serve 重启自动选择 K3S 作为默认 runtime
 ```
 
 ---
@@ -139,17 +192,20 @@ aima init
 ```
 dist/                          # ~/.aima/dist/{os}-{arch}/
   linux-amd64/
-    k3s                        # K3S 二进制 (~70MB)
-    k3s-airgap-images.tar.zst  # K3S 系统镜像 (~134MB)
-    hami-2.4.1.tgz             # HAMi Helm chart
-    hami-airgap-images.tar      # HAMi 容器镜像 (~398MB)
-    zeroclaw                   # ZeroClaw 二进制 (~8.8MB)
+    docker-27.5.1.tgz         # Docker 静态二进制包 (Tier 1)
+    nvidia-container-toolkit_1.17.5_deb.tar.gz  # NVIDIA CTK deb 包 (Tier 1)
+    k3s                        # K3S 二进制 (~70MB, Tier 2)
+    k3s-airgap-images.tar.zst  # K3S 系统镜像 (~134MB, Tier 2)
+    hami-2.4.1.tgz             # HAMi Helm chart (Tier 2)
+    hami-airgap-images.tar      # HAMi 容器镜像 (~398MB, Tier 2)
   linux-arm64/
-    ...                        # arm64 版本 (HAMi ~237MB)
+    ...                        # arm64 版本
 ```
 
 ### 制品来源
 
+- Docker 静态二进制: download.docker.com (mirror: TUNA, Aliyun)
+- NVIDIA CTK deb 包: NVIDIA GitHub release (mirror: ghfast, ghproxy)
 - K3S 二进制 + airgap tar: K3S 官方 GitHub release
 - HAMi chart: HAMi 官方 GitHub release
 - HAMi airgap tar: AIMA GitHub release (v0.1.0-images)
@@ -189,9 +245,12 @@ Stack Component 中的先验知识经历三个阶段：
 
 ## 相关文件
 
-- `internal/stack/installer.go` - 通用 stack installer + `WriteRegistries` 导出函数
-- `catalog/stack/` - Stack Component YAML
+- `internal/stack/installer.go` - 通用 stack installer (`FilterByTier`, `installArchive`, `WriteRegistries`)
+- `internal/knowledge/loader.go` - Stack 结构体（`StackSource.Archive/ExtractBinaries`, `StackInstall.Tier/SystemdUnits/PostInstall`, `SystemdUnit`）
+- `internal/cli/init.go` - CLI init 命令（`--k3s` flag, tier 传递）
+- `internal/mcp/tools.go` - MCP tool 定义（`stack.preflight`, `stack.init` 接受 `tier` 参数）
+- `catalog/stack/` - Stack Component YAML（docker, nvidia-ctk, k3s, hami, aima-serve）
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-03-03*

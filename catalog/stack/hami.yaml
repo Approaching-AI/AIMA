@@ -52,6 +52,7 @@ source:
 install:
   method: helm
   priority: 20
+  tier: k3s
   helm:
     chart: "hami-2.4.1.tgz"
     namespace: "hami-system"

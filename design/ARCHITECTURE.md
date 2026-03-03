@@ -97,8 +97,8 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   Knowledge Layer (知识层)                                     │
 │   5 种知识资产 (go:embed YAML + 磁盘 overlay) + SQLite 查询    │
 ├───────────────────────────────────────────────────────────────┤
-│   Orchestration Layer (编排层)                                 │
-│   K3S (轻量 Kubernetes) + HAMi (GPU 虚拟化中间件)              │
+│   Orchestration Layer (编排层) — 按需分层                        │
+│   Tier 1: Docker + CDI │ Tier 2: + K3S + HAMi (GPU 分区)      │
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
 │   56 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
@@ -119,7 +119,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 | Knowledge | [docs/knowledge.md](../docs/knowledge.md) | 知识库、配置解析、Pod 生成 |
 | HAL | [docs/hal.md](../docs/hal.md) | 硬件检测、能力向量 |
 | K3S | [docs/k3s.md](../docs/k3s.md) | K8s 集成、Pod 管理、HAMi |
-| Stack | [docs/stack.md](../docs/stack.md) | 基础设施（K3S, HAMi, aima-serve） |
+| Stack | [docs/stack.md](../docs/stack.md) | 分层基础设施（Docker/CTK/K3S/HAMi/aima-serve） |
 | MCP | [docs/mcp.md](../docs/mcp.md) | MCP 服务器、工具定义 |
 | CLI | [docs/cli.md](../docs/cli.md) | 命令行接口 |
 | Agent | [docs/agent.md](../docs/agent.md) | Go Agent、ZeroClaw Sidecar |
@@ -240,8 +240,15 @@ Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 
 
 ### systemd 持久化
 
-`aima init` 通过 Stack Component YAML (`catalog/stack/aima-serve.yaml`) 安装 systemd 服务：
+`aima init` 采用分层初始化，按需安装基础设施：
 
+- **Tier 1** (`aima init`): Docker (containerd + dockerd) + nvidia-ctk (CDI) + aima-serve
+- **Tier 2** (`aima init --k3s`): Tier 1 + K3S + HAMi（GPU 分区、多模型调度）
+
+每个 Stack Component YAML 声明 `install.tier`，`FilterByTier()` 根据请求层级过滤。
+Archive 方法支持多 systemd unit 依赖链（如 Docker: containerd.service → docker.service）。
+
+systemd 单元配置：
 - `Type=simple`（非 sd_notify）
 - `Environment=HOME=/root`（systemd 不设 HOME）
 - env 文件：`/etc/aima/aima-serve.env`（非 K3S 组件使用独立目录）

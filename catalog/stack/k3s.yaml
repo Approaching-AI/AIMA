@@ -46,6 +46,7 @@ install:
   method: binary
   daemon: true
   priority: 10
+  tier: k3s
   args:
     - flag: "--disable=traefik"
       rationale: "Edge devices don't need Ingress Controller"

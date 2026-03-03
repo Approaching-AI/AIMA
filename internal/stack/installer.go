@@ -1,6 +1,8 @@
 package stack
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -34,6 +36,44 @@ func platformSupported(platforms []string) bool {
 		}
 	}
 	return false
+}
+
+// tierRank returns the numeric order for a tier name.
+// "docker" tier (1) includes components with tier "docker" only.
+// "k3s" tier (2) includes both "docker" and "k3s" components (superset).
+// Unknown tiers return 0.
+func tierRank(tier string) int {
+	switch tier {
+	case "docker":
+		return 1
+	case "k3s":
+		return 2
+	default:
+		return 0
+	}
+}
+
+// FilterByTier returns components whose tier is at or below the requested tier.
+// tier "docker" → only tier="docker" components.
+// tier "k3s" → tier="docker" and tier="k3s" components.
+// Empty tier on a component means it's included in all tiers.
+func FilterByTier(components []knowledge.StackComponent, tier string) []knowledge.StackComponent {
+	maxOrder := tierRank(tier)
+	if maxOrder == 0 {
+		return components // unknown tier → include all
+	}
+	var filtered []knowledge.StackComponent
+	for _, c := range components {
+		compTier := c.Install.Tier
+		if compTier == "" {
+			filtered = append(filtered, c) // no tier = always included
+			continue
+		}
+		if compOrder := tierRank(compTier); compOrder > 0 && compOrder <= maxOrder {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
 }
 
 // CommandRunner executes shell commands.
@@ -136,9 +176,23 @@ func (inst *Installer) PreCheck(ctx context.Context, components []knowledge.Stac
 		if !comp.Install.Daemon {
 			continue
 		}
-		// If this daemon is already running, no root needed
-		out, err := inst.runner.Run(ctx, "systemctl", "is-active", comp.Metadata.Name)
-		if err == nil && strings.TrimSpace(string(out)) == "active" {
+		// Check if all daemon units are already running — if so, no root needed
+		allActive := true
+		unitNames := []string{comp.Metadata.Name}
+		if len(comp.Install.SystemdUnits) > 0 {
+			unitNames = make([]string, len(comp.Install.SystemdUnits))
+			for i, u := range comp.Install.SystemdUnits {
+				unitNames[i] = u.Name
+			}
+		}
+		for _, name := range unitNames {
+			out, err := inst.runner.Run(ctx, "systemctl", "is-active", name)
+			if err != nil || strings.TrimSpace(string(out)) != "active" {
+				allActive = false
+				break
+			}
+		}
+		if allActive {
 			continue
 		}
 		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo aima init", comp.Metadata.Name)
@@ -216,10 +270,13 @@ func (inst *Installer) Preflight(ctx context.Context, components []knowledge.Sta
 			continue
 		}
 
-		// Main artifact: binary or chart
+		// Main artifact: binary, chart, or archive
 		fileName := comp.Source.Binary
 		if fileName == "" {
 			fileName = comp.Source.Chart
+		}
+		if fileName == "" {
+			fileName = comp.Source.Archive
 		}
 		if fileName != "" {
 			localPath := filepath.Join(inst.distDir, fileName)
@@ -232,7 +289,7 @@ func (inst *Installer) Preflight(ctx context.Context, components []knowledge.Sta
 						URL:        url,
 						MirrorURLs: comp.Source.Mirror[platform],
 						SHA256:     comp.Source.SHA256[platform],
-						Executable: comp.Source.Binary != "",
+						Executable: comp.Source.Binary != "" && comp.Source.Archive == "",
 					})
 				}
 			}
@@ -516,12 +573,26 @@ func (inst *Installer) initComponent(ctx context.Context, comp knowledge.StackCo
 		if err := inst.installBinary(ctx, comp, hwProfile); err != nil {
 			return status, fmt.Errorf("install %s: %w", comp.Metadata.Name, err)
 		}
+	case "archive":
+		if err := inst.installArchive(ctx, comp); err != nil {
+			return status, fmt.Errorf("install %s: %w", comp.Metadata.Name, err)
+		}
 	case "helm":
 		if err := inst.installHelm(ctx, comp, hwProfile); err != nil {
 			return status, fmt.Errorf("install %s: %w", comp.Metadata.Name, err)
 		}
 	default:
 		return status, fmt.Errorf("unknown install method %q for %s", comp.Install.Method, comp.Metadata.Name)
+	}
+
+	// Run post_install commands (non-fatal on failure)
+	for _, rawCmd := range comp.Install.PostInstall {
+		cmd := strings.ReplaceAll(rawCmd, "{{.DistDir}}", inst.distDir)
+		slog.Info("running post_install", "name", comp.Metadata.Name, "command", cmd)
+		out, err := inst.runner.Run(ctx, "sh", "-c", cmd)
+		if err != nil {
+			slog.Warn("post_install command failed (non-fatal)", "name", comp.Metadata.Name, "command", cmd, "error", err, "output", string(out))
+		}
 	}
 
 	status.Installed = true
@@ -705,6 +776,159 @@ WantedBy=multi-user.target
 	return nil
 }
 
+// installArchive installs a component from a .tar.gz archive:
+// 1. Extract specified binaries to /usr/local/bin/
+// 2. Write systemd unit files from SystemdUnits list
+// 3. daemon-reload + enable + start each unit
+func (inst *Installer) installArchive(ctx context.Context, comp knowledge.StackComponent) error {
+	archiveName := comp.Source.Archive
+	if archiveName == "" {
+		return fmt.Errorf("archive name not specified for %s", comp.Metadata.Name)
+	}
+
+	archivePath := filepath.Join(inst.distDir, archiveName)
+	if _, err := os.Stat(archivePath); err != nil {
+		return fmt.Errorf("%s not found: place archive at %s", archiveName, archivePath)
+	}
+
+	// 1. Extract binaries (skip if extract_binaries is empty — e.g. deb archives handled by post_install)
+	if len(comp.Source.ExtractBinaries) > 0 {
+		destDir := "/usr/local/bin"
+		if err := extractBinaries(archivePath, comp.Source.ExtractBinaries, destDir); err != nil {
+			return fmt.Errorf("extract binaries from %s: %w", archiveName, err)
+		}
+	}
+
+	// 2. Write systemd units
+	for _, unit := range comp.Install.SystemdUnits {
+		if err := writeSystemdUnit(comp, unit); err != nil {
+			return fmt.Errorf("write systemd unit %s: %w", unit.Name, err)
+		}
+	}
+
+	// 3. daemon-reload + enable + start
+	if len(comp.Install.SystemdUnits) > 0 {
+		if out, err := inst.runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("systemctl daemon-reload: %s: %w", string(out), err)
+		}
+		for _, unit := range comp.Install.SystemdUnits {
+			if out, err := inst.runner.Run(ctx, "systemctl", "enable", "--now", unit.Name); err != nil {
+				return fmt.Errorf("systemctl enable --now %s: %s: %w", unit.Name, string(out), err)
+			}
+			slog.Info("systemd unit enabled and started", "name", unit.Name)
+		}
+	}
+
+	return nil
+}
+
+// extractBinaries opens a .tar.gz archive and extracts specific files to destDir.
+// paths are matched against tar entry names (e.g. "docker/dockerd").
+// Extracted files are made executable (0755).
+func extractBinaries(archivePath string, paths []string, destDir string) error {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("create dest dir: %w", err)
+	}
+
+	// Build a set for fast lookup
+	wanted := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		wanted[p] = true
+	}
+
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	extracted := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		if !wanted[hdr.Name] {
+			continue
+		}
+
+		baseName := filepath.Base(hdr.Name)
+		destPath := filepath.Join(destDir, baseName)
+
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", destPath, err)
+		}
+		if _, err := io.Copy(out, tr); err != nil {
+			out.Close()
+			return fmt.Errorf("write %s: %w", destPath, err)
+		}
+		out.Close()
+		slog.Info("extracted binary", "path", destPath)
+		extracted++
+	}
+
+	if extracted == 0 {
+		return fmt.Errorf("no matching binaries found in archive (wanted %d)", len(paths))
+	}
+	slog.Info("extracted binaries from archive", "count", extracted, "archive", filepath.Base(archivePath))
+	return nil
+}
+
+// writeSystemdUnit generates and writes a systemd unit file for an archive component.
+func writeSystemdUnit(comp knowledge.StackComponent, unit knowledge.SystemdUnit) error {
+	serviceType := unit.Type
+	if serviceType == "" {
+		serviceType = "simple"
+	}
+	after := "network-online.target"
+	wants := "network-online.target"
+	if unit.After != "" {
+		after = "network-online.target " + unit.After
+		wants = "network-online.target " + unit.After
+	}
+
+	content := fmt.Sprintf(`[Unit]
+Description=AIMA managed %s (%s)
+After=%s
+Wants=%s
+
+[Service]
+Type=%s
+ExecStart=%s
+Restart=always
+RestartSec=5s
+KillMode=process
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+`, unit.Name, comp.Metadata.Version, after, wants, serviceType, unit.Exec)
+
+	unitPath := "/etc/systemd/system/" + unit.Name + ".service"
+	if err := os.MkdirAll("/etc/systemd/system", 0o755); err != nil {
+		return fmt.Errorf("create systemd dir: %w", err)
+	}
+	if err := os.WriteFile(unitPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", unitPath, err)
+	}
+	slog.Info("wrote systemd unit", "path", unitPath)
+	return nil
+}
+
 func (inst *Installer) installHelm(ctx context.Context, comp knowledge.StackComponent, hwProfile string) error {
 	if comp.Install.Helm == nil {
 		return fmt.Errorf("helm config missing for %s", comp.Metadata.Name)
@@ -844,10 +1068,19 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 
 	// Early systemd check for daemon components on Linux — gives actionable guidance
 	if comp.Install.Daemon && runtime.GOOS == "linux" {
-		out, err := inst.runner.Run(ctx, "systemctl", "is-active", comp.Metadata.Name)
-		if err != nil || strings.TrimSpace(string(out)) != "active" {
-			status.Message = fmt.Sprintf("service not running; try: sudo systemctl start %s", comp.Metadata.Name)
-			return status
+		unitNames := []string{comp.Metadata.Name}
+		if len(comp.Install.SystemdUnits) > 0 {
+			unitNames = make([]string, len(comp.Install.SystemdUnits))
+			for i, u := range comp.Install.SystemdUnits {
+				unitNames[i] = u.Name
+			}
+		}
+		for _, uname := range unitNames {
+			out, err := inst.runner.Run(ctx, "systemctl", "is-active", uname)
+			if err != nil || strings.TrimSpace(string(out)) != "active" {
+				status.Message = fmt.Sprintf("service %s not running; try: sudo systemctl start %s", uname, uname)
+				return status
+			}
 		}
 	}
 

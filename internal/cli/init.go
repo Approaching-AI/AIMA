@@ -20,19 +20,34 @@ func isTTY() bool {
 }
 
 func newInitCmd(app *App) *cobra.Command {
-	var yesFlag bool
+	var (
+		yesFlag  bool
+		k3sFlag  bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Install and configure infrastructure stack (K3S, HAMi)",
-		Long:  "Detect hardware, install K3S and HAMi with AIMA-optimized defaults, and verify readiness. Missing files are auto-downloaded (use --no-download to skip).",
+		Short: "Install infrastructure stack (Docker tier by default, --k3s for full K3S+HAMi)",
+		Long: `Initialize AIMA infrastructure on this device.
+
+Tiers:
+  aima init        Docker + nvidia-ctk + aima-serve (lightweight container inference)
+  aima init --k3s  + K3S + HAMi (GPU partitioning, multi-model scheduling)
+
+The K3S tier is a superset of the Docker tier. Missing files are auto-downloaded
+when confirmed (or use --yes to skip the prompt).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			allowDownload := false
 
+			tier := "docker"
+			if k3sFlag {
+				tier = "k3s"
+			}
+
 			// 1. Preflight: check for missing files
 			if app.ToolDeps.StackPreflight != nil {
-				preflightData, err := app.ToolDeps.StackPreflight(ctx)
+				preflightData, err := app.ToolDeps.StackPreflight(ctx, tier)
 				if err != nil {
 					return fmt.Errorf("preflight: %w", err)
 				}
@@ -49,7 +64,6 @@ func newInitCmd(app *App) *cobra.Command {
 					}
 
 					if yesFlag || !isTTY() {
-						// Auto-download when --yes is set or stdin is not a terminal
 						allowDownload = true
 					} else {
 						fmt.Fprintf(cmd.ErrOrStderr(), "\nDownload these files? [Y/n] ")
@@ -67,9 +81,13 @@ func newInitCmd(app *App) *cobra.Command {
 			}
 
 			// 2. Run init
-			fmt.Fprintln(cmd.OutOrStdout(), "Initializing AIMA infrastructure stack...")
+			tierLabel := "Docker"
+			if k3sFlag {
+				tierLabel = "K3S (full stack)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Initializing AIMA infrastructure stack [%s tier]...\n", tierLabel)
 
-			data, err := app.ToolDeps.StackInit(ctx, allowDownload)
+			data, err := app.ToolDeps.StackInit(ctx, tier, allowDownload)
 			if err != nil {
 				return fmt.Errorf("init: %w", err)
 			}
@@ -116,8 +134,8 @@ func newInitCmd(app *App) *cobra.Command {
 				}
 			}
 
-			// 4. Auto-import Docker images to K3S containerd (init has root)
-			if result.AllReady && app.ToolDeps.ScanEngines != nil {
+			// 4. Auto-import Docker images to K3S containerd (only for K3S tier)
+			if k3sFlag && result.AllReady && app.ToolDeps.ScanEngines != nil {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nImporting Docker engine images to K3S containerd...")
 				if _, err := app.ToolDeps.ScanEngines(ctx, "auto", true); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: engine import failed: %v\n", err)
@@ -146,5 +164,6 @@ func newInitCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&yesFlag, "yes", "y", false, "Skip download confirmation prompt")
+	cmd.Flags().BoolVar(&k3sFlag, "k3s", false, "Install full K3S+HAMi stack (GPU partitioning, multi-model scheduling)")
 	return cmd
 }

@@ -24,6 +24,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | linux-1 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
 | amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
 | hygon | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× Hygon C86-4G 48C + 8× Hygon BW150 DCU 64GB | 751 GB | 265 GB + 564 GB NVMe | K3S + Docker 28.0 | key | DCU inference validation |
+| qjq2 | `user@<REDACTED_IP>` (via qjq0 `<REDACTED_IP>`) | Linux | — | No GPU | — | — | — | key (via ProxyCommand) | Edge device validation (no GPU) |
 
 > **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
 > Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
@@ -151,7 +152,7 @@ internal/
   state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager
-  stack/                      # Infrastructure stack installer (K3S + HAMi, airgap, parallel downloads)
+  stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   mcp/                        # MCP server + 56 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)

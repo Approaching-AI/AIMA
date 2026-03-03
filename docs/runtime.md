@@ -55,23 +55,40 @@ type DeployRequest struct {
 
 ### 选择逻辑
 
-```go
-func selectRuntime() Runtime {
-    if runtime.GOOS == "linux" && k3sAvailable() {
-        return &K3SRuntime{}      // 集群：完整体验
-    }
-    if runtime.GOOS == "linux" && dockerAvailable() {
-        return &DockerRuntime{}   // 单机容器：隔离 + 生命周期
-    }
-    return &NativeRuntime{}       // 跨平台 fallback
-}
+AIMA 在启动时构建所有可用 runtime，然后按两个层次选择：
+
+**默认 Runtime**（全局 fallback）:
+
+```
+selectDefaultRuntime: K3S (if available) → Docker (if available) → Native
 ```
 
-**优先级链**: K3S (集群) → Docker (单机容器) → Native (裸进程)
+**Per-Deployment Runtime**（基于 Engine YAML 的 `RuntimeRecommendation`）:
 
-- Linux + K3S 可用 → K3S Runtime（完整体验：GPU 切分、多模型并行、声明式健康检查）
-- Linux + Docker 可用 → Docker Runtime（容器隔离、自动重启、无需 K8s）
-- 否则 → Native Runtime（跨平台 fallback：单模型、进程管理）
+```go
+pickRuntimeForDeployment(recommendation, k3sRt, dockerRt, nativeRt, defaultRt, hasPartition):
+    "native"    → nativeRt
+    "docker"    → dockerRt > nativeRt
+    "k3s"       → k3sRt (required, error if unavailable)
+    "container" → k3sRt > dockerRt (partition needs k3s)
+    "auto" / "" → defaultRt
+```
+
+| Engine says | Partition | Selected |
+|-------------|-----------|----------|
+| native | — | Native |
+| container | no | Docker (lighter) or K3S |
+| container | yes (slot) | K3S (HAMi required) |
+| auto | — | Best available |
+
+如果 GPU 分区需要 K3S 但不可用 → 报错: "Run `aima init --k3s` to install"
+
+### Docker CDI GPU 支持
+
+Docker Runtime 部署 NVIDIA GPU 容器时优先使用 CDI (Container Device Interface)：
+
+- 若 `/etc/cdi/nvidia.yaml` 存在 → `--device nvidia.com/gpu=all` (CDI, Docker 25+ 原生支持)
+- 否则 → `--gpus all` (传统 nvidia-container-toolkit 方式)
 
 ---
 

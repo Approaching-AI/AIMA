@@ -309,27 +309,40 @@ type StackCompatibility struct {
 }
 
 type StackSource struct {
-	Binary         string              `yaml:"binary,omitempty"`
-	Chart          string              `yaml:"chart,omitempty"`
-	Airgap         string              `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
-	Platforms      []string            `yaml:"platforms"`
-	Download       map[string]string   `yaml:"download,omitempty"`         // platform → URL
-	Mirror         map[string][]string `yaml:"mirror,omitempty"`           // platform → fallback URLs (tried in order)
-	SHA256         map[string]string   `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
-	AirgapDownload map[string]string   `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
-	AirgapMirror   map[string][]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URLs (tried in order)
-	AirgapSHA256   map[string]string   `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
+	Binary          string              `yaml:"binary,omitempty"`
+	Chart           string              `yaml:"chart,omitempty"`
+	Archive         string              `yaml:"archive,omitempty"`          // archive filename (e.g. docker-27.5.1.tgz)
+	ExtractBinaries []string            `yaml:"extract_binaries,omitempty"` // paths within archive to extract (e.g. "docker/dockerd")
+	Airgap          string              `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
+	Platforms       []string            `yaml:"platforms"`
+	Download        map[string]string   `yaml:"download,omitempty"`         // platform → URL
+	Mirror          map[string][]string `yaml:"mirror,omitempty"`           // platform → fallback URLs (tried in order)
+	SHA256          map[string]string   `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
+	AirgapDownload  map[string]string   `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
+	AirgapMirror    map[string][]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URLs (tried in order)
+	AirgapSHA256    map[string]string   `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
 }
 
 type StackInstall struct {
-	Method      string            `yaml:"method"`
-	Daemon      bool              `yaml:"daemon,omitempty"`
-	Subcommand  string            `yaml:"subcommand,omitempty"`   // daemon ExecStart subcommand (default "server")
-	ServiceType string            `yaml:"service_type,omitempty"` // systemd Type= (default "notify")
-	Priority    int               `yaml:"priority,omitempty"`     // lower = installed first (default 0)
-	Args        []StackArg        `yaml:"args,omitempty"`
-	Env         map[string]string `yaml:"env,omitempty"`
-	Helm        *StackHelm        `yaml:"helm,omitempty"`
+	Method       string            `yaml:"method"`
+	Daemon       bool              `yaml:"daemon,omitempty"`
+	Subcommand   string            `yaml:"subcommand,omitempty"`    // daemon ExecStart subcommand (default "server")
+	ServiceType  string            `yaml:"service_type,omitempty"`  // systemd Type= (default "notify")
+	Priority     int               `yaml:"priority,omitempty"`      // lower = installed first (default 0)
+	Tier         string            `yaml:"tier,omitempty"`          // "docker" or "k3s" — used for tiered init filtering
+	Args         []StackArg        `yaml:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	Helm         *StackHelm        `yaml:"helm,omitempty"`
+	SystemdUnits []SystemdUnit     `yaml:"systemd_units,omitempty"` // multiple systemd services (archive method)
+	PostInstall  []string          `yaml:"post_install,omitempty"`  // commands to run after install (non-fatal on failure)
+}
+
+// SystemdUnit describes a systemd service unit to create during archive installation.
+type SystemdUnit struct {
+	Name  string `yaml:"name"`
+	Exec  string `yaml:"exec"`
+	Type  string `yaml:"type,omitempty"`  // systemd Type= (default "simple")
+	After string `yaml:"after,omitempty"` // systemd After= dependency
 }
 
 type StackArg struct {

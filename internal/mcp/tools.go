@@ -60,8 +60,8 @@ type ToolDeps struct {
 	AggregateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
 	// Stack management
-	StackPreflight func(ctx context.Context) (json.RawMessage, error)
-	StackInit      func(ctx context.Context, allowDownload bool) (json.RawMessage, error)
+	StackPreflight func(ctx context.Context, tier string) (json.RawMessage, error)
+	StackInit      func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error)
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
 	// Discovery
@@ -853,13 +853,22 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// stack.preflight
 	s.RegisterTool(&Tool{
 		Name:        "stack.preflight",
-		Description: "Check which infrastructure stack components (K3S, HAMi) need files downloaded before installation. Returns a checklist of components and their download status. Use before stack.init to see what is missing.",
-		InputSchema: noParamsSchema(),
+		Description: "Check which infrastructure stack components need files downloaded before installation. Returns a checklist of components and their download status. Use before stack.init to see what is missing. Tier controls scope: 'docker' (default) = Docker + nvidia-ctk + aima-serve; 'k3s' = all components including K3S + HAMi.",
+		InputSchema: schema(`"tier":{"type":"string","description":"Init tier: 'docker' (default) or 'k3s' (includes K3S + HAMi)","enum":["docker","k3s"]}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.StackPreflight == nil {
 				return ErrorResult("stack.preflight not implemented"), nil
 			}
-			data, err := deps.StackPreflight(ctx)
+			var p struct {
+				Tier string `json:"tier"`
+			}
+			if len(params) > 0 {
+				_ = json.Unmarshal(params, &p)
+			}
+			if p.Tier == "" {
+				p.Tier = "docker"
+			}
+			data, err := deps.StackPreflight(ctx, p.Tier)
 			if err != nil {
 				return nil, fmt.Errorf("stack preflight: %w", err)
 			}
@@ -870,21 +879,25 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// stack.init
 	s.RegisterTool(&Tool{
 		Name:        "stack.init",
-		Description: "Install and configure the infrastructure stack (K3S, HAMi) on this device. Run stack.preflight first to check prerequisites. This is a significant operation that modifies the system. Blocked for agent-initiated calls.",
-		InputSchema: schema(`"allow_download":{"type":"boolean","description":"Auto-download missing component files (default false)"}`),
+		Description: "Install and configure the infrastructure stack on this device. Tier controls scope: 'docker' (default) = Docker + nvidia-ctk + aima-serve; 'k3s' = all components including K3S + HAMi. Run stack.preflight first to check prerequisites. This is a significant operation that modifies the system. Blocked for agent-initiated calls.",
+		InputSchema: schema(`"tier":{"type":"string","description":"Init tier: 'docker' (default) or 'k3s' (includes K3S + HAMi)","enum":["docker","k3s"]},"allow_download":{"type":"boolean","description":"Auto-download missing component files (default false)"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.StackInit == nil {
 				return ErrorResult("stack.init not implemented"), nil
 			}
 			var p struct {
-				AllowDownload bool `json:"allow_download"`
+				Tier          string `json:"tier"`
+				AllowDownload bool   `json:"allow_download"`
 			}
 			if len(params) > 0 {
 				if err := json.Unmarshal(params, &p); err != nil {
 					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 				}
 			}
-			data, err := deps.StackInit(ctx, p.AllowDownload)
+			if p.Tier == "" {
+				p.Tier = "docker"
+			}
+			data, err := deps.StackInit(ctx, p.Tier, p.AllowDownload)
 			if err != nil {
 				return nil, fmt.Errorf("stack init: %w", err)
 			}

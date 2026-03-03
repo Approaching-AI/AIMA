@@ -126,9 +126,9 @@ SQLite 关系查询驱动，支持多维分析:
 
 | 工具 | 功能 |
 |------|------|
-| `stack.preflight` | 预检 (CPU/RAM/磁盘/Docker/containerd 可用性) |
-| `stack.init` | 一键安装 K3S + HAMi + aima-serve systemd |
-| `stack.status` | 查询 K3S/HAMi 组件状态 |
+| `stack.preflight` | 预检: 按 tier 检查缺失文件 (tier: docker/k3s) |
+| `stack.init` | 分层安装: docker 层 (Docker+CTK+aima-serve) 或 k3s 层 (+K3S+HAMi) |
+| `stack.status` | 查询所有 Stack 组件状态 |
 
 ### 目录覆盖 — Catalog (2)
 

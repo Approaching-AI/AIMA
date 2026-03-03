@@ -371,12 +371,21 @@ func (r *DockerRuntime) enrichDockerProgress(ctx context.Context, ds *Deployment
 }
 
 // dockerStatusToPhase maps `docker ps` Status string to phase.
+// Format examples: "Up 2 hours", "Exited (1) 5 minutes ago", "Created".
 func dockerStatusToPhase(status string) string {
 	s := strings.ToLower(status)
 	switch {
 	case strings.HasPrefix(s, "up"):
 		return "running"
 	case strings.HasPrefix(s, "exited"):
+		// Parse exit code from "Exited (N) ..." to distinguish stopped vs failed.
+		if i := strings.Index(s, "("); i >= 0 {
+			if j := strings.Index(s[i:], ")"); j >= 0 {
+				if strings.TrimSpace(s[i+1:i+j]) == "0" {
+					return "stopped"
+				}
+			}
+		}
 		return "failed"
 	case strings.HasPrefix(s, "created"):
 		return "starting"
@@ -388,6 +397,8 @@ func dockerStatusToPhase(status string) string {
 }
 
 // parseLabelString parses Docker's comma-separated label format "k=v,k2=v2".
+// Note: AIMA labels never contain commas in values; if that changes, switch to
+// docker inspect (which returns a proper JSON map) instead of docker ps format.
 func parseLabelString(s string) map[string]string {
 	m := make(map[string]string)
 	if s == "" {

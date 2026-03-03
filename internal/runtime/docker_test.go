@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -268,7 +269,8 @@ func TestDockerStatusToPhase(t *testing.T) {
 		{"Up 2 hours", "running"},
 		{"Up About a minute", "running"},
 		{"Exited (1) 5 minutes ago", "failed"},
-		{"Exited (0) 5 minutes ago", "failed"}, // docker ps doesn't distinguish exit codes
+		{"Exited (0) 5 minutes ago", "stopped"},
+		{"Exited (137) 2 seconds ago", "failed"},
 		{"Created", "starting"},
 		{"Restarting (1) 5 seconds ago", "starting"},
 	}
@@ -286,39 +288,19 @@ func TestDockerStatusToPhase(t *testing.T) {
 // --- helpers ---
 
 func joinArgs(args []string) string {
-	return " " + join(args, " ") + " "
-}
-
-func join(ss []string, sep string) string {
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += sep
-		}
-		result += s
-	}
-	return result
+	return " " + strings.Join(args, " ") + " "
 }
 
 func assertContains(t *testing.T, haystack, needle, msg string) {
 	t.Helper()
-	if !containsSubstring(haystack, needle) {
+	if !strings.Contains(haystack, needle) {
 		t.Errorf("%s: args should contain %q, got: %s", msg, needle, haystack)
 	}
 }
 
 func assertNotContains(t *testing.T, haystack, needle, msg string) {
 	t.Helper()
-	if containsSubstring(haystack, needle) {
+	if strings.Contains(haystack, needle) {
 		t.Errorf("%s: args should NOT contain %q, got: %s", msg, needle, haystack)
 	}
-}
-
-func containsSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

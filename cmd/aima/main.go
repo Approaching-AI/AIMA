@@ -1022,6 +1022,9 @@ func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.
 	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
 		return runtime.NewK3SRuntime(k3sClient, runtime.WithEngineAssets(engineAssets))
 	}
+	// Docker on macOS/Windows (Docker Desktop) doesn't support GPU passthrough
+	// (--gpus flag requires NVIDIA Container Toolkit on Linux), so inference
+	// containers can't access the GPU. Only enable Docker runtime on Linux.
 	if goruntime.GOOS == "linux" && runtime.DockerAvailable(ctx) {
 		return runtime.NewDockerRuntime(engineAssets)
 	}

@@ -23,6 +23,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | gb10 | `qujing@100.105.58.16` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
 | linux-1 | `cjwx@100.121.255.97` (Tailscale) / `cjwx@192.168.109.23` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
 | amd395 | `quings@100.71.145.56` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
+| hygon | `qujing@100.113.47.73` (Tailscale) / `qujing@192.168.110.24` (LAN) | Ubuntu 22.04 | x86_64 | 2× Hygon C86-4G 48C + 8× Hygon BW150 DCU 64GB | 751 GB | 265 GB + 564 GB NVMe | K3S + Docker 28.0 | key | DCU inference validation |
 
 > **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
 > Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
@@ -40,18 +41,22 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
       │  go build -o build/aima.exe ./cmd/aima                                       # dev-win
       │  GOOS=darwin  GOARCH=arm64 go build -o build/aima-darwin-arm64  ./cmd/aima   # mac-m4
       │  GOOS=linux   GOARCH=arm64 go build -o build/aima-linux-arm64   ./cmd/aima   # gb10
-      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1
+      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1, amd395, hygon
       │
  [3] Distribute: 同步到所有远程机器
       │  scp build/aima-darwin-arm64 jguan@100.125.202.50:~/aima
       │  scp build/aima-linux-arm64  qujing@100.105.58.16:~/aima
       │  scp build/aima-linux-amd64  cjwx@100.121.255.97:~/aima
+      │  scp build/aima-linux-amd64  quings@100.71.145.56:~/aima
+      │  scp build/aima-linux-amd64  qujing@100.113.47.73:~/aima
       │
  [4] Execute: 对所有设备（含本机）并行执行同一组测试命令
       │  本机:  build/aima.exe hal detect
       │  SSH:   ssh jguan@100.125.202.50 './aima hal detect'
       │  SSH:   ssh qujing@100.105.58.16     './aima hal detect'
       │  SSH:   ssh cjwx@100.121.255.97      './aima hal detect'
+      │  SSH:   ssh quings@100.71.145.56     './aima hal detect'
+      │  SSH:   ssh qujing@100.113.47.73     './aima hal detect'
       │
       ╔══════════════════════════════════════════════════════════╗
       ║  ⚠ BARRIER: 等待所有设备返回结果，一台都不能少。       ║

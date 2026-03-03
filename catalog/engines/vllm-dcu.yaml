@@ -1,0 +1,78 @@
+kind: engine_asset
+metadata:
+  name: vllm-dcu
+  type: vllm
+  version: "0.9.2"
+  supported_formats: [safetensors]
+image:
+  name: harbor.sourcefind.cn:5443/dcu/admin/base/vllm
+  tag: "0.9.2-ubuntu22.04-dtk26.04-0130-py3.10-20260202"
+  size_approx_mb: 20000
+  platforms: [linux/amd64]
+  registries:
+    - harbor.sourcefind.cn:5443/dcu/admin/base/vllm
+patterns:
+  - "dcu/admin/base/vllm"
+  - "/dcu/"
+hardware:
+  gpu_arch: DCU
+  vram_min_mib: 4096
+startup:
+  command: ["vllm", "serve", "{{.ModelPath}}"]
+  env:
+    VLLM_USE_FUSED_RMS_ROPE: "1"
+    VLLM_USE_MARLIN_W16A16_MOE: "1"
+  default_args:
+    port: 8000
+    gpu_memory_utilization: 0.95
+    max_model_len: 32768
+    dtype: float16
+    served_model_name: "{{.ModelName}}"
+  health_check:
+    path: /health
+    timeout_s: 600
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 60
+  log_patterns:
+    phases:
+      - name: loading_weights
+        pattern: "Loading model weights"
+        progress: 40
+      - name: cuda_graphs
+        pattern: "Capturing CUDA graph.*?(\\d+)%"
+        progress_regex_group: 1
+        progress_base: 40
+        progress_range: 50
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|CUDA out of memory"
+        message: "GPU memory insufficient"
+      - pattern: "torch.cuda.OutOfMemoryError"
+        message: "GPU memory insufficient"
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - paged_attention
+    - continuous_batching
+  performance_gain: "DCU-optimized vLLM with FP16, MoE fused kernels"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 4096
+  recommended_gpu_cores_percent: 50
+time_constraints:
+  cold_start_s: [60, 300]
+  model_switch_s: [60, 300]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

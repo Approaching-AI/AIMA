@@ -78,6 +78,11 @@ var gpuMetricsProbes = []gpuMetricsProbe{
 }
 
 func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
+	// Hygon DCU: sysfs-based detection, must run before AMD probe (DCU also has /dev/kfd).
+	if gpu := detectHygonDCU(ctx, runner); gpu != nil {
+		return gpu
+	}
+
 	for _, p := range gpuProbes {
 		out, err := runner.Run(ctx, p.cmd, p.args...)
 		if err != nil {
@@ -94,6 +99,11 @@ func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
 }
 
 func collectGPUMetrics(ctx context.Context, runner CommandRunner) *GPUMetrics {
+	// Hygon DCU: sysfs-based metrics, must run before AMD probe.
+	if m := collectHygonDCUMetrics(ctx, runner); m != nil {
+		return m
+	}
+
 	for _, p := range gpuMetricsProbes {
 		out, err := runner.Run(ctx, p.cmd, p.args...)
 		if err != nil {
@@ -699,6 +709,136 @@ func mthreadsGPUToArch(name string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// --- Hygon DCU (sysfs-based, no host CLI tool) ---
+
+// detectHygonDCU detects Hygon DCU cards via Linux sysfs.
+// Sentinel: /opt/hyhal must exist. Then scans /sys/class/drm/card*/device/uevent
+// for DRIVER=hycu entries. Reads VRAM from mem_info_vram_total sysfs file.
+func detectHygonDCU(ctx context.Context, runner CommandRunner) *GPUInfo {
+	if _, err := runner.Run(ctx, "stat", "/opt/hyhal"); err != nil {
+		return nil
+	}
+
+	out, err := runner.Run(ctx, "ls", "/sys/class/drm/")
+	if err != nil {
+		return nil
+	}
+
+	var count int
+	var vramMiB int
+	var name, computeID string
+
+	for _, entry := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(entry, "card") || strings.Contains(entry, "-") {
+			continue
+		}
+
+		ueventOut, err := runner.Run(ctx, "cat", "/sys/class/drm/"+entry+"/device/uevent")
+		if err != nil {
+			continue
+		}
+		uevent := string(ueventOut)
+		if !strings.Contains(uevent, "DRIVER=hycu") {
+			continue
+		}
+
+		count++
+
+		if name == "" {
+			for _, line := range strings.Split(uevent, "\n") {
+				if strings.HasPrefix(line, "PCI_ID=") {
+					pciID := strings.TrimPrefix(line, "PCI_ID=")
+					name, computeID = hygonPCIToName(strings.TrimSpace(pciID))
+					break
+				}
+			}
+		}
+
+		if vramMiB == 0 {
+			if vramOut, err := runner.Run(ctx, "cat", "/sys/class/drm/"+entry+"/device/mem_info_vram_total"); err == nil {
+				if bytes, err := strconv.ParseInt(strings.TrimSpace(string(vramOut)), 10, 64); err == nil && bytes > 0 {
+					vramMiB = int(bytes / (1024 * 1024))
+				}
+			}
+		}
+	}
+
+	if count == 0 {
+		return nil
+	}
+	if name == "" {
+		name = "Hygon DCU"
+	}
+
+	slog.Info("detected Hygon DCU via sysfs", "count", count, "name", name, "vram_mib", vramMiB)
+	return &GPUInfo{
+		Vendor:    "hygon",
+		Name:      name,
+		Arch:      "DCU",
+		VRAMMiB:   vramMiB,
+		ComputeID: computeID,
+		Count:     count,
+	}
+}
+
+func hygonPCIToName(pciID string) (name, computeID string) {
+	upper := strings.ToUpper(pciID)
+	switch {
+	case strings.HasSuffix(upper, ":6320"):
+		return "BW150", "DCU-C3000"
+	default:
+		return "Hygon DCU", "DCU"
+	}
+}
+
+// collectHygonDCUMetrics reads per-card VRAM usage from sysfs.
+// Returns first DCU card's metrics. Utilization and temperature unavailable via sysfs.
+func collectHygonDCUMetrics(ctx context.Context, runner CommandRunner) *GPUMetrics {
+	if _, err := runner.Run(ctx, "stat", "/opt/hyhal"); err != nil {
+		return nil
+	}
+
+	out, err := runner.Run(ctx, "ls", "/sys/class/drm/")
+	if err != nil {
+		return nil
+	}
+
+	for _, entry := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(entry, "card") || strings.Contains(entry, "-") {
+			continue
+		}
+
+		ueventOut, err := runner.Run(ctx, "cat", "/sys/class/drm/"+entry+"/device/uevent")
+		if err != nil || !strings.Contains(string(ueventOut), "DRIVER=hycu") {
+			continue
+		}
+
+		var memUsed, memTotal int
+		basePath := "/sys/class/drm/" + entry + "/device/"
+
+		if totalOut, err := runner.Run(ctx, "cat", basePath+"mem_info_vram_total"); err == nil {
+			if bytes, err := strconv.ParseInt(strings.TrimSpace(string(totalOut)), 10, 64); err == nil {
+				memTotal = int(bytes / (1024 * 1024))
+			}
+		}
+		if usedOut, err := runner.Run(ctx, "cat", basePath+"mem_info_vram_used"); err == nil {
+			if bytes, err := strconv.ParseInt(strings.TrimSpace(string(usedOut)), 10, 64); err == nil {
+				memUsed = int(bytes / (1024 * 1024))
+			}
+		}
+
+		if memTotal == 0 {
+			continue
+		}
+
+		return &GPUMetrics{
+			MemoryUsedMiB:  memUsed,
+			MemoryTotalMiB: memTotal,
+		}
+	}
+	return nil
 }
 
 // --- JSON helpers ---

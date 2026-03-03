@@ -133,6 +133,11 @@ Model Asset YAML 中的 variant 可声明硬件约束，配置解析器在选择
 - 解决：`detectGGUFModels()` 返回所有 .gguf 文件
 - 关键：使用文件路径作为唯一标识（非目录路径）
 
+**v1.3 修复**：GGUF 路径匹配兼容
+
+- 问题：`Import()` 和 `scanDirectory()` 使用精确目录匹配 (`m.Path == modelDir`)，GGUF 模型的 Path 是文件路径（非目录），导致导入后找不到模型
+- 解决：同时匹配目录路径（safetensors/pytorch）和目录前缀（GGUF 文件路径）
+
 ---
 
 ## 数据库 Schema v3
@@ -197,4 +202,4 @@ ALTER TABLE models ADD COLUMN quant_src TEXT DEFAULT '';
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-03-03 (GGUF 路径匹配修复)*

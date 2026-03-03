@@ -27,7 +27,7 @@ type HardwareInfo struct {
 }
 
 type GPUInfo struct {
-    Vendor       string  `json:"vendor"`         // nvidia | amd | intel | huawei | mthreads
+    Vendor       string  `json:"vendor"`         // nvidia | amd | intel | huawei | mthreads | hygon
     Name         string  `json:"name"`           // NVIDIA GeForce RTX 4090 | AMD Radeon Graphics | ...
     Arch         string  `json:"arch"`           // Blackwell | Ada | RDNA3.5 | Apple | ...
     VRAMMiB      int     `json:"vram_mib"`
@@ -113,6 +113,7 @@ Detect()
   ├── 2. RAM 检测 (/proc/meminfo 或 sysctl)
   │
   ├── 3. GPU 检测 (probe chain, 按优先级尝试)
+  │      ├── Hygon DCU (sysfs: /opt/hyhal + DRM uevent DRIVER=hycu) ← 必须在 AMD 之前
   │      ├── nvidia-smi (NVIDIA) → enrichNvidiaGPU
   │      ├── rocm-smi (AMD) → enrichAMDGPU
   │      ├── xpu-smi (Intel)
@@ -138,7 +139,20 @@ Detect()
 |--------|----------------|-------------------|
 | NVIDIA | `nvidia-smi` 输出解析 → `"CUDA 12.7"` | `nvidia-smi --query-gpu=driver_version` |
 | AMD | `cat /opt/rocm/.info/version` → `"ROCm 7.9.0"` | `modinfo -F version amdgpu`，空则 fallback `uname -r` |
+| Hygon | *(sysfs 无 SDK 信息)* | *(sysfs 无驱动版本)* |
 | Intel/Huawei/MThreads | *(未实现)* | *(未实现)* |
+
+### Hygon DCU 检测（sysfs）
+
+宿主机无 GPU CLI 工具（`rocm-smi` 仅在容器内），使用 Linux sysfs 检测：
+
+1. **哨兵检查**: `/opt/hyhal` 目录存在 → 确认 Hygon 平台
+2. **DRM 枚举**: 遍历 `/sys/class/drm/card*/device/uevent` → 找 `DRIVER=hycu` 的卡
+3. **VRAM 读取**: `mem_info_vram_total` (bytes → MiB)
+4. **设备映射**: `PCI_ID=1D94:6320` → Name="BW150", Arch="DCU", ComputeID="DCU-C3000"
+5. **指标采集**: `mem_info_vram_used` + `mem_info_vram_total`（无 GPU 利用率/温度，sysfs 不提供）
+
+**必须在 AMD probe 之前运行**：DCU 也暴露 `/dev/kfd`，AMD probe 会误匹配。
 
 ### GPU 资源名映射
 
@@ -147,9 +161,11 @@ Detect()
 | NVIDIA | `nvidia.com/gpu` |
 | AMD | `amd.com/gpu` |
 | Intel | `gpu.intel.com/i915` |
+| Hygon DCU | (无，通过 hostPath 设备透传) |
 | 无 GPU | (空字符串) |
 
 资源名用于 Pod YAML 生成时的 GPU 资源声明，支持多厂商 GPU。
+Hygon DCU 通过 Hardware Profile YAML 的 `container.devices` 字段透传 `/dev/kfd`, `/dev/mkfd`, `/dev/dri`。
 
 ---
 
@@ -248,6 +264,21 @@ constraints:
   "cpu": { "arch": "amd64", "model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S", "cores": 16 },
   "ram": { "total_mib": 63937, "available_mib": 56926 }
 }
+
+# Hygon DCU 输出示例 (hygon)
+{
+  "gpu": {
+    "vendor": "hygon",
+    "name": "BW150",
+    "arch": "DCU",
+    "vram_mib": 65520,
+    "compute_id": "DCU-C3000",
+    "unified_memory": false,
+    "count": 8
+  },
+  "cpu": { "arch": "amd64", "model": "Hygon C86-4G (OPN:7470)", "cores": 48 },
+  "ram": { "total_mib": 769657, "available_mib": 740926 }
+}
 ```
 
 ### 查询实时指标
@@ -292,4 +323,4 @@ constraints:
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-03-03 (Hygon DCU sysfs 检测)*

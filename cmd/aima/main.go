@@ -2131,8 +2131,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		// Stack management
 		StackPreflight: func(ctx context.Context) (json.RawMessage, error) {
-			installer := stack.NewInstaller(&execRunner{}, dataDir)
-			items := installer.Preflight(cat.StackComponents)
+			installer := stack.NewInstaller(&execRunner{}, dataDir).
+				WithPodQuerier(&podQuerierAdapter{client: k3sClient})
+			hwProfile := detectHWProfile(ctx)
+			items := installer.Preflight(ctx, cat.StackComponents, hwProfile)
 			return json.Marshal(items)
 		},
 		StackInit: func(ctx context.Context, allowDownload bool) (json.RawMessage, error) {
@@ -2141,13 +2143,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := installer.PreCheck(ctx, cat.StackComponents); err != nil {
 				return nil, err
 			}
+			hwProfile := detectHWProfile(ctx)
 			if allowDownload {
-				missing := installer.Preflight(cat.StackComponents)
+				missing := installer.Preflight(ctx, cat.StackComponents, hwProfile)
 				if err := stack.DownloadItems(ctx, missing); err != nil {
 					return nil, fmt.Errorf("download: %w", err)
 				}
 			}
-			hwProfile := detectHWProfile(ctx)
 			result, err := installer.Init(ctx, cat.StackComponents, hwProfile)
 			if err != nil {
 				return nil, err

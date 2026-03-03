@@ -159,6 +159,32 @@ variants:
         1024:   [0.083, 173.7, 12337]
         2048:   [0.481, 174.0, 4257]
 
+  # --- Hygon DCU (BW150, 8× 64GB HBM, K3S) ---
+  # FP16 权重 ~72GB, TP=2 → 每 DCU 36GB, 64GB HBM 余量充足
+  # DCU 不支持 BF16, 必须用 FP16
+  # vllm-dcu 引擎 (harbor.sourcefind.cn 镜像)
+  - name: qwen3.5-35b-a3b-dcu-vllm-fp16
+    hardware:
+      gpu_arch: DCU
+      vram_min_mib: 40960
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B
+    default_config:
+      gpu_memory_utilization: 0.95
+      max_model_len: 32768
+      dtype: float16
+      tensor_parallel_size: 2
+    expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 300
+      tokens_per_second: [10, 30]
+      vram_mib: 72000
+      notes: "vLLM 0.9.2 DCU, FP16, TP=2, untested estimate. 2× BW150 64GB each."
+
   # --- 所有设备通用 (llamacpp + GGUF Q4_K_M=21GB) ---
   # linux-1 fallback, dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload
   # amd395 已有专属 RDNA3.5 变体 (上方), 此为其他设备 fallback

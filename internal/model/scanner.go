@@ -372,9 +372,10 @@ func scanDirectory(ctx context.Context, dir string, depth int, seen map[string]b
 	for _, entry := range entries {
 		if entry.IsDir() {
 			subdirPath := filepath.Join(dir, entry.Name())
+			prefix := subdirPath + string(filepath.Separator)
 			for _, m := range models {
-				// Exact match: subdirectory path equals a detected model's path
-				if m.Path == subdirPath {
+				// Match directory path (safetensors/pytorch) or file within it (GGUF)
+				if m.Path == subdirPath || strings.HasPrefix(m.Path, prefix) {
 					hasModelSubdirs = true
 					break
 				}

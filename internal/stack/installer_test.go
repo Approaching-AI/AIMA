@@ -277,7 +277,7 @@ func TestPreflightReturnsMissingFiles(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 2 {
 		t.Fatalf("expected 2 download items, got %d", len(items))
 	}
@@ -322,7 +322,7 @@ func TestPreflightSkipsExistingFiles(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 0 {
 		t.Errorf("expected 0 items for existing file, got %d", len(items))
 	}
@@ -344,7 +344,7 @@ func TestPreflightSkipsUnsupportedPlatform(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 0 {
 		t.Errorf("expected 0 items for unsupported platform, got %d", len(items))
 	}
@@ -364,7 +364,7 @@ func TestPreflightSkipsNoDownloadURL(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 0 {
 		t.Errorf("expected 0 items without download URL, got %d", len(items))
 	}
@@ -472,7 +472,7 @@ func TestPreflightPopulatesMirrorURLs(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -924,7 +924,7 @@ func TestPreflightIncludesAirgapTar(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 2 {
 		t.Fatalf("expected 2 items (binary + airgap), got %d", len(items))
 	}
@@ -974,7 +974,7 @@ func TestPreflightSkipsExistingAirgap(t *testing.T) {
 		},
 	}
 
-	items := inst.Preflight(components)
+	items := inst.Preflight(context.Background(), components, "")
 	if len(items) != 0 {
 		t.Errorf("expected 0 items when all files exist, got %d", len(items))
 	}

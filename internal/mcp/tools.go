@@ -23,7 +23,7 @@ type ToolDeps struct {
 	RemoveModel func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines    func(ctx context.Context, runtime string) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
+	ScanEngines    func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
 	ListEngines    func(ctx context.Context) (json.RawMessage, error)
 	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
 	PullEngine     func(ctx context.Context, name string) error
@@ -367,7 +367,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Runtime == "" {
 				p.Runtime = "auto"
 			}
-			data, err := deps.ScanEngines(ctx, p.Runtime)
+			data, err := deps.ScanEngines(ctx, p.Runtime, false)
 			if err != nil {
 				return nil, fmt.Errorf("scan engines: %w", err)
 			}

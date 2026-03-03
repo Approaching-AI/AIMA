@@ -150,10 +150,8 @@ engine.scan (ScanUnified)
   │   ├── 同 type 多个 YAML 的 patterns 合并（非覆盖）
   │   └── DockerOnly 标记传递到 EngineImage
   │
-  ├── 3. Docker-only 镜像处理
-  │   ├── 预检查：k3s ctr version → 判断是否有 containerd 权限
-  │   ├── 有权限 → docker save | k3s ctr import → 导入到 K3S containerd
-  │   └── 无权限 → WARN 提示手动导入命令（不阻塞扫描）
+  ├── 3. Docker-only 镜像标记
+  │   └── 仅标记 DockerOnly=true（不自动导入，除非 AutoImport=true）
   │
   ├── 4. Native 扫描 (并行)
   │   ├── 扫描 distDir: ~/.aima/dist/{os}-{arch}/
@@ -164,9 +162,12 @@ engine.scan (ScanUnified)
 
 **扫描行为：**
 1. Container：crictl + docker 同时扫描，containerd 优先去重
-2. Docker-only 镜像：标记 `docker_only=true`，尝试导入到 K3S containerd（需 root）
-3. Native：始终扫描 distDir + PATH（不依赖容器运行时）
-4. Pattern 合并：同 type 多个 Engine YAML 的 patterns 合并匹配，不互相覆盖
+2. Docker-only 镜像：标记 `docker_only=true`，**不自动导入**（避免每次 scan 都需要 root）
+3. 自动导入仅在以下场景触发：
+   - `aima init` 安装 K3S 后自动导入（init 以 root 运行）
+   - `aima engine scan --import` 显式请求导入
+4. Native：始终扫描 distDir + PATH（不依赖容器运行时）
+5. Pattern 合并：同 type 多个 Engine YAML 的 patterns 合并匹配，不互相覆盖
 
 **Native 扫描规则：**
 - 扫描 `~/.aima/dist/{os}-{arch}/` 目录
@@ -219,8 +220,9 @@ Docker 和 K3S containerd 使用独立的镜像存储。通过 `docker pull` 拉
 **engine scan 自动检测与处理：**
 - 扫描时同时查询 crictl (containerd) 和 docker，按 image:tag 去重
 - 仅在 Docker 中的镜像标记 `docker_only=true`
-- 如有 containerd 写权限（root），自动通过 `docker save | k3s ctr import` 导入
-- 无权限时打印 WARN 和手动修复命令：
+- **默认不自动导入**（避免非 root 用户 scan 时报错）
+- 自动导入仅在 `AutoImport=true` 时触发（`aima init` 或 `aima engine scan --import`）
+- 导入时如无 containerd 写权限，打印 WARN 和手动修复命令：
   ```
   WARN engine in Docker but not in K3S containerd; import requires root
        engine=vllm image=vllm/vllm-openai:latest
@@ -362,4 +364,4 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 ---
 
-*最后更新：2026-02-28 (v5: Docker-only 检测 + containerd 导入 + pattern 合并)*
+*最后更新：2026-03-03 (v6: auto-import 延迟到 init, engine scan --import 显式触发)*

@@ -42,11 +42,13 @@ type ScanOptions struct {
 	DistDir      string // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
 	Platform     string // current platform (e.g., "windows-amd64")
 	BinaryAssets map[string]string // binary name -> engine type (native engines)
+	AutoImport   bool // when true, auto-import Docker-only images to K3S containerd (heavy; use only during init)
 }
 
 // ScanUnified discovers both container images and native binaries.
 // Returns all available engines from both runtimes (container + native).
-// For Docker-only images, attempts import to K3S containerd; warns if no permission.
+// When opts.AutoImport is true, Docker-only images are imported to K3S containerd
+// (heavy operation; intended for init only). Otherwise they are just flagged as DockerOnly.
 func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("scan engines: %w", err)
@@ -59,28 +61,26 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 	if err == nil {
 		matched := matchImages(images, opts.AssetPatterns)
 
-		// Check if any Docker-only images need import
-		hasDockerOnly := false
-		for _, img := range matched {
-			if img.DockerOnly {
-				hasDockerOnly = true
-				break
+		// Auto-import Docker-only images to containerd (only when explicitly requested)
+		if opts.AutoImport {
+			hasDockerOnly := false
+			for _, img := range matched {
+				if img.DockerOnly {
+					hasDockerOnly = true
+					break
+				}
 			}
-		}
 
-		// Pre-check containerd access before attempting expensive imports
-		canImport := false
-		if hasDockerOnly {
-			_, checkErr := opts.Runner.Run(ctx, "k3s", "ctr", "-n", "k8s.io", "version")
-			canImport = checkErr == nil
-		}
+			canImport := false
+			if hasDockerOnly {
+				_, checkErr := opts.Runner.Run(ctx, "k3s", "ctr", "-n", "k8s.io", "version")
+				canImport = checkErr == nil
+			}
 
-		for _, img := range matched {
-			img.RuntimeType = "container"
-			img.Platform = opts.Platform
-
-			// Docker-only image: try to import into K3S containerd
-			if img.DockerOnly {
+			for _, img := range matched {
+				if !img.DockerOnly {
+					continue
+				}
 				ref := img.Image + ":" + img.Tag
 				if !canImport {
 					slog.Warn("engine in Docker but not in K3S containerd; import requires root",
@@ -94,6 +94,11 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 					img.DockerOnly = false
 				}
 			}
+		}
+
+		for _, img := range matched {
+			img.RuntimeType = "container"
+			img.Platform = opts.Platform
 		}
 		allEngines = append(allEngines, matched...)
 	}

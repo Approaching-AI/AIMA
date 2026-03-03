@@ -25,7 +25,10 @@ func newEngineCmd(app *App) *cobra.Command {
 }
 
 func newEngineScanCmd(app *App) *cobra.Command {
-	var runtime string
+	var (
+		runtime    string
+		autoImport bool
+	)
 	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan for locally available engine images",
@@ -39,7 +42,7 @@ func newEngineScanCmd(app *App) *cobra.Command {
 				return fmt.Errorf("invalid runtime: %s (must be auto, container, or native)", runtime)
 			}
 
-			data, err := app.ToolDeps.ScanEngines(ctx, runtime)
+			data, err := app.ToolDeps.ScanEngines(ctx, runtime, autoImport)
 			if err != nil {
 				return fmt.Errorf("scan engines: %w", err)
 			}
@@ -49,6 +52,7 @@ func newEngineScanCmd(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&runtime, "runtime", "auto", "Runtime filter: auto, container, or native")
+	cmd.Flags().BoolVar(&autoImport, "import", false, "Auto-import Docker images to K3S containerd (requires root)")
 	return cmd
 }
 

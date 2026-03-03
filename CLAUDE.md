@@ -19,10 +19,11 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | ID | User@Host | OS | Arch | Chip/GPU | RAM | Disk Free | K3S/Docker | SSH Auth | Role |
 |----|-----------|-----|------|----------|-----|-----------|------------|----------|------|
 | dev-win | **local** (Light-Salt) | Windows 11 | x86_64 | i9-13980HX + RTX 4060 8GB (Driver 566, CUDA) | 32 GB | 551 GB | no | local | Dev machine, `go build/test` runs here directly |
-| mac-m4 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
+| mac-m4 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | macOS 15.3 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
 | gb10 | `user@<REDACTED_IP>` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
 | linux-1 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
 | amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
+| hygon | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× Hygon C86-4G 48C + 8× Hygon BW150 DCU 64GB | 751 GB | 265 GB + 564 GB NVMe | K3S + Docker 28.0 | key | DCU inference validation |
 
 > **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
 > Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
@@ -40,11 +41,13 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
       │  go build -o build/aima.exe ./cmd/aima                                       # dev-win
       │  GOOS=darwin  GOARCH=arm64 go build -o build/aima-darwin-arm64  ./cmd/aima   # mac-m4
       │  GOOS=linux   GOARCH=arm64 go build -o build/aima-linux-arm64   ./cmd/aima   # gb10
-      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1
+      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1, amd395, hygon
       │
  [3] Distribute: 同步到所有远程机器
       │  scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
       │  scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
+      │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
+      │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
       │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
       │
  [4] Execute: 对所有设备（含本机）并行执行同一组测试命令
@@ -52,6 +55,8 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
       │  SSH:   ssh user@<REDACTED_IP> './aima hal detect'
       │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
       │  SSH:   ssh user@<REDACTED_IP>      './aima hal detect'
+      │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
+      │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
       │
       ╔══════════════════════════════════════════════════════════╗
       ║  ⚠ BARRIER: 等待所有设备返回结果，一台都不能少。       ║

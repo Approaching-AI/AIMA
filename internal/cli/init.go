@@ -116,6 +116,14 @@ func newInitCmd(app *App) *cobra.Command {
 				}
 			}
 
+			// 4. Auto-import Docker images to K3S containerd (init has root)
+			if result.AllReady && app.ToolDeps.ScanEngines != nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nImporting Docker engine images to K3S containerd...")
+				if _, err := app.ToolDeps.ScanEngines(ctx, "auto", true); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: engine import failed: %v\n", err)
+				}
+			}
+
 			if result.AllReady {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nAll components ready. Run 'aima serve' to begin.")
 			} else {

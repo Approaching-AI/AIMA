@@ -1,0 +1,44 @@
+kind: hardware_profile
+metadata:
+  name: hygon-bw150-dcu-x86
+  description: "Hygon BW150 DCU (C-3000), x86_64, 64GB HBM per card"
+hardware:
+  gpu:
+    arch: DCU
+    vram_mib: 65536
+    compute_id: "DCU-C3000"
+    compute_units: 0
+    resource_name: ""
+  cpu:
+    arch: x86_64
+    cores: 96
+    freq_ghz: 2.1
+  ram:
+    total_mib: 769024
+    bandwidth_gbps: 200
+  unified_memory: false
+constraints:
+  tdp_watts: 300
+  power_modes: [300]
+  cooling: active
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]
+container:
+  devices:
+    - /dev/kfd
+    - /dev/mkfd
+    - /dev/dri
+  volumes:
+    - name: hyhal
+      host_path: /opt/hyhal
+      mount_path: /opt/hyhal
+      read_only: true
+  env:
+    ALLREDUCE_STREAM_WITH_COMPUTE: "1"
+    NCCL_MIN_NCHANNELS: "16"
+    NCCL_MAX_NCHANNELS: "16"
+    VLLM_NUMA_BIND: "1"
+  security:
+    privileged: true
+    supplemental_groups: [44]

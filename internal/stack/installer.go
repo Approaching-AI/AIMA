@@ -199,12 +199,20 @@ type DownloadItem struct {
 // Preflight checks which components need files downloaded.
 // It returns a list of missing files that have download URLs configured,
 // including airgap image tars when configured.
-func (inst *Installer) Preflight(components []knowledge.StackComponent) []DownloadItem {
+// Components that are already installed and ready are skipped entirely —
+// this avoids slow/failing downloads for airgap tars of already-running services.
+func (inst *Installer) Preflight(ctx context.Context, components []knowledge.StackComponent, hwProfile string) []DownloadItem {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	var items []DownloadItem
 
 	for _, comp := range components {
 		if !platformSupported(comp.Source.Platforms) {
+			continue
+		}
+
+		// Skip downloads for components that are already ready
+		if existing := inst.checkComponent(ctx, comp, hwProfile); existing.Ready {
+			slog.Info("preflight: component already ready, skipping download", "name", comp.Metadata.Name)
 			continue
 		}
 

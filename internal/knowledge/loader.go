@@ -173,6 +173,26 @@ type EngineStartup struct {
 	HealthCheck  HealthCheck       `yaml:"health_check"               json:"health_check"`
 	Warmup       WarmupConfig      `yaml:"warmup"                     json:"warmup"`
 	ExtraVolumes []ContainerVolume `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
+	LogPatterns  *StartupLogPatterns `yaml:"log_patterns,omitempty"   json:"log_patterns,omitempty"`
+}
+
+type StartupLogPatterns struct {
+	Phases []StartupPhasePattern `yaml:"phases" json:"phases"`
+	Errors []StartupErrorPattern `yaml:"errors" json:"errors"`
+}
+
+type StartupPhasePattern struct {
+	Name               string `yaml:"name"                             json:"name"`
+	Pattern            string `yaml:"pattern"                          json:"pattern"`
+	Progress           int    `yaml:"progress,omitempty"               json:"progress,omitempty"`
+	ProgressRegexGroup int    `yaml:"progress_regex_group,omitempty"   json:"progress_regex_group,omitempty"`
+	ProgressBase       int    `yaml:"progress_base,omitempty"          json:"progress_base,omitempty"`
+	ProgressRange      int    `yaml:"progress_range,omitempty"         json:"progress_range,omitempty"`
+}
+
+type StartupErrorPattern struct {
+	Pattern string `yaml:"pattern" json:"pattern"`
+	Message string `yaml:"message" json:"message"`
 }
 
 type HealthCheck struct {

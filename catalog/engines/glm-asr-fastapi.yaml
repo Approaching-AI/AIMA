@@ -26,6 +26,17 @@ startup:
     timeout_s: 120
   warmup:
     enabled: false
+  log_patterns:
+    phases:
+      - name: loading_model
+        pattern: "Loading model|loading model"
+        progress: 50
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "ImportError|ModuleNotFoundError"
+        message: "Missing Python dependency"
 api:
   protocol: openai
   base_path: /v1

@@ -23,6 +23,12 @@ func (e *execRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// PodCondition represents a Kubernetes pod condition.
+type PodCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
 // PodStatus represents the status of a K3S pod.
 type PodStatus struct {
 	Name          string            `json:"name"`
@@ -36,6 +42,7 @@ type PodStatus struct {
 	RestartCount     int    `json:"restart_count,omitempty"`
 	ExitCode         *int  `json:"exit_code,omitempty"`         // from Terminated state
 	ContainerStarted string `json:"container_started,omitempty"` // when the current container instance started
+	Conditions       []PodCondition `json:"conditions,omitempty"`
 }
 
 // LogOptions configures log retrieval.
@@ -242,6 +249,10 @@ type kubePod struct {
 		PodIP             string `json:"podIP"`
 		StartTime         string `json:"startTime"`
 		Message           string `json:"message"`
+		Conditions        []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 		ContainerStatuses []struct {
 			Ready        bool `json:"ready"`
 			RestartCount int  `json:"restartCount"`
@@ -319,6 +330,11 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 		containerPort = kp.Spec.Containers[0].Ports[0].ContainerPort
 	}
 
+	var conditions []PodCondition
+	for _, c := range kp.Status.Conditions {
+		conditions = append(conditions, PodCondition{Type: c.Type, Status: c.Status})
+	}
+
 	return &PodStatus{
 		Name:             kp.Metadata.Name,
 		Phase:            kp.Status.Phase,
@@ -331,6 +347,7 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 		RestartCount:     restartCount,
 		ExitCode:         exitCode,
 		ContainerStarted: containerStarted,
+		Conditions:       conditions,
 	}, nil
 }
 

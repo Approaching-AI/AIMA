@@ -11,13 +11,28 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 )
 
-// K3SRuntime adapts the existing k3s.Client + knowledge.GeneratePod to the Runtime interface.
-type K3SRuntime struct {
-	client *k3s.Client
+// K3SOption configures a K3SRuntime.
+type K3SOption func(*K3SRuntime)
+
+// WithEngineAssets provides engine asset data for startup progress detection.
+func WithEngineAssets(assets []knowledge.EngineAsset) K3SOption {
+	return func(r *K3SRuntime) {
+		r.engineAssets = assets
+	}
 }
 
-func NewK3SRuntime(client *k3s.Client) *K3SRuntime {
-	return &K3SRuntime{client: client}
+// K3SRuntime adapts the existing k3s.Client + knowledge.GeneratePod to the Runtime interface.
+type K3SRuntime struct {
+	client       *k3s.Client
+	engineAssets []knowledge.EngineAsset
+}
+
+func NewK3SRuntime(client *k3s.Client, opts ...K3SOption) *K3SRuntime {
+	r := &K3SRuntime{client: client}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 func (r *K3SRuntime) Name() string { return "k3s" }
@@ -51,7 +66,9 @@ func (r *K3SRuntime) Status(ctx context.Context, name string) (*DeploymentStatus
 	if err != nil {
 		return nil, err
 	}
-	return podToStatus(pod), nil
+	ds := podToStatus(pod)
+	r.enrichStartupProgress(ctx, pod, ds)
+	return ds, nil
 }
 
 func (r *K3SRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
@@ -61,7 +78,9 @@ func (r *K3SRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
 	}
 	statuses := make([]*DeploymentStatus, len(pods))
 	for i, p := range pods {
-		statuses[i] = podToStatus(p)
+		ds := podToStatus(p)
+		r.enrichStartupProgress(ctx, p, ds)
+		statuses[i] = ds
 	}
 	return statuses, nil
 }
@@ -193,6 +212,63 @@ func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 		Runtime:   "k3s",
 		Restarts:  pod.RestartCount,
 		ExitCode:  pod.ExitCode,
+	}
+}
+
+// enrichStartupProgress adds startup progress data to non-ready or failed deployments.
+// Note: for List() with N starting pods, this fetches logs per pod (N extra kubectl execs).
+// Acceptable at 3-10s poll intervals with typical deployment counts (<10).
+func (r *K3SRuntime) enrichStartupProgress(ctx context.Context, pod *k3s.PodStatus, ds *DeploymentStatus) {
+	if ds.Ready && ds.Phase == "running" {
+		return
+	}
+
+	engineName := ""
+	if pod.Labels != nil {
+		engineName = pod.Labels["aima.dev/engine"]
+	}
+	asset := findEngineAsset(r.engineAssets, engineName)
+
+	if asset != nil && len(asset.TimeConstraints.ColdStartS) >= 2 {
+		ds.EstimatedTotalS = asset.TimeConstraints.ColdStartS[1]
+	}
+
+	if ds.Phase == "failed" {
+		if logs, err := r.client.Logs(ctx, pod.Name, k3s.LogOptions{TailLines: 5}); err == nil && logs != "" {
+			ds.ErrorLines = logs
+			if asset != nil && asset.Startup.LogPatterns != nil {
+				if errMsg := DetectStartupError(logs, asset.Startup.LogPatterns); errMsg != "" {
+					ds.StartupMessage = errMsg
+				}
+			}
+		}
+		return
+	}
+
+	if ds.Phase != "starting" {
+		return
+	}
+
+	containerRunning := pod.ContainerStarted != ""
+	phase, progress := DetectK3SPhaseFromConditions(pod.Conditions, containerRunning)
+	ds.StartupPhase = phase
+	ds.StartupProgress = progress
+	ds.StartupMessage = formatPhaseName(phase)
+
+	if containerRunning && asset != nil && asset.Startup.LogPatterns != nil {
+		logs, err := r.client.Logs(ctx, pod.Name, k3s.LogOptions{TailLines: 50})
+		if err == nil && logs != "" {
+			sp := DetectStartupProgress(logs, asset.Startup.LogPatterns)
+			if sp.Progress > ds.StartupProgress {
+				ds.StartupPhase = sp.Phase
+				ds.StartupProgress = sp.Progress
+				ds.StartupMessage = sp.Message
+			}
+
+			if errMsg := DetectStartupError(logs, asset.Startup.LogPatterns); errMsg != "" {
+				ds.StartupMessage = errMsg
+			}
+		}
 	}
 }
 

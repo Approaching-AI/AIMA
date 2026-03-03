@@ -53,6 +53,12 @@ type DeploymentStatus struct {
 	Runtime   string            `json:"runtime"` // "k3s" or "native"
 	Restarts  int               `json:"restarts,omitempty"`
 	ExitCode  *int              `json:"exit_code,omitempty"`
+
+	StartupPhase    string `json:"startup_phase,omitempty"`    // scheduling/pulling_image/initializing/loading_weights/cuda_graphs/ready
+	StartupProgress int    `json:"startup_progress,omitempty"` // 0-100
+	StartupMessage  string `json:"startup_message,omitempty"`  // human-readable
+	EstimatedTotalS int    `json:"estimated_total_s,omitempty"`
+	ErrorLines      string `json:"error_lines,omitempty"`      // last few log lines on failure
 }
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.

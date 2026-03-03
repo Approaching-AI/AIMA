@@ -572,6 +572,13 @@ body {
 
 /* Empty state */
 .empty { color: var(--text-dim); font-size: 11px; font-style: italic; }
+
+/* Deploy progress */
+.deploy-progress { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.deploy-progress-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--cyan), var(--cyan-bright)); transition: width 0.5s ease; }
+.deploy-phase-text { font-size: 10px; color: var(--cyan); margin-top: 2px; display: flex; justify-content: space-between; }
+.deploy-error-lines { font-size: 10px; color: var(--red); white-space: pre-wrap; word-break: break-all; margin-top: 4px; max-height: 60px; overflow: hidden; font-family: var(--font-mono); }
+.deploy-eta { font-size: 10px; color: var(--text-dim); }
 </style>
 </head>
 <body>
@@ -817,10 +824,19 @@ body {
         <ul class="panel-list">
           <template x-for="dep in deployments" :key="dep.name">
             <li>
-              <span class="dot" :class="dep.phase === 'running' ? 'dot-green' : dep.phase === 'pending' ? 'dot-orange' : 'dot-red'"></span>
+              <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
               <div style="flex:1;overflow:hidden">
                 <div x-text="dep.name" style="text-overflow:ellipsis;overflow:hidden"></div>
                 <div style="font-size:10px;color:var(--text-dim)" x-text="dep.detail"></div>
+                <template x-if="dep.startup_progress > 0 && dep.startup_progress < 100">
+                  <div>
+                    <div class="deploy-progress"><div class="deploy-progress-fill" :style="'width:' + dep.startup_progress + '%'"></div></div>
+                    <div class="deploy-phase-text"><span x-text="dep.startup_message || dep.startup_phase"></span><span class="deploy-eta" x-text="dep.eta ? '~' + dep.eta : dep.startup_progress + '%'"></span></div>
+                  </div>
+                </template>
+                <template x-if="dep.phase === 'failed' && dep.error_lines">
+                  <div class="deploy-error-lines" x-text="dep.error_lines"></div>
+                </template>
               </div>
             </li>
           </template>
@@ -914,7 +930,7 @@ body {
         </div>
         <div class="panel">
           <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span></div>
-          <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name"><li><span class="dot" :class="dep.phase === 'running' ? 'dot-green' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase"></span></li></template></ul>
+          <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name"><li style="flex-wrap:wrap"><span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.startup_message || dep.phase"></span><template x-if="dep.startup_progress > 0 && dep.startup_progress < 100"><div style="width:100%;margin-top:2px"><div class="deploy-progress"><div class="deploy-progress-fill" :style="'width:' + dep.startup_progress + '%'"></div></div></div></template></li></template></ul>
         </div>
       </div>
     </template>
@@ -1404,7 +1420,8 @@ function aimaApp() {
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
-      this._timers.push(setInterval(() => this.pollDeployments(), 10000));
+      this._deployPollMs = 10000;
+      this._deployTimer = setInterval(() => this.pollDeployments(), 10000);
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
       this._timers.push(setInterval(() => this.pollAgentInfo(), 30000));
 
@@ -1416,6 +1433,7 @@ function aimaApp() {
     destroy() {
       this._timers.forEach(t => clearInterval(t));
       this._timers = [];
+      if (this._deployTimer) clearInterval(this._deployTimer);
     },
 
     // ── API helpers ──
@@ -1549,11 +1567,36 @@ function aimaApp() {
       const data = await this.callTool('deploy.list');
       if (data._err) return;
       const list = Array.isArray(data) ? data : [];
-      this.deployments = list.map(d => ({
-        name: d.name || 'unknown',
-        phase: d.phase || 'unknown',
-        detail: [d.runtime, d.address].filter(Boolean).join(' ')
-      }));
+      const hasStarting = list.some(d => d.phase === 'starting' || (d.phase === 'running' && !d.ready));
+      this.deployments = list.map(d => {
+        let eta = '';
+        if (d.estimated_total_s && d.startup_progress > 0 && d.startup_progress < 100) {
+          const elapsed = d.estimated_total_s * d.startup_progress / 100;
+          const remaining = Math.max(0, d.estimated_total_s - elapsed);
+          eta = remaining >= 60 ? Math.ceil(remaining / 60) + 'm' : Math.ceil(remaining) + 's';
+        }
+        return {
+          name: d.name || 'unknown',
+          phase: d.phase || 'unknown',
+          ready: d.ready || false,
+          detail: [d.runtime, d.ready ? d.address : d.phase].filter(Boolean).join(' '),
+          startup_phase: d.startup_phase || '',
+          startup_progress: d.startup_progress || 0,
+          startup_message: d.startup_message || '',
+          error_lines: d.error_lines || '',
+          eta
+        };
+      });
+      // Adaptive polling: 3s during startup, 10s when stable
+      this._adjustDeployPoll(hasStarting);
+    },
+
+    _adjustDeployPoll(fast) {
+      const want = fast ? 3000 : 10000;
+      if (this._deployPollMs === want) return;
+      this._deployPollMs = want;
+      if (this._deployTimer) clearInterval(this._deployTimer);
+      this._deployTimer = setInterval(() => this.pollDeployments(), want);
     },
 
     async pollFleet() {

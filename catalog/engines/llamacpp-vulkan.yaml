@@ -41,6 +41,17 @@ startup:
     prompt: "Hello"
     max_tokens: 1
     timeout_s: 30
+  log_patterns:
+    phases:
+      - name: loading_model
+        pattern: "llm_load_print_meta|loading model"
+        progress: 50
+      - name: ready
+        pattern: "HTTP server listening|server listening"
+        progress: 100
+    errors:
+      - pattern: "failed to load model|unable to load model"
+        message: "Model load failed"
 api:
   protocol: openai
   base_path: /v1

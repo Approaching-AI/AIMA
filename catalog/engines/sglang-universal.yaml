@@ -38,6 +38,20 @@ startup:
     prompt: "Hello"
     max_tokens: 1
     timeout_s: 60
+  log_patterns:
+    phases:
+      - name: loading_weights
+        pattern: "Loading model weights|loading weights"
+        progress: 40
+      - name: server_starting
+        pattern: "The server is fired up"
+        progress: 80
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|CUDA out of memory"
+        message: "GPU memory insufficient"
 api:
   protocol: openai
   base_path: /v1

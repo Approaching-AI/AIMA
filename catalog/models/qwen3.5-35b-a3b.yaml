@@ -38,11 +38,13 @@ variants:
     engine: vllm-nightly
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.9
-      max_model_len: 262144
+      gpu_memory_utilization: 0.8
+      max_model_len: 131072
       dtype: bfloat16
-      enable_chunked_prefill: true
+      enable_chunked_prefill: false
     expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 300
       tokens_per_second: [24, 30]        # decode 30 tok/s @1K → 24 tok/s @128K
       latency_first_token_ms: [96, 133]  # short-context TTFT 96~133ms
       tpot_ms: [31, 34]                  # measured: TPOT 31.5~33.6ms
@@ -93,6 +95,8 @@ variants:
       dtype: bfloat16
       enable_chunked_prefill: true
     expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 300
       vram_mib: 67100
       notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.9, 262K context, tool calling enabled (qwen3_xml parser)."
 
@@ -116,6 +120,8 @@ variants:
       n_gpu_layers: 999
       ctx_size: 16384
     expected_performance:
+      startup_time_s: 30
+      cold_start_time_s: 60
       tokens_per_second: [15, 30]
       latency_first_token_ms: [50, 200]
       vram_mib: 22000
@@ -141,6 +147,8 @@ variants:
       dtype: bfloat16
       tensor_parallel_size: 2
     expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 300
       tokens_per_second: [170, 175]            # measured: 172-174 tok/s decode (TP=2, 2× RTX 4090)
       latency_first_token_ms: [41, 481]        # short 41ms → 2K 481ms
       tpot_ms: [5.7, 5.8]                      # measured: rock-solid 5.7-5.8ms across all context
@@ -164,5 +172,7 @@ variants:
       n_gpu_layers: 999
       ctx_size: 4096
     expected_performance:
+      startup_time_s: 30
+      cold_start_time_s: 60
       tokens_per_second: [3, 15]
       latency_first_token_ms: [80, 400]

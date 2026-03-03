@@ -39,6 +39,24 @@ startup:
     prompt: "Hello"
     max_tokens: 1
     timeout_s: 60
+  log_patterns:
+    phases:
+      - name: loading_weights
+        pattern: "Loading model weights"
+        progress: 40
+      - name: cuda_graphs
+        pattern: "Capturing CUDA graph.*?(\\d+)%"
+        progress_regex_group: 1
+        progress_base: 40
+        progress_range: 50
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|CUDA out of memory"
+        message: "GPU memory insufficient"
+      - pattern: "torch.cuda.OutOfMemoryError"
+        message: "GPU memory insufficient"
 api:
   protocol: openai
   base_path: /v1

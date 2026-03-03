@@ -140,8 +140,8 @@ func run() error {
 	)
 
 	// 7. Select runtime: K3S if available (Linux), else native process
-	nativeRt := buildNativeRuntime(dataDir)
-	rt := selectRuntime(ctx, k3sClient, nativeRt)
+	nativeRt := buildNativeRuntime(dataDir, cat.EngineAssets)
+	rt := selectRuntime(ctx, k3sClient, nativeRt, cat.EngineAssets)
 	slog.Info("runtime selected", "runtime", rt.Name())
 
 	// 8. Create MCP server with tool deps wired
@@ -913,7 +913,7 @@ func newK3SClient(dataDir string) *k3s.Client {
 }
 
 // buildNativeRuntime constructs a native process runtime for the current platform.
-func buildNativeRuntime(dataDir string) runtime.Runtime {
+func buildNativeRuntime(dataDir string, engineAssets []knowledge.EngineAsset) runtime.Runtime {
 	platform := goruntime.GOOS + "-" + goruntime.GOARCH
 	distDir := filepath.Join(dataDir, "dist", platform)
 	bm := engine.NewBinaryManager(distDir)
@@ -924,6 +924,7 @@ func buildNativeRuntime(dataDir string) runtime.Runtime {
 		runtime.WithBinaryResolver(func(ctx context.Context, src *engine.BinarySource) (string, error) {
 			return bm.Resolve(ctx, src)
 		}),
+		runtime.WithNativeEngineAssets(engineAssets),
 	)
 }
 
@@ -995,9 +996,9 @@ func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint 
 }
 
 // selectRuntime picks the best runtime: K3S on Linux if available, else native.
-func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.Runtime) runtime.Runtime {
+func selectRuntime(ctx context.Context, k3sClient *k3s.Client, nativeRt runtime.Runtime, engineAssets []knowledge.EngineAsset) runtime.Runtime {
 	if goruntime.GOOS == "linux" && runtime.K3SAvailable(ctx, k3sClient) {
-		return runtime.NewK3SRuntime(k3sClient)
+		return runtime.NewK3SRuntime(k3sClient, runtime.WithEngineAssets(engineAssets))
 	}
 	return nativeRt
 }

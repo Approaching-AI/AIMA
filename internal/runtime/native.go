@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/knowledge"
 )
 
 // deploymentMeta is persisted to disk so deployments survive across CLI invocations.
@@ -62,6 +63,7 @@ type NativeRuntime struct {
 	distDir       string // e.g. ~/.aima/dist/windows-amd64/
 	deployDir     string // e.g. ~/.aima/deployments/ — persisted deployment metadata
 	resolveBinary BinaryResolveFunc
+	engineAssets  []knowledge.EngineAsset
 	processes     map[string]*nativeProcess
 	mu            sync.RWMutex
 }
@@ -86,6 +88,13 @@ type NativeOption func(*NativeRuntime)
 func WithBinaryResolver(fn BinaryResolveFunc) NativeOption {
 	return func(r *NativeRuntime) {
 		r.resolveBinary = fn
+	}
+}
+
+// WithNativeEngineAssets provides engine asset data for startup progress detection.
+func WithNativeEngineAssets(assets []knowledge.EngineAsset) NativeOption {
+	return func(r *NativeRuntime) {
+		r.engineAssets = assets
 	}
 }
 
@@ -454,7 +463,7 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 		ready = false
 	}
 
-	return &DeploymentStatus{
+	ds := &DeploymentStatus{
 		Name:      proc.name,
 		Phase:     phase,
 		Ready:     ready,
@@ -463,6 +472,13 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 		StartTime: proc.startTime.Format(time.RFC3339),
 		Runtime:   "native",
 	}
+
+	// Enrich with log-based progress for non-ready deployments
+	if !ready && proc.logPath != "" {
+		r.enrichNativeProgress(ds, proc.logPath, proc.labels)
+	}
+
+	return ds
 }
 
 // metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness.
@@ -485,7 +501,7 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		}
 	}
 
-	return &DeploymentStatus{
+	ds := &DeploymentStatus{
 		Name:      meta.Name,
 		Phase:     phase,
 		Ready:     ready,
@@ -494,6 +510,13 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		StartTime: meta.StartTime.Format(time.RFC3339),
 		Runtime:   "native",
 	}
+
+	// Enrich with log-based progress for non-ready deployments
+	if !ready && meta.LogPath != "" {
+		r.enrichNativeProgress(ds, meta.LogPath, meta.Labels)
+	}
+
+	return ds
 }
 
 // --- Deployment metadata persistence ---
@@ -598,6 +621,54 @@ func (r *NativeRuntime) findInDist(name string) string {
 		}
 	}
 	return ""
+}
+
+// enrichNativeProgress reads log tail and matches engine patterns to set progress fields.
+func (r *NativeRuntime) enrichNativeProgress(ds *DeploymentStatus, logPath string, labels map[string]string) {
+	engineName := ""
+	if labels != nil {
+		engineName = labels["aima.dev/engine"]
+	}
+	asset := findEngineAsset(r.engineAssets, engineName)
+
+	if asset != nil && len(asset.TimeConstraints.ColdStartS) >= 2 {
+		ds.EstimatedTotalS = asset.TimeConstraints.ColdStartS[1]
+	}
+
+	tailLines := 50
+	if ds.Phase == "failed" {
+		tailLines = 5
+	}
+
+	logs, err := readTail(logPath, tailLines)
+	if err != nil || logs == "" {
+		return
+	}
+
+	if ds.Phase == "failed" {
+		ds.ErrorLines = logs
+	}
+
+	if asset == nil || asset.Startup.LogPatterns == nil {
+		return
+	}
+
+	if errMsg := DetectStartupError(logs, asset.Startup.LogPatterns); errMsg != "" {
+		ds.StartupMessage = errMsg
+	}
+
+	if ds.Phase == "starting" {
+		sp := DetectStartupProgress(logs, asset.Startup.LogPatterns)
+		if sp.Progress > 0 {
+			ds.StartupPhase = sp.Phase
+			ds.StartupProgress = sp.Progress
+			ds.StartupMessage = sp.Message
+		} else {
+			ds.StartupPhase = "initializing"
+			ds.StartupProgress = 5
+			ds.StartupMessage = formatPhaseName("initializing")
+		}
+	}
 }
 
 func waitForProcessExit(proc *nativeProcess, timeout time.Duration) bool {

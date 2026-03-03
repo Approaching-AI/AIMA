@@ -8,21 +8,22 @@ import (
 )
 
 // Runtime abstracts deployment execution. K3S uses Pod YAML via kubectl;
-// Native uses direct process exec. MCP tools and CLI are unaware of which.
+// Docker uses docker CLI; Native uses direct process exec.
+// MCP tools and CLI are unaware of which.
 type Runtime interface {
 	Deploy(ctx context.Context, req *DeployRequest) error
 	Delete(ctx context.Context, name string) error
 	Status(ctx context.Context, name string) (*DeploymentStatus, error)
 	List(ctx context.Context) ([]*DeploymentStatus, error)
 	Logs(ctx context.Context, name string, tailLines int) (string, error)
-	Name() string // "k3s" or "native"
+	Name() string // "k3s", "docker", or "native"
 }
 
 // DeployRequest describes what to deploy, independent of how.
 type DeployRequest struct {
 	Name         string
 	Engine       string
-	Image        string            // container image (K3S only)
+	Image        string            // container image (K3S, Docker)
 	Command      []string          // startup command with {{.ModelPath}} placeholder
 	InitCommands []string          // pre-commands to run before main server (K3S only)
 	ModelPath    string            // host path to model files
@@ -36,7 +37,7 @@ type DeployRequest struct {
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
 	CPUArch          string                     // "arm64", "amd64" -- for platform-specific paths in Pod spec
 	Env              map[string]string          // extra env vars (engine YAML + hardware YAML merged)
-	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S only)
+	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S, Docker)
 	GPUResourceName  string                     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
 	ExtraVolumes     []knowledge.ContainerVolume // additional host volumes to mount (K3S only)
 }
@@ -44,13 +45,13 @@ type DeployRequest struct {
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
 	Name      string            `json:"name"`
-	Phase     string            `json:"phase"`   // running / starting / stopped / failed
+	Phase     string            `json:"phase"` // running / starting / stopped / failed
 	Ready     bool              `json:"ready"`
 	Address   string            `json:"address"` // host:port
 	Labels    map[string]string `json:"labels"`
 	StartTime string            `json:"start_time"`
 	Message   string            `json:"message,omitempty"`
-	Runtime   string            `json:"runtime"` // "k3s" or "native"
+	Runtime   string            `json:"runtime"` // "k3s", "docker", or "native"
 	Restarts  int               `json:"restarts,omitempty"`
 	ExitCode  *int              `json:"exit_code,omitempty"`
 

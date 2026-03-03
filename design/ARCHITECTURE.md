@@ -115,7 +115,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 | 核心原则 | 本文档 | 设计原则、架构全景 |
 | Model | [docs/model.md](../docs/model.md) | 模型扫描、导入、删除、元数据 |
 | Engine | [docs/engine.md](../docs/engine.md) | 引擎镜像、拉取、导入、Native 二进制 |
-| Runtime | [docs/runtime.md](../docs/runtime.md) | K3S Runtime、Native Runtime、Multi-Runtime 抽象 |
+| Runtime | [docs/runtime.md](../docs/runtime.md) | K3S Runtime、Docker Runtime、Native Runtime、Multi-Runtime 抽象 |
 | Knowledge | [docs/knowledge.md](../docs/knowledge.md) | 知识库、配置解析、Pod 生成 |
 | HAL | [docs/hal.md](../docs/hal.md) | 硬件检测、能力向量 |
 | K3S | [docs/k3s.md](../docs/k3s.md) | K8s 集成、Pod 管理、HAMi |

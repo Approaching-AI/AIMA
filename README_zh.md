@@ -8,7 +8,7 @@
 
 - **零配置硬件检测** — 自动发现 GPU（NVIDIA、AMD、Apple Silicon）、CPU 和内存
 - **知识驱动部署** — YAML 目录包含硬件画像、引擎、模型和分区策略；无引擎特定代码分支
-- **多运行时** — K3S（Pod）容器化负载 + Native（exec）裸机推理
+- **多运行时** — K3S（Pod）集群容器 + Docker（单机容器） + Native（exec）裸机推理
 - **56 个 MCP 工具** — AI Agent 可通过程序化接口完整控制硬件、模型、引擎、部署、集群等
 - **集群管理** — 基于 mDNS 的局域网自动发现；跨异构设备远程工具执行
 - **离线优先** — 所有核心功能零网络依赖；网络仅作增强
@@ -134,7 +134,7 @@ cmd/aima/          入口
 internal/
   hal/             硬件检测
   knowledge/       YAML 知识库 + SQLite 解析器
-  runtime/         K3S（Pod）+ Native（exec）运行时
+  runtime/         K3S（Pod）+ Docker（容器）+ Native（exec）运行时
   mcp/             56 个 MCP 工具实现
   agent/           Go Agent 循环（L3a）
   cli/             Cobra CLI（MCP 工具的薄包装）

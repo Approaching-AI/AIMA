@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -61,8 +62,28 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, "--label", "aima.dev/port="+strconv.Itoa(req.Port))
 	}
 
-	// Port publish
-	if req.Port > 0 {
+	// --runtime (e.g. ascend)
+	if req.Container != nil && req.Container.DockerRuntime != "" {
+		args = append(args, "--runtime", req.Container.DockerRuntime)
+	}
+
+	// --init
+	if req.Container != nil && req.Container.Init {
+		args = append(args, "--init")
+	}
+
+	// --network host (skip --publish when host network)
+	if req.Container != nil && req.Container.NetworkMode == "host" {
+		args = append(args, "--network", "host")
+	}
+
+	// --shm-size
+	if req.Container != nil && req.Container.ShmSize != "" {
+		args = append(args, "--shm-size", req.Container.ShmSize)
+	}
+
+	// Port publish (skip when using host network)
+	if req.Port > 0 && (req.Container == nil || req.Container.NetworkMode != "host") {
 		portStr := strconv.Itoa(req.Port)
 		args = append(args, "--publish", portStr+":"+portStr)
 	}
@@ -141,11 +162,36 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", "/models")
 	}
 
+	// Append config values as CLI flags (same logic as native runtime).
+	// Config keys use underscore (e.g. "tp") → "--tp", "mem_fraction_static" → "--mem-fraction-static".
+	// "port" is excluded since it is handled by the engine command or --publish.
+	if len(req.Config) > 0 {
+		keys := make([]string, 0, len(req.Config))
+		for k := range req.Config {
+			if k != "port" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			flag := "--" + strings.ReplaceAll(k, "_", "-")
+			switch v := req.Config[k].(type) {
+			case bool:
+				if v {
+					command = append(command, flag)
+				}
+			default:
+				command = append(command, flag, fmt.Sprintf("%v", v))
+			}
+		}
+	}
+
 	// Image
 	image := req.Image
 	args = append(args, image)
 
-	// InitCommands: wrap with sh -c "init1 && init2 && exec main args..."
+	// InitCommands: wrap with bash -c "init1 && init2 && exec main args..."
+	// Uses bash (not sh) because init scripts often use bash syntax (arrays, source).
 	if len(req.InitCommands) > 0 {
 		// Clear the image-only append above, replace with entrypoint override
 		args = args[:len(args)-1] // remove image
@@ -154,7 +200,7 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		mainCmd := strings.Join(command, " ")
 		shellCmd := initChain + " && exec " + mainCmd
 
-		args = append(args, image, "sh", "-c", shellCmd)
+		args = append(args, image, "bash", "-c", shellCmd)
 	} else if len(command) > 0 {
 		args = append(args, command...)
 	}

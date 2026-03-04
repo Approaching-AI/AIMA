@@ -863,7 +863,7 @@ func TestProbeChain_NvidiaFailsAMDSucceeds(t *testing.T) {
 
 func TestProbeChain_FallsToHuawei(t *testing.T) {
 	runner := newMockRunner(map[string]mockResult{
-		"npu-smi info -t common -j": {
+		"npu-smi info": {
 			output: []byte(`{"NPU": [{"Name": "Ascend 910B", "HBM Capacity(MB)": 65536, "Temperature(C)": 42}]}`),
 		},
 	})
@@ -1379,6 +1379,184 @@ func TestNpuName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseHuaweiNPUText(t *testing.T) {
+	// Real output from qjq2 npu-smi info (8× Ascend 910B1)
+	output := `+--------------------------------------------------------------------------------------------------------+
+| npu-smi 25.3.rc1                         Version: 25.3.rc1                                            |
++-------------------+-----------------+--------------------------------------------------------------+
+| NPU     Name      | Health          | Power(W)     Temp(C)           Hugepages-Usage(page)         |
+| Chip    Device     | Bus-Id          | AICore(%)    Memory-Usage(MB)                                |
++===================+=================+==============================================================+
+| 0       910B1     | OK              | 99.3        50                0    / 0                       |
+| 0                 | 0000:C1:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 1       910B1     | OK              | 97.2        49                0    / 0                       |
+| 0                 | 0000:01:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 2       910B1     | OK              | 98.1        48                0    / 0                       |
+| 0                 | 0000:41:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 3       910B1     | OK              | 97.8        47                0    / 0                       |
+| 0                 | 0000:81:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 5       910B1     | OK              | 99.5        51                0    / 0                       |
+| 0                 | 0000:42:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 6       910B1     | OK              | 97.0        50                0    / 0                       |
+| 0                 | 0000:82:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 7       910B1     | OK              | 100.1       52                0    / 0                       |
+| 0                 | 0000:C2:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+
+| 4       910B1     | OK              | 98.3        49                0    / 0                       |
+| 0                 | 0000:02:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+`
+
+	gpu := parseHuaweiNPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU from text table output")
+	}
+	if gpu.Name != "910B1" {
+		t.Errorf("Name = %q, want %q", gpu.Name, "910B1")
+	}
+	if gpu.Arch != "Ascend910B" {
+		t.Errorf("Arch = %q, want %q", gpu.Arch, "Ascend910B")
+	}
+	if gpu.VRAMMiB != 65536 {
+		t.Errorf("VRAMMiB = %d, want 65536", gpu.VRAMMiB)
+	}
+	if gpu.Count != 8 {
+		t.Errorf("Count = %d, want 8", gpu.Count)
+	}
+	if gpu.TemperatureCelsius < 40 || gpu.TemperatureCelsius > 60 {
+		t.Errorf("TemperatureCelsius = %f, expected in range [40,60]", gpu.TemperatureCelsius)
+	}
+	if gpu.PowerDrawWatts < 90 || gpu.PowerDrawWatts > 110 {
+		t.Errorf("PowerDrawWatts = %f, expected in range [90,110]", gpu.PowerDrawWatts)
+	}
+}
+
+func TestParseHuaweiNPUMetricsText(t *testing.T) {
+	output := `+--------------------------------------------------------------------------------------------------------+
+| npu-smi 25.3.rc1                         Version: 25.3.rc1                                            |
++-------------------+-----------------+--------------------------------------------------------------+
+| NPU     Name      | Health          | Power(W)     Temp(C)           Hugepages-Usage(page)         |
+| Chip    Device     | Bus-Id          | AICore(%)    Memory-Usage(MB)                                |
++===================+=================+==============================================================+
+| 0       910B1     | OK              | 99.3        50                0    / 0                       |
+| 0                 | 0000:C1:00.0    | 85          30000 / 0         45000 / 65536                  |
++===================+=================+==============================================================+`
+
+	m := parseHuaweiNPUMetrics(output)
+	if m == nil {
+		t.Fatal("expected non-nil metrics from text table output")
+	}
+	if m.UtilizationPercent != 85 {
+		t.Errorf("UtilizationPercent = %d, want 85", m.UtilizationPercent)
+	}
+	if m.MemoryTotalMiB != 65536 {
+		t.Errorf("MemoryTotalMiB = %d, want 65536", m.MemoryTotalMiB)
+	}
+	if m.MemoryUsedMiB != 45000 {
+		t.Errorf("MemoryUsedMiB = %d, want 45000", m.MemoryUsedMiB)
+	}
+}
+
+func TestParseHuaweiNPUTextFallsBackFromJSON(t *testing.T) {
+	// Text table output should not parse as JSON, and fallback to table parser
+	output := `+---+
+| 0       910B1     | OK              | 99.3        50                0    / 0                       |
+| 0                 | 0000:C1:00.0    | 0           0    / 0          3453 / 65536                   |
++---+`
+
+	gpu := parseHuaweiNPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU from table fallback")
+	}
+	if gpu.Name != "910B1" {
+		t.Errorf("Name = %q, want %q", gpu.Name, "910B1")
+	}
+	if gpu.VRAMMiB != 65536 {
+		t.Errorf("VRAMMiB = %d, want 65536", gpu.VRAMMiB)
+	}
+	if gpu.Count != 1 {
+		t.Errorf("Count = %d, want 1", gpu.Count)
+	}
+}
+
+func TestProbeChain_FallsToHuaweiText(t *testing.T) {
+	// Simulate npu-smi info returning text table (no -j support)
+	tableOutput := `+-------------------+-----------------+--------------------------------------------------------------+
+| 0       910B1     | OK              | 99.3        50                0    / 0                       |
+| 0                 | 0000:C1:00.0    | 0           0    / 0          3453 / 65536                   |
++===================+=================+==============================================================+`
+
+	runner := newMockRunner(map[string]mockResult{
+		"npu-smi info": {
+			output: []byte(tableOutput),
+		},
+	})
+
+	ctx := context.Background()
+	gpu := detectGPU(ctx, runner)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU from text table probe")
+	}
+	if gpu.Vendor != "huawei" {
+		t.Errorf("Vendor = %q, want %q", gpu.Vendor, "huawei")
+	}
+	if gpu.Arch != "Ascend910B" {
+		t.Errorf("Arch = %q, want %q", gpu.Arch, "Ascend910B")
+	}
+}
+
+func TestEnrichHuaweiNPU(t *testing.T) {
+	t.Run("fills driver and CANN version", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /usr/local/Ascend/driver/version.info":                 {output: []byte("Version=25.3.rc1\n")},
+			"cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg": {output: []byte("package_name=Ascend-cann-toolkit\nversion=8.3.RC1\n")},
+		})
+		gpu := &GPUInfo{Vendor: "huawei", Name: "910B1"}
+		enrichHuaweiNPU(context.Background(), runner, gpu)
+
+		if gpu.DriverVersion != "25.3.rc1" {
+			t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, "25.3.rc1")
+		}
+		if gpu.SDKVersion != "CANN 8.3.RC1" {
+			t.Errorf("SDKVersion = %q, want %q", gpu.SDKVersion, "CANN 8.3.RC1")
+		}
+	})
+
+	t.Run("does not overwrite existing values", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /usr/local/Ascend/driver/version.info":                 {output: []byte("Version=25.3.rc1\n")},
+			"cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg": {output: []byte("version=8.3.RC1\n")},
+		})
+		gpu := &GPUInfo{Vendor: "huawei", DriverVersion: "24.1", SDKVersion: "CANN 7.0"}
+		enrichHuaweiNPU(context.Background(), runner, gpu)
+
+		if gpu.DriverVersion != "24.1" {
+			t.Errorf("DriverVersion = %q, want %q (should not overwrite)", gpu.DriverVersion, "24.1")
+		}
+		if gpu.SDKVersion != "CANN 7.0" {
+			t.Errorf("SDKVersion = %q, want %q (should not overwrite)", gpu.SDKVersion, "CANN 7.0")
+		}
+	})
+
+	t.Run("graceful degradation when files absent", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{})
+		gpu := &GPUInfo{Vendor: "huawei", Name: "910B1"}
+		enrichHuaweiNPU(context.Background(), runner, gpu)
+
+		if gpu.DriverVersion != "" {
+			t.Errorf("DriverVersion = %q, want empty on failure", gpu.DriverVersion)
+		}
+		if gpu.SDKVersion != "" {
+			t.Errorf("SDKVersion = %q, want empty on failure", gpu.SDKVersion)
+		}
+	})
 }
 
 func TestCollectMetrics_UnifiedMemoryBackfill(t *testing.T) {

@@ -499,7 +499,7 @@ func (c *Catalog) DefaultEngine() string {
 // for models that have no YAML catalog entry. Uses wildcard gpu_arch="*"
 // so it matches any hardware, and relies on engine L0 defaults for config.
 // The catalog is used to derive the engine type from the model's file format.
-func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, format string) ModelAsset {
+func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, format string, requestedEngines ...string) ModelAsset {
 	if modelType == "" {
 		modelType = "llm"
 	}
@@ -526,6 +526,20 @@ func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, 
 			Format:   format,
 		})
 	}
+	// When the caller specifies an engine not already covered by format-inferred
+	// variants (e.g. "sglang" for a safetensors model that defaults to "vllm"),
+	// add a wildcard variant so findModelVariant can match.
+	for _, re := range requestedEngines {
+		if re == "" || re == engineType || re == defaultEngine {
+			continue
+		}
+		variants = append(variants, ModelVariant{
+			Name:     name + "-" + re,
+			Hardware: ModelVariantHardware{GPUArch: "*"},
+			Engine:   re,
+			Format:   format,
+		})
+	}
 
 	return ModelAsset{
 		Kind: "model_asset",
@@ -543,8 +557,10 @@ func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, 
 }
 
 // RegisterModel appends a ModelAsset to the catalog if no asset with the
-// same name already exists.
+// same name already exists. Safe for concurrent use.
 func (c *Catalog) RegisterModel(ma ModelAsset) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, existing := range c.ModelAssets {
 		if strings.EqualFold(existing.Metadata.Name, ma.Metadata.Name) {
 			return

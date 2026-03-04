@@ -57,8 +57,13 @@ func discoverMDNS(ctx context.Context, timeout time.Duration) ([]DiscoveredServi
 		}(iface)
 	}
 
-	// Collect and deduplicate by Name
-	seen := make(map[string]bool)
+	// Collect and deduplicate by Name+Addr+Port (same name on different IPs = different devices)
+	type dedupKey struct {
+		Name   string
+		AddrV4 string
+		Port   int
+	}
+	seen := make(map[dedupKey]bool)
 	var services []DiscoveredService
 	var firstErr error
 	for range ifaces {
@@ -70,8 +75,9 @@ func discoverMDNS(ctx context.Context, timeout time.Duration) ([]DiscoveredServi
 			continue
 		}
 		for _, svc := range r.services {
-			if !seen[svc.Name] {
-				seen[svc.Name] = true
+			key := dedupKey{Name: svc.Name, AddrV4: svc.AddrV4, Port: svc.Port}
+			if !seen[key] {
+				seen[key] = true
 				services = append(services, svc)
 			}
 		}

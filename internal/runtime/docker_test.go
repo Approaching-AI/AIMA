@@ -80,7 +80,7 @@ func TestBuildRunArgs_InitCommands(t *testing.T) {
 	args := r.buildRunArgs("test-model-vllm", req)
 	argStr := joinArgs(args)
 
-	assertContains(t, argStr, "sh -c", "shell wrapper")
+	assertContains(t, argStr, "bash -c", "shell wrapper")
 	assertContains(t, argStr, "pip install librosa && pip install soundfile && exec vllm serve /models", "init chain + exec main")
 }
 
@@ -142,6 +142,68 @@ func TestBuildRunArgs_ExtraVolumes(t *testing.T) {
 
 	assertContains(t, argStr, "--volume /dev/shm:/dev/shm", "container volume")
 	assertContains(t, argStr, "--volume /opt/data:/data:ro", "extra volume readonly")
+}
+
+func TestBuildRunArgs_Ascend(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "test-model",
+		Engine:    "sglang-ascend",
+		Image:     "docker.1ms.run/lmsysorg/sglang:main-cann8.5.0-910b",
+		Command:   []string{"python3", "-m", "sglang.launch_server", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"},
+		ModelPath: "/data/models/qwen3",
+		Port:      30000,
+		Labels:    map[string]string{"aima.dev/engine": "sglang-ascend"},
+		Container: &knowledge.ContainerAccess{
+			DockerRuntime: "ascend",
+			NetworkMode:   "host",
+			ShmSize:       "500g",
+			Init:          true,
+			Devices:       []string{"/dev/davinci0", "/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"},
+			Env:           map[string]string{"PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True"},
+			Security:      &knowledge.ContainerSecurity{Privileged: true},
+		},
+		InitCommands: []string{"source /usr/local/Ascend/ascend-toolkit/set_env.sh"},
+	}
+
+	args := r.buildRunArgs("test-model-sglang-ascend", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--runtime ascend", "Ascend runtime")
+	assertContains(t, argStr, "--init", "init flag")
+	assertContains(t, argStr, "--network host", "host network")
+	assertContains(t, argStr, "--shm-size 500g", "shared memory size")
+	assertContains(t, argStr, "--privileged", "privileged mode")
+	assertContains(t, argStr, "--device /dev/davinci0", "davinci device")
+	assertContains(t, argStr, "--device /dev/davinci_manager", "davinci manager device")
+	assertContains(t, argStr, "--env PYTORCH_NPU_ALLOC_CONF=expandable_segments:True", "NPU env")
+	assertNotContains(t, argStr, "--publish", "should not have port publish with host network")
+	assertContains(t, argStr, "bash -c", "init command shell wrapper")
+}
+
+func TestBuildRunArgs_ExistingUnchanged(t *testing.T) {
+	// Regression: verify existing non-Ascend deployments still produce correct args
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "test",
+		Engine:    "vllm",
+		Image:     "vllm/vllm-openai:latest",
+		Command:   []string{"vllm", "serve", "{{.ModelPath}}"},
+		ModelPath: "/data/models/qwen3",
+		Port:      8000,
+		Container: &knowledge.ContainerAccess{
+			Env: map[string]string{"NVIDIA_VISIBLE_DEVICES": "all"},
+		},
+	}
+
+	args := r.buildRunArgs("test-vllm", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--publish 8000:8000", "port publish without host network")
+	assertNotContains(t, argStr, "--runtime", "no runtime flag for NVIDIA")
+	assertNotContains(t, argStr, "--init", "no init flag")
+	assertNotContains(t, argStr, "--network", "no network flag")
+	assertNotContains(t, argStr, "--shm-size", "no shm-size flag")
 }
 
 func TestDockerInspectToStatus(t *testing.T) {

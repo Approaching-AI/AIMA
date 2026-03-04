@@ -53,9 +53,9 @@ var rocmSMIMetricsArgs = []string{"--json", "--showuse", "--showmeminfo", "vram"
 var xpuSMIArgs = []string{"discovery", "--json"}
 var xpuSMIMetricsArgs = []string{"stats", "--json"}
 
-// Huawei args
-var npuSMIArgs = []string{"info", "-t", "common", "-j"}
-var npuSMIMetricsArgs = []string{"info", "-t", "usages", "-j"}
+// Huawei args — plain "info" (no -j): universally supported across npu-smi versions
+var npuSMIArgs = []string{"info"}
+var npuSMIMetricsArgs = []string{"info"}
 
 // MThreads args
 var mthreadsGMIArgs = []string{"-q", "-j"}
@@ -261,6 +261,7 @@ func computeCapToArch(cc string) string {
 var gpuEnrichers = map[string]func(context.Context, CommandRunner, *GPUInfo){
 	"nvidia": enrichNvidiaGPU,
 	"amd":    enrichAMDGPU,
+	"huawei": enrichHuaweiNPU,
 }
 
 // enrichGPU fills in fields that the primary probe couldn't provide.
@@ -310,6 +311,30 @@ func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 			if out, err := runner.Run(ctx, "uname", "-r"); err == nil {
 				if ver := strings.TrimSpace(string(out)); ver != "" {
 					gpu.DriverVersion = ver
+				}
+			}
+		}
+	}
+}
+
+// enrichHuaweiNPU supplements GPUInfo with driver and CANN SDK version from system files.
+func enrichHuaweiNPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	if gpu.DriverVersion == "" {
+		if out, err := runner.Run(ctx, "cat", "/usr/local/Ascend/driver/version.info"); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.HasPrefix(line, "Version=") {
+					gpu.DriverVersion = strings.TrimPrefix(line, "Version=")
+					break
+				}
+			}
+		}
+	}
+	if gpu.SDKVersion == "" {
+		if out, err := runner.Run(ctx, "cat", "/usr/local/Ascend/ascend-toolkit/latest/version.cfg"); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.HasPrefix(line, "version=") {
+					gpu.SDKVersion = "CANN " + strings.TrimPrefix(line, "version=")
+					break
 				}
 			}
 		}
@@ -569,47 +594,210 @@ func intelGPUToArch(name string) string {
 // --- Huawei ---
 
 func parseHuaweiNPU(output string) *GPUInfo {
+	// Try JSON first (forward-compatible with npu-smi versions that support -j)
 	var raw struct {
 		NPU []map[string]interface{} `json:"NPU"`
 	}
-	if err := json.Unmarshal([]byte(output), &raw); err != nil {
-		return nil
-	}
-	if len(raw.NPU) == 0 {
-		return nil
+	if err := json.Unmarshal([]byte(output), &raw); err == nil && len(raw.NPU) > 0 {
+		npu := raw.NPU[0]
+		name := jsonStr(npu, "Name")
+		if name == "" {
+			return nil
+		}
+		return &GPUInfo{
+			Name:               name,
+			Arch:               huaweiNPUToArch(name),
+			VRAMMiB:            int(jsonFloat(npu, "HBM Capacity(MB)")),
+			TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
+			Count:              len(raw.NPU),
+		}
 	}
 
-	npu := raw.NPU[0]
-	name := jsonStr(npu, "Name")
-	if name == "" {
+	// Fallback: parse npu-smi info text table output.
+	// Table has 2 rows per NPU separated by +---+ lines:
+	//   Row 1: | <id> <name>              | <health>      | <power>  <temp>  ...        |
+	//   Row 2: | <id>                     | <bus_id>      | <aicore> ...  <hbm>/<total>  |
+	return parseHuaweiNPUTable(output)
+}
+
+// parseHuaweiNPUTable parses the text table output of `npu-smi info`.
+// Depends on table structure: cell 0 = "ID  ChipName", cell 2 = data fields.
+// Row 1 (chip name present): Power(W), Temp(C); Row 2 (following): AICore%, HBM.
+func parseHuaweiNPUTable(output string) *GPUInfo {
+	lines := strings.Split(output, "\n")
+
+	var name string
+	var vram int
+	var temp, power float64
+	var count int
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "+") {
+			continue
+		}
+
+		cells := splitTableCells(line)
+		if len(cells) < 3 {
+			continue
+		}
+
+		cell0 := strings.TrimSpace(cells[0])
+		if containsNPUName(cell0) {
+			count++
+			if name == "" {
+				// Cell 0 is "<id> <name>", e.g. "0     910B1" — skip numeric device ID
+				fields := strings.Fields(cell0)
+				if len(fields) >= 2 {
+					if _, err := strconv.Atoi(fields[0]); err == nil {
+						name = strings.Join(fields[1:], " ")
+					} else {
+						name = cell0
+					}
+				} else {
+					name = cell0
+				}
+				cell2 := strings.TrimSpace(cells[2])
+				temp, power = parseNPUTempPower(cell2)
+			}
+		} else if count > 0 && vram == 0 {
+			// Row 2: extract HBM total from last "used / total" fraction
+			cell2 := strings.TrimSpace(cells[2])
+			parts := strings.Split(cell2, "/")
+			if len(parts) >= 2 {
+				lastRight := strings.TrimSpace(parts[len(parts)-1])
+				if f := strings.Fields(lastRight); len(f) > 0 {
+					vram, _ = strconv.Atoi(f[0])
+				}
+			}
+		}
+	}
+
+	if count == 0 || name == "" {
 		return nil
 	}
 
 	return &GPUInfo{
 		Name:               name,
 		Arch:               huaweiNPUToArch(name),
-		VRAMMiB:            int(jsonFloat(npu, "HBM Capacity(MB)")),
-		TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
-		Count:              len(raw.NPU),
+		VRAMMiB:            vram,
+		TemperatureCelsius: temp,
+		PowerDrawWatts:     power,
+		Count:              count,
 	}
 }
 
+// splitTableCells splits a "|"-delimited table row into cells (excluding outer pipes).
+func splitTableCells(line string) []string {
+	line = strings.TrimPrefix(line, "|")
+	line = strings.TrimSuffix(line, "|")
+	return strings.Split(line, "|")
+}
+
+// containsNPUName checks if cell 0 contains an NPU chip name pattern (e.g. "910B1", "310P").
+// Relies on table structure where cell 0 is always "<device_id> <chip_name>" for data rows;
+// header rows ("NPU  Name", "Chip  Device") and non-data rows won't match these patterns.
+func containsNPUName(cell string) bool {
+	lower := strings.ToLower(cell)
+	return strings.Contains(lower, "910") || strings.Contains(lower, "310") ||
+		strings.Contains(lower, "ascend")
+}
+
+// parseNPUTempPower extracts temperature and power from a row-1 cell.
+// Header order: "Power(W) Temp(C) Hugepages-Usage(page)"
+// Example: "99.3  50  0 / 0" → power=99.3, temp=50
+func parseNPUTempPower(cell string) (temp, power float64) {
+	fields := strings.Fields(cell)
+	nums := make([]float64, 0, 4)
+	for _, f := range fields {
+		if f == "/" {
+			break
+		}
+		v, err := strconv.ParseFloat(f, 64)
+		if err == nil {
+			nums = append(nums, v)
+		}
+	}
+	if len(nums) >= 1 {
+		power = nums[0]
+	}
+	if len(nums) >= 2 {
+		temp = nums[1]
+	}
+	return
+}
+
 func parseHuaweiNPUMetrics(output string) *GPUMetrics {
+	// Try JSON first
 	var raw struct {
 		NPU []map[string]interface{} `json:"NPU"`
 	}
-	if err := json.Unmarshal([]byte(output), &raw); err != nil {
-		return nil
-	}
-	if len(raw.NPU) == 0 {
-		return nil
+	if err := json.Unmarshal([]byte(output), &raw); err == nil && len(raw.NPU) > 0 {
+		npu := raw.NPU[0]
+		util := int(jsonFloat(npu, "Aicore Usage(%)"))
+		memUsed := int(jsonFloat(npu, "HBM Usage(MB)"))
+		memTotal := int(jsonFloat(npu, "HBM Capacity(MB)"))
+		if memTotal == 0 && util == 0 {
+			return nil
+		}
+		return &GPUMetrics{
+			UtilizationPercent: util,
+			MemoryUsedMiB:      memUsed,
+			MemoryTotalMiB:     memTotal,
+			TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
+			PowerDrawWatts:     roundTo(jsonFloat(npu, "Power(W)"), 2),
+		}
 	}
 
-	npu := raw.NPU[0]
-	util := int(jsonFloat(npu, "Aicore Usage(%)"))
-	memUsed := int(jsonFloat(npu, "HBM Usage(MB)"))
-	memTotal := int(jsonFloat(npu, "HBM Capacity(MB)"))
-	if memTotal == 0 && util == 0 {
+	// Fallback: parse text table
+	return parseHuaweiNPUMetricsTable(output)
+}
+
+// parseHuaweiNPUMetricsTable extracts metrics from npu-smi info text table.
+// Row 1: Power(W), Temp(C). Row 2: AICore%, Memory-Usage (HBM used/total).
+func parseHuaweiNPUMetricsTable(output string) *GPUMetrics {
+	lines := strings.Split(output, "\n")
+
+	var util, memUsed, memTotal int
+	var temp, power float64
+	foundNPU := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "+") {
+			continue
+		}
+		cells := splitTableCells(line)
+		if len(cells) < 3 {
+			continue
+		}
+
+		cell0 := strings.TrimSpace(cells[0])
+		if containsNPUName(cell0) {
+			foundNPU = true
+			cell2 := strings.TrimSpace(cells[2])
+			temp, power = parseNPUTempPower(cell2)
+		} else if foundNPU {
+			// Row 2 cell format: "<aicore%> <...> / <...> <hbm_used> / <hbm_total>"
+			cell2 := strings.TrimSpace(cells[2])
+			fields := strings.Fields(cell2)
+			if len(fields) > 0 {
+				util, _ = strconv.Atoi(fields[0])
+			}
+			parts := strings.Split(cell2, "/")
+			if len(parts) >= 2 {
+				if f := strings.Fields(strings.TrimSpace(parts[len(parts)-1])); len(f) > 0 {
+					memTotal, _ = strconv.Atoi(f[0])
+				}
+				if f := strings.Fields(strings.TrimSpace(parts[len(parts)-2])); len(f) > 0 {
+					memUsed, _ = strconv.Atoi(f[len(f)-1])
+				}
+			}
+			break // only first NPU
+		}
+	}
+
+	if !foundNPU || (memTotal == 0 && util == 0) {
 		return nil
 	}
 
@@ -617,8 +805,8 @@ func parseHuaweiNPUMetrics(output string) *GPUMetrics {
 		UtilizationPercent: util,
 		MemoryUsedMiB:      memUsed,
 		MemoryTotalMiB:     memTotal,
-		TemperatureCelsius: jsonFloat(npu, "Temperature(C)"),
-		PowerDrawWatts:     roundTo(jsonFloat(npu, "Power(W)"), 2),
+		TemperatureCelsius: temp,
+		PowerDrawWatts:     roundTo(power, 2),
 	}
 }
 

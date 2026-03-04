@@ -869,10 +869,23 @@ func (r *execRunner) Pipe(ctx context.Context, from, to []string) error {
 		return fmt.Errorf("%s: %w", to[0], err)
 	}
 
-	if err := fromCmd.Wait(); err != nil {
-		return fmt.Errorf("%s: %w", from[0], err)
+	// Wait for both concurrently. If the receiver (toCmd) dies early
+	// (e.g., permission denied on containerd socket), kill the sender
+	// to avoid blocking on a dead pipe.
+	toErr := make(chan error, 1)
+	go func() { toErr <- toCmd.Wait() }()
+
+	fromErr := fromCmd.Wait()
+	tErr := <-toErr
+
+	if tErr != nil {
+		_ = fromCmd.Process.Kill()
+		return fmt.Errorf("%s: %w", to[0], tErr)
 	}
-	return toCmd.Wait()
+	if fromErr != nil {
+		return fmt.Errorf("%s: %w", from[0], fromErr)
+	}
+	return nil
 }
 
 // podQuerierAdapter bridges k3s.Client to stack.PodQuerier interface.
@@ -1187,7 +1200,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 		"model", dbModel.Name, "format", dbModel.Format, "path", dbModel.Path)
 
 	synth := cat.BuildSyntheticModelAsset(
-		dbModel.Name, dbModel.Type, dbModel.DetectedArch, dbModel.DetectedParams, dbModel.Format)
+		dbModel.Name, dbModel.Type, dbModel.DetectedArch, dbModel.DetectedParams, dbModel.Format, engineType)
 	cat.RegisterModel(synth)
 
 	if overrides == nil {
@@ -1320,7 +1333,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if runtimeFilter == "auto" || img.RuntimeType == runtimeFilter {
 				filtered = append(filtered, img)
 				scannedIDs = append(scannedIDs, img.ID)
-				_ = db.UpsertScannedEngine(ctx, &state.Engine{
+				if err := db.UpsertScannedEngine(ctx, &state.Engine{
 					ID:          img.ID,
 					Type:        img.Type,
 					Image:       img.Image,
@@ -1330,11 +1343,20 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					RuntimeType: img.RuntimeType,
 					BinaryPath:  img.BinaryPath,
 					Available:   img.Available,
-				})
+				}); err != nil {
+					slog.Warn("engine scan: failed to persist engine", "id", img.ID, "error", err)
+				}
 			}
 		}
-		// Mark engines not found in this scan as unavailable (handles renamed/deleted images)
-		_ = db.MarkEnginesUnavailableExcept(ctx, scannedIDs)
+		// Mark engines not found in this scan as unavailable (handles renamed/deleted images).
+		// When filtering by runtime, only affect that runtime's engines to avoid cross-runtime pollution.
+		markRuntime := ""
+		if runtimeFilter != "auto" {
+			markRuntime = runtimeFilter
+		}
+		if err := db.MarkEnginesUnavailableExcept(ctx, scannedIDs, markRuntime); err != nil {
+			slog.Warn("engine scan: failed to mark stale engines", "error", err)
+		}
 		return json.Marshal(filtered)
 	}
 	return &mcp.ToolDeps{
@@ -1724,19 +1746,27 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 
 			// Select runtime based on engine recommendation and available runtimes.
-			hasPartition := req.Partition != nil
+			// All-zero partition (full device) does not require K3S+HAMi GPU splitting.
+			hasPartition := req.Partition != nil && (req.Partition.GPUMemoryMiB > 0 || req.Partition.GPUCoresPercent > 0)
 			activeRt, rtErr := pickRuntimeForDeployment(resolved.RuntimeRecommendation, k3sRt, dockerRt, nativeRt, rt, hasPartition)
 			if rtErr != nil {
 				return nil, rtErr
 			}
 			// Pre-flight: ensure image is available in containerd for K3S deployments.
 			// Auto-import from Docker or pre-pull from registries if needed.
+			// Note: containerd operations require root; skip gracefully if not root.
 			if activeRt.Name() == "k3s" && req.Image != "" {
 				if !engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{}) {
 					if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
-						slog.Info("auto-importing image from Docker to containerd", "image", req.Image)
-						if importErr := engine.ImportDockerToContainerd(ctx, req.Image, &execRunner{}); importErr != nil {
-							slog.Warn("auto-import failed, K3S will try registries.yaml", "image", req.Image, "error", importErr)
+						if os.Getuid() != 0 {
+							slog.Warn("engine in Docker but not detected in containerd; import requires root",
+								"image", req.Image,
+								"fix", fmt.Sprintf("sudo docker save %s | sudo k3s ctr -n k8s.io images import -", req.Image))
+						} else {
+							slog.Info("auto-importing image from Docker to containerd", "image", req.Image)
+							if importErr := engine.ImportDockerToContainerd(ctx, req.Image, &execRunner{}); importErr != nil {
+								slog.Warn("auto-import failed, K3S will try registries.yaml", "image", req.Image, "error", importErr)
+							}
 						}
 					} else if len(resolved.EngineRegistries) > 0 {
 						slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
@@ -1782,7 +1812,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 			// Select runtime for display
 			resolved := rd.Resolved
-			hasPartition := resolved.Partition != nil
+			hasPartition := resolved.Partition != nil && (resolved.Partition.GPUMemoryMiB > 0 || resolved.Partition.GPUCoresPercent > 0)
 			selectedRt, rtErr := pickRuntimeForDeployment(resolved.RuntimeRecommendation, k3sRt, dockerRt, nativeRt, rt, hasPartition)
 			if rtErr != nil {
 				return nil, rtErr
@@ -1867,7 +1897,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 			}
 			if err != nil {
-				return fmt.Errorf("deployment %q not found", name)
+				return fmt.Errorf("delete deployment %q: %w", name, err)
 			}
 			if modelKey != "" {
 				proxyServer.RemoveBackend(modelKey)
@@ -2252,10 +2282,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := validateOverlayAssetName(name); err != nil {
 				return nil, err
 			}
-			// Validate YAML parses as the correct kind
+			// Validate YAML parses as the correct kind AND body kind matches param kind
 			tmpCat := &knowledge.Catalog{}
 			if err := tmpCat.ParseAssetPublic([]byte(content), "input"); err != nil {
 				return nil, fmt.Errorf("invalid YAML: %w", err)
+			}
+			if bodyKind := tmpCat.ParsedKind(); bodyKind != kind {
+				return nil, fmt.Errorf("kind mismatch: parameter is %q but YAML body is %q", kind, bodyKind)
 			}
 			// Inject _base_digest if factory has this asset
 			finalContent := content

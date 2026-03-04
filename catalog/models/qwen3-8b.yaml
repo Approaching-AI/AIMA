@@ -57,6 +57,27 @@ variants:
       tokens_per_second: [30, 60]
       latency_first_token_ms: [15, 40]
 
+  # --- Hygon DCU (BW150, 64GB HBM per card) ---
+  # FP16 weights ~16GB, single DCU 64GB 余量充足
+  # DCU 不支持 BF16, 必须用 FP16 (vLLM 自动转换)
+  - name: qwen3-8b-dcu-vllm-fp16
+    hardware:
+      gpu_arch: DCU
+      vram_min_mib: 6144
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 8192
+      dtype: float16
+    expected_performance:
+      startup_time_s: 60
+      cold_start_time_s: 180
+      tokens_per_second: [20, 50]
+      vram_mib: 16000
+      notes: "vLLM 0.9.2 DCU, FP16, single BW150 64GB, untested estimate."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # Q4_K_M = 5.03GB → RTX 4060 (8GB) ✓, M4 (16GB) ✓
   # Q8_0 = 8.71GB → RTX 4060 需部分 CPU offload

@@ -38,6 +38,21 @@ variants:
       tokens_per_second: [8, 18]
       latency_first_token_ms: [50, 200]
 
+  # --- Ascend 910B (sglang, safetensors BF16) ---
+  # BF16 ~64GB → 8×64GB HBM = 512GB total, TP8 → each NPU holds ~8GB
+  - name: qwen3-32b-ascend-sglang-bf16
+    hardware:
+      gpu_arch: Ascend910B
+      vram_min_mib: 8192
+    engine: sglang
+    format: safetensors
+    default_config:
+      tp: 8
+      mem_fraction_static: 0.86
+      context_length: 8192
+      disable_radix_cache: true
+      watchdog_timeout: 9000
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # Q4_K_M = 19.8GB → linux-1 (2×4090 24GB/GPU ✓), amd395 (128GB unified ✓)
   # RTX 4060 (8GB) / M4 (16GB) 太小，需大量 CPU offload

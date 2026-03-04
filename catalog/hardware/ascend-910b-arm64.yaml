@@ -1,0 +1,59 @@
+kind: hardware_profile
+metadata:
+  name: ascend-910b-arm64
+  description: "Huawei Ascend 910B1, aarch64 Kunpeng-920, 8× NPU 64GB HBM per card"
+hardware:
+  gpu:
+    arch: Ascend910B
+    vram_mib: 65536
+    compute_id: ""
+    compute_units: 0
+    resource_name: ""
+  cpu:
+    arch: aarch64
+    cores: 192
+    freq_ghz: 2.6
+  ram:
+    total_mib: 1572864
+    bandwidth_gbps: 200
+  unified_memory: false
+constraints:
+  tdp_watts: 400
+  power_modes: [400]
+  cooling: active
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]
+container:
+  docker_runtime: ascend
+  network_mode: host
+  shm_size: "500g"
+  devices:
+    - /dev/davinci0
+    - /dev/davinci1
+    - /dev/davinci2
+    - /dev/davinci3
+    - /dev/davinci4
+    - /dev/davinci5
+    - /dev/davinci6
+    - /dev/davinci7
+    - /dev/davinci_manager
+    - /dev/devmm_svm
+    - /dev/hisi_hdc
+  volumes:
+    - name: ascend-driver
+      host_path: /usr/local/Ascend/driver
+      mount_path: /usr/local/Ascend/driver
+      read_only: true
+    - name: ascend-firmware
+      host_path: /usr/local/Ascend/firmware
+      mount_path: /usr/local/Ascend/firmware
+      read_only: true
+    - name: hccn-conf
+      host_path: /etc/hccn.conf
+      mount_path: /etc/hccn.conf
+      read_only: true
+  env:
+    PYTORCH_NPU_ALLOC_CONF: "expandable_segments:True"
+  security:
+    privileged: true

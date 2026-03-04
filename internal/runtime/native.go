@@ -152,7 +152,14 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		sort.Strings(keys)
 		for _, k := range keys {
 			flag := "--" + strings.ReplaceAll(k, "_", "-")
-			command = append(command, flag, fmt.Sprintf("%v", req.Config[k]))
+			switch v := req.Config[k].(type) {
+			case bool:
+				if v {
+					command = append(command, flag)
+				}
+			default:
+				command = append(command, flag, fmt.Sprintf("%v", v))
+			}
 		}
 	}
 

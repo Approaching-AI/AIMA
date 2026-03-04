@@ -34,6 +34,14 @@
 |------|------|
 | `aima-design-principles-review.md` | **设计原则实战案例** - INV-1 典型违反/修复、YAML-driven 模式对照、INV-3 边界 |
 
+## 关键经验总结（跨领域）
+
+| 文件 | 描述 |
+|------|------|
+| `development-lessons.md` | **开发经验** - YAML-driven 架构实践、Config L0-L3 分层、MCP 工具设计、零值传播审计、Runtime 选择、Go 工程模式 |
+| `testing-lessons.md` | **测试经验** - 多设备全量采集方法论、GPU 部署验证（VRAM 估算/多模型共存/跨厂商）、Agent E2E 矩阵、Benchmark 方法、AMD 专项 |
+| `operations-lessons.md` | **运维经验** - mDNS 多网卡/跨平台、LAN Proxy 路由、systemd/容器 Runtime、中国网络镜像、Fleet API 架构、安全/密钥管理、分层 Stack 安装 |
+
 ## NPU 相关
 
 | 文件 | 描述 |

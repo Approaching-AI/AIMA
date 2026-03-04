@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Catalog holds all knowledge assets loaded from embedded YAML files.
 type Catalog struct {
+	mu                  sync.Mutex
 	HardwareProfiles    []HardwareProfile
 	PartitionStrategies []PartitionStrategy
 	EngineAssets        []EngineAsset
@@ -87,6 +89,10 @@ type ContainerAccess struct {
 	PartitionRemoveEnv  []string          `yaml:"partition_remove_env,omitempty"`
 	Volumes             []ContainerVolume `yaml:"volumes,omitempty"`
 	Security            *ContainerSecurity `yaml:"security,omitempty"`
+	DockerRuntime       string            `yaml:"docker_runtime,omitempty"`  // --runtime flag (e.g. "ascend")
+	NetworkMode         string            `yaml:"network_mode,omitempty"`    // "host" for --network host
+	ShmSize             string            `yaml:"shm_size,omitempty"`        // --shm-size (e.g. "500g")
+	Init                bool              `yaml:"init,omitempty"`            // --init flag
 }
 
 type ContainerVolume struct {
@@ -543,6 +549,31 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 // ParseAssetPublic is an exported wrapper around parseAsset for validation.
 func (cat *Catalog) ParseAssetPublic(data []byte, path string) error {
 	return cat.parseAsset(data, path)
+}
+
+// ParsedKind returns the kind of asset that was parsed into this catalog.
+// Returns "" if no assets were parsed or multiple kinds were parsed.
+func (cat *Catalog) ParsedKind() string {
+	var kinds []string
+	if len(cat.HardwareProfiles) > 0 {
+		kinds = append(kinds, "hardware_profile")
+	}
+	if len(cat.EngineAssets) > 0 {
+		kinds = append(kinds, "engine_asset")
+	}
+	if len(cat.ModelAssets) > 0 {
+		kinds = append(kinds, "model_asset")
+	}
+	if len(cat.PartitionStrategies) > 0 {
+		kinds = append(kinds, "partition_strategy")
+	}
+	if len(cat.StackComponents) > 0 {
+		kinds = append(kinds, "stack_component")
+	}
+	if len(kinds) == 1 {
+		return kinds[0]
+	}
+	return ""
 }
 
 // LoadCatalogLenient loads YAML assets like LoadCatalog but continues on

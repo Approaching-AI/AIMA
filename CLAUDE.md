@@ -24,7 +24,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
 | linux-1 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
 | amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
 | hygon | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× Hygon C86-4G 48C + 8× Hygon BW150 DCU 64GB | 751 GB | 265 GB + 564 GB NVMe | K3S + Docker 28.0 | key | DCU inference validation |
-| qjq2 | `user@<REDACTED_IP>` (via qjq0 `<REDACTED_IP>`) | Linux | — | No GPU | — | — | — | key (via ProxyCommand) | Edge device validation (no GPU) |
+| qjq2 | `user@<REDACTED_IP>` (via qjq0 `<REDACTED_IP>`) | EulerOS 2.0 | aarch64 | 8× Ascend 910B1 64GB HBM (Driver 25.3, CANN 8.3) | 1.5 TiB | 99 GB | Docker 18.09 | key (ProxyCommand) | Ascend NPU inference validation |
 
 > **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
 > Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
@@ -50,6 +50,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
       │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
       │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
       │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
+      │  scp build/aima-linux-arm64  qjq2:~/aima                          # qjq2 (reuses gb10's arm64 binary)
       │
  [4] Execute: 对所有设备（含本机）并行执行同一组测试命令
       │  本机:  build/aima.exe hal detect
@@ -58,6 +59,7 @@ Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them
       │  SSH:   ssh user@<REDACTED_IP>      './aima hal detect'
       │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
       │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
+      │  SSH:   ssh qjq2                        './aima hal detect'
       │
       ╔══════════════════════════════════════════════════════════╗
       ║  ⚠ BARRIER: 等待所有设备返回结果，一台都不能少。       ║

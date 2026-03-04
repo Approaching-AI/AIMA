@@ -139,8 +139,29 @@ Detect()
 |--------|----------------|-------------------|
 | NVIDIA | `nvidia-smi` 输出解析 → `"CUDA 12.7"` | `nvidia-smi --query-gpu=driver_version` |
 | AMD | `cat /opt/rocm/.info/version` → `"ROCm 7.9.0"` | `modinfo -F version amdgpu`，空则 fallback `uname -r` |
+| Huawei | `cat .../ascend-toolkit/latest/version.cfg` → `"CANN 8.3.RC1"` | `cat /usr/local/Ascend/driver/version.info` → `"25.3.rc1"` |
 | Hygon | *(sysfs 无 SDK 信息)* | *(sysfs 无驱动版本)* |
-| Intel/Huawei/MThreads | *(未实现)* | *(未实现)* |
+| Intel/MThreads | *(未实现)* | *(未实现)* |
+
+### Huawei Ascend NPU 检测
+
+`npu-smi info` 输出有两种格式，AIMA 支持双路解析：
+
+1. **JSON 格式** (`-j` flag)：新版 npu-smi 支持，直接 `json.Unmarshal`
+2. **文本表格** (plain `info`)：旧版 npu-smi（如 25.3.rc1）不支持 `-j`，AIMA 解析表格结构
+
+表格结构（每 NPU 两行）：
+```
+| 0       910B1     | OK              | 99.3        50                0    / 0                       |
+| 0                 | 0000:C1:00.0    | 0           0    / 0          3453 / 65536                   |
+```
+
+- Row 1: Cell 0 = 设备号+芯片名, Cell 2 = Power(W)+Temp(C)
+- Row 2: Cell 2 = AICore%+Memory-Usage (HBM used / total)
+
+**Enrichment**: 从系统文件读取驱动版本和 CANN SDK 版本：
+- `/usr/local/Ascend/driver/version.info` → `Version=25.3.rc1`
+- `/usr/local/Ascend/ascend-toolkit/latest/version.cfg` → `version=8.3.RC1`
 
 ### Hygon DCU 检测（sysfs）
 
@@ -161,11 +182,14 @@ Detect()
 | NVIDIA | `nvidia.com/gpu` |
 | AMD | `amd.com/gpu` |
 | Intel | `gpu.intel.com/i915` |
+| Huawei Ascend | (无，通过 hostPath 设备透传 + `--runtime ascend`) |
 | Hygon DCU | (无，通过 hostPath 设备透传) |
 | 无 GPU | (空字符串) |
 
 资源名用于 Pod YAML 生成时的 GPU 资源声明，支持多厂商 GPU。
 Hygon DCU 通过 Hardware Profile YAML 的 `container.devices` 字段透传 `/dev/kfd`, `/dev/mkfd`, `/dev/dri`。
+Huawei Ascend 通过 Hardware Profile YAML 的 `container.devices` 透传 `/dev/davinci*` 设备，
+并通过 `container.docker_runtime: ascend` 使用华为 Ascend Docker Runtime。
 
 ---
 
@@ -279,6 +303,24 @@ constraints:
   "cpu": { "arch": "amd64", "model": "Hygon C86-4G (OPN:7470)", "cores": 48 },
   "ram": { "total_mib": 769657, "available_mib": 740926 }
 }
+
+# Huawei Ascend 输出示例 (qjq2)
+{
+  "gpu": {
+    "vendor": "huawei",
+    "name": "910B1",
+    "arch": "Ascend910B",
+    "vram_mib": 65536,
+    "driver_version": "25.3.rc1",
+    "sdk_version": "CANN 8.3.RC1",
+    "power_draw_watts": 99.3,
+    "temperature_celsius": 50,
+    "unified_memory": false,
+    "count": 8
+  },
+  "cpu": { "arch": "arm64", "model": "Kunpeng-920", "cores": 192 },
+  "ram": { "total_mib": 1572864, "available_mib": 1520000 }
+}
 ```
 
 ### 查询实时指标
@@ -323,4 +365,4 @@ constraints:
 
 ---
 
-*最后更新：2026-03-03 (Hygon DCU sysfs 检测)*
+*最后更新：2026-03-04 (Huawei Ascend 910B NPU 双路解析 + enrichment)*

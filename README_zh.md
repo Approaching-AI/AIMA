@@ -6,7 +6,7 @@
 
 ## 特性
 
-- **零配置硬件检测** — 自动发现 GPU（NVIDIA、AMD、Apple Silicon）、CPU 和内存
+- **零配置硬件检测** — 自动发现 GPU（NVIDIA、AMD、华为昇腾、海光 DCU、Apple Silicon）、CPU 和内存
 - **知识驱动部署** — YAML 目录包含硬件画像、引擎、模型和分区策略；无引擎特定代码分支
 - **多运行时** — K3S（Pod）集群容器 + Docker（单机容器） + Native（exec）裸机推理
 - **56 个 MCP 工具** — AI Agent 可通过程序化接口完整控制硬件、模型、引擎、部署、集群等
@@ -101,6 +101,8 @@ aima fleet devices --api-key <your-key>
 |------|-----------|-----|
 | NVIDIA | RTX 4060、RTX 4090、GB10（Grace Blackwell） | CUDA |
 | AMD | Radeon 8060S（RDNA 3.5）、Ryzen AI MAX+ 395 | ROCm / Vulkan |
+| 华为 | Ascend 910B1（8× 64GB HBM, 鲲鹏 920 aarch64） | CANN |
+| 海光 | BW150 DCU（8× 64GB HBM） | DCU |
 | Apple | M4 | Metal |
 | Intel | 仅 CPU | — |
 
@@ -108,9 +110,9 @@ aima fleet devices --api-key <your-key>
 
 | 引擎 | GPU 支持 | 格式 |
 |------|---------|------|
-| vLLM | NVIDIA CUDA、AMD ROCm | Safetensors |
+| vLLM | NVIDIA CUDA、AMD ROCm、海光 DCU | Safetensors |
 | llama.cpp | NVIDIA CUDA、AMD Vulkan、Apple Metal、CPU | GGUF |
-| SGLang | NVIDIA CUDA | Safetensors |
+| SGLang | NVIDIA CUDA、华为昇腾（CANN） | Safetensors |
 | Ollama | 全部（通过 llama.cpp） | GGUF |
 
 ## 架构

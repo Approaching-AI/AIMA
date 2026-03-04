@@ -155,10 +155,14 @@ Hardware Profile YAML  ──→  ContainerAccess ──→  GeneratePod (厂商
 **容器访问配置**
 
 Hardware Profile YAML 的 `container` 字段描述该硬件在 K3S 容器中运行推理时需要的厂商特定配置：
-- `devices`: 需挂载的宿主机设备（如 AMD ROCm 的 `/dev/kfd`, `/dev/dri`）
+- `devices`: 需挂载的宿主机设备（如 AMD ROCm 的 `/dev/kfd`, `/dev/dri`; Ascend 的 `/dev/davinci*`）
 - `env`: 注入到容器的环境变量（如 NVIDIA 的 `LD_LIBRARY_PATH`, AMD 的 `LD_PRELOAD`）
-- `volumes`: 额外的 hostPath 挂载
+- `volumes`: 额外的 hostPath 挂载（如 Ascend 的 driver/firmware 只读挂载）
 - `security`: securityContext 配置（如 `supplemental_groups` 用于 video/render 组权限）
+- `docker_runtime`: Docker 自定义 Runtime（如 Ascend 的 `--runtime ascend`）
+- `network_mode`: 网络模式（如 `"host"` → `--network host`，跳过端口映射）
+- `shm_size`: 共享内存大小（如 `"500g"`）
+- `init`: 是否使用 `--init` 进程管理
 
 ConfigResolver 在 `Resolve()` 中通过 `findContainerAccess()` 匹配当前硬件的 container 配置，
 传入 `ResolvedConfig.Container`，最终由 `GeneratePod()` 通用渲染。
@@ -346,4 +350,4 @@ Agent 单次决策循环限制 ≤ 30 轮工具调用 (可配置)，防止无限
 
 ---
 
-*最后更新：2026-03-03 (Hygon DCU 适配, engine auto-import 延迟, MCP 工具数更正)*
+*最后更新：2026-03-04 (Huawei Ascend 910B 适配, ContainerAccess 扩展字段)*

@@ -10,7 +10,7 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 
 | 运行时 | 适用场景 | 引擎类型 |
 |--------|---------|----------|
-| **Container Runtime** (K3S/Docker) | Linux 服务器，GPU 集群 | vLLM, SGLang, Ollama, llama.cpp |
+| **Container Runtime** (K3S/Docker) | Linux 服务器，GPU 集群 | vLLM, SGLang, SGLang-Ascend, Ollama, llama.cpp |
 | **Native Runtime** (进程) | Windows/macOS, 边缘设备, 无容器环境 | llama.cpp, 其他 Native 引擎 |
 
 **`aima engine scan` 自动检测可用运行时并扫描对应引擎：**
@@ -364,4 +364,4 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 ---
 
-*最后更新：2026-03-03 (v6: auto-import 延迟到 init, engine scan --import 显式触发)*
+*最后更新：2026-03-04 (添加 SGLang-Ascend 引擎, engine scan runtime-scoped stale marking)*

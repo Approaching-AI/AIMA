@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Apple Silicon), CPU, and RAM
+- **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Huawei Ascend, Hygon DCU, Apple Silicon), CPU, and RAM
 - **Knowledge-driven deployment** — YAML catalog of hardware profiles, engines, models, and partition strategies; no engine-specific code branches
 - **Multi-runtime** — K3S (Pod) for clusters, Docker for single-node containers, Native (exec) for bare-metal inference
 - **56 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more
@@ -101,6 +101,8 @@ aima fleet devices --api-key <your-key>
 |--------|---------------|-----|
 | NVIDIA | RTX 4060, RTX 4090, GB10 (Grace Blackwell) | CUDA |
 | AMD | Radeon 8060S (RDNA 3.5), Ryzen AI MAX+ 395 | ROCm / Vulkan |
+| Huawei | Ascend 910B1 (8× 64GB HBM, Kunpeng-920 aarch64) | CANN |
+| Hygon | BW150 DCU (8× 64GB HBM) | DCU |
 | Apple | M4 | Metal |
 | Intel | CPU-only | — |
 
@@ -108,9 +110,9 @@ aima fleet devices --api-key <your-key>
 
 | Engine | GPU Support | Format |
 |--------|------------|--------|
-| vLLM | NVIDIA CUDA, AMD ROCm | Safetensors |
+| vLLM | NVIDIA CUDA, AMD ROCm, Hygon DCU | Safetensors |
 | llama.cpp | NVIDIA CUDA, AMD Vulkan, Apple Metal, CPU | GGUF |
-| SGLang | NVIDIA CUDA | Safetensors |
+| SGLang | NVIDIA CUDA, Huawei Ascend (CANN) | Safetensors |
 | Ollama | All (via llama.cpp) | GGUF |
 
 ## Architecture

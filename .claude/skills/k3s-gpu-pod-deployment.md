@@ -1361,4 +1361,91 @@ tool_call_parser: qwen3_coder
 
 ---
 
-更新：2026-03-02（Qwen3.5-27B SGLang + deploy 自动导入 + K3S 镜像源更新）
+## 二十、CUDA PTX 兼容性问题：scitrera/dgx-spark-vllm 与 GB10 Driver 580（2026-03-04）
+
+### 问题概述
+
+GB10 从 K3S 迁移到纯 Docker 后，部署 `scitrera/dgx-spark-vllm` 镜像时 CUDA graph capture 阶段崩溃：
+
+```
+torch.AcceleratorError: CUDA error: the provided PTX was compiled with an unsupported toolchain.
+```
+
+权重加载（~4min）和 PIECEWISE graph capture 均成功，仅 FULL graph capture 失败。
+
+### 根因分析
+
+| 项目 | 值 |
+|------|-----|
+| GB10 驱动 | 580.126.09 → CUDA 13.0 |
+| scitrera 镜像 CUDA | **13.1.0**（所有 tag 均如此） |
+| 崩溃阶段 | Capturing CUDA graphs (decode, FULL) |
+| 根因 | CUDA 13.1 编译的 PTX 不兼容 CUDA 13.0 runtime |
+
+### 关键误区：以为旧版镜像能跑
+
+之前 GB10 上 `aima-vllm-qwen3-omni:latest` 能正常运行（prefill 9937 tok/s @16K），误以为是 `scitrera/dgx-spark-vllm:0.14.0-t5` 的同一镜像。
+
+**实际情况**：
+- `aima-vllm-qwen3-omni:latest` 是一个**本地构建**的镜像（版本 `v0.1.dev1+g6a3c7ede8`），可能基于 CUDA 13.0 base image
+- DockerHub 上的 scitrera 镜像**所有版本**（`0.13.0-t4` ~ `0.16.1-dev-t5`）都基于 CUDA 13.1
+- K3S 移除后旧镜像随 containerd 一起丢失，无法复原
+- `-t4` (Transformers 4) 和 `-t5` (Transformers 5) 的区别仅在 Python 包版本，CUDA base image 相同
+
+**验证**：在另一台同驱动（580.126.09）的 GB10 机器（192.168.108.131）上确认：
+- `zhiwen-vllm:0128` = `scitrera/dgx-spark-vllm:0.14.0-t5`（Image ID 一致: `1bf08933a646`），**未被使用**
+- 实际跑 Qwen3-Coder-Next 的是 `vllm:26.01-py3`（NGC 官方, CUDA 13.0）
+
+### Driver 590 升级评估（CUDA 13.1 所需）
+
+| 风险 | 严重度 | 详情 |
+|------|--------|------|
+| UMA 内存泄漏 | **高** | CUDA 进程退出后 ~80GB 统一内存不释放，GB10 只有 120GB |
+| Secure Boot 黑屏 | **高** | MOK 注册失败导致 nvidia-smi 不可用 |
+| 官方不支持 | **高** | NVIDIA 明确 "590 was not ready for the GB10 yet" |
+| DGX OS 锁定 | — | 最新 DGX OS 7.4.0 仍锁定 Driver 580 + CUDA 13.0 |
+
+**结论**：不升级。等 NVIDIA 在未来 DGX OS 中官方支持 r590。
+
+### 解决方案
+
+优先使用 `vllm-nightly` (`qwen3_5-cu130`, CUDA 13.0)：
+
+```yaml
+# model YAML variant 顺序：vllm-nightly 优先，vllm-spark 降级
+variants:
+  - name: ...-vllm-nightly-fp8   # 优先：CUDA 13.0 兼容
+    engine: vllm-nightly
+  - name: ...-vllm-spark         # 备选：需 Driver 590+
+    engine: vllm-spark
+```
+
+### 引擎版本全景（更新）
+
+| 引擎 | CUDA | Driver 580 兼容 | 性能特点 |
+|------|------|----------------|---------|
+| `vllm/vllm-openai:qwen3_5-cu130` | 13.0 | ✅ | 262K context, 42.5 tok/s @1K |
+| `nvcr.io/nvidia/vllm:26.01-py3` | 13.0 | ✅ | NGC 官方，已验证可用 |
+| `scitrera/dgx-spark-vllm:*-t4/t5` | **13.1** | ❌ PTX 不兼容 | prefill 2-3x 快，等驱动升级 |
+
+### init_commands 相关 Bug
+
+`vllm-spark.yaml` 之前定义了 `init_commands`（`fix_rope.py`, `fix_funasr_import.py`）和 `extra_volumes`（`/tmp/aima-patches`），但：
+1. 镜像内无 `/patches/` 目录
+2. 宿主机 `/tmp/aima-patches/` 为空目录
+3. 导致容器无限重启（15+ 次）
+
+**修复**：移除 `init_commands` 和 `extra_volumes`。新版镜像（0.14.1-t5）不需要这些 patch。
+
+### 教训
+
+1. **CUDA 版本匹配是硬约束**：容器内的 CUDA toolkit 版本 ≠ PTX 编译目标。即使 `CUDA_VERSION=13.1`，关键是 PTX 是否兼容宿主 driver 支持的 CUDA runtime
+2. **镜像 tag 不等于内容**：`-t4` vs `-t5` 只改 Python 包（Transformers），不改 CUDA base image
+3. **本地构建 ≠ DockerHub 发布**：同名项目的本地构建和公开 tag 可能基于不同 base image
+4. **K3S 移除要备份镜像**：containerd 中的自建镜像随 K3S 卸载丢失，应提前 `docker save` 备份
+5. **DGX Spark 驱动升级须等官方**：NVIDIA 明确不支持 GB10 上的 r590 驱动，强行升级有 UMA 内存泄漏等严重风险
+6. **先全量排查再下结论**：debug 时检查了两台 GB10 机器 + DockerHub tag 列表 + NVIDIA 论坛，才定位到真正的根因
+
+---
+
+更新：2026-03-04（CUDA PTX 兼容性 + scitrera spark 镜像排查 + Driver 590 风险评估）

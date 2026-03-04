@@ -74,8 +74,8 @@ partition_hints:
   min_gpu_memory_mib: 4096
   recommended_gpu_cores_percent: 50
 time_constraints:
-  cold_start_s: [60, 180]
-  model_switch_s: [60, 180]
+  cold_start_s: [120, 240]
+  model_switch_s: [120, 240]
 power_constraints:
   typical_draw_watts: [40, 80]
 runtime:

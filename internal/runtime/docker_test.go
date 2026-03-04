@@ -33,7 +33,8 @@ func TestBuildRunArgs_NVIDIA(t *testing.T) {
 	assertContains(t, argStr, "--volume /data/models/qwen3:/models:ro", "model volume")
 	assertContains(t, argStr, "--publish 8000:8000", "port publish")
 	assertContains(t, argStr, "--restart unless-stopped", "restart policy")
-	assertContains(t, argStr, "vllm serve /models", "command with model path substitution")
+	assertContains(t, argStr, "--entrypoint vllm", "entrypoint override")
+	assertContains(t, argStr, "serve /models", "command with model path substitution")
 }
 
 func TestBuildRunArgs_AMD(t *testing.T) {
@@ -80,7 +81,8 @@ func TestBuildRunArgs_InitCommands(t *testing.T) {
 	args := r.buildRunArgs("test-model-vllm", req)
 	argStr := joinArgs(args)
 
-	assertContains(t, argStr, "bash -c", "shell wrapper")
+	assertContains(t, argStr, "--entrypoint bash", "shell wrapper entrypoint")
+	assertContains(t, argStr, "-c", "shell wrapper -c flag")
 	assertContains(t, argStr, "pip install librosa && pip install soundfile && exec vllm serve /models", "init chain + exec main")
 }
 
@@ -178,7 +180,8 @@ func TestBuildRunArgs_Ascend(t *testing.T) {
 	assertContains(t, argStr, "--device /dev/davinci_manager", "davinci manager device")
 	assertContains(t, argStr, "--env PYTORCH_NPU_ALLOC_CONF=expandable_segments:True", "NPU env")
 	assertNotContains(t, argStr, "--publish", "should not have port publish with host network")
-	assertContains(t, argStr, "bash -c", "init command shell wrapper")
+	assertContains(t, argStr, "--entrypoint bash", "init command shell wrapper entrypoint")
+	assertContains(t, argStr, "-c", "init command shell wrapper -c flag")
 }
 
 func TestBuildRunArgs_ExistingUnchanged(t *testing.T) {

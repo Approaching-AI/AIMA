@@ -155,32 +155,39 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, "--volume", v)
 	}
 
-	// Build command with {{.ModelPath}} → /models substitution
+	// Build command with template substitution
 	command := make([]string, len(req.Command))
 	for i, c := range req.Command {
-		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", "/models")
+		c = strings.ReplaceAll(c, "{{.ModelPath}}", "/models")
+		c = strings.ReplaceAll(c, "{{.ModelName}}", req.Name)
+		command[i] = c
 	}
 
-	// Append config values as CLI flags
-	command = append(command, configToFlags(req.Config)...)
+	// Append config values as CLI flags, with template substitution
+	for _, f := range configToFlags(req.Config) {
+		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
+		f = strings.ReplaceAll(f, "{{.ModelPath}}", "/models")
+		command = append(command, f)
+	}
 
-	// Image
+	// Image + command.
+	// When YAML defines a command, override the image ENTRYPOINT so the YAML
+	// command is the full process invocation (matches K3S `command:` semantics).
+	// Without --entrypoint override, Docker would concatenate ENTRYPOINT + our
+	// command, causing duplication (e.g. "vllm serve vllm serve /models").
 	image := req.Image
-	args = append(args, image)
 
-	// InitCommands: wrap with bash -c "init1 && init2 && exec main args..."
-	// Uses bash (not sh) because init scripts often use bash syntax (arrays, source).
 	if len(req.InitCommands) > 0 {
-		// Clear the image-only append above, replace with entrypoint override
-		args = args[:len(args)-1] // remove image
-
 		initChain := strings.Join(req.InitCommands, " && ")
 		mainCmd := strings.Join(command, " ")
 		shellCmd := initChain + " && exec " + mainCmd
 
-		args = append(args, image, "bash", "-c", shellCmd)
+		args = append(args, "--entrypoint", "bash", image, "-c", shellCmd)
 	} else if len(command) > 0 {
-		args = append(args, command...)
+		args = append(args, "--entrypoint", command[0], image)
+		args = append(args, command[1:]...)
+	} else {
+		args = append(args, image)
 	}
 
 	return args

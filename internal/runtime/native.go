@@ -120,10 +120,12 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		return fmt.Errorf("deploy %s: empty command", req.Name)
 	}
 
-	// Replace {{.ModelPath}} with actual host path (not /models like K3S)
+	// Replace templates with actual values (host path, not /models like containers)
 	command := make([]string, len(req.Command))
 	for i, c := range req.Command {
-		command[i] = strings.ReplaceAll(c, "{{.ModelPath}}", req.ModelPath)
+		c = strings.ReplaceAll(c, "{{.ModelPath}}", req.ModelPath)
+		c = strings.ReplaceAll(c, "{{.ModelName}}", req.Name)
+		command[i] = c
 	}
 
 	// Append --port if not already present
@@ -138,8 +140,12 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		command = append(command, "--port", strconv.Itoa(req.Port))
 	}
 
-	// Append other config values as CLI flags
-	command = append(command, configToFlags(req.Config)...)
+	// Append other config values as CLI flags, with template substitution
+	for _, f := range configToFlags(req.Config) {
+		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
+		f = strings.ReplaceAll(f, "{{.ModelPath}}", req.ModelPath)
+		command = append(command, f)
+	}
 
 	// Set up log file
 	if err := os.MkdirAll(r.logDir, 0o755); err != nil {

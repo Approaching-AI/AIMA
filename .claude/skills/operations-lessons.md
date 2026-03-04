@@ -153,6 +153,37 @@ Direct huggingface.co unreachable from China. model.pull should eventually suppo
 ### Adding/removing mirrors = YAML change only
 INV-1 + Prime Directive: proxy list changes = edit YAML, zero Go code. New mirrors are picked up at next build.
 
+### Container image pull: mirror reliability tiers (China)
+| Mirror | docker.io 热门镜像 | docker.io 冷门镜像 | nvcr.io | ghcr.io |
+|--------|-------------------|-------------------|---------|---------|
+| daemon registry-mirrors | ✅ 自动 | ✅ 自动 | ❌ | ❌ |
+| docker.1ms.run | ✅ | ✅ (可能限速) | ❌ | ❌ |
+| docker.xuanyuan.me | ✅ | ⚠️ 免费限速 | ❌ | ❌ |
+| docker.m.daocloud.io | ✅ 白名单内 | ❌ 白名单外 | ❌ | ✅ ghcr.m.daocloud.io |
+| Aliyun aima/* | ✅ 自建推送 | ❌ 需自建 | ❌ | ❌ |
+| nvcr.io 直连 | ❌ | ❌ | ✅ 直连 | ❌ |
+
+**教训**:
+- nvcr.io (NGC) 在国内可直连，不需要镜像
+- docker.io 小众镜像 (如 scitrera) 多数镜像站不缓存或限速，`1ms.run` 最可靠但大镜像 ~2MB/s
+- 拉取前先检查 `docker images` 避免重复下载
+- 大镜像 (>20GB) 在 arm64 上解压可能需要数小时
+
+### Engine YAML 镜像名必须与实际可拉取的镜像一致
+**Bug**: `vllm-spark.yaml` 写 `vllm-spark-tf5:latest` (本地构建名), 实际不存在于任何 registry。
+**Fix**: 改为 `scitrera/dgx-spark-vllm:0.14.1-t5` (Docker Hub 真实镜像名)。
+
+**规则**: Engine YAML `image.name:tag` 必须是可通过 `docker pull` 拉取的完整镜像引用。
+社区/自定义构建也要用其 Docker Hub 的真实名称，不要用本地 tag 别名。
+`registries` 列表 + `source.mirror` 字段提供回退拉取路径。
+
+### scitrera/dgx-spark-vllm — GB10 社区 vLLM 构建
+- **来源**: [NVIDIA Forum](https://forums.developer.nvidia.com/t/new-pre-built-vllm-docker-images-for-nvidia-dgx-spark/357832)
+- **Tag 语义**: `-t4` = Transformers 4.x, `-t5` = Transformers 5.x
+- **用途**: Qwen3-Coder-Next (FLASH_ATTN, 2x prefill vs 官方 nightly), GLM-4.7-Flash (需 Transformers 5)
+- **版本**: 0.14.1-t5 = vLLM 0.14.1 + CUDA 13.1 + FlashInfer + Transformers 5.0
+- **拉取**: 国内用 `docker.1ms.run/scitrera/dgx-spark-vllm:0.14.1-t5`，约 25GB
+
 ## 6. Fleet REST API Architecture
 
 ### Consumer-side interface pattern

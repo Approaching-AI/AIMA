@@ -264,6 +264,24 @@ func run() error {
 			}
 			return json.Marshal(map[string]string{"status": "ok"})
 		},
+		DispatchAskStream: func(ctx context.Context, query, sessionID string, cb func(string, []byte)) (json.RawMessage, error) {
+			var streamCB agent.StreamCallback
+			if cb != nil {
+				streamCB = func(ev agent.StreamEvent) {
+					data, _ := json.Marshal(ev)
+					cb(ev.Type, data)
+				}
+			}
+			result, sid, toolCalls, err := dispatcher.Ask(ctx, query, agent.DispatchOption{
+				SessionID:      sessionID,
+				StreamCallback: streamCB,
+			})
+			if err != nil {
+				return nil, err
+			}
+			data, err := json.Marshal(map[string]any{"result": result, "session_id": sid, "tool_calls": toolCalls})
+			return data, err
+		},
 	}
 	fleetRoutes := fleet.RegisterRoutes(fleetDeps)
 	uiRoutes := ui.RegisterRoutes()

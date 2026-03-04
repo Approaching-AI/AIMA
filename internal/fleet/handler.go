@@ -18,10 +18,11 @@ type MCPExecutor interface {
 
 // Deps holds dependencies for fleet HTTP handlers.
 type Deps struct {
-	Registry   *Registry
-	MCP        MCPExecutor
-	Client     *Client
-	DeviceInfo func(ctx context.Context) (json.RawMessage, error)
+	Registry         *Registry
+	MCP              MCPExecutor
+	Client           *Client
+	DeviceInfo       func(ctx context.Context) (json.RawMessage, error)
+	DispatchAskStream func(ctx context.Context, query, sessionID string, cb func(eventType string, data []byte)) (json.RawMessage, error)
 }
 
 // RegisterRoutes returns a function that registers fleet API routes on a mux.
@@ -31,6 +32,9 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 		mux.HandleFunc("GET /api/v1/device", deps.handleLocalDevice)
 		mux.HandleFunc("GET /api/v1/tools", deps.handleLocalTools)
 		mux.HandleFunc("POST /api/v1/tools/{name}", deps.handleLocalToolCall)
+
+		// Agent streaming API
+		mux.HandleFunc("POST /api/v1/agent/ask/stream", deps.handleAgentAskStream)
 
 		// Fleet API (manager)
 		mux.HandleFunc("GET /api/v1/devices", deps.handleListDevices)
@@ -216,6 +220,60 @@ func (d *Deps) lookupDevice(w http.ResponseWriter, id string) *Device {
 		return nil
 	}
 	return device
+}
+
+func (d *Deps) handleAgentAskStream(w http.ResponseWriter, r *http.Request) {
+	if d.DispatchAskStream == nil {
+		writeError(w, http.StatusNotImplemented, "agent streaming not available")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	var params struct {
+		Query     string `json:"query"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(body, &params); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if params.Query == "" {
+		writeError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	cb := func(eventType string, data []byte) {
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+		flusher.Flush()
+	}
+
+	result, err := d.DispatchAskStream(r.Context(), params.Query, params.SessionID, cb)
+	if err != nil {
+		errData, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+		flusher.Flush()
+		return
+	}
+
+	fmt.Fprintf(w, "event: response\ndata: %s\n\n", result)
+	flusher.Flush()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -2232,7 +2232,102 @@ function aimaApp() {
       const params = { query: text };
       if (this.sessionId) params.session_id = this.sessionId;
 
-      // Show a tool call for the agent.ask being executed
+      // Try SSE streaming first, fall back to synchronous
+      try {
+        await this._sendAgentStream(text, params);
+      } catch (e) {
+        // SSE failed (e.g. endpoint not available) → fall back to sync
+        await this._sendAgentSync(text, params);
+      }
+    },
+
+    async _sendAgentStream(text, params) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+
+      const resp = await fetch('/api/v1/agent/ask/stream', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(params)
+      });
+
+      if (!resp.ok || !resp.body) throw new Error('SSE not available');
+
+      // Track tool call messages by index for updating
+      const toolIndexMap = {};
+      const startTimes = {};
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop(); // keep incomplete part
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          let eventType = 'message';
+          let dataStr = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dataStr = line.slice(6);
+          }
+          if (!dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+            this._handleStreamEvent(eventType, data, toolIndexMap, startTimes);
+          } catch {}
+        }
+      }
+    },
+
+    _handleStreamEvent(eventType, data, toolIndexMap, startTimes) {
+      if (eventType === 'tool_start') {
+        const msgIdx = this.messages.length;
+        toolIndexMap[data.index] = msgIdx;
+        startTimes[data.index] = Date.now();
+        this.messages.push({
+          role: 'tool',
+          toolName: data.name,
+          args: data.arguments || {},
+          status: 'running',
+          expanded: false
+        });
+        this.scrollChat();
+      } else if (eventType === 'tool_done') {
+        const msgIdx = toolIndexMap[data.index];
+        if (msgIdx !== undefined && this.messages[msgIdx]) {
+          const elapsed = startTimes[data.index] ? ((Date.now() - startTimes[data.index]) / 1000).toFixed(1) + 's' : '';
+          this.messages.splice(msgIdx, 1, {
+            ...this.messages[msgIdx],
+            status: data.is_error ? 'error' : 'success',
+            result: data.result || null,
+            duration: elapsed
+          });
+        }
+        this.scrollChat();
+      } else if (eventType === 'response') {
+        this._agentConfirmed = true;
+        this.agentAvailable = true;
+        if (data.session_id) this.sessionId = data.session_id;
+        const result = data.result || JSON.stringify(data);
+        this.messages.push({ role: 'ai', text: result });
+        this.scrollChat();
+      } else if (eventType === 'error') {
+        this._agentConfirmed = false;
+        this.agentAvailable = false;
+        this.messages.push({ role: 'ai', text: data.error || 'Agent error' });
+        this.scrollChat();
+      }
+    },
+
+    async _sendAgentSync(text, params) {
       const toolIndex = this.messages.length;
       const startTime = Date.now();
       this.messages.push({
@@ -2249,7 +2344,6 @@ function aimaApp() {
       const duration = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
 
       if (data._err) {
-        // Update tool status using splice for reactivity
         this.messages.splice(toolIndex, 1, {
           ...this.messages[toolIndex],
           status: 'error',
@@ -2266,7 +2360,6 @@ function aimaApp() {
       this.agentAvailable = true;
       if (data.session_id) this.sessionId = data.session_id;
 
-      // Update tool status using splice for reactivity
       this.messages.splice(toolIndex, 1, {
         ...this.messages[toolIndex],
         status: 'success',
@@ -2274,7 +2367,6 @@ function aimaApp() {
         duration: duration
       });
 
-      // If response contains tool_calls, display them
       if (data.tool_calls && Array.isArray(data.tool_calls)) {
         for (const tc of data.tool_calls) {
           this.messages.push({
@@ -2288,7 +2380,6 @@ function aimaApp() {
         }
       }
 
-      // Show final AI response
       const result = data.result || data._raw || data.response || JSON.stringify(data);
       this.messages.push({ role: 'ai', text: result });
       this.scrollChat();

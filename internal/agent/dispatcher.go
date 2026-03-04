@@ -15,9 +15,10 @@ type ZeroClawClient interface {
 
 // DispatchOption controls routing behavior.
 type DispatchOption struct {
-	ForceLocal bool   // --local flag: force L3a
-	ForceDeep  bool   // --deep flag: force L3b
-	SessionID  string // --session flag: continue L3a or L3b session
+	ForceLocal     bool           // --local flag: force L3a
+	ForceDeep      bool           // --deep flag: force L3b
+	SessionID      string         // --session flag: continue L3a or L3b session
+	StreamCallback StreamCallback // optional: stream tool call events
 }
 
 // Dispatcher routes queries to L3a (Go Agent) or L3b (ZeroClaw).
@@ -39,7 +40,7 @@ func NewDispatcher(goAgent *Agent, zeroclaw ZeroClawClient) *Dispatcher {
 func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption) (string, string, []ToolCallInfo, error) {
 	// Force local → L3a
 	if opts.ForceLocal {
-		return d.goAgent.Ask(ctx, opts.SessionID, query)
+		return d.goAgent.AskStream(ctx, opts.SessionID, query, opts.StreamCallback)
 	}
 
 	// Force deep → L3b (no session fallback)
@@ -62,7 +63,7 @@ func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption)
 			return r, opts.SessionID, nil, err
 		}
 		// Graceful degradation: L3b unavailable → use L3a session
-		return d.goAgent.Ask(ctx, opts.SessionID, query)
+		return d.goAgent.AskStream(ctx, opts.SessionID, query, opts.StreamCallback)
 	}
 
 	// Auto-route: if ZeroClaw available and query looks complex, use L3b
@@ -72,7 +73,7 @@ func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption)
 	}
 
 	// Default: L3a
-	return d.goAgent.Ask(ctx, "", query)
+	return d.goAgent.AskStream(ctx, "", query, opts.StreamCallback)
 }
 
 func (d *Dispatcher) zeroClawAvailable() bool {

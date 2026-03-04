@@ -62,6 +62,19 @@ type ToolDefinition struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+// StreamEvent is emitted during AskStream to report tool call progress.
+type StreamEvent struct {
+	Type      string          `json:"type"`                // "tool_start" or "tool_done"
+	Name      string          `json:"name"`                // tool name
+	Arguments json.RawMessage `json:"arguments,omitempty"` // tool arguments (tool_start only)
+	Result    string          `json:"result,omitempty"`    // tool result (tool_done only)
+	IsError   bool            `json:"is_error,omitempty"`  // true if tool errored (tool_done only)
+	Index     int             `json:"index"`               // tool call index
+}
+
+// StreamCallback is called for each tool call event during AskStream.
+type StreamCallback func(StreamEvent)
+
 const defaultMaxTurns = 30
 
 // Agent is the L3a Go Agent (simple tool-calling loop).
@@ -110,6 +123,11 @@ func (a *Agent) Available() bool {
 // Ask processes a user query through the agent loop and returns the final text response.
 // If sessionID is empty, a new session is created. Returns (result, sessionID, toolCalls, error).
 func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, string, []ToolCallInfo, error) {
+	return a.AskStream(ctx, sessionID, query, nil)
+}
+
+// AskStream is like Ask but calls cb for each tool call start/finish event.
+func (a *Agent) AskStream(ctx context.Context, sessionID, query string, cb StreamCallback) (string, string, []ToolCallInfo, error) {
 	if a.llm == nil {
 		return "", "", nil, fmt.Errorf("no LLM backend configured: deploy a model and run 'aima serve', or set AIMA_LLM_ENDPOINT")
 	}
@@ -169,6 +187,11 @@ func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, strin
 				Name:      tc.Name,
 				Arguments: json.RawMessage(tc.Arguments),
 			}
+			idx := len(allToolCalls)
+
+			if cb != nil {
+				cb(StreamEvent{Type: "tool_start", Name: tc.Name, Arguments: json.RawMessage(tc.Arguments), Index: idx})
+			}
 
 			result, err := a.tools.ExecuteTool(ctx, tc.Name, json.RawMessage(tc.Arguments))
 			if err != nil {
@@ -180,6 +203,9 @@ func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, strin
 					Content:    fmt.Sprintf("error: %v", err),
 				})
 				allToolCalls = append(allToolCalls, callInfo)
+				if cb != nil {
+					cb(StreamEvent{Type: "tool_done", Name: tc.Name, Result: callInfo.Result, IsError: true, Index: idx})
+				}
 				continue
 			}
 
@@ -195,6 +221,9 @@ func (a *Agent) Ask(ctx context.Context, sessionID, query string) (string, strin
 				Content:    content,
 			})
 			allToolCalls = append(allToolCalls, callInfo)
+			if cb != nil {
+				cb(StreamEvent{Type: "tool_done", Name: tc.Name, Result: content, IsError: result.IsError, Index: idx})
+			}
 		}
 	}
 

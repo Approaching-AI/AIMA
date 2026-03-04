@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -256,6 +257,11 @@ func (r *DockerRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
 
 		phase := dockerStatusToPhase(ps.Status)
 		ready := phase == "running" && port > 0 && portAlive(port)
+		if ready {
+			if asset := findEngineAsset(r.engineAssets, labels["aima.dev/engine"]); asset != nil && asset.Startup.HealthCheck.Path != "" {
+				ready = httpHealthy(port, asset.Startup.HealthCheck.Path)
+			}
+		}
 		addr := ""
 		if port > 0 {
 			addr = "127.0.0.1:" + strconv.Itoa(port)
@@ -338,6 +344,11 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	}
 
 	ready := phase == "running" && port > 0 && portAlive(port)
+	if ready {
+		if asset := findEngineAsset(r.engineAssets, labels["aima.dev/engine"]); asset != nil && asset.Startup.HealthCheck.Path != "" {
+			ready = httpHealthy(port, asset.Startup.HealthCheck.Path)
+		}
+	}
 	addr := ""
 	if port > 0 {
 		addr = "127.0.0.1:" + strconv.Itoa(port)
@@ -442,6 +453,18 @@ func dockerStatusToPhase(status string) string {
 func cdiAvailable() bool {
 	_, err := os.Stat("/etc/cdi/nvidia.yaml")
 	return err == nil
+}
+
+// httpHealthy checks whether the engine's HTTP health endpoint returns 200.
+// Used to distinguish "TCP port open" (vLLM binds early) from "actually ready to serve".
+func httpHealthy(port int, path string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, path))
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // parseLabelString parses Docker's comma-separated label format "k=v,k2=v2".

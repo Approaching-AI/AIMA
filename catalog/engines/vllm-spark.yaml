@@ -27,9 +27,6 @@ hardware:
   vram_min_mib: 4096
 startup:
   command: ["vllm", "serve", "{{.ModelPath}}"]
-  init_commands:
-    - "python3 /patches/fix_rope.py"
-    - "python3 /patches/fix_funasr_import.py"
   env:
     VLLM_ATTENTION_BACKEND: FLASH_ATTN
   default_args:
@@ -48,11 +45,6 @@ startup:
     prompt: "Hello"
     max_tokens: 1
     timeout_s: 60
-  extra_volumes:
-    - name: patches
-      host_path: /tmp/aima-patches
-      mount_path: /patches
-      read_only: true
   log_patterns:
     phases:
       - name: model_init

@@ -2318,17 +2318,20 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		// Benchmark execution
 		RunBenchmark: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 			var p struct {
-				Model       string `json:"model"`
-				Endpoint    string `json:"endpoint"`
-				Concurrency int    `json:"concurrency"`
-				NumRequests int    `json:"num_requests"`
-				MaxTokens   int    `json:"max_tokens"`
-				InputTokens int    `json:"input_tokens"`
-				Warmup      *int   `json:"warmup"`
-				Save        *bool  `json:"save"`
-				Hardware    string `json:"hardware"`
-				Engine      string `json:"engine"`
-				Notes       string `json:"notes"`
+				Model          string  `json:"model"`
+				Endpoint       string  `json:"endpoint"`
+				Concurrency    int     `json:"concurrency"`
+				NumRequests    int     `json:"num_requests"`
+				MaxTokens      int     `json:"max_tokens"`
+				InputTokens    int     `json:"input_tokens"`
+				Warmup         *int    `json:"warmup"`
+				Rounds         int     `json:"rounds"`
+				MinOutputRatio float64 `json:"min_output_ratio"`
+				MaxRetries     int     `json:"max_retries"`
+				Save           *bool   `json:"save"`
+				Hardware       string  `json:"hardware"`
+				Engine         string  `json:"engine"`
+				Notes          string  `json:"notes"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse benchmark params: %w", err)
@@ -2342,13 +2345,16 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 
 			cfg := benchpkg.RunConfig{
-				Endpoint:    endpoint,
-				Model:       p.Model,
-				Concurrency: p.Concurrency,
-				NumRequests: p.NumRequests,
-				MaxTokens:   p.MaxTokens,
-				InputTokens: p.InputTokens,
-				WarmupCount: warmup,
+				Endpoint:       endpoint,
+				Model:          p.Model,
+				Concurrency:    p.Concurrency,
+				NumRequests:    p.NumRequests,
+				MaxTokens:      p.MaxTokens,
+				InputTokens:    p.InputTokens,
+				WarmupCount:    warmup,
+				Rounds:         p.Rounds,
+				MinOutputRatio: p.MinOutputRatio,
+				MaxRetries:     p.MaxRetries,
 			}
 
 			result, err := benchpkg.Run(ctx, cfg)
@@ -2382,15 +2388,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		RunBenchmarkMatrix: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 			var p struct {
-				Model             string `json:"model"`
-				Endpoint          string `json:"endpoint"`
-				ConcurrencyLevels []int  `json:"concurrency_levels"`
-				InputTokenLevels  []int  `json:"input_token_levels"`
-				MaxTokenLevels    []int  `json:"max_token_levels"`
-				RequestsPerCombo  int    `json:"requests_per_combo"`
-				Save              *bool  `json:"save"`
-				Hardware          string `json:"hardware"`
-				Engine            string `json:"engine"`
+				Model             string  `json:"model"`
+				Endpoint          string  `json:"endpoint"`
+				ConcurrencyLevels []int   `json:"concurrency_levels"`
+				InputTokenLevels  []int   `json:"input_token_levels"`
+				MaxTokenLevels    []int   `json:"max_token_levels"`
+				RequestsPerCombo  int     `json:"requests_per_combo"`
+				Rounds            int     `json:"rounds"`
+				MinOutputRatio    float64 `json:"min_output_ratio"`
+				MaxRetries        int     `json:"max_retries"`
+				Save              *bool   `json:"save"`
+				Hardware          string  `json:"hardware"`
+				Engine            string  `json:"engine"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse matrix params: %w", err)
@@ -2423,13 +2432,16 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				for _, inTok := range p.InputTokenLevels {
 					for _, maxTok := range p.MaxTokenLevels {
 						cfg := benchpkg.RunConfig{
-							Endpoint:    endpoint,
-							Model:       p.Model,
-							Concurrency: conc,
-							NumRequests: p.RequestsPerCombo,
-							MaxTokens:   maxTok,
-							InputTokens: inTok,
-							WarmupCount: 1,
+							Endpoint:       endpoint,
+							Model:          p.Model,
+							Concurrency:    conc,
+							NumRequests:    p.RequestsPerCombo,
+							MaxTokens:      maxTok,
+							InputTokens:    inTok,
+							WarmupCount:    1,
+							Rounds:         p.Rounds,
+							MinOutputRatio: p.MinOutputRatio,
+							MaxRetries:     p.MaxRetries,
 						}
 						result, err := benchpkg.Run(ctx, cfg)
 						cell := matrixCell{
@@ -3045,7 +3057,8 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		ThroughputTPS: result.ThroughputTPS, QPS: result.QPS,
 		ErrorRate: result.ErrorRate, SampleCount: result.TotalRequests,
 		DurationS: int(result.DurationMs / 1000), TestedAt: time.Now(),
-		Notes: notes,
+		Stability: stabilityFromCV(result.TTFTCVPct),
+		Notes:     notes,
 	}
 	if err := db.InsertBenchmarkResult(ctx, br); err != nil {
 		return "", "", fmt.Errorf("save benchmark result: %w", err)
@@ -3066,6 +3079,18 @@ func tokenBucket(tokens int) string {
 		return fmt.Sprintf("%dK", tokens/1000)
 	default:
 		return fmt.Sprintf("%d", tokens)
+	}
+}
+
+// stabilityFromCV derives a stability label from coefficient of variation (percentage).
+func stabilityFromCV(cvPct float64) string {
+	switch {
+	case cvPct <= 15:
+		return "stable"
+	case cvPct <= 30:
+		return "fluctuating"
+	default:
+		return "unstable"
 	}
 }
 

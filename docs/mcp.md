@@ -116,11 +116,14 @@ SQLite 关系查询驱动，支持多维分析:
 | `knowledge.aggregate` | 分组聚合统计 (按引擎/硬件/模型维度) |
 | `knowledge.promote` | 将 Configuration 提升为推荐配置 |
 
-### 基准测试 — Benchmark (1)
+### 基准测试 — Benchmark (4)
 
 | 工具 | 功能 |
 |------|------|
-| `benchmark.record` | 记录性能数据 (throughput/TTFT/TPOT/VRAM), 自动创建 Configuration |
+| `benchmark.run` | 在线基准测试: 向 OpenAI 兼容 endpoint 发送流式请求, 测量 TTFT/TPOT/吞吐量. 支持多轮测量(rounds)、输出长度校验重试(min_output_ratio)、请求级重试(max_retries) |
+| `benchmark.matrix` | 矩阵测试: 在多组 concurrency × input_tokens × max_tokens 组合上批量运行 benchmark.run |
+| `benchmark.record` | 手动记录性能数据 (throughput/TTFT/TPOT/VRAM), 自动创建 Configuration |
+| `benchmark.list` | 查询历史基准测试结果, 支持按 model/hardware/engine/config_id 过滤 |
 
 ### 基础设施 — Stack (3)
 

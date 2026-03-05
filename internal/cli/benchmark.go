@@ -126,17 +126,20 @@ Example:
 
 func newBenchmarkRunCmd(app *App) *cobra.Command {
 	var (
-		modelName   string
-		endpoint    string
-		concurrency int
-		requests    int
-		maxTokens   int
-		inputTokens int
-		warmup      int
-		noSave      bool
-		hardware    string
-		engine      string
-		notes       string
+		modelName      string
+		endpoint       string
+		concurrency    int
+		requests       int
+		maxTokens      int
+		inputTokens    int
+		warmup         int
+		rounds         int
+		minOutputRatio float64
+		maxRetries     int
+		noSave         bool
+		hardware       string
+		engine         string
+		notes          string
 	)
 
 	cmd := &cobra.Command{
@@ -148,21 +151,25 @@ Results are automatically saved to the knowledge database unless --no-save is us
 Examples:
   aima benchmark run --model qwen3-8b
   aima benchmark run --model qwen3-8b --concurrency 4 --requests 20
-  aima benchmark run --model gpt-4 --endpoint https://api.openai.com/v1/chat/completions --no-save`,
+  aima benchmark run --model gpt-4 --endpoint https://api.openai.com/v1/chat/completions --no-save
+  aima benchmark run --model qwen3-8b --rounds 3 --min-output-ratio 0.5 --max-retries 2`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			save := !noSave
 			params := map[string]any{
-				"model":       modelName,
-				"endpoint":    endpoint,
-				"concurrency": concurrency,
-				"num_requests": requests,
-				"max_tokens":  maxTokens,
-				"input_tokens": inputTokens,
-				"warmup":      warmup,
-				"save":        save,
-				"hardware":    hardware,
-				"engine":      engine,
-				"notes":       notes,
+				"model":            modelName,
+				"endpoint":         endpoint,
+				"concurrency":      concurrency,
+				"num_requests":     requests,
+				"max_tokens":       maxTokens,
+				"input_tokens":     inputTokens,
+				"warmup":           warmup,
+				"rounds":           rounds,
+				"min_output_ratio": minOutputRatio,
+				"max_retries":      maxRetries,
+				"save":             save,
+				"hardware":         hardware,
+				"engine":           engine,
+				"notes":            notes,
 			}
 			raw, err := json.Marshal(params)
 			if err != nil {
@@ -184,6 +191,9 @@ Examples:
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 256, "Max output tokens per request")
 	cmd.Flags().IntVar(&inputTokens, "input-tokens", 128, "Approximate input length in tokens")
 	cmd.Flags().IntVar(&warmup, "warmup", 2, "Warmup requests to discard")
+	cmd.Flags().IntVar(&rounds, "rounds", 1, "Number of measurement rounds")
+	cmd.Flags().Float64Var(&minOutputRatio, "min-output-ratio", 0, "Minimum output tokens ratio (0-1, retry below)")
+	cmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Per-request retry count on failure")
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID for saving")
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type for saving")
@@ -196,10 +206,14 @@ Examples:
 func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 	var (
 		modelName      string
+		endpoint       string
 		concurrencyStr string
 		inputTokensStr string
 		maxTokensStr   string
 		requests       int
+		rounds         int
+		minOutputRatio float64
+		maxRetries     int
 		noSave         bool
 		hardware       string
 		engine         string
@@ -212,15 +226,20 @@ func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 
 Examples:
   aima benchmark matrix --model qwen3-8b
-  aima benchmark matrix --model qwen3-8b --concurrency 1,4,8 --hardware nvidia-gb10-arm64 --engine vllm`,
+  aima benchmark matrix --model qwen3-8b --concurrency 1,4,8 --hardware nvidia-gb10-arm64 --engine vllm
+  aima benchmark matrix --model qwen3-8b --rounds 3 --max-retries 1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			save := !noSave
 			params := map[string]any{
 				"model":              modelName,
+				"endpoint":           endpoint,
 				"concurrency_levels": parseIntList(concurrencyStr),
 				"input_token_levels": parseIntList(inputTokensStr),
 				"max_token_levels":   parseIntList(maxTokensStr),
 				"requests_per_combo": requests,
+				"rounds":             rounds,
+				"min_output_ratio":   minOutputRatio,
+				"max_retries":        maxRetries,
 				"save":               save,
 				"hardware":           hardware,
 				"engine":             engine,
@@ -239,10 +258,14 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
+	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OpenAI-compatible endpoint URL (auto-detect if empty)")
 	cmd.Flags().StringVar(&concurrencyStr, "concurrency", "1,4", "Comma-separated concurrency levels")
 	cmd.Flags().StringVar(&inputTokensStr, "input-tokens", "128,1024", "Comma-separated input token lengths")
 	cmd.Flags().StringVar(&maxTokensStr, "max-tokens", "128,512", "Comma-separated output token lengths")
 	cmd.Flags().IntVar(&requests, "requests", 5, "Requests per combination")
+	cmd.Flags().IntVar(&rounds, "rounds", 1, "Measurement rounds per combination")
+	cmd.Flags().Float64Var(&minOutputRatio, "min-output-ratio", 0, "Minimum output tokens ratio (0-1)")
+	cmd.Flags().IntVar(&maxRetries, "max-retries", 0, "Per-request retry count")
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID")
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type")

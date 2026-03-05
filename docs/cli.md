@@ -81,6 +81,30 @@ aima agent install                        # 安装 ZeroClaw
 aima agent status                         # 查看 Agent 状态
 ```
 
+### 基准测试
+
+```bash
+aima benchmark run --model <name>         # 在线基准测试 (TTFT/TPOT/吞吐量)
+  --endpoint <url>                        # 指定推理 endpoint (默认自动检测)
+  --concurrency <n>                       # 并发数 (默认 1)
+  --requests <n>                          # 请求数 (默认 10)
+  --max-tokens <n>                        # 最大输出 token 数 (默认 256)
+  --input-tokens <n>                      # 输入长度 (默认 128)
+  --rounds <n>                            # 测量轮数 (默认 1, 多轮提高统计显著性)
+  --min-output-ratio <0-1>                # 最小输出比例 (低于阈值自动重试)
+  --max-retries <n>                       # 每请求重试次数 (默认 0)
+  --warmup <n>                            # 预热请求数 (默认 2)
+  --no-save                               # 不保存到知识库
+aima benchmark matrix --model <name>      # 矩阵测试 (多组参数组合)
+  --concurrency 1,4,8                     # 逗号分隔的并发级别
+  --input-tokens 128,1024                 # 逗号分隔的输入长度
+  --max-tokens 128,512                    # 逗号分隔的输出长度
+  --endpoint <url>                        # 指定推理 endpoint
+  --rounds <n>                            # 每组合测量轮数
+aima benchmark record                     # 手动记录性能数据
+aima benchmark list                       # 查询历史测试结果
+```
+
 ### 配置
 
 ```bash
@@ -167,4 +191,4 @@ aima ask --deep "为什么我的模型推理很慢？"
 
 ---
 
-*最后更新：2026-02-27*
+*最后更新：2026-03-05*

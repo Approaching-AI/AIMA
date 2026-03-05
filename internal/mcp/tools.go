@@ -1195,6 +1195,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				`"max_tokens":{"type":"integer","description":"Max output tokens per request (default: 256)"},`+
 				`"input_tokens":{"type":"integer","description":"Approximate input length in tokens (default: 128)"},`+
 				`"warmup":{"type":"integer","description":"Warmup requests to discard (default: 2)"},`+
+				`"rounds":{"type":"integer","description":"Number of measurement rounds (default: 1). Multiple rounds improve statistical significance."},`+
+				`"min_output_ratio":{"type":"number","description":"Minimum output tokens as ratio of max_tokens (0-1, default: 0). Retries requests below this threshold."},`+
+				`"max_retries":{"type":"integer","description":"Per-request retry count on failure or output too short (default: 0)"},`+
 				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
 				`"hardware":{"type":"string","description":"Hardware profile ID for saving (e.g. nvidia-gb10-arm64)"},`+
 				`"engine":{"type":"string","description":"Engine type for saving (e.g. vllm)"},`+
@@ -1218,10 +1221,14 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Description: "Run a benchmark test matrix across multiple concurrency levels and input/output length combinations. Runs benchmark.run for each combination sequentially. Use when you need comprehensive performance characterization of a deployment.",
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model name"},`+
+				`"endpoint":{"type":"string","description":"OpenAI-compatible endpoint URL. Auto-detected from proxy if omitted."},`+
 				`"concurrency_levels":{"type":"array","items":{"type":"integer"},"description":"Concurrency levels to test (default: [1,4])"},`+
 				`"input_token_levels":{"type":"array","items":{"type":"integer"},"description":"Input lengths in tokens (default: [128,1024])"},`+
 				`"max_token_levels":{"type":"array","items":{"type":"integer"},"description":"Output lengths in tokens (default: [128,512])"},`+
 				`"requests_per_combo":{"type":"integer","description":"Requests per combination (default: 5)"},`+
+				`"rounds":{"type":"integer","description":"Measurement rounds per combination (default: 1)"},`+
+				`"min_output_ratio":{"type":"number","description":"Minimum output tokens ratio for retry (0-1, default: 0)"},`+
+				`"max_retries":{"type":"integer","description":"Per-request retry count (default: 0)"},`+
 				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
 				`"hardware":{"type":"string","description":"Hardware profile ID"},`+
 				`"engine":{"type":"string","description":"Engine type"}`,

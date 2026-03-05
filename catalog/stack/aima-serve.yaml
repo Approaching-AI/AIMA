@@ -1,7 +1,7 @@
 kind: stack_component
 metadata:
   name: aima-serve
-  version: "0.1.0"
+  version: "0.0.1"
   description: "AIMA inference proxy with mDNS LAN discovery"
 
 source:

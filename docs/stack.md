@@ -53,7 +53,7 @@ metadata:
   description: "K3S with AIMA-optimized defaults for edge AI inference"
 
 compatibility:
-  aima_min: "0.1.0"
+  aima_min: "0.0.1"
 
 source:
   binary: "k3s"

@@ -76,8 +76,8 @@ variants:
       quantization: gptq
       dtype: auto
     expected_performance:
-      tokens_per_second: [5, 15]
-      latency_first_token_ms: [200, 1000]
+      tokens_per_second: [9, 13]
+      latency_first_token_ms: [900, 4000]
 
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)

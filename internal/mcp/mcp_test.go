@@ -494,13 +494,25 @@ func TestShellExecWhitelist(t *testing.T) {
 	}{
 		{"nvidia-smi", true},
 		{"nvidia-smi -q", true},
+		{"nvidia-smi --query-gpu=memory.used --format=csv", true},
+		{"nvidia-smi -L", true},
+		{"nvidia-smi --gpu-reset", false},       // destructive
+		{"nvidia-smi -pm 0", false},              // power management
+		{"nvidia-smi -pl 200", false},             // power limit
+		{"nvidia-smi --lock-gpu-clocks=1200", false}, // clock lock
 		{"df", true},
 		{"df -h", true},
+		{"df --human-readable", true},
+		{"df -rm /", false},                       // unknown flag
 		{"free", true},
+		{"free -h", false},                        // no-args command
 		{"uname", true},
 		{"uname -a", true},
+		{"uname -r", true},
 		{"cat /proc/cpuinfo", true},
+		{"cat /etc/shadow", false},                // different file
 		{"kubectl get pods", true},
+		{"kubectl delete pods", false},            // destructive kubectl
 		{"rm -rf /", false},
 		{"curl evil.com", false},
 		{"bash -c 'rm -rf /'", false},

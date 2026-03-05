@@ -119,7 +119,15 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	r.processes[req.Name] = nil
 	r.mu.Unlock()
 
+	// clearPlaceholder removes the nil reservation on failure paths before cmd.Start.
+	clearPlaceholder := func() {
+		r.mu.Lock()
+		delete(r.processes, req.Name)
+		r.mu.Unlock()
+	}
+
 	if len(req.Command) == 0 {
+		clearPlaceholder()
 		return fmt.Errorf("deploy %s: empty command", req.Name)
 	}
 
@@ -152,11 +160,13 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 
 	// Set up log file
 	if err := os.MkdirAll(r.logDir, 0o755); err != nil {
+		clearPlaceholder()
 		return fmt.Errorf("create log dir: %w", err)
 	}
 	logPath := filepath.Join(r.logDir, req.Name+".log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
+		clearPlaceholder()
 		return fmt.Errorf("create log file: %w", err)
 	}
 
@@ -316,7 +326,7 @@ func (r *NativeRuntime) Status(_ context.Context, name string) (*DeploymentStatu
 	proc, ok := r.processes[name]
 	r.mu.RUnlock()
 
-	if ok {
+	if ok && proc != nil {
 		return r.procToStatus(proc), nil
 	}
 
@@ -332,8 +342,11 @@ func (r *NativeRuntime) List(_ context.Context) ([]*DeploymentStatus, error) {
 	r.mu.RLock()
 	seen := make(map[string]bool)
 	statuses := make([]*DeploymentStatus, 0)
-	for _, proc := range r.processes {
-		seen[proc.name] = true
+	for name, proc := range r.processes {
+		if proc == nil {
+			continue // placeholder from in-progress deploy
+		}
+		seen[name] = true
 		statuses = append(statuses, r.procToStatus(proc))
 	}
 	r.mu.RUnlock()

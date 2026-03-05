@@ -115,14 +115,34 @@ func IsValidConfigKey(key string) bool {
 
 // isCommandAllowed checks if a command is in the whitelist.
 func isCommandAllowed(command string) bool {
-	// allowedCommands is the whitelist for shell.exec.
-	// Single-word entries match exact command name. Multi-word entries match exact prefix.
-	allowedCommands := []string{
-		"nvidia-smi",
-		"df",
-		"free",
-		"uname",
+	// allowedExact lists commands that must match exactly (no extra arguments).
+	allowedExact := []string{
 		"cat /proc/cpuinfo",
+	}
+
+	// allowedNoArgs lists commands allowed only without arguments.
+	allowedNoArgs := []string{
+		"free",
+	}
+
+	// allowedWithSafeFlags maps commands to a set of permitted flag prefixes.
+	// Only flags starting with one of these prefixes are accepted.
+	allowedWithSafeFlags := map[string][]string{
+		"nvidia-smi": {
+			"-q", "--query", // query modes (--query-gpu, --query-compute-apps, etc.)
+			"-L", "--list",  // list GPUs
+			"-i",            // select GPU by index (read-only)
+			"--format",      // output format (csv, noheader, etc.)
+			"--id",          // select GPU by ID
+		},
+		"df": {
+			"-h", "--human", // human-readable
+			"-T", "--type",  // show filesystem type
+			"-a", "--all",   // show all filesystems
+		},
+		"uname": {
+			"-a", "-s", "-r", "-m", "-n", "-v", "-p", "-o", // all flags are read-only
+		},
 	}
 
 	// allowedKubectlSubcommands restricts kubectl to read-only operations.
@@ -145,15 +165,37 @@ func isCommandAllowed(command string) bool {
 		return len(parts) >= 2 && allowedKubectlSubcommands[parts[1]]
 	}
 
-	// Other commands: exact match or match with additional arguments.
-	// For multi-word entries (e.g. "cat /proc/cpuinfo"), ALL tokens must match —
-	// additional arguments after the pattern are rejected to prevent file read escalation.
-	for _, allowed := range allowedCommands {
+	// Exact multi-word matches (no extra arguments allowed).
+	for _, allowed := range allowedExact {
 		if cmd == allowed {
 			return true
 		}
-		allowedParts := strings.Fields(allowed)
-		if len(allowedParts) == 1 && strings.HasPrefix(cmd, allowed+" ") {
+	}
+
+	// Commands allowed without any arguments.
+	for _, allowed := range allowedNoArgs {
+		if cmd == allowed {
+			return true
+		}
+	}
+
+	// Commands with flag whitelisting: every flag must match a safe prefix.
+	if safePrefixes, ok := allowedWithSafeFlags[parts[0]]; ok {
+		for _, arg := range parts[1:] {
+			if !hasAnySafePrefix(arg, safePrefixes) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+// hasAnySafePrefix reports whether arg starts with any of the given prefixes.
+func hasAnySafePrefix(arg string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(arg, p) {
 			return true
 		}
 	}

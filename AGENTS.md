@@ -1,142 +1,86 @@
-# AIMA — Claude Code Development Guide
+# AIMA — Development Guide
 
 ## What Is This
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 54 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 57 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
 
-## ====== Remote Test Lab (Heterogeneous Hardware) ======
+## Git Flow
 
-**This is a live, SSH-driven test environment for real-device validation.**
-Claude Code SSHes into each machine, runs AIMA, collects results, and feeds them back into development.
-
-### Machine Registry
-
-| ID | User@Host | OS | Arch | Chip/GPU | RAM | Disk Free | K3S/Docker | SSH Auth | Role |
-|----|-----------|-----|------|----------|-----|-----------|------------|----------|------|
-| dev-win | **local** (Light-Salt) | Windows 11 | x86_64 | i9-13980HX + RTX 4060 8GB (Driver 566, CUDA) | 32 GB | 551 GB | no | local | Dev machine, `go build/test` runs here directly |
-| mac-m4 | `user@<REDACTED_IP>` | macOS 26.2 | arm64 | Apple M4 | 16 GB | 393 GB | no | key | Apple Silicon validation |
-| gb10 | `user@<REDACTED_IP>` | Ubuntu 24.04 | aarch64 | NVIDIA GB10 (CUDA 13.0, Driver 580) | 120 GB unified | 149 GB | K3S v1.31.4 + Docker 28.5 | key | GPU inference + K3S full-stack validation |
-| linux-1 | `user@<REDACTED_IP>` (Tailscale) / `user@<REDACTED_IP>` (LAN) | Ubuntu 22.04 | x86_64 | 2× NVIDIA RTX 4090 48GB (Driver 580, CUDA 13.0) | 503 GB | 72 GB | Docker | key | Dual-GPU inference validation |
-| amd395 | `user@<REDACTED_IP>` (Tailscale) | Ubuntu 24.04 | x86_64 | AMD Ryzen AI MAX+ 395 + Radeon 8060S (no NVIDIA) | 62 GB | 57 GB | Docker 28.2 | key | AMD/APU inference validation |
-
-> **Maintaining this table:** After first SSH to a new machine, run the device probe and update this table.
-> Password: never store passwords here. Use SSH key auth. For initial key setup: `ssh-copy-id <user@host>`.
-
-### Test Loop Workflow — ALL COLLECT, THEN ANALYZE
-
-> **核心原则：先全量采集，再统一分析，最后一次性修改。**
-> 绝对不要看一台改一台。逐台修复会制造"按下葫芦浮起瓢"的兼容性问题。
-> 每一轮修改必须基于所有设备的完整结果矩阵。
+This project uses **Git Flow** branching model:
 
 ```
- [1] Develop locally (edit Go / YAML)
-      │
- [2] Build: 一次性交叉编译所有目标
-      │  go build -o build/aima.exe ./cmd/aima                                       # dev-win
-      │  GOOS=darwin  GOARCH=arm64 go build -o build/aima-darwin-arm64  ./cmd/aima   # mac-m4
-      │  GOOS=linux   GOARCH=arm64 go build -o build/aima-linux-arm64   ./cmd/aima   # gb10
-      │  GOOS=linux   GOARCH=amd64 go build -o build/aima-linux-amd64   ./cmd/aima   # linux-1
-      │
- [3] Distribute: 同步到所有远程机器
-      │  scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
-      │  scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
-      │  scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
-      │
- [4] Execute: 对所有设备（含本机）并行执行同一组测试命令
-      │  本机:  build/aima.exe hal detect
-      │  SSH:   ssh user@<REDACTED_IP> './aima hal detect'
-      │  SSH:   ssh user@<REDACTED_IP>     './aima hal detect'
-      │  SSH:   ssh user@<REDACTED_IP>      './aima hal detect'
-      │
-      ╔══════════════════════════════════════════════════════════╗
-      ║  ⚠ BARRIER: 等待所有设备返回结果，一台都不能少。       ║
-      ║  如果某台超时/不可达，记录为 UNREACHABLE，不要跳过。    ║
-      ╚══════════════════════════════════════════════════════════╝
-      │
- [5] Collect: 将所有结果汇总为对比矩阵
-      │
-      │  ┌──────────┬──────────────┬──────────┬──────────────┐
-      │  │ 测试项    │ dev-win      │ mac-m4   │ gb10   │ ... │
-      │  ├──────────┼──────────────┼──────────┼──────────────┤
-      │  │ hal detect│ ✅ RTX 4060 │ ✅ no-gpu│ ❌ N/A parse│
-      │  │ engine ls │ ✅           │ ✅       │ ✅          │
-      │  │ ...       │              │          │              │
-      │  └──────────┴──────────────┴──────────┴──────────────┘
-      │
- [6] Analyze: 基于完整矩阵统一分析
-      │  - 哪些设备通过、哪些失败、失败模式是否相同
-      │  - 是否存在仅在某一架构上出现的 edge case
-      │  - 修复方案是否对所有设备都安全（不能只修一个平台）
-      │
- [7] Fix: 一次性提交修改，修改必须覆盖所有已知平台
-      │
- [8] Re-verify: 回到 [2]，再次全量验证，直到矩阵全绿
+master ──●──── tag v0.0.1 ────────────────── tag v0.0.2 ──
+          \                                  /
+develop ───●──●──●──●──feature──●──●──●──●──●
+                   \           /
+                    feat/xxx──●
 ```
 
-### Standard Test Commands
+| Branch | Purpose | Merges to |
+|--------|---------|-----------|
+| `master` | Production releases only. Every commit = a tagged release. | — |
+| `develop` | Integration branch. Daily development lands here. | `master` (via release) |
+| `feat/<name>` | New features. Branch from `develop`. | `develop` (via PR) |
+| `fix/<name>` | Bug fixes for develop. Branch from `develop`. | `develop` (via PR) |
+| `release/<ver>` | Release prep (version bump, final fixes). Branch from `develop`. | `master` + `develop` |
+| `hotfix/<ver>` | Urgent fix for production. Branch from `master`. | `master` + `develop` |
+
+### Daily workflow
 
 ```bash
-# --- Device probe (first time or hardware change) ---
-ssh <user@host> 'uname -a && cat /etc/os-release 2>/dev/null; sw_vers 2>/dev/null; nvidia-smi 2>/dev/null || echo no-nvidia; free -h 2>/dev/null; df -h / | tail -1'
+# Start a new feature
+git checkout develop
+git pull origin develop
+git checkout -b feat/my-feature
 
-# --- Smoke test suite (run same commands on EVERY device) ---
-./aima version                # or ssh <user@host> './aima version'
-./aima hal detect
-./aima engine list
-./aima model list
-./aima deploy list            # only meaningful on K3S-capable devices
+# ... develop, commit ...
+
+# Push and create PR to develop
+git push -u origin feat/my-feature
+# Create PR: feat/my-feature → develop
+
+# After PR merged, clean up
+git checkout develop
+git pull origin develop
+git branch -d feat/my-feature
 ```
 
-### Quick Reference: Full-Fleet Build → Distribute → Test
+### Release workflow
 
 ```bash
-# ── [2] Build all targets ──
-go build -o build/aima.exe ./cmd/aima && \
-GOOS=darwin GOARCH=arm64 go build -o build/aima-darwin-arm64 ./cmd/aima && \
-GOOS=linux  GOARCH=arm64 go build -o build/aima-linux-arm64  ./cmd/aima && \
-GOOS=linux  GOARCH=amd64 go build -o build/aima-linux-amd64  ./cmd/aima
+# Prepare release
+git checkout develop
+git checkout -b release/v0.0.2
 
-# ── [3] Distribute ──
-scp build/aima-darwin-arm64 user@<REDACTED_IP>:~/aima
-scp build/aima-linux-arm64  user@<REDACTED_IP>:~/aima
-scp build/aima-linux-amd64  user@<REDACTED_IP>:~/aima
+# Version bump, final fixes, then merge to master
+git checkout master
+git merge --no-ff release/v0.0.2
+git tag -a v0.0.2 -m "Release v0.0.2"
+git push origin master --tags
 
-# ── [4] Execute ALL in parallel, wait for ALL ──
-build/aima.exe hal detect > build/result-dev-win.txt 2>&1 &
-ssh user@<REDACTED_IP> 'chmod +x ~/aima && ~/aima hal detect' > build/result-mac-m4.txt 2>&1 &
-ssh user@<REDACTED_IP>      'chmod +x ~/aima && ~/aima hal detect' > build/result-gb10.txt 2>&1 &
-ssh user@<REDACTED_IP>       'chmod +x ~/aima && ~/aima hal detect' > build/result-linux-1.txt 2>&1 &
-wait
-
-# ── [5] Collect: print comparison matrix ──
-echo "=== dev-win ===" && cat build/result-dev-win.txt
-echo "=== mac-m4 ===" && cat build/result-mac-m4.txt
-echo "=== gb10 ===" && cat build/result-gb10.txt
-echo "=== linux-1 ===" && cat build/result-linux-1.txt
+# Back-merge to develop
+git checkout develop
+git merge --no-ff release/v0.0.2
+git branch -d release/v0.0.2
 ```
 
-### Adding a New Machine
+### Build with version info
 
-1. Ensure SSH key auth works: `ssh-copy-id <user@host>`
-2. SSH in and run the device probe command above
-3. Update the Machine Registry table with the results
-4. Determine the correct `GOOS/GOARCH` for cross-compilation
-5. Add the machine to the sync & test scripts
+```bash
+VERSION=$(git describe --tags --always)
+COMMIT=$(git rev-parse --short HEAD)
+BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS="-X github.com/jguan/aima/internal/cli.Version=$VERSION \
+         -X github.com/jguan/aima/internal/cli.GitCommit=$COMMIT \
+         -X github.com/jguan/aima/internal/cli.BuildTime=$BUILD_TIME"
 
-### Conventions
-
-- **全量采集、统一分析、一次修改。** 这是最高优先级的流程约束。不要在看到一台设备的结果后就开始改代码。必须等所有设备结果到齐，对比后再动手。违反此原则的修改大概率引入平台特异性 bug。
-- **Never store passwords in this file or any tracked file.** Use SSH keys only.
-- **Cross-compile locally.** Don't install Go on remote machines — AIMA has zero CGO, so cross-compilation always works.
-- **Test results are ephemeral.** Don't commit raw test outputs. Summarize findings in commit messages or design docs.
-- **One binary per arch.** Build outputs go to `build/` (gitignored). Name pattern: `aima-{os}-{arch}`.
-
----
+go build -ldflags "$LDFLAGS" -o build/aima ./cmd/aima
+```
 
 ## The Prime Directive: Less Code
 
@@ -175,18 +119,21 @@ internal/
   state/                      # SQLite (modernc.org/sqlite, zero CGO) — v2: 16 tables
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager
-  stack/                      # Infrastructure stack installer (K3S + HAMi, airgap, parallel downloads)
+  stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   mcp/                        # MCP server + 56 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
-catalog/                      # Knowledge assets (go:embed)
+  ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
+catalog/                      # Knowledge assets (go:embed, compiled in)
   embed.go
   hardware/                   # Hardware Profile YAML (incl. gpu.resource_name)
   engines/                    # Engine Asset YAML (incl. source, warmup)
   models/                     # Model Asset YAML
   partitions/                 # Partition Strategy YAML
   stack/                      # Stack Component YAML (K3S, HAMi — install config + airgap sources)
+# Runtime overlay: ~/.aima/catalog/{hardware,engines,models,partitions,stack}/*.yaml
+#   Same metadata.name overrides go:embed, new names append. No recompilation needed.
 ```
 
 ## Key Commands
@@ -212,7 +159,7 @@ go vet ./...                       # Static analysis
 ## Design Patterns to Follow
 
 ### The "Thin CLI" Pattern
-Every CLI command is a thin wrapper: parse flags → call MCP tool function → format output.
+Every CLI command is a thin wrapper: parse flags -> call MCP tool function -> format output.
 CLI never contains business logic. If you need new logic, add it as an MCP tool first.
 
 ```go
@@ -251,7 +198,7 @@ if engineType == "vllm" {
 Every feature must handle absence of its dependencies:
 
 ```go
-// L3b unavailable → fall back to L3a → fall back to L2 → fall back to L0
+// L3b unavailable -> fall back to L3a -> fall back to L2 -> fall back to L0
 func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
     if d.zeroclaw.Available() && d.isComplex(query) {
         return d.zeroclaw.Ask(ctx, query)
@@ -281,6 +228,7 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 3. **Test what matters.** Test business logic and edge cases. Don't test that Go's JSON marshaling works.
 4. **One MCP tool = one function = one responsibility.** Keep tool implementations focused.
 5. **Commit atomically.** Each commit should be a coherent, working unit.
+6. **Branch from develop.** Never commit directly to master. Feature branches merge to develop via PR.
 
 ## Domain Terminology
 
@@ -291,10 +239,10 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 | Hardware Profile | YAML describing a device's GPU/CPU/RAM capability vector |
 | Partition Strategy | YAML describing how to split resources across multiple workloads |
 | Knowledge Note | Structured record of Agent exploration results (trials + recommendation) |
-| Configuration | A tested Hardware×Engine×Model×Config instance with derivation chain |
+| Configuration | A tested Hardware x Engine x Model x Config instance with derivation chain |
 | BenchmarkResult | Multi-dimensional performance data for a Configuration under specific load |
 | PerfVector | 6-dimensional normalized performance vector for similarity search |
-| L0/L1/L2/L3a/L3b | Progressive intelligence levels: defaults → human CLI → knowledge → Go Agent → ZeroClaw |
+| L0/L1/L2/L3a/L3b | Progressive intelligence levels: defaults -> human CLI -> knowledge -> Go Agent -> ZeroClaw |
 | ConfigResolver | Merges L0-L3 configs, higher layer overrides lower |
 | Store | Knowledge query engine wrapping *sql.DB (Search/Compare/Gaps/Similar/Lineage/Aggregate) |
 | MCP Tool | JSON-RPC function exposed to Agents (deploy.apply, model.scan, etc) |

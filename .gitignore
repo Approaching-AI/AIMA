@@ -7,6 +7,12 @@ build/
 .claude/*
 !.claude/skills/
 
+# Personal CLAUDE.md (machine registry, SSH info — not shared)
+CLAUDE.md
+
+# Hardware reference docs (vendor PDFs, local notes)
+hardware-reference/
+
 # IDE / editor
 .idea/
 .vscode/

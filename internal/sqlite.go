@@ -190,6 +190,7 @@ func isSQLiteBusy(err error) bool {
 	return strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "database is locked")
 }
 
+
 func (d *DB) Close() error {
 	return d.db.Close()
 }

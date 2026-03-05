@@ -19,6 +19,7 @@ import (
 
 	"github.com/jguan/aima/catalog"
 	"github.com/jguan/aima/internal/agent"
+	benchpkg "github.com/jguan/aima/internal/benchmark"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/fleet"
@@ -1406,6 +1407,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		}
 		return json.Marshal(filtered)
 	}
+
+	// resolveEndpoint auto-detects the inference endpoint from proxy backends or falls back to localhost.
+	resolveEndpoint := func(explicit, model string) string {
+		if explicit != "" {
+			return explicit
+		}
+		backends := proxyServer.ListBackends()
+		if b, ok := backends[strings.ToLower(model)]; ok && b.Ready {
+			return fmt.Sprintf("http://%s%s/v1/chat/completions", b.Address, b.BasePath)
+		}
+		return "http://localhost:6188/v1/chat/completions"
+	}
+
 	return &mcp.ToolDeps{
 		// Hardware
 		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
@@ -2301,6 +2315,417 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			})
 		},
 
+		// Benchmark execution
+		RunBenchmark: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				Model       string `json:"model"`
+				Endpoint    string `json:"endpoint"`
+				Concurrency int    `json:"concurrency"`
+				NumRequests int    `json:"num_requests"`
+				MaxTokens   int    `json:"max_tokens"`
+				InputTokens int    `json:"input_tokens"`
+				Warmup      *int   `json:"warmup"`
+				Save        *bool  `json:"save"`
+				Hardware    string `json:"hardware"`
+				Engine      string `json:"engine"`
+				Notes       string `json:"notes"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse benchmark params: %w", err)
+			}
+
+			endpoint := resolveEndpoint(p.Endpoint, p.Model)
+
+			warmup := 2
+			if p.Warmup != nil {
+				warmup = *p.Warmup
+			}
+
+			cfg := benchpkg.RunConfig{
+				Endpoint:    endpoint,
+				Model:       p.Model,
+				Concurrency: p.Concurrency,
+				NumRequests: p.NumRequests,
+				MaxTokens:   p.MaxTokens,
+				InputTokens: p.InputTokens,
+				WarmupCount: warmup,
+			}
+
+			result, err := benchpkg.Run(ctx, cfg)
+			if err != nil {
+				return nil, fmt.Errorf("benchmark run: %w", err)
+			}
+
+			// Save to DB unless explicitly disabled
+			save := p.Save == nil || *p.Save
+			var benchmarkID, configID string
+			if save && p.Hardware != "" && p.Engine != "" {
+				var err error
+				benchmarkID, configID, err = saveBenchmarkResult(ctx, db,
+					p.Hardware, p.Engine, p.Model, result,
+					cfg.Concurrency, cfg.InputTokens, cfg.MaxTokens, p.Notes)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			resp := map[string]any{
+				"result": result,
+				"saved":  save && benchmarkID != "",
+			}
+			if benchmarkID != "" {
+				resp["benchmark_id"] = benchmarkID
+				resp["config_id"] = configID
+			}
+			return json.Marshal(resp)
+		},
+
+		RunBenchmarkMatrix: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				Model             string `json:"model"`
+				Endpoint          string `json:"endpoint"`
+				ConcurrencyLevels []int  `json:"concurrency_levels"`
+				InputTokenLevels  []int  `json:"input_token_levels"`
+				MaxTokenLevels    []int  `json:"max_token_levels"`
+				RequestsPerCombo  int    `json:"requests_per_combo"`
+				Save              *bool  `json:"save"`
+				Hardware          string `json:"hardware"`
+				Engine            string `json:"engine"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse matrix params: %w", err)
+			}
+			if len(p.ConcurrencyLevels) == 0 {
+				p.ConcurrencyLevels = []int{1, 4}
+			}
+			if len(p.InputTokenLevels) == 0 {
+				p.InputTokenLevels = []int{128, 1024}
+			}
+			if len(p.MaxTokenLevels) == 0 {
+				p.MaxTokenLevels = []int{128, 512}
+			}
+			if p.RequestsPerCombo <= 0 {
+				p.RequestsPerCombo = 5
+			}
+
+			endpoint := resolveEndpoint(p.Endpoint, p.Model)
+
+			type matrixCell struct {
+				Concurrency int                `json:"concurrency"`
+				InputTokens int                `json:"input_tokens"`
+				MaxTokens   int                `json:"max_tokens"`
+				Result      *benchpkg.RunResult `json:"result"`
+				Error       string             `json:"error,omitempty"`
+			}
+
+			var cells []matrixCell
+			for _, conc := range p.ConcurrencyLevels {
+				for _, inTok := range p.InputTokenLevels {
+					for _, maxTok := range p.MaxTokenLevels {
+						cfg := benchpkg.RunConfig{
+							Endpoint:    endpoint,
+							Model:       p.Model,
+							Concurrency: conc,
+							NumRequests: p.RequestsPerCombo,
+							MaxTokens:   maxTok,
+							InputTokens: inTok,
+							WarmupCount: 1,
+						}
+						result, err := benchpkg.Run(ctx, cfg)
+						cell := matrixCell{
+							Concurrency: conc,
+							InputTokens: inTok,
+							MaxTokens:   maxTok,
+						}
+						if err != nil {
+							cell.Error = err.Error()
+						} else {
+							cell.Result = result
+							// Save each cell if requested
+							save := p.Save == nil || *p.Save
+							if save && p.Hardware != "" && p.Engine != "" {
+								notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
+								saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, conc, inTok, maxTok, notes)
+							}
+						}
+						cells = append(cells, cell)
+					}
+				}
+			}
+
+			return json.Marshal(map[string]any{
+				"model":  p.Model,
+				"cells":  cells,
+				"total":  len(cells),
+			})
+		},
+
+		ListBenchmarks: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				ConfigID string `json:"config_id"`
+				Hardware string `json:"hardware"`
+				Model    string `json:"model"`
+				Engine   string `json:"engine"`
+				Limit    int    `json:"limit"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse list params: %w", err)
+			}
+			if p.Limit <= 0 {
+				p.Limit = 20
+			}
+
+			var configIDs []string
+			if p.ConfigID != "" {
+				configIDs = []string{p.ConfigID}
+			} else if p.Hardware != "" || p.Model != "" || p.Engine != "" {
+				configs, err := db.ListConfigurations(ctx, p.Hardware, p.Model, p.Engine)
+				if err != nil {
+					return nil, fmt.Errorf("list configurations: %w", err)
+				}
+				for _, c := range configs {
+					configIDs = append(configIDs, c.ID)
+				}
+				if len(configIDs) == 0 {
+					return json.Marshal(map[string]any{
+						"results": []any{},
+						"total":   0,
+					})
+				}
+			}
+
+			results, err := db.ListBenchmarkResults(ctx, configIDs, p.Limit)
+			if err != nil {
+				return nil, fmt.Errorf("list benchmarks: %w", err)
+			}
+
+			return json.Marshal(map[string]any{
+				"results": results,
+				"total":   len(results),
+			})
+		},
+
+		// Knowledge export/import
+		ExportKnowledge: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				Hardware   string `json:"hardware"`
+				Model      string `json:"model"`
+				Engine     string `json:"engine"`
+				OutputPath string `json:"output_path"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse export params: %w", err)
+			}
+
+			configs, err := db.ListConfigurations(ctx, p.Hardware, p.Model, p.Engine)
+			if err != nil {
+				return nil, fmt.Errorf("list configurations: %w", err)
+			}
+
+			var configIDs []string
+			for _, c := range configs {
+				configIDs = append(configIDs, c.ID)
+			}
+			benchmarks, err := db.ListBenchmarkResults(ctx, configIDs, 0)
+			if err != nil {
+				return nil, fmt.Errorf("list benchmarks: %w", err)
+			}
+
+			notes, err := db.SearchNotes(ctx, state.NoteFilter{
+				HardwareProfile: p.Hardware,
+				Model:           p.Model,
+				Engine:          p.Engine,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("search notes: %w", err)
+			}
+
+			export := map[string]any{
+				"schema_version": 1,
+				"exported_at":    time.Now().UTC().Format(time.RFC3339),
+				"aima_version":   cli.Version,
+				"filter":         map[string]string{"hardware": p.Hardware, "model": p.Model, "engine": p.Engine},
+				"data": map[string]any{
+					"configurations":   configs,
+					"benchmark_results": benchmarks,
+					"knowledge_notes":  notes,
+				},
+				"stats": map[string]int{
+					"configurations":   len(configs),
+					"benchmark_results": len(benchmarks),
+					"knowledge_notes":  len(notes),
+				},
+			}
+
+			exportJSON, err := json.MarshalIndent(export, "", "  ")
+			if err != nil {
+				return nil, fmt.Errorf("marshal export: %w", err)
+			}
+
+			if p.OutputPath != "" {
+				if err := os.WriteFile(p.OutputPath, exportJSON, 0644); err != nil {
+					return nil, fmt.Errorf("write export file: %w", err)
+				}
+				return json.Marshal(map[string]any{
+					"path":  p.OutputPath,
+					"stats": export["stats"],
+				})
+			}
+
+			return exportJSON, nil
+		},
+
+		ImportKnowledge: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var p struct {
+				InputPath string `json:"input_path"`
+				Conflict  string `json:"conflict"`
+				DryRun    bool   `json:"dry_run"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse import params: %w", err)
+			}
+			if p.Conflict == "" {
+				p.Conflict = "skip"
+			}
+
+			data, err := os.ReadFile(p.InputPath)
+			if err != nil {
+				return nil, fmt.Errorf("read import file: %w", err)
+			}
+
+			var envelope struct {
+				SchemaVersion int `json:"schema_version"`
+				Data          struct {
+					Configurations   []*state.Configuration  `json:"configurations"`
+					BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
+					KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(data, &envelope); err != nil {
+				return nil, fmt.Errorf("parse import JSON: %w", err)
+			}
+			if envelope.SchemaVersion != 1 {
+				return nil, fmt.Errorf("unsupported schema version %d (expected 1)", envelope.SchemaVersion)
+			}
+
+			imported := map[string]int{"configurations": 0, "benchmark_results": 0, "knowledge_notes": 0}
+			skipped := 0
+
+			rawDB := db.RawDB()
+			tx, err := rawDB.BeginTx(ctx, nil)
+			if err != nil {
+				return nil, fmt.Errorf("begin transaction: %w", err)
+			}
+			defer tx.Rollback()
+
+			// All reads and writes go through tx to avoid deadlock
+			// (db uses SetMaxOpenConns(1), so db.GetConfiguration would block).
+
+			// Import configurations
+			for _, c := range envelope.Data.Configurations {
+				var exists int
+				tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM configurations WHERE id = ?`, c.ID).Scan(&exists)
+				if exists > 0 && p.Conflict == "skip" {
+					skipped++
+					continue
+				}
+				if p.DryRun {
+					imported["configurations"]++
+					continue
+				}
+				if exists > 0 {
+					tx.ExecContext(ctx, `DELETE FROM configurations WHERE id = ?`, c.ID)
+				}
+				tagsJSON, _ := json.Marshal(c.Tags)
+				var derivedFrom sql.NullString
+				if c.DerivedFrom != "" {
+					derivedFrom = sql.NullString{String: c.DerivedFrom, Valid: true}
+				}
+				_, insertErr := tx.ExecContext(ctx,
+					`INSERT INTO configurations (id, hardware_id, engine_id, model_id, partition_slot,
+						config, config_hash, derived_from, status, tags, source, device_id)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					c.ID, c.HardwareID, c.EngineID, c.ModelID, c.Slot,
+					c.Config, c.ConfigHash, derivedFrom, c.Status, string(tagsJSON), c.Source, c.DeviceID)
+				if insertErr != nil {
+					skipped++
+					continue
+				}
+				imported["configurations"]++
+			}
+
+			// Import benchmark results
+			for _, b := range envelope.Data.BenchmarkResults {
+				var exists int
+				tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM benchmark_results WHERE id = ?`, b.ID).Scan(&exists)
+				if exists > 0 && p.Conflict == "skip" {
+					skipped++
+					continue
+				}
+				if p.DryRun {
+					imported["benchmark_results"]++
+					continue
+				}
+				if exists > 0 {
+					tx.ExecContext(ctx, `DELETE FROM benchmark_results WHERE id = ?`, b.ID)
+				}
+				_, insertErr := tx.ExecContext(ctx,
+					`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
+						ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
+						throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct,
+						error_rate, oom_occurred, stability, duration_s, sample_count, tested_at, agent_model, notes)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
+					b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
+					b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct,
+					b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.TestedAt, b.AgentModel, b.Notes)
+				if insertErr != nil {
+					skipped++
+					continue
+				}
+				imported["benchmark_results"]++
+			}
+
+			// Import knowledge notes
+			for _, n := range envelope.Data.KnowledgeNotes {
+				var exists int
+				tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowledge_notes WHERE id = ?`, n.ID).Scan(&exists)
+				if exists > 0 && p.Conflict == "skip" {
+					skipped++
+					continue
+				}
+				if p.DryRun {
+					imported["knowledge_notes"]++
+					continue
+				}
+				if exists > 0 {
+					tx.ExecContext(ctx, `DELETE FROM knowledge_notes WHERE id = ?`, n.ID)
+				}
+				tagsJSON, _ := json.Marshal(n.Tags)
+				_, insertErr := tx.ExecContext(ctx,
+					`INSERT INTO knowledge_notes (id, title, tags, hardware_profile, model, engine, content, confidence)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					n.ID, n.Title, string(tagsJSON), n.HardwareProfile, n.Model, n.Engine, n.Content, n.Confidence)
+				if insertErr != nil {
+					skipped++
+					continue
+				}
+				imported["knowledge_notes"]++
+			}
+
+			if !p.DryRun {
+				if err := tx.Commit(); err != nil {
+					return nil, fmt.Errorf("commit import: %w", err)
+				}
+			}
+
+			return json.Marshal(map[string]any{
+				"imported": imported,
+				"skipped":  skipped,
+				"dry_run":  p.DryRun,
+			})
+		},
+
 		// Discovery
 		DiscoverLAN: func(ctx context.Context, timeoutS int) (json.RawMessage, error) {
 			services, err := proxy.Discover(ctx, time.Duration(timeoutS)*time.Second)
@@ -2575,6 +3000,72 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			return json.Marshal(status)
 		},
+	}
+}
+
+// saveBenchmarkResult saves a benchmark result and its configuration to the DB.
+// Returns (benchmarkID, configID) or error.
+func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
+	result *benchpkg.RunResult, concurrency, inputTokens, maxTokens int, notes string) (string, string, error) {
+
+	configJSON, _ := json.Marshal(map[string]any{
+		"concurrency":  concurrency,
+		"max_tokens":   maxTokens,
+		"input_tokens": inputTokens,
+	})
+	configHash := fmt.Sprintf("%x", sha256.Sum256(
+		[]byte(hardware+"|"+engineID+"|"+model+"|"+string(configJSON))))
+
+	existingCfg, err := db.FindConfigByHash(ctx, configHash)
+	if err != nil {
+		return "", "", fmt.Errorf("find config: %w", err)
+	}
+	if existingCfg == nil {
+		existingCfg = &state.Configuration{
+			ID: configHash[:16], HardwareID: hardware,
+			EngineID: engineID, ModelID: model,
+			Config: string(configJSON), ConfigHash: configHash,
+			Status: "experiment", Source: "benchmark",
+		}
+		if err := db.InsertConfiguration(ctx, existingCfg); err != nil {
+			return "", "", fmt.Errorf("create configuration: %w", err)
+		}
+	}
+
+	benchmarkID := fmt.Sprintf("%x", sha256.Sum256(
+		[]byte(existingCfg.ID+"|"+fmt.Sprintf("%d", time.Now().UnixNano()))))[:16]
+
+	br := &state.BenchmarkResult{
+		ID: benchmarkID, ConfigID: existingCfg.ID, Concurrency: concurrency,
+		InputLenBucket:  tokenBucket(result.AvgInputTokens),
+		OutputLenBucket: tokenBucket(result.AvgOutputTokens),
+		Modality:        "text",
+		TTFTP50ms: result.TTFTP50ms, TTFTP95ms: result.TTFTP95ms, TTFTP99ms: result.TTFTP99ms,
+		TPOTP50ms: result.TPOTP50ms, TPOTP95ms: result.TPOTP95ms,
+		ThroughputTPS: result.ThroughputTPS, QPS: result.QPS,
+		ErrorRate: result.ErrorRate, SampleCount: result.TotalRequests,
+		DurationS: int(result.DurationMs / 1000), TestedAt: time.Now(),
+		Notes: notes,
+	}
+	if err := db.InsertBenchmarkResult(ctx, br); err != nil {
+		return "", "", fmt.Errorf("save benchmark result: %w", err)
+	}
+	return benchmarkID, existingCfg.ID, nil
+}
+
+// tokenBucket converts a token count to a human-readable bucket string.
+func tokenBucket(tokens int) string {
+	switch {
+	case tokens >= 128000:
+		return "128K"
+	case tokens >= 32000:
+		return "32K"
+	case tokens >= 8000:
+		return "8K"
+	case tokens >= 1000:
+		return fmt.Sprintf("%dK", tokens/1000)
+	default:
+		return fmt.Sprintf("%d", tokens)
 	}
 }
 

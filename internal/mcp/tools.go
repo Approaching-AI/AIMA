@@ -48,8 +48,11 @@ type ToolDeps struct {
 	ListModelAssets  func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
-	RecordBenchmark func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	PromoteConfig   func(ctx context.Context, configID, status string) (json.RawMessage, error)
+	RecordBenchmark    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	RunBenchmark       func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	RunBenchmarkMatrix func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ListBenchmarks     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	PromoteConfig      func(ctx context.Context, configID, status string) (json.RawMessage, error)
 
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -90,6 +93,10 @@ type ToolDeps struct {
 
 	// Knowledge (summary)
 	ListKnowledgeSummary func(ctx context.Context) (json.RawMessage, error)
+
+	// Knowledge export/import
+	ExportKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ImportKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
 	// Fleet management
 	FleetListDevices func(ctx context.Context) (json.RawMessage, error)
@@ -1171,6 +1178,125 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.RecordBenchmark(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("record benchmark: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// benchmark.run
+	s.RegisterTool(&Tool{
+		Name:        "benchmark.run",
+		Description: "Run a performance benchmark against a deployed model. Sends streaming inference requests and measures TTFT, TPOT, and throughput. Results are automatically saved to the knowledge database. Use after deploying a model to establish performance baselines or compare configurations.",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model name (must match a deployed model)"},`+
+				`"endpoint":{"type":"string","description":"OpenAI-compatible endpoint URL. Auto-detected from proxy if omitted."},`+
+				`"concurrency":{"type":"integer","description":"Number of concurrent requests (default: 1)"},`+
+				`"num_requests":{"type":"integer","description":"Total requests to send (default: 10)"},`+
+				`"max_tokens":{"type":"integer","description":"Max output tokens per request (default: 256)"},`+
+				`"input_tokens":{"type":"integer","description":"Approximate input length in tokens (default: 128)"},`+
+				`"warmup":{"type":"integer","description":"Warmup requests to discard (default: 2)"},`+
+				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
+				`"hardware":{"type":"string","description":"Hardware profile ID for saving (e.g. nvidia-gb10-arm64)"},`+
+				`"engine":{"type":"string","description":"Engine type for saving (e.g. vllm)"},`+
+				`"notes":{"type":"string","description":"Free-form notes"}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RunBenchmark == nil {
+				return ErrorResult("benchmark.run not implemented"), nil
+			}
+			data, err := deps.RunBenchmark(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("benchmark run: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// benchmark.matrix
+	s.RegisterTool(&Tool{
+		Name:        "benchmark.matrix",
+		Description: "Run a benchmark test matrix across multiple concurrency levels and input/output length combinations. Runs benchmark.run for each combination sequentially. Use when you need comprehensive performance characterization of a deployment.",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model name"},`+
+				`"concurrency_levels":{"type":"array","items":{"type":"integer"},"description":"Concurrency levels to test (default: [1,4])"},`+
+				`"input_token_levels":{"type":"array","items":{"type":"integer"},"description":"Input lengths in tokens (default: [128,1024])"},`+
+				`"max_token_levels":{"type":"array","items":{"type":"integer"},"description":"Output lengths in tokens (default: [128,512])"},`+
+				`"requests_per_combo":{"type":"integer","description":"Requests per combination (default: 5)"},`+
+				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
+				`"hardware":{"type":"string","description":"Hardware profile ID"},`+
+				`"engine":{"type":"string","description":"Engine type"}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RunBenchmarkMatrix == nil {
+				return ErrorResult("benchmark.matrix not implemented"), nil
+			}
+			data, err := deps.RunBenchmarkMatrix(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("benchmark matrix: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// benchmark.list
+	s.RegisterTool(&Tool{
+		Name:        "benchmark.list",
+		Description: "List benchmark results from the knowledge database. Filter by model, hardware, or configuration ID. Use to review historical performance data or compare configurations.",
+		InputSchema: schema(
+			`"config_id":{"type":"string","description":"Filter by configuration ID"},`+
+				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
+				`"model":{"type":"string","description":"Filter by model name"},`+
+				`"engine":{"type":"string","description":"Filter by engine type"},`+
+				`"limit":{"type":"integer","description":"Max results to return (default: 20)"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ListBenchmarks == nil {
+				return ErrorResult("benchmark.list not implemented"), nil
+			}
+			data, err := deps.ListBenchmarks(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("list benchmarks: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.export
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.export",
+		Description: "Export knowledge data (configurations, benchmark results, knowledge notes) to a JSON file. Filter by hardware, model, or engine. Use to share tuning results with other devices or create backups. If output_path is omitted, returns JSON directly.",
+		InputSchema: schema(
+			`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
+				`"model":{"type":"string","description":"Filter by model name"},`+
+				`"engine":{"type":"string","description":"Filter by engine type"},`+
+				`"output_path":{"type":"string","description":"File path to write JSON. If omitted, returns JSON in response."}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ExportKnowledge == nil {
+				return ErrorResult("knowledge.export not implemented"), nil
+			}
+			data, err := deps.ExportKnowledge(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("export knowledge: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.import
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.import",
+		Description: "Import knowledge data from a JSON file exported by knowledge.export. Supports conflict resolution: 'skip' (default) skips existing records, 'overwrite' replaces them. Use --dry-run to preview without writing. Runs in a single transaction for atomicity.",
+		InputSchema: schema(
+			`"input_path":{"type":"string","description":"Path to JSON file to import"},`+
+				`"conflict":{"type":"string","enum":["skip","overwrite"],"description":"Conflict resolution (default: skip)"},`+
+				`"dry_run":{"type":"boolean","description":"Preview import without writing (default: false)"}`,
+			"input_path"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ImportKnowledge == nil {
+				return ErrorResult("knowledge.import not implemented"), nil
+			}
+			data, err := deps.ImportKnowledge(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("import knowledge: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

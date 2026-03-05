@@ -16,6 +16,8 @@ func newKnowledgeCmd(app *App) *cobra.Command {
 	cmd.AddCommand(
 		newKnowledgeListCmd(app),
 		newKnowledgeResolveCmd(app),
+		newKnowledgeExportCmd(app),
+		newKnowledgeImportCmd(app),
 	)
 
 	return cmd
@@ -62,6 +64,99 @@ func newKnowledgeResolveCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&engineType, "engine", "", "Engine type to resolve for")
+
+	return cmd
+}
+
+func newKnowledgeExportCmd(app *App) *cobra.Command {
+	var (
+		hardware   string
+		model      string
+		engine     string
+		outputPath string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export knowledge data to JSON",
+		Long: `Export configurations, benchmark results, and knowledge notes to a JSON file.
+Filter by hardware, model, or engine. Outputs to stdout if --output is not specified.
+
+Examples:
+  aima knowledge export --hardware nvidia-gb10-arm64 --output gb10.json
+  aima knowledge export --model qwen3-8b > qwen3.json
+  aima knowledge export`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			params := map[string]any{
+				"hardware":    hardware,
+				"model":       model,
+				"engine":      engine,
+				"output_path": outputPath,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return err
+			}
+			result, err := app.ToolDeps.ExportKnowledge(cmd.Context(), raw)
+			if err != nil {
+				return fmt.Errorf("export knowledge: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(result))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&hardware, "hardware", "", "Filter by hardware profile ID")
+	cmd.Flags().StringVar(&model, "model", "", "Filter by model name")
+	cmd.Flags().StringVar(&engine, "engine", "", "Filter by engine type")
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output file path (default: stdout)")
+
+	return cmd
+}
+
+func newKnowledgeImportCmd(app *App) *cobra.Command {
+	var (
+		inputPath string
+		conflict  string
+		dryRun    bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import knowledge data from JSON",
+		Long: `Import configurations, benchmark results, and knowledge notes from a JSON file.
+
+Conflict resolution:
+  skip (default): Skip records that already exist
+  overwrite: Replace existing records
+
+Examples:
+  aima knowledge import --input gb10.json
+  aima knowledge import --input gb10.json --conflict overwrite
+  aima knowledge import --input gb10.json --dry-run`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			params := map[string]any{
+				"input_path": inputPath,
+				"conflict":   conflict,
+				"dry_run":    dryRun,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return err
+			}
+			result, err := app.ToolDeps.ImportKnowledge(cmd.Context(), raw)
+			if err != nil {
+				return fmt.Errorf("import knowledge: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(result))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&inputPath, "input", "i", "", "Input JSON file path")
+	cmd.Flags().StringVar(&conflict, "conflict", "skip", "Conflict resolution: skip | overwrite")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview import without writing")
+	_ = cmd.MarkFlagRequired("input")
 
 	return cmd
 }

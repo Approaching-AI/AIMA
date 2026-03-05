@@ -101,7 +101,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   Tier 1: Docker + CDI │ Tier 2: + K3S + HAMi (GPU 分区)      │
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
-│   56 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
+│   61 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
 │   Web UI (嵌入式 SPA) · mDNS 多网卡发现 · 硬件检测 · 审计+回滚  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -192,7 +192,7 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
 所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `config`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
 Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 每次自动扫描，其余 fleet 工具懒发现），CLI 和 MCP Agent 走完全相同的代码路径。
-当前共 57 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 7 + Knowledge 16 + Benchmark 1 + Stack 3 + Catalog 2 + System 3 + Discovery 1 + Agent 6 + Fleet 4)。
+当前共 61 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 7 + Knowledge 17 + Benchmark 4 + Stack 3 + Catalog 2 + System 2 + Discovery 1 + Agent 6 + Fleet 4 + Shell 1)。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
 

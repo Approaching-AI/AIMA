@@ -1247,6 +1247,104 @@ func (d *DB) LogAction(ctx context.Context, entry *AuditEntry) error {
 	return nil
 }
 
+// ListConfigurations returns configurations matching optional filters.
+// Empty filter values are ignored.
+func (d *DB) ListConfigurations(ctx context.Context, hardware, model, engine string) ([]*Configuration, error) {
+	query := `SELECT id, hardware_id, engine_id, model_id, COALESCE(partition_slot,''),
+	                 config, config_hash, derived_from, COALESCE(status,'experiment'),
+	                 COALESCE(tags,'[]'), COALESCE(source,'local'), COALESCE(device_id,''),
+	                 created_at, updated_at
+	          FROM configurations WHERE 1=1`
+	var args []any
+	if hardware != "" {
+		query += ` AND hardware_id = ?`
+		args = append(args, hardware)
+	}
+	if model != "" {
+		query += ` AND model_id = ?`
+		args = append(args, model)
+	}
+	if engine != "" {
+		query += ` AND engine_id = ?`
+		args = append(args, engine)
+	}
+	query += ` ORDER BY updated_at DESC`
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list configurations: %w", err)
+	}
+	defer rows.Close()
+
+	configs := make([]*Configuration, 0)
+	for rows.Next() {
+		c := &Configuration{}
+		var tagsStr, derivedFrom sql.NullString
+		if err := rows.Scan(&c.ID, &c.HardwareID, &c.EngineID, &c.ModelID, &c.Slot,
+			&c.Config, &c.ConfigHash, &derivedFrom, &c.Status,
+			&tagsStr, &c.Source, &c.DeviceID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan configuration row: %w", err)
+		}
+		if derivedFrom.Valid {
+			c.DerivedFrom = derivedFrom.String
+		}
+		_ = json.Unmarshal([]byte(tagsStr.String), &c.Tags)
+		configs = append(configs, c)
+	}
+	return configs, rows.Err()
+}
+
+// ListBenchmarkResults returns benchmark results, optionally filtered by config IDs.
+func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit int) ([]*BenchmarkResult, error) {
+	query := `SELECT id, config_id, concurrency, COALESCE(input_len_bucket,''),
+	                 COALESCE(output_len_bucket,''), COALESCE(modality,'text'),
+	                 ttft_ms_p50, ttft_ms_p95, COALESCE(ttft_ms_p99,0),
+	                 COALESCE(tpot_ms_p50,0), COALESCE(tpot_ms_p95,0),
+	                 throughput_tps, COALESCE(qps,0),
+	                 COALESCE(vram_usage_mib,0), COALESCE(ram_usage_mib,0),
+	                 COALESCE(power_draw_watts,0), COALESCE(gpu_utilization_pct,0),
+	                 COALESCE(error_rate,0), COALESCE(oom_occurred,0),
+	                 COALESCE(stability,''), COALESCE(duration_s,0), COALESCE(sample_count,0),
+	                 tested_at, COALESCE(agent_model,''), COALESCE(notes,'')
+	          FROM benchmark_results WHERE 1=1`
+	var args []any
+	if len(configIDs) > 0 {
+		placeholders := strings.Repeat("?,", len(configIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		query += fmt.Sprintf(` AND config_id IN (%s)`, placeholders)
+		for _, id := range configIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` ORDER BY tested_at DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list benchmark results: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]*BenchmarkResult, 0)
+	for rows.Next() {
+		b := &BenchmarkResult{}
+		if err := rows.Scan(&b.ID, &b.ConfigID, &b.Concurrency, &b.InputLenBucket,
+			&b.OutputLenBucket, &b.Modality,
+			&b.TTFTP50ms, &b.TTFTP95ms, &b.TTFTP99ms, &b.TPOTP50ms, &b.TPOTP95ms,
+			&b.ThroughputTPS, &b.QPS,
+			&b.VRAMUsageMiB, &b.RAMUsageMiB, &b.PowerDrawWatts, &b.GPUUtilPct,
+			&b.ErrorRate, &b.OOMOccurred, &b.Stability, &b.DurationS, &b.SampleCount,
+			&b.TestedAt, &b.AgentModel, &b.Notes); err != nil {
+			return nil, fmt.Errorf("scan benchmark row: %w", err)
+		}
+		results = append(results, b)
+	}
+	return results, rows.Err()
+}
+
 func nullStr(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}

@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 57 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 61 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -133,7 +133,8 @@ internal/
   model/                      # Model scan/download/import
   engine/                     # Engine image scan/pull/import + native binary manager
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
-  mcp/                        # MCP server + 56 tool implementations
+  benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
+  mcp/                        # MCP server + 61 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
@@ -259,3 +260,66 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 | ConfigResolver | Merges L0-L3 configs, higher layer overrides lower |
 | Store | Knowledge query engine wrapping *sql.DB (Search/Compare/Gaps/Similar/Lineage/Aggregate) |
 | MCP Tool | JSON-RPC function exposed to Agents (deploy.apply, model.scan, etc) |
+
+## MCP Tools for Benchmarking & Knowledge Transfer
+
+### Benchmark Workflow (Agent Guidance)
+
+After deploying a model, establish performance baselines using the benchmark tools:
+
+```
+1. benchmark.run   — Single benchmark run against a deployed model
+                     Auto-detects endpoint from proxy; measures TTFT/TPOT/TPS
+                     Results auto-saved to DB when hardware + engine provided
+
+2. benchmark.matrix — Test matrix: concurrency × input_len × output_len
+                      Runs benchmark.run for each combination sequentially
+                      Use for comprehensive performance characterization
+
+3. benchmark.list   — Query historical benchmark results
+                      Filter by model, hardware, engine, or config ID
+
+4. benchmark.record — Manually record external benchmark measurements
+```
+
+### Knowledge Export/Import Workflow (Agent Guidance)
+
+Share tuning knowledge across devices using export/import:
+
+```
+1. knowledge.export — Export configs + benchmarks + notes to JSON
+                      Filter by --hardware, --model, --engine
+                      No filter = full DB dump
+                      Output to file (--output) or stdout
+
+2. knowledge.import — Import from JSON file
+                      Conflict: skip (default) | overwrite
+                      Supports --dry-run preview
+                      Atomic transaction (all-or-nothing)
+```
+
+Typical cross-device flow:
+```bash
+# On device A (has benchmark data)
+aima knowledge export --hardware nvidia-gb10-arm64 -o gb10.json
+
+# Transfer file to device B
+scp gb10.json user@device-b:/tmp/
+
+# On device B (import knowledge)
+aima knowledge import -i /tmp/gb10.json --dry-run   # preview first
+aima knowledge import -i /tmp/gb10.json              # commit
+```
+
+Export JSON format (schema_version: 1):
+```json
+{
+  "schema_version": 1,
+  "data": {
+    "configurations": [...],    // Hardware×Engine×Model configs
+    "benchmark_results": [...], // Performance measurements (FK → configurations)
+    "knowledge_notes": [...]    // Agent exploration notes
+  },
+  "stats": { "configurations": N, "benchmark_results": N, "knowledge_notes": N }
+}
+```

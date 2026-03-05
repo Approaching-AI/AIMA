@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -13,7 +15,12 @@ func newBenchmarkCmd(app *App) *cobra.Command {
 		Short: "Record and query benchmark results",
 	}
 
-	cmd.AddCommand(newBenchmarkRecordCmd(app))
+	cmd.AddCommand(
+		newBenchmarkRecordCmd(app),
+		newBenchmarkRunCmd(app),
+		newBenchmarkMatrixCmd(app),
+		newBenchmarkListCmd(app),
+	)
 
 	return cmd
 }
@@ -115,4 +122,191 @@ Example:
 	_ = cmd.MarkFlagRequired("throughput")
 
 	return cmd
+}
+
+func newBenchmarkRunCmd(app *App) *cobra.Command {
+	var (
+		modelName   string
+		endpoint    string
+		concurrency int
+		requests    int
+		maxTokens   int
+		inputTokens int
+		warmup      int
+		noSave      bool
+		hardware    string
+		engine      string
+		notes       string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run a live benchmark against a deployed model",
+		Long: `Send streaming inference requests and measure TTFT, TPOT, and throughput.
+Results are automatically saved to the knowledge database unless --no-save is used.
+
+Examples:
+  aima benchmark run --model qwen3-8b
+  aima benchmark run --model qwen3-8b --concurrency 4 --requests 20
+  aima benchmark run --model gpt-4 --endpoint https://api.openai.com/v1/chat/completions --no-save`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			save := !noSave
+			params := map[string]any{
+				"model":       modelName,
+				"endpoint":    endpoint,
+				"concurrency": concurrency,
+				"num_requests": requests,
+				"max_tokens":  maxTokens,
+				"input_tokens": inputTokens,
+				"warmup":      warmup,
+				"save":        save,
+				"hardware":    hardware,
+				"engine":      engine,
+				"notes":       notes,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return err
+			}
+			result, err := app.ToolDeps.RunBenchmark(cmd.Context(), raw)
+			if err != nil {
+				return fmt.Errorf("benchmark run: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(result))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
+	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OpenAI-compatible endpoint URL (auto-detect if empty)")
+	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Number of concurrent requests")
+	cmd.Flags().IntVar(&requests, "requests", 10, "Total requests to send")
+	cmd.Flags().IntVar(&maxTokens, "max-tokens", 256, "Max output tokens per request")
+	cmd.Flags().IntVar(&inputTokens, "input-tokens", 128, "Approximate input length in tokens")
+	cmd.Flags().IntVar(&warmup, "warmup", 2, "Warmup requests to discard")
+	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
+	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID for saving")
+	cmd.Flags().StringVar(&engine, "engine", "", "Engine type for saving")
+	cmd.Flags().StringVar(&notes, "notes", "", "Free-form notes")
+	_ = cmd.MarkFlagRequired("model")
+
+	return cmd
+}
+
+func newBenchmarkMatrixCmd(app *App) *cobra.Command {
+	var (
+		modelName      string
+		concurrencyStr string
+		inputTokensStr string
+		maxTokensStr   string
+		requests       int
+		noSave         bool
+		hardware       string
+		engine         string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "matrix",
+		Short: "Run a benchmark test matrix",
+		Long: `Run benchmarks across multiple concurrency levels and input/output length combinations.
+
+Examples:
+  aima benchmark matrix --model qwen3-8b
+  aima benchmark matrix --model qwen3-8b --concurrency 1,4,8 --hardware nvidia-gb10-arm64 --engine vllm`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			save := !noSave
+			params := map[string]any{
+				"model":              modelName,
+				"concurrency_levels": parseIntList(concurrencyStr),
+				"input_token_levels": parseIntList(inputTokensStr),
+				"max_token_levels":   parseIntList(maxTokensStr),
+				"requests_per_combo": requests,
+				"save":               save,
+				"hardware":           hardware,
+				"engine":             engine,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return err
+			}
+			result, err := app.ToolDeps.RunBenchmarkMatrix(cmd.Context(), raw)
+			if err != nil {
+				return fmt.Errorf("benchmark matrix: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(result))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
+	cmd.Flags().StringVar(&concurrencyStr, "concurrency", "1,4", "Comma-separated concurrency levels")
+	cmd.Flags().StringVar(&inputTokensStr, "input-tokens", "128,1024", "Comma-separated input token lengths")
+	cmd.Flags().StringVar(&maxTokensStr, "max-tokens", "128,512", "Comma-separated output token lengths")
+	cmd.Flags().IntVar(&requests, "requests", 5, "Requests per combination")
+	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
+	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID")
+	cmd.Flags().StringVar(&engine, "engine", "", "Engine type")
+	_ = cmd.MarkFlagRequired("model")
+
+	return cmd
+}
+
+func newBenchmarkListCmd(app *App) *cobra.Command {
+	var (
+		configID string
+		hardware string
+		modelName string
+		engine   string
+		limit    int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List benchmark results from the knowledge database",
+		Long: `List historical benchmark results. Filter by model, hardware, engine, or config ID.
+
+Examples:
+  aima benchmark list --model qwen3-8b
+  aima benchmark list --hardware nvidia-gb10-arm64
+  aima benchmark list --limit 50`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			params := map[string]any{
+				"config_id": configID,
+				"hardware":  hardware,
+				"model":     modelName,
+				"engine":    engine,
+				"limit":     limit,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return err
+			}
+			result, err := app.ToolDeps.ListBenchmarks(cmd.Context(), raw)
+			if err != nil {
+				return fmt.Errorf("list benchmarks: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(result))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&configID, "config", "", "Filter by configuration ID")
+	cmd.Flags().StringVar(&hardware, "hardware", "", "Filter by hardware profile ID")
+	cmd.Flags().StringVar(&modelName, "model", "", "Filter by model name")
+	cmd.Flags().StringVar(&engine, "engine", "", "Filter by engine type")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Max results to return")
+
+	return cmd
+}
+
+func parseIntList(s string) []int {
+	parts := strings.Split(s, ",")
+	result := make([]int, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if v, err := strconv.Atoi(p); err == nil {
+			result = append(result, v)
+		}
+	}
+	return result
 }

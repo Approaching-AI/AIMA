@@ -1,0 +1,99 @@
+kind: engine_asset
+metadata:
+  name: vllm-maca
+  type: vllm
+  version: "0.13.0"
+  supported_formats: [safetensors]
+image:
+  name: cr.metax-tech.com/public-ai-release/maca/vllm-metax
+  tag: "0.13.0-maca.ai3.3.0.303-torch2.8-py310-kylinv11-amd64"
+  size_approx_mb: 25500
+  platforms: [linux/amd64]
+  registries:
+    - cr.metax-tech.com/public-ai-release/maca/vllm-metax
+patterns:
+  - "vllm-metax"
+  - "/maca/vllm"
+  - "metax-tech.com"
+hardware:
+  gpu_arch: MACA
+  vram_min_mib: 4096
+startup:
+  command: ["vllm", "serve", "{{.ModelPath}}"]
+  env:
+    PATH: "/opt/conda/bin:/opt/maca/bin:/opt/maca/mxgpu_llvm/bin:/opt/maca/ompi/bin:/opt/maca/ucx/bin:/opt/mxdriver/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    VLLM_USE_V1: "0"
+    PYTORCH_ENABLE_SAME_RAND_A100: "1"
+    MCPYTORCH_DISABLE_PRINT: "1"
+  default_args:
+    port: 8000
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768
+    dtype: auto
+    served_model_name: "{{.ModelName}}"
+  health_check:
+    path: /health
+    timeout_s: 600
+  warmup:
+    enabled: true
+    prompt: "Hello"
+    max_tokens: 1
+    timeout_s: 120
+  log_patterns:
+    phases:
+      - name: model_init
+        pattern: "Starting to load model"
+        progress: 5
+      - name: loading_shards
+        pattern: "Loading safetensors checkpoint shards:\\s+(\\d+)%"
+        progress_regex_group: 1
+        progress_base: 5
+        progress_range: 35
+      - name: weights_loaded
+        pattern: "Loading weights took|Loading model weights"
+        progress: 40
+      - name: torch_compile
+        pattern: "torch\\.compile takes"
+        progress: 50
+      - name: cuda_graphs
+        pattern: "Capturing CUDA graph[^s].*?(\\d+)%"
+        progress_regex_group: 1
+        progress_base: 50
+        progress_range: 40
+      - name: graph_done
+        pattern: "Graph capturing finished"
+        progress: 92
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|CUDA out of memory"
+        message: "GPU memory insufficient"
+      - pattern: "torch.cuda.OutOfMemoryError"
+        message: "GPU memory insufficient"
+      - pattern: "MACA initialization error"
+        message: "MACA init error — check GPU device access (/dev/mxcd, /dev/dri)"
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - paged_attention
+    - continuous_batching
+  performance_gain: "MACA-optimized vLLM with cu-bridge CUDA compatibility layer"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 4096
+  recommended_gpu_cores_percent: 50
+time_constraints:
+  cold_start_s: [60, 300]
+  model_switch_s: [60, 300]
+power_constraints:
+  typical_draw_watts: [100, 225]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

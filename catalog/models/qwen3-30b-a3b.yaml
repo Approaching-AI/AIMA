@@ -79,6 +79,32 @@ variants:
       tokens_per_second: [9, 13]
       latency_first_token_ms: [900, 4000]
 
+  # --- MetaX N260 (MACA, 2× 64GB HBM2e, Docker) ---
+  # BF16 weights ~60GB, TP=2 → 30GB per GPU, 64GB HBM2e 余量充足
+  # MoE 30B total / 3B active, vllm-metax 0.13.0 (MACA cu-bridge)
+  - name: qwen3-30b-a3b-maca-vllm-bf16
+    hardware:
+      gpu_arch: MACA
+      vram_min_mib: 40960
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: modelscope
+      repo: Qwen/Qwen3-30B-A3B
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 32768
+      dtype: bfloat16
+      tensor_parallel_size: 2
+      trust_remote_code: true
+    expected_performance:
+      startup_time_s: 226
+      cold_start_time_s: 300
+      tokens_per_second: [60, 66]
+      vram_mib: 123012
+      notes: "vLLM-MetaX 0.13.0, BF16, TP=2, 2× MetaX N260 64GB HBM2e. Measured 2026-03-06: weights 38s + torch.compile 161s + CUDA graph 27s = 226s startup. 65.8 tok/s decode (512 tokens). 61506 MiB/GPU (gmu=0.90). FLASH_ATTN backend, PIECEWISE CUDA graphs."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
   # 虽然文件大，但推理时仅激活 3B params，速度较快

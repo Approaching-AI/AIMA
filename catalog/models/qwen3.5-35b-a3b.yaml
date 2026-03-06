@@ -102,6 +102,35 @@ variants:
       vram_mib: 67100
       notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.9, 262K context, tool calling enabled (qwen3_xml parser)."
 
+  # --- MetaX N260 (MACA, 2× 64GB HBM2e, Docker) ---
+  # ⛔ BLOCKED: vLLM-MetaX 0.13.0 不支持 Qwen3_5MoeForConditionalGeneration 架构
+  # qwen3_5_moe model_type 需要 transformers>=5.0 + vLLM>=0.16.0
+  # vLLM-MetaX 0.13.0 绑定 transformers 4.57.6 (上限 <5), 无法升级
+  # 等待 MetaX 发布 vLLM-MetaX 0.16.0+ 后启用此 variant
+  # 替代方案: 使用 qwen3-30b-a3b (Qwen2MoeForCausalLM, 已验证 65 tok/s)
+  - name: qwen3.5-35b-a3b-maca-vllm-bf16
+    hardware:
+      gpu_arch: MACA
+      vram_min_mib: 40960
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 32768
+      dtype: bfloat16
+      tensor_parallel_size: 2
+      trust_remote_code: true
+    expected_performance:
+      startup_time_s: 240
+      cold_start_time_s: 360
+      tokens_per_second: [50, 65]
+      vram_mib: 123012
+      notes: "BLOCKED: vLLM-MetaX 0.13.0 lacks Qwen3_5MoeForConditionalGeneration arch. Requires vLLM-MetaX >= 0.16.0 with transformers >= 5.0. Use qwen3-30b-a3b on MACA instead (validated 65 tok/s, 2026-03-06)."
+
   # --- amd395 (RDNA3.5, 62GB unified, native Vulkan) ---
   # GGUF Q4_K_M ~22GB, 62GB unified 余量充足 (40GB for KV cache + system)
   # MoE 35B total / 3B active, Vulkan GPU acceleration

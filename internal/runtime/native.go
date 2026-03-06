@@ -47,9 +47,10 @@ type nativeProcess struct {
 	port      int
 	labels    map[string]string
 	startTime time.Time
-	ready     bool
-	exited    bool
-	mu        sync.Mutex
+	ready        bool
+	exited       bool
+	exitSuccess  bool // true if process exited with code 0
+	mu           sync.Mutex
 }
 
 // BinaryResolveFunc resolves a native engine binary, downloading if needed.
@@ -384,6 +385,7 @@ func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
 	proc.mu.Lock()
 	proc.exited = true
 	proc.ready = false
+	proc.exitSuccess = err == nil
 	proc.mu.Unlock()
 	if proc.logFile != nil {
 		_ = proc.logFile.Close()
@@ -475,11 +477,13 @@ func (r *NativeRuntime) warmup(proc *nativeProcess, cfg *WarmupConfig) {
 func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	proc.mu.Lock()
 	ready := proc.ready
+	exited := proc.exited
+	exitSuccess := proc.exitSuccess
 	proc.mu.Unlock()
 
 	phase := "running"
-	if proc.cmd.ProcessState != nil {
-		if proc.cmd.ProcessState.Success() {
+	if exited {
+		if exitSuccess {
 			phase = "stopped"
 		} else {
 			phase = "failed"

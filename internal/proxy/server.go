@@ -129,11 +129,14 @@ func (s *Server) ListBackends() map[string]*Backend {
 
 // Start starts the HTTP server (blocking).
 func (s *Server) Start(ctx context.Context) error {
-	s.server = &http.Server{
+	srv := &http.Server{
 		Addr:              s.addr,
 		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	s.mu.Lock()
+	s.server = srv
+	s.mu.Unlock()
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -147,10 +150,10 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		s.server.Shutdown(shutdownCtx)
+		srv.Shutdown(shutdownCtx)
 	}()
 
-	if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("proxy serve: %w", err)
 	}
 	return nil
@@ -158,10 +161,13 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.server == nil {
+	s.mu.RLock()
+	srv := s.server
+	s.mu.RUnlock()
+	if srv == nil {
 		return nil
 	}
-	return s.server.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 // handler builds the HTTP mux. Exported for testing via handler().

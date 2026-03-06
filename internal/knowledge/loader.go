@@ -278,6 +278,34 @@ type ModelVariant struct {
 	ExpectedPerformance map[string]any `yaml:"expected_performance"`
 }
 
+// ExpectedPerf holds structured performance estimates extracted from a variant's
+// ExpectedPerformance map. Zero-valued fields mean "not specified".
+type ExpectedPerf struct {
+	StartupTimeS   int        // model loading time (seconds)
+	ColdStartTimeS int        // full cold start time (seconds)
+	TokensPerSecond [2]float64 // [min, max] throughput estimate
+	VRAMMiB        int        // expected VRAM usage
+}
+
+// ParsedExpectedPerf extracts structured performance fields from the variant's
+// ExpectedPerformance map. Missing or non-numeric fields produce zero values.
+func (v *ModelVariant) ParsedExpectedPerf() ExpectedPerf {
+	var p ExpectedPerf
+	if v.ExpectedPerformance == nil {
+		return p
+	}
+	p.StartupTimeS = int(toFloat64(v.ExpectedPerformance["startup_time_s"]))
+	p.ColdStartTimeS = int(toFloat64(v.ExpectedPerformance["cold_start_time_s"]))
+	p.VRAMMiB = int(toFloat64(v.ExpectedPerformance["vram_mib"]))
+	if tps, ok := v.ExpectedPerformance["tokens_per_second"]; ok {
+		if arr, ok := tps.([]any); ok && len(arr) >= 2 {
+			p.TokensPerSecond[0] = toFloat64(arr[0])
+			p.TokensPerSecond[1] = toFloat64(arr[1])
+		}
+	}
+	return p
+}
+
 type ModelVariantHardware struct {
 	GPUArch       string `yaml:"gpu_arch"`
 	VRAMMinMiB    int    `yaml:"vram_min_mib"`

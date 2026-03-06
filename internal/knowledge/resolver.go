@@ -21,6 +21,7 @@ type HardwareInfo struct {
 	Platform        string // "linux/amd64", "darwin/arm64", etc.
 	RuntimeType     string // "k3s" or "native"
 	SwapTotalMiB int // Total swap space (0 = unknown or none)
+	TDPWatts     int // hardware TDP from profile (0 = unknown)
 	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
 	GPUMemUsedMiB int // Currently used GPU memory
 	GPUMemFreeMiB int // Currently free GPU memory
@@ -60,6 +61,18 @@ type ResolvedConfig struct {
 	CPUArch               string            // CPU architecture (e.g. "amd64", "arm64") — for platform-specific paths
 	Container             *ContainerAccess  // vendor-specific container access (devices, env, volumes, security) from hardware profile
 	EngineRegistries      []string          // container image registries from engine YAML (for pre-pull fallback)
+
+	// Time estimates (zero = unknown, graceful degradation)
+	ColdStartSMin int // engine cold start lower bound (seconds)
+	ColdStartSMax int // engine cold start upper bound (seconds)
+	StartupTimeS  int // model-specific startup time estimate (seconds)
+
+	// Power estimates (zero = unknown)
+	EnginePowerWattsMin int // engine typical power draw lower bound
+	EnginePowerWattsMax int // engine typical power draw upper bound
+
+	// Resource estimates (zero = unknown)
+	EstimatedVRAMMiB int // expected VRAM usage from model variant
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
@@ -164,6 +177,29 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.RuntimeRecommendation = rec
 	} else {
 		resolved.RuntimeRecommendation = engine.Runtime.Default
+	}
+
+	// Time estimates from engine
+	if len(engine.TimeConstraints.ColdStartS) >= 2 {
+		resolved.ColdStartSMin = engine.TimeConstraints.ColdStartS[0]
+		resolved.ColdStartSMax = engine.TimeConstraints.ColdStartS[1]
+	}
+
+	// Power estimates from engine
+	if len(engine.PowerConstraints.TypicalDrawWatts) >= 2 {
+		resolved.EnginePowerWattsMin = engine.PowerConstraints.TypicalDrawWatts[0]
+		resolved.EnginePowerWattsMax = engine.PowerConstraints.TypicalDrawWatts[1]
+	}
+
+	// Model variant estimates
+	if variant != nil {
+		perf := variant.ParsedExpectedPerf()
+		resolved.StartupTimeS = perf.StartupTimeS
+		if perf.VRAMMiB > 0 {
+			resolved.EstimatedVRAMMiB = perf.VRAMMiB
+		} else if variant.Hardware.VRAMMinMiB > 0 {
+			resolved.EstimatedVRAMMiB = variant.Hardware.VRAMMinMiB
+		}
 	}
 
 	// Set ModelPath from user overrides or default pattern
@@ -336,6 +372,17 @@ func (c *Catalog) findRuntimeClassName(hw HardwareInfo) string {
 		}
 	}
 	return ""
+}
+
+// FindHardwareTDP returns the TDP (watts) for the hardware profile matching
+// the given GPU arch. Returns 0 if no matching profile or TDP is not set.
+func (c *Catalog) FindHardwareTDP(hw HardwareInfo) int {
+	for _, hp := range c.HardwareProfiles {
+		if hp.Hardware.GPU.Arch == hw.GPUArch {
+			return hp.Constraints.TDPWatts
+		}
+	}
+	return 0
 }
 
 func platformInList(platform string, platforms []string) bool {
@@ -685,6 +732,19 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 				}
 				break // each engine uses only one gmu parameter
 			}
+		}
+	}
+
+	// Power budget check: warn if engine typical power may exceed hardware TDP
+	if hw.TDPWatts > 0 && resolved.EnginePowerWattsMax > 0 {
+		if resolved.EnginePowerWattsMin > hw.TDPWatts {
+			r.Warnings = append(r.Warnings, fmt.Sprintf(
+				"engine minimum power draw (%d W) exceeds hardware TDP (%d W)",
+				resolved.EnginePowerWattsMin, hw.TDPWatts))
+		} else if resolved.EnginePowerWattsMax > hw.TDPWatts {
+			r.Warnings = append(r.Warnings, fmt.Sprintf(
+				"engine power draw may reach %d W, exceeding hardware TDP (%d W)",
+				resolved.EnginePowerWattsMax, hw.TDPWatts))
 		}
 	}
 

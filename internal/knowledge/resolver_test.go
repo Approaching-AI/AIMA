@@ -858,6 +858,179 @@ func TestResolveVariantForPull(t *testing.T) {
 	}
 }
 
+func TestParsedExpectedPerf(t *testing.T) {
+	tests := []struct {
+		name   string
+		perf   map[string]any
+		wantS  int     // StartupTimeS
+		wantCS int     // ColdStartTimeS
+		wantV  int     // VRAMMiB
+		wantT0 float64 // TokensPerSecond[0]
+		wantT1 float64 // TokensPerSecond[1]
+	}{
+		{"nil map", nil, 0, 0, 0, 0, 0},
+		{"empty map", map[string]any{}, 0, 0, 0, 0, 0},
+		{"full fields", map[string]any{
+			"startup_time_s":    30,
+			"cold_start_time_s": 45,
+			"vram_mib":          16000,
+			"tokens_per_second": []any{10.5, 20.0},
+		}, 30, 45, 16000, 10.5, 20.0},
+		{"partial fields", map[string]any{
+			"startup_time_s": 15,
+		}, 15, 0, 0, 0, 0},
+		{"float values", map[string]any{
+			"startup_time_s": 12.7,
+			"vram_mib":       8192.0,
+		}, 12, 0, 8192, 0, 0},
+		{"tokens_per_second short array", map[string]any{
+			"tokens_per_second": []any{5.0},
+		}, 0, 0, 0, 0, 0},
+		{"non-numeric startup", map[string]any{
+			"startup_time_s": "not-a-number",
+		}, 0, 0, 0, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &ModelVariant{ExpectedPerformance: tt.perf}
+			p := v.ParsedExpectedPerf()
+			if p.StartupTimeS != tt.wantS {
+				t.Errorf("StartupTimeS = %d, want %d", p.StartupTimeS, tt.wantS)
+			}
+			if p.ColdStartTimeS != tt.wantCS {
+				t.Errorf("ColdStartTimeS = %d, want %d", p.ColdStartTimeS, tt.wantCS)
+			}
+			if p.VRAMMiB != tt.wantV {
+				t.Errorf("VRAMMiB = %d, want %d", p.VRAMMiB, tt.wantV)
+			}
+			if p.TokensPerSecond[0] != tt.wantT0 {
+				t.Errorf("TokensPerSecond[0] = %f, want %f", p.TokensPerSecond[0], tt.wantT0)
+			}
+			if p.TokensPerSecond[1] != tt.wantT1 {
+				t.Errorf("TokensPerSecond[1] = %f, want %f", p.TokensPerSecond[1], tt.wantT1)
+			}
+		})
+	}
+}
+
+func TestResolveTimeAndPowerFields(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192}
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// testengine has cold_start_s: [10, 30] and typical_draw_watts: [50, 100]
+	if resolved.ColdStartSMin != 10 || resolved.ColdStartSMax != 30 {
+		t.Errorf("ColdStartS = [%d, %d], want [10, 30]", resolved.ColdStartSMin, resolved.ColdStartSMax)
+	}
+	if resolved.EnginePowerWattsMin != 50 || resolved.EnginePowerWattsMax != 100 {
+		t.Errorf("EnginePowerWatts = [%d, %d], want [50, 100]", resolved.EnginePowerWattsMin, resolved.EnginePowerWattsMax)
+	}
+
+	// TestArch variant has vram_min_mib: 4096, no expected_performance.vram_mib
+	if resolved.EstimatedVRAMMiB != 4096 {
+		t.Errorf("EstimatedVRAMMiB = %d, want 4096 (from vram_min_mib fallback)", resolved.EstimatedVRAMMiB)
+	}
+}
+
+func TestResolveTimeFieldsZeroWhenMissing(t *testing.T) {
+	// Engine with no time/power constraints should produce zero values
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{{
+			Metadata: EngineMetadata{Name: "bare-engine", Type: "bare", Version: "1.0"},
+			Image:    EngineImage{Name: "bare/engine", Tag: "v1"},
+			Hardware: EngineHardware{GPUArch: "*"},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}, HealthCheck: HealthCheck{Path: "/health", TimeoutS: 60}},
+		}},
+		ModelAssets: []ModelAsset{{
+			Kind:     "model_asset",
+			Metadata: ModelMetadata{Name: "bare-model"},
+			Variants: []ModelVariant{{
+				Name:     "bare-v",
+				Hardware: ModelVariantHardware{GPUArch: "*"},
+				Engine:   "bare",
+			}},
+		}},
+	}
+	hw := HardwareInfo{GPUArch: "any"}
+	resolved, err := cat.Resolve(hw, "bare-model", "bare", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.ColdStartSMin != 0 || resolved.ColdStartSMax != 0 {
+		t.Errorf("ColdStartS = [%d, %d], want [0, 0]", resolved.ColdStartSMin, resolved.ColdStartSMax)
+	}
+	if resolved.EnginePowerWattsMin != 0 || resolved.EnginePowerWattsMax != 0 {
+		t.Errorf("EnginePowerWatts = [%d, %d], want [0, 0]", resolved.EnginePowerWattsMin, resolved.EnginePowerWattsMax)
+	}
+	if resolved.EstimatedVRAMMiB != 0 {
+		t.Errorf("EstimatedVRAMMiB = %d, want 0", resolved.EstimatedVRAMMiB)
+	}
+}
+
+func TestCheckFitPowerBudget(t *testing.T) {
+	tests := []struct {
+		name        string
+		tdpWatts    int
+		powerMin    int
+		powerMax    int
+		wantWarning string // substring, "" = no warning expected
+	}{
+		{"TDP=450, power [80,200] → no warning", 450, 80, 200, ""},
+		{"TDP=22, power [80,200] → min exceeds", 22, 80, 200, "minimum power draw (80 W) exceeds"},
+		{"TDP=150, power [80,200] → may reach", 150, 80, 200, "may reach 200 W"},
+		{"TDP=0 → skip", 0, 80, 200, ""},
+		{"power=0 → skip", 150, 0, 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := &ResolvedConfig{
+				Config:              map[string]any{},
+				EnginePowerWattsMin: tt.powerMin,
+				EnginePowerWattsMax: tt.powerMax,
+			}
+			hw := HardwareInfo{TDPWatts: tt.tdpWatts}
+			fit := CheckFit(resolved, hw)
+			if !fit.Fit {
+				t.Fatalf("expected Fit=true, got Reason=%q", fit.Reason)
+			}
+			if tt.wantWarning == "" {
+				for _, w := range fit.Warnings {
+					if strings.Contains(w, "power") {
+						t.Errorf("unexpected power warning: %q", w)
+					}
+				}
+			} else {
+				var found bool
+				for _, w := range fit.Warnings {
+					if strings.Contains(w, tt.wantWarning) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected warning containing %q, got %v", tt.wantWarning, fit.Warnings)
+				}
+			}
+		})
+	}
+}
+
+func TestFindHardwareTDP(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	// test-gpu has tdp_watts: 300
+	if tdp := cat.FindHardwareTDP(HardwareInfo{GPUArch: "TestArch"}); tdp != 300 {
+		t.Errorf("FindHardwareTDP(TestArch) = %d, want 300", tdp)
+	}
+	// Unknown arch → 0
+	if tdp := cat.FindHardwareTDP(HardwareInfo{GPUArch: "Unknown"}); tdp != 0 {
+		t.Errorf("FindHardwareTDP(Unknown) = %d, want 0", tdp)
+	}
+}
+
 func TestFindEngineByName(t *testing.T) {
 	cat := mustLoadCatalog(t)
 

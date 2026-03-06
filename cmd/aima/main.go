@@ -289,6 +289,7 @@ func run() error {
 	proxyServer.SetExtraRoutes(func(mux *http.ServeMux) {
 		fleetRoutes(mux)
 		uiRoutes(mux)
+		mux.HandleFunc("/api/v1/power", handlePowerSnapshot(cat))
 	})
 
 	// fleetEnsureDiscovery runs a one-shot mDNS scan if the registry is empty.
@@ -1186,7 +1187,7 @@ func staticKnowledgeLoaded(ctx context.Context, sqlDB *sql.DB) bool {
 // buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
 // Missing data results in zero values, which downstream functions treat as "unknown" and skip.
-func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInfo {
+func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName string) knowledge.HardwareInfo {
 	hwInfo := knowledge.HardwareInfo{
 		Platform:    goruntime.GOOS + "/" + goruntime.GOARCH,
 		RuntimeType: rtName,
@@ -1208,6 +1209,10 @@ func buildHardwareInfo(ctx context.Context, rtName string) knowledge.HardwareInf
 	if m, err := hal.CollectMetrics(ctx); err == nil && m.GPU != nil {
 		hwInfo.GPUMemUsedMiB = m.GPU.MemoryUsedMiB
 		hwInfo.GPUMemFreeMiB = m.GPU.MemoryTotalMiB - m.GPU.MemoryUsedMiB
+	}
+	// TDP from hardware profile catalog
+	if cat != nil {
+		hwInfo.TDPWatts = cat.FindHardwareTDP(hwInfo)
 	}
 	return hwInfo
 }
@@ -1488,7 +1493,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 
 			// Determine required format via hardware-aware variant resolution.
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			_, resolvedVariant, engineType, _ := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
 			requiredFormat := ""
 			if resolvedVariant != nil {
@@ -1621,7 +1626,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(engines)
 		},
 		GetEngineInfo: func(ctx context.Context, name string) (json.RawMessage, error) {
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			nameLower := strings.ToLower(name)
 
 			// Catalog lookup: exact name → type+hw preference → image substring
@@ -1663,7 +1668,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if name == "" {
 				name = cat.DefaultEngine()
 			}
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 
 			ea := cat.FindEngineByName(name, hwInfo)
 			if ea == nil {
@@ -1720,7 +1725,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
 				return nil, err
@@ -1865,7 +1870,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(result)
 		},
 		DeployDryRun: func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, overrides, dataDir)
 			if err != nil {
 				return nil, err
@@ -1900,6 +1905,39 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			warnings = append(warnings, rd.Fit.Warnings...)
 			if !rd.Fit.Fit {
 				warnings = append(warnings, "WILL NOT DEPLOY: "+rd.Fit.Reason)
+			}
+
+			// Time estimates
+			if resolved.ColdStartSMax > 0 {
+				result["cold_start_s"] = map[string]int{"min": resolved.ColdStartSMin, "max": resolved.ColdStartSMax}
+			}
+			if resolved.StartupTimeS > 0 {
+				result["startup_time_s"] = resolved.StartupTimeS
+			}
+
+			// Power estimates
+			if resolved.EnginePowerWattsMax > 0 {
+				result["engine_power_watts"] = map[string]int{"min": resolved.EnginePowerWattsMin, "max": resolved.EnginePowerWattsMax}
+			}
+
+			// Resource estimates
+			resourceEstimate := map[string]any{}
+			if resolved.EstimatedVRAMMiB > 0 {
+				resourceEstimate["vram_mib"] = resolved.EstimatedVRAMMiB
+			}
+			if resolved.Partition != nil {
+				if resolved.Partition.GPUMemoryMiB > 0 {
+					resourceEstimate["partition_gpu_memory_mib"] = resolved.Partition.GPUMemoryMiB
+				}
+				if resolved.Partition.CPUCores > 0 {
+					resourceEstimate["partition_cpu_cores"] = resolved.Partition.CPUCores
+				}
+				if resolved.Partition.RAMMiB > 0 {
+					resourceEstimate["partition_ram_mib"] = resolved.Partition.RAMMiB
+				}
+			}
+			if len(resourceEstimate) > 0 {
+				result["resource_estimate"] = resourceEstimate
 			}
 
 			if runtimeName == "k3s" {
@@ -2074,7 +2112,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		// Knowledge
 		ResolveConfig: func(ctx context.Context, modelName, engineType string, overrides map[string]any) (json.RawMessage, error) {
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, "", overrides, dataDir)
 			if err != nil {
 				return nil, err
@@ -2101,7 +2139,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return db.InsertNote(ctx, &n)
 		},
 		GeneratePod: func(ctx context.Context, modelName, engineType, slot string) (json.RawMessage, error) {
-			hwInfo := buildHardwareInfo(ctx, rt.Name())
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			overrides := map[string]any{}
 			if slot != "" {
 				overrides["slot"] = slot
@@ -2382,6 +2420,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if benchmarkID != "" {
 				resp["benchmark_id"] = benchmarkID
 				resp["config_id"] = configID
+
+				// L2c auto-promote: if new benchmark beats current golden by >5%
+				if promoted, oldID := maybeAutoPromote(ctx, db, configID, result.ThroughputTPS, p.Hardware, p.Engine, p.Model); promoted {
+					resp["auto_promoted"] = true
+					if oldID != "" {
+						resp["old_golden_id"] = oldID
+					}
+				}
 			}
 			return json.Marshal(resp)
 		},
@@ -3066,6 +3112,49 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 	return benchmarkID, existingCfg.ID, nil
 }
 
+// maybeAutoPromote promotes a config to golden if its benchmark throughput beats
+// the current golden by >5%. Returns (promoted, oldGoldenID).
+func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, newThroughput float64, hardware, engine, model string) (bool, string) {
+	goldenCfg, goldenBench, err := db.FindGoldenBenchmark(ctx, hardware, engine, model)
+	if err != nil {
+		slog.Warn("auto-promote: failed to query golden", "error", err)
+		return false, ""
+	}
+
+	// No golden exists → promote this one directly
+	if goldenCfg == nil {
+		if err := db.UpdateConfigStatus(ctx, newConfigID, "golden"); err == nil {
+			slog.Info("auto-promote: first golden config", "config_id", newConfigID)
+			return true, ""
+		}
+		return false, ""
+	}
+
+	// Same config → skip
+	if goldenCfg.ID == newConfigID {
+		return false, ""
+	}
+
+	// Compare: new must beat golden by >5% to avoid noisy promotion
+	if goldenBench != nil && newThroughput > goldenBench.ThroughputTPS*1.05 {
+		if err := db.UpdateConfigStatus(ctx, goldenCfg.ID, "experiment"); err != nil {
+			slog.Warn("auto-promote: failed to demote old golden", "config_id", goldenCfg.ID, "error", err)
+			return false, ""
+		}
+		if err := db.UpdateConfigStatus(ctx, newConfigID, "golden"); err != nil {
+			slog.Warn("auto-promote: failed to promote new golden", "config_id", newConfigID, "error", err)
+			// Restore old golden status
+			_ = db.UpdateConfigStatus(ctx, goldenCfg.ID, "golden")
+			return false, ""
+		}
+		slog.Info("auto-promote: new golden config",
+			"old_golden", goldenCfg.ID, "new_golden", newConfigID,
+			"old_tps", goldenBench.ThroughputTPS, "new_tps", newThroughput)
+		return true, goldenCfg.ID
+	}
+	return false, ""
+}
+
 // tokenBucket converts a token count to a human-readable bucket string.
 func tokenBucket(tokens int) string {
 	switch {
@@ -3112,4 +3201,44 @@ func findModelFileInDir(dir string) string {
 		}
 	}
 	return ""
+}
+
+// handlePowerSnapshot returns a JSON snapshot of current power/GPU metrics.
+func handlePowerSnapshot(cat *knowledge.Catalog) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ctx := r.Context()
+		resp := map[string]any{"timestamp": time.Now().UTC()}
+
+		metrics, err := hal.CollectMetrics(ctx)
+		if err != nil || metrics == nil || metrics.GPU == nil {
+			resp["available"] = false
+		} else {
+			resp["available"] = true
+			resp["gpu"] = map[string]any{
+				"power_draw_watts":  metrics.GPU.PowerDrawWatts,
+				"temperature_c":    metrics.GPU.TemperatureCelsius,
+				"utilization_pct":  metrics.GPU.UtilizationPercent,
+				"memory_used_mib":  metrics.GPU.MemoryUsedMiB,
+				"memory_total_mib": metrics.GPU.MemoryTotalMiB,
+			}
+		}
+
+		// Add TDP from hardware profile for context
+		if hw, hwErr := hal.Detect(ctx); hwErr == nil && hw.GPU != nil {
+			tdp := cat.FindHardwareTDP(knowledge.HardwareInfo{GPUArch: hw.GPU.Arch})
+			if tdp > 0 {
+				resp["tdp_watts"] = tdp
+				if metrics != nil && metrics.GPU != nil && metrics.GPU.PowerDrawWatts > 0 {
+					resp["power_utilization_pct"] = metrics.GPU.PowerDrawWatts / float64(tdp) * 100
+				}
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
 }

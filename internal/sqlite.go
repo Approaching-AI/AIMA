@@ -1193,6 +1193,50 @@ func (d *DB) FindConfigByHash(ctx context.Context, hash string) (*Configuration,
 	return c, nil
 }
 
+// FindGoldenBenchmark returns the golden configuration and its best benchmark result
+// for the given hardware/engine/model triple. Uses a single JOIN query to avoid
+// MaxOpenConns(1) deadlocks. Returns (nil, nil, nil) if no golden config exists.
+func (d *DB) FindGoldenBenchmark(ctx context.Context, hardware, engine, model string) (*Configuration, *BenchmarkResult, error) {
+	row := d.db.QueryRowContext(ctx,
+		`SELECT c.id, c.hardware_id, c.engine_id, c.model_id, COALESCE(c.partition_slot,''),
+		        c.config, c.config_hash, c.derived_from, c.status,
+		        COALESCE(c.tags,'[]'), COALESCE(c.source,'local'), COALESCE(c.device_id,''),
+		        c.created_at, c.updated_at,
+		        b.id, b.throughput_tps
+		 FROM configurations c
+		 LEFT JOIN benchmark_results b ON b.config_id = c.id
+		 WHERE c.status = 'golden'
+		   AND c.hardware_id = ? AND c.engine_id = ? AND c.model_id = ?
+		 ORDER BY b.throughput_tps DESC
+		 LIMIT 1`,
+		hardware, engine, model)
+
+	cfg := &Configuration{}
+	var tagsStr, derivedFrom, benchID sql.NullString
+	var throughput sql.NullFloat64
+	err := row.Scan(
+		&cfg.ID, &cfg.HardwareID, &cfg.EngineID, &cfg.ModelID, &cfg.Slot,
+		&cfg.Config, &cfg.ConfigHash, &derivedFrom, &cfg.Status,
+		&tagsStr, &cfg.Source, &cfg.DeviceID, &cfg.CreatedAt, &cfg.UpdatedAt,
+		&benchID, &throughput)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("find golden benchmark: %w", err)
+	}
+	if derivedFrom.Valid {
+		cfg.DerivedFrom = derivedFrom.String
+	}
+	_ = json.Unmarshal([]byte(tagsStr.String), &cfg.Tags)
+
+	var bench *BenchmarkResult
+	if benchID.Valid {
+		bench = &BenchmarkResult{ID: benchID.String, ConfigID: cfg.ID, ThroughputTPS: throughput.Float64}
+	}
+	return cfg, bench, nil
+}
+
 func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,

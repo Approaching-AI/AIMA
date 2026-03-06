@@ -1581,3 +1581,207 @@ func TestCollectMetrics_UnifiedMemoryBackfill(t *testing.T) {
 		t.Errorf("GPU MemoryUsedMiB = %d, want %d (RAM used)", m.GPU.MemoryUsedMiB, m.RAM.UsedMiB)
 	}
 }
+
+// --- MetaX GPU tests ---
+
+const metaxSMIOutput = `mx-smi  version: 2.2.8
+
+=================== MetaX System Management Interface Log ===================
+Timestamp                                         : Fri Mar  6 11:58:48 2026
+
+Attached GPUs                                     : 2
++---------------------------------------------------------------------------------+
+| MX-SMI 2.2.8                        Kernel Mode Driver Version: 3.0.11          |
+| MACA Version: 3.1.0.14              BIOS Version: 1.26.1.0                      |
+|------------------------------------+---------------------+----------------------+
+| GPU     NAME         Persistence-M | Bus-id              | GPU-Util      sGPU-M |
+| Temp    Pwr:Usage/Cap         Perf | Memory-Usage        | GPU-State            |
+|====================================+=====================+======================|
+| 0       MetaX N260             Off | 0000:01:00.0        | 0%            Native |
+| 37C     29W / 225W              P0 | 666/65536 MiB       | Available            |
++------------------------------------+---------------------+----------------------+
+| 1       MetaX N260             Off | 0000:21:00.0        | 0%            Native |
+| 37C     33W / 225W              P0 | 666/65536 MiB       | Available            |
++------------------------------------+---------------------+----------------------+
+
++---------------------------------------------------------------------------------+
+| Process:                                                                        |
+|  GPU                    PID         Process Name                 GPU Memory     |
+|                                                                  Usage(MiB)     |
+|=================================================================================|
+|  no process found                                                               |
++---------------------------------------------------------------------------------+
+
+End of Log
+`
+
+func TestParseMetaXGPU(t *testing.T) {
+	gpu := parseMetaXGPU(metaxSMIOutput)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Name != "MetaX N260" {
+		t.Errorf("Name = %q, want %q", gpu.Name, "MetaX N260")
+	}
+	if gpu.Arch != "MACA" {
+		t.Errorf("Arch = %q, want %q", gpu.Arch, "MACA")
+	}
+	if gpu.VRAMMiB != 65536 {
+		t.Errorf("VRAMMiB = %d, want %d", gpu.VRAMMiB, 65536)
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want %d", gpu.Count, 2)
+	}
+	if gpu.DriverVersion != "3.0.11" {
+		t.Errorf("DriverVersion = %q, want %q", gpu.DriverVersion, "3.0.11")
+	}
+	if gpu.SDKVersion != "MACA 3.1.0.14" {
+		t.Errorf("SDKVersion = %q, want %q", gpu.SDKVersion, "MACA 3.1.0.14")
+	}
+	if gpu.TemperatureCelsius != 37 {
+		t.Errorf("Temperature = %v, want %v", gpu.TemperatureCelsius, 37.0)
+	}
+	if gpu.PowerDrawWatts != 29 {
+		t.Errorf("PowerDraw = %v, want %v", gpu.PowerDrawWatts, 29.0)
+	}
+	if gpu.PowerLimitWatts != 225 {
+		t.Errorf("PowerLimit = %v, want %v", gpu.PowerLimitWatts, 225.0)
+	}
+}
+
+func TestParseMetaXGPUMetrics(t *testing.T) {
+	m := parseMetaXGPUMetrics(metaxSMIOutput)
+	if m == nil {
+		t.Fatal("expected non-nil metrics")
+	}
+	if m.UtilizationPercent != 0 {
+		t.Errorf("Utilization = %d, want %d", m.UtilizationPercent, 0)
+	}
+	if m.MemoryUsedMiB != 666 {
+		t.Errorf("MemoryUsed = %d, want %d", m.MemoryUsedMiB, 666)
+	}
+	if m.MemoryTotalMiB != 65536 {
+		t.Errorf("MemoryTotal = %d, want %d", m.MemoryTotalMiB, 65536)
+	}
+	if m.TemperatureCelsius != 37 {
+		t.Errorf("Temperature = %v, want %v", m.TemperatureCelsius, 37.0)
+	}
+	if m.PowerDrawWatts != 29 {
+		t.Errorf("PowerDraw = %v, want %v", m.PowerDrawWatts, 29.0)
+	}
+}
+
+func TestParseMetaXGPU_SingleGPU(t *testing.T) {
+	output := `mx-smi  version: 2.2.8
+
+=================== MetaX System Management Interface Log ===================
+Timestamp                                         : Fri Mar  6 12:00:00 2026
+
+Attached GPUs                                     : 1
++---------------------------------------------------------------------------------+
+| MX-SMI 2.2.8                        Kernel Mode Driver Version: 3.0.11          |
+| MACA Version: 3.1.0.14              BIOS Version: 1.26.1.0                      |
+|------------------------------------+---------------------+----------------------+
+| GPU     NAME         Persistence-M | Bus-id              | GPU-Util      sGPU-M |
+| Temp    Pwr:Usage/Cap         Perf | Memory-Usage        | GPU-State            |
+|====================================+=====================+======================|
+| 0       MetaX C500             Off | 0000:01:00.0        | 42%           Native |
+| 55C     180W / 300W             P0 | 32000/65536 MiB     | Available            |
++------------------------------------+---------------------+----------------------+
+`
+	gpu := parseMetaXGPU(output)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Name != "MetaX C500" {
+		t.Errorf("Name = %q, want %q", gpu.Name, "MetaX C500")
+	}
+	if gpu.Count != 1 {
+		t.Errorf("Count = %d, want %d", gpu.Count, 1)
+	}
+	if gpu.PowerDrawWatts != 180 {
+		t.Errorf("PowerDraw = %v, want %v", gpu.PowerDrawWatts, 180.0)
+	}
+	if gpu.PowerLimitWatts != 300 {
+		t.Errorf("PowerLimit = %v, want %v", gpu.PowerLimitWatts, 300.0)
+	}
+
+	m := parseMetaXGPUMetrics(output)
+	if m == nil {
+		t.Fatal("expected non-nil metrics")
+	}
+	if m.UtilizationPercent != 42 {
+		t.Errorf("Utilization = %d, want %d", m.UtilizationPercent, 42)
+	}
+	if m.MemoryUsedMiB != 32000 {
+		t.Errorf("MemoryUsed = %d, want %d", m.MemoryUsedMiB, 32000)
+	}
+}
+
+func TestParseMetaXGPU_EmptyOutput(t *testing.T) {
+	if gpu := parseMetaXGPU(""); gpu != nil {
+		t.Errorf("expected nil for empty output, got %+v", gpu)
+	}
+	if gpu := parseMetaXGPU("mx-smi: command not found"); gpu != nil {
+		t.Errorf("expected nil for error output, got %+v", gpu)
+	}
+}
+
+func TestMetaXGPUToArch(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"MetaX N260", "MACA"},
+		{"MetaX N100", "MACA"},
+		{"MetaX C500", "MACA"},
+		{"MetaX C280", "MACA"},
+		{"Unknown MetaX GPU", "MACA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := metaxGPUToArch(tt.name); got != tt.want {
+				t.Errorf("metaxGPUToArch(%q) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeChain_FallsToMetaX(t *testing.T) {
+	runner := newMockRunner(map[string]mockResult{
+		"stat /opt/hyhal":   {err: fmt.Errorf("not found")},
+		"stat /dev/mtgpu.0": {err: fmt.Errorf("not found")},
+		"nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits": {
+			err: fmt.Errorf("not found"),
+		},
+		"rocm-smi --json --showproductname --showmeminfo vram --showtemp --showpower": {
+			err: fmt.Errorf("not found"),
+		},
+		"xpu-smi discovery --json": {err: fmt.Errorf("not found")},
+		"npu-smi info":             {err: fmt.Errorf("not found")},
+		"mthreads-gmi -q -j":       {err: fmt.Errorf("not found")},
+		"mx-smi": {
+			output: []byte(metaxSMIOutput),
+		},
+		"mx-smi -j": {
+			output: []byte(`{"maca_version":"3.1.0.14","driver_version":"3.0.11","attached_gpus":2}`),
+		},
+	})
+
+	gpu := detectGPU(context.Background(), runner)
+	if gpu == nil {
+		t.Fatal("expected non-nil GPU")
+	}
+	if gpu.Vendor != "metax" {
+		t.Errorf("Vendor = %q, want %q", gpu.Vendor, "metax")
+	}
+	if gpu.Name != "MetaX N260" {
+		t.Errorf("Name = %q, want %q", gpu.Name, "MetaX N260")
+	}
+	if gpu.Arch != "MACA" {
+		t.Errorf("Arch = %q, want %q", gpu.Arch, "MACA")
+	}
+	if gpu.Count != 2 {
+		t.Errorf("Count = %d, want %d", gpu.Count, 2)
+	}
+}

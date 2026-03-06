@@ -1,0 +1,42 @@
+kind: hardware_profile
+metadata:
+  name: metax-n260-x86
+  description: "MetaX N260 GPU, x86_64, 64GB HBM2e per card"
+hardware:
+  gpu:
+    arch: MACA
+    vram_mib: 65536
+    compute_id: "N260"
+    compute_units: 0
+    resource_name: ""
+  cpu:
+    arch: x86_64
+    cores: 64
+    freq_ghz: 2.26
+  ram:
+    total_mib: 127032
+    bandwidth_gbps: 200
+  unified_memory: false
+constraints:
+  tdp_watts: 225
+  power_modes: [225]
+  cooling: active
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]
+container:
+  devices:
+    - /dev/mxcd
+    - /dev/dri
+  volumes:
+    - name: mxdriver
+      host_path: /opt/mxdriver
+      mount_path: /opt/mxdriver
+      read_only: true
+  env:
+    MACA_PATH: /opt/maca
+    MACA_CLANG_PATH: /opt/maca/mxgpu_llvm/bin
+    CUCC_PATH: /opt/maca/tools/cu-bridge
+    CUDA_PATH: /opt/maca/tools/cu-bridge
+  security:
+    supplemental_groups: [39]

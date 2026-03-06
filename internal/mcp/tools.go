@@ -103,6 +103,43 @@ type ToolDeps struct {
 	FleetDeviceInfo  func(ctx context.Context, deviceID string) (json.RawMessage, error)
 	FleetDeviceTools func(ctx context.Context, deviceID string) (json.RawMessage, error)
 	FleetExecTool    func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error)
+
+	// Patrol & Alerts (A2)
+	PatrolStatus  func(ctx context.Context) (json.RawMessage, error)
+	PatrolAlerts  func(ctx context.Context) (json.RawMessage, error)
+	PatrolConfig  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	PatrolActions func(ctx context.Context, limit int) (json.RawMessage, error)
+
+	// Auto-tuning (A3)
+	TuningStart   func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	TuningStatus  func(ctx context.Context) (json.RawMessage, error)
+	TuningStop    func(ctx context.Context) (json.RawMessage, error)
+	TuningResults func(ctx context.Context) (json.RawMessage, error)
+
+	// Power history (F4)
+	PowerHistory func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
+	// Validation (F5)
+	ValidateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
+	// Engine switch cost (A5/D5)
+	EngineSwitchCost func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
+	// Open questions (I6)
+	OpenQuestions func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+
+	// App management (D4)
+	AppRegister  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	AppProvision func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	AppList      func(ctx context.Context) (json.RawMessage, error)
+
+	// Knowledge sync (K6)
+	SyncPush   func(ctx context.Context) (json.RawMessage, error)
+	SyncPull   func(ctx context.Context) (json.RawMessage, error)
+	SyncStatus func(ctx context.Context) (json.RawMessage, error)
+
+	// Power mode (S3)
+	PowerMode func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 }
 
 // validConfigKeys is the whitelist for system.config get/set.
@@ -112,7 +149,9 @@ var validConfigKeys = map[string]bool{
 	"llm.model":        true,
 	"llm.api_key":      true,
 	"llm.user_agent":   true,
-	"llm.extra_params": true,
+	"llm.extra_params":  true,
+	"central.endpoint":  true,
+	"central.api_key":   true,
 }
 
 // IsValidConfigKey reports whether key is a recognized configuration key.
@@ -543,23 +582,31 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			`"model":{"type":"string","description":"Model to deploy, e.g. 'qwen3-0.6b'. Call model.list to verify it is available locally."},`+
 				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm', 'llamacpp'. Omit to auto-select the best engine for this hardware."},`+
 				`"slot":{"type":"string","description":"Partition slot for multi-model deployment, e.g. 'slot-0'. Omit for default full-device allocation."},`+
-				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9, \"max_model_len\": 131072, \"tensor_parallel_size\": 2}"}`,
+				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9, \"max_model_len\": 131072, \"tensor_parallel_size\": 2}"},`+
+				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection. 0 or omitted means no constraint."}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployApply == nil {
 				return ErrorResult("deploy.apply not implemented"), nil
 			}
 			var p struct {
-				Model  string         `json:"model"`
-				Engine string         `json:"engine"`
-				Slot   string         `json:"slot"`
-				Config map[string]any `json:"config"`
+				Model          string         `json:"model"`
+				Engine         string         `json:"engine"`
+				Slot           string         `json:"slot"`
+				Config         map[string]any `json:"config"`
+				MaxColdStartS  int            `json:"max_cold_start_s"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
 			if p.Model == "" {
 				return ErrorResult("model is required"), nil
+			}
+			if p.MaxColdStartS > 0 {
+				if p.Config == nil {
+					p.Config = map[string]any{}
+				}
+				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
 			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
@@ -577,23 +624,31 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			`"model":{"type":"string","description":"Model to deploy, e.g. 'qwen3-0.6b'"},`+
 				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm', 'llamacpp'. Omit to auto-select."},`+
 				`"slot":{"type":"string","description":"Partition slot for multi-model, e.g. 'slot-0'. Omit for default."},`+
-				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9}"}`,
+				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9}"},`+
+				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection."}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployDryRun == nil {
 				return ErrorResult("deploy.dry_run not implemented"), nil
 			}
 			var p struct {
-				Model  string         `json:"model"`
-				Engine string         `json:"engine"`
-				Slot   string         `json:"slot"`
-				Config map[string]any `json:"config"`
+				Model         string         `json:"model"`
+				Engine        string         `json:"engine"`
+				Slot          string         `json:"slot"`
+				Config        map[string]any `json:"config"`
+				MaxColdStartS int            `json:"max_cold_start_s"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
 			if p.Model == "" {
 				return ErrorResult("model is required"), nil
+			}
+			if p.MaxColdStartS > 0 {
+				if p.Config == nil {
+					p.Config = map[string]any{}
+				}
+				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
 			data, err := deps.DeployDryRun(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
@@ -1698,6 +1753,366 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.FleetExecTool(ctx, p.DeviceID, p.ToolName, p.Params)
 			if err != nil {
 				return nil, fmt.Errorf("fleet exec %s on %s: %w", p.ToolName, p.DeviceID, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// --- Patrol & Alerts (A2) ---
+
+	s.RegisterTool(&Tool{
+		Name:        "agent.patrol_status",
+		Description: "Get the current patrol loop state: whether running, last run time, next scheduled run, and active alert count.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PatrolStatus == nil {
+				return ErrorResult("patrol not available"), nil
+			}
+			data, err := deps.PatrolStatus(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "agent.alerts",
+		Description: "List active patrol alerts with severity, type, and message. Alerts are generated by the patrol loop when GPU temperature exceeds threshold, deployments crash, or VRAM opportunity exists.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PatrolAlerts == nil {
+				return ErrorResult("patrol not available"), nil
+			}
+			data, err := deps.PatrolAlerts(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "agent.patrol_config",
+		Description: "Get or set patrol configuration. Set interval to 0 to disable patrol. Parameters: action ('get' or 'set'), key (e.g. 'interval'), value.",
+		InputSchema: schema(
+			`"action":{"type":"string","enum":["get","set"],"description":"'get' to read config, 'set' to update"},`+
+				`"key":{"type":"string","description":"Config key: 'interval', 'self_heal'"},`+
+				`"value":{"type":"string","description":"New value (only for 'set')"}`,
+			"action"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PatrolConfig == nil {
+				return ErrorResult("patrol not available"), nil
+			}
+			data, err := deps.PatrolConfig(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "agent.patrol_actions",
+		Description: "List automated actions taken by the patrol loop (self-healing, notifications). Shows what the patrol did in response to alerts.",
+		InputSchema: schema(
+			`"limit":{"type":"integer","description":"Maximum number of actions to return (default 50)"}`,
+			""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PatrolActions == nil {
+				return ErrorResult("patrol actions not available"), nil
+			}
+			var p struct {
+				Limit int `json:"limit"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.Limit <= 0 {
+				p.Limit = 50
+			}
+			data, err := deps.PatrolActions(ctx, p.Limit)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// --- Auto-tuning (A3) ---
+
+	s.RegisterTool(&Tool{
+		Name:        "tuning.start",
+		Description: "Start an auto-tuning session. Iterates config parameter combinations, benchmarks each, and promotes the best. Parameters: model (required), engine (optional), parameters (list of tunable params with key/values or min/max/step).",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model name to tune"},`+
+				`"engine":{"type":"string","description":"Engine type (auto-detect if empty)"},`+
+				`"parameters":{"type":"array","items":{"type":"object"},"description":"Tunable parameter definitions"},`+
+				`"max_configs":{"type":"integer","description":"Maximum configs to test (default: 20)"}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.TuningStart == nil {
+				return ErrorResult("tuning not available"), nil
+			}
+			data, err := deps.TuningStart(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "tuning.status",
+		Description: "Get current auto-tuning session progress: configs tested, current best throughput, ETA.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.TuningStatus == nil {
+				return ErrorResult("tuning not available"), nil
+			}
+			data, err := deps.TuningStatus(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "tuning.stop",
+		Description: "Cancel an ongoing auto-tuning session. The best config found so far is deployed.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.TuningStop == nil {
+				return ErrorResult("tuning not available"), nil
+			}
+			data, err := deps.TuningStop(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "tuning.results",
+		Description: "Get the results of the last completed tuning session: ranked configs with benchmark data.",
+		InputSchema: noParamsSchema(),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.TuningResults == nil {
+				return ErrorResult("tuning not available"), nil
+			}
+			data, err := deps.TuningResults(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// --- Power History (F4) ---
+
+	s.RegisterTool(&Tool{
+		Name:        "device.power_history",
+		Description: "Query historical GPU power, temperature, and utilization samples over time. Returns time series data for trend analysis.",
+		InputSchema: schema(
+			`"from":{"type":"string","description":"Start time (ISO 8601 or 'now-1h', 'now-6h', 'now-24h')"},`+
+				`"to":{"type":"string","description":"End time (ISO 8601 or 'now')"}`,
+		),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PowerHistory == nil {
+				return ErrorResult("power history not available"), nil
+			}
+			data, err := deps.PowerHistory(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// --- Validation (F5) ---
+
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.validate",
+		Description: "Compare predicted vs actual performance for a hardware/engine/model combination. Shows deviation percentage and flags divergent predictions (>20% off).",
+		InputSchema: schema(
+			`"hardware":{"type":"string","description":"GPU architecture"},`+
+				`"engine":{"type":"string","description":"Engine type"},`+
+				`"model":{"type":"string","description":"Model name"}`,
+		),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ValidateKnowledge == nil {
+				return ErrorResult("validation not available"), nil
+			}
+			data, err := deps.ValidateKnowledge(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// --- Engine Switch Cost (A5/D5) ---
+
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.engine_switch_cost",
+		Description: "Quantify the cost vs benefit of switching from one engine to another. Returns throughput gain, switch time (cold start), and a switch/stay recommendation.",
+		InputSchema: schema(
+			`"current_engine":{"type":"string","description":"Currently deployed engine type"},`+
+				`"target_engine":{"type":"string","description":"Engine to evaluate switching to"},`+
+				`"hardware":{"type":"string","description":"GPU architecture"},`+
+				`"model":{"type":"string","description":"Model name"}`,
+			"current_engine", "target_engine"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.EngineSwitchCost == nil {
+				return ErrorResult("engine switch cost not available"), nil
+			}
+			data, err := deps.EngineSwitchCost(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// I6: Open questions
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.open_questions",
+		Description: "List and resolve open questions from knowledge assets. Questions are YAML-declared uncertainties that need real-device validation.",
+		InputSchema: schema(
+			`"action":{"type":"string","description":"Action: list (default), resolve","enum":["list","resolve"]},`+
+				`"status":{"type":"string","description":"Filter by status: untested, confirmed, rejected"},`+
+				`"id":{"type":"string","description":"Question ID (for resolve action)"},`+
+				`"result":{"type":"string","description":"Actual test result (for resolve action)"},`+
+				`"hardware":{"type":"string","description":"Hardware that tested (for resolve action)"}`,
+		),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.OpenQuestions == nil {
+				return ErrorResult("open questions not available"), nil
+			}
+			data, err := deps.OpenQuestions(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// D4: App management
+	s.RegisterTool(&Tool{
+		Name:        "app.register",
+		Description: "Register an application with its inference dependency declarations. The app spec defines what inference services (LLM, embedding, rerank, etc.) the app needs.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"App name"},`+
+				`"inference_needs":{"type":"array","description":"Array of inference needs","items":{"type":"object","properties":{"type":{"type":"string"},"model":{"type":"string"},"required":{"type":"boolean"},"performance":{"type":"string"}}}},`+
+				`"resource_budget":{"type":"object","description":"Resource budget","properties":{"cpu_cores":{"type":"integer"},"memory_mb":{"type":"integer"}}},`+
+				`"time_constraints":{"type":"object","description":"Time constraints","properties":{"max_cold_start_s":{"type":"number"}}}`,
+			"name", "inference_needs"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AppRegister == nil {
+				return ErrorResult("app register not available"), nil
+			}
+			data, err := deps.AppRegister(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+	s.RegisterTool(&Tool{
+		Name:        "app.provision",
+		Description: "Auto-deploy all required inference services for a registered app. Checks existing deployments first, deploys missing ones, and reports satisfaction status.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"App name to provision"}`,
+			"name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AppProvision == nil {
+				return ErrorResult("app provision not available"), nil
+			}
+			data, err := deps.AppProvision(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+	s.RegisterTool(&Tool{
+		Name:        "app.list",
+		Description: "List all registered apps with their dependency satisfaction status.",
+		InputSchema: schema(""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AppList == nil {
+				return ErrorResult("app list not available"), nil
+			}
+			data, err := deps.AppList(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// K6: Knowledge sync
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.sync_push",
+		Description: "Push local knowledge (configurations + benchmarks) to the central knowledge server.",
+		InputSchema: schema(""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.SyncPush == nil {
+				return ErrorResult("sync not configured — set central.endpoint and central.api_key first"), nil
+			}
+			data, err := deps.SyncPush(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.sync_pull",
+		Description: "Pull new knowledge from the central knowledge server. Only downloads configs/benchmarks newer than last pull.",
+		InputSchema: schema(""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.SyncPull == nil {
+				return ErrorResult("sync not configured — set central.endpoint and central.api_key first"), nil
+			}
+			data, err := deps.SyncPull(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.sync_status",
+		Description: "Show knowledge sync status: central server URL, connectivity, last push/pull timestamps.",
+		InputSchema: schema(""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.SyncStatus == nil {
+				return ErrorResult("sync not configured — set central.endpoint and central.api_key first"), nil
+			}
+			data, err := deps.SyncStatus(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// S3: Power mode
+	s.RegisterTool(&Tool{
+		Name:        "device.power_mode",
+		Description: "List available power modes and current mode for the device. On supported hardware, can switch between performance/balanced/powersave modes.",
+		InputSchema: schema(
+			`"action":{"type":"string","description":"Action: get (default) or set","enum":["get","set"]},`+
+				`"mode":{"type":"string","description":"Power mode to set (for set action)"}`,
+		),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.PowerMode == nil {
+				return ErrorResult("power mode not available"), nil
+			}
+			data, err := deps.PowerMode(ctx, params)
+			if err != nil {
+				return nil, err
 			}
 			return TextResult(string(data)), nil
 		},

@@ -286,10 +286,47 @@ func run() error {
 	}
 	fleetRoutes := fleet.RegisterRoutes(fleetDeps)
 	uiRoutes := ui.RegisterRoutes()
+	var patrol *agent.Patrol // created later; captured by closure, safe because serve runs after init
 	proxyServer.SetExtraRoutes(func(mux *http.ServeMux) {
 		fleetRoutes(mux)
 		uiRoutes(mux)
 		mux.HandleFunc("/api/v1/power", handlePowerSnapshot(cat))
+		mux.HandleFunc("/api/v1/power/history", func(w http.ResponseWriter, r *http.Request) {
+			from := r.URL.Query().Get("from")
+			to := r.URL.Query().Get("to")
+			if from == "" {
+				from = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+			}
+			if to == "" {
+				to = time.Now().UTC().Format(time.RFC3339)
+			}
+			results, err := db.QueryPowerHistory(r.Context(), from, to, 60)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(results)
+		})
+
+		// Start power sampling goroutine (30s interval, 7-day retention)
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				m, err := hal.CollectMetrics(context.Background())
+				if err != nil || m.GPU == nil {
+					continue
+				}
+				_ = db.InsertPowerSample(context.Background(), 0,
+					m.GPU.PowerDrawWatts, m.GPU.TemperatureCelsius,
+					float64(m.GPU.UtilizationPercent), m.GPU.MemoryUsedMiB, m.GPU.MemoryTotalMiB)
+				_ = db.PrunePowerSamples(context.Background(), 7)
+			}
+		}()
+
+		// Start patrol loop
+		patrol.Start(context.Background())
 	})
 
 	// fleetEnsureDiscovery runs a one-shot mDNS scan if the registry is empty.
@@ -393,7 +430,487 @@ func run() error {
 		return nil
 	}
 
-	// 9g. Register all tools (after all deps are fully wired)
+	// 9g. Patrol, tuner, healer (A2, A3, A4)
+	healer := agent.NewHealer(toolAdapter)
+	tuner := agent.NewTuner(toolAdapter)
+	patrol = agent.NewPatrol(agent.DefaultPatrolConfig(), toolAdapter, db.InsertPatrolAlert,
+		agent.WithHealer(healer),
+		agent.WithActionCallback(func(ctx context.Context, a agent.PatrolAction) {
+			slog.Info("patrol_action_audit",
+				"alert_id", a.AlertID, "type", a.Type,
+				"success", a.Success, "detail", a.Detail)
+		}),
+	)
+
+	deps.PatrolStatus = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(patrol.Status())
+	}
+	deps.PatrolAlerts = func(ctx context.Context) (json.RawMessage, error) {
+		alerts := patrol.ActiveAlerts()
+		if alerts == nil {
+			alerts = []agent.Alert{}
+		}
+		return json.Marshal(alerts)
+	}
+	deps.PatrolConfig = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Action string `json:"action"`
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.Action == "get" {
+			return json.Marshal(patrol.Config())
+		}
+		switch p.Key {
+		case "interval":
+			d, err := time.ParseDuration(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid duration: %w", err)
+			}
+			patrol.SetInterval(d)
+		}
+		return json.Marshal(map[string]string{"status": "updated"})
+	}
+	deps.PatrolActions = func(ctx context.Context, limit int) (json.RawMessage, error) {
+		actions := patrol.RecentActions(limit)
+		if actions == nil {
+			actions = []agent.PatrolAction{}
+		}
+		return json.Marshal(actions)
+	}
+	deps.TuningStart = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var config agent.TuningConfig
+		if err := json.Unmarshal(params, &config); err != nil {
+			return nil, err
+		}
+		if config.MaxConfigs == 0 {
+			config.MaxConfigs = 20
+		}
+		session, err := tuner.Start(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(session)
+	}
+	deps.TuningStatus = func(ctx context.Context) (json.RawMessage, error) {
+		s := tuner.CurrentSession()
+		if s == nil {
+			return json.Marshal(map[string]string{"status": "no session"})
+		}
+		return json.Marshal(s)
+	}
+	deps.TuningStop = func(ctx context.Context) (json.RawMessage, error) {
+		tuner.Stop()
+		return json.Marshal(map[string]string{"status": "stopped"})
+	}
+	deps.TuningResults = func(ctx context.Context) (json.RawMessage, error) {
+		s := tuner.CurrentSession()
+		if s == nil {
+			return json.Marshal(map[string]string{"status": "no session"})
+		}
+		return json.Marshal(s)
+	}
+	deps.PowerHistory = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.From == "" {
+			p.From = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		}
+		if p.To == "" {
+			p.To = time.Now().UTC().Format(time.RFC3339)
+		}
+		results, err := db.QueryPowerHistory(ctx, p.From, p.To, 60)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(results)
+	}
+	deps.ValidateKnowledge = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Hardware string `json:"hardware"`
+			Engine   string `json:"engine"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		results, err := db.ListValidations(ctx, p.Hardware, p.Engine, p.Model)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(results)
+	}
+	deps.EngineSwitchCost = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			CurrentEngine string `json:"current_engine"`
+			TargetEngine  string `json:"target_engine"`
+			Hardware      string `json:"hardware"`
+			Model         string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+
+		// Look up engines from catalog for cold_start data
+		hwInfo := knowledge.HardwareInfo{GPUArch: p.Hardware}
+		currentEngine := cat.FindEngineByName(p.CurrentEngine, hwInfo)
+		targetEngine := cat.FindEngineByName(p.TargetEngine, hwInfo)
+
+		result := map[string]any{
+			"current_engine": p.CurrentEngine,
+			"target_engine":  p.TargetEngine,
+		}
+
+		if targetEngine != nil && len(targetEngine.TimeConstraints.ColdStartS) >= 2 {
+			result["switch_time_s"] = targetEngine.TimeConstraints.ColdStartS[1]
+		}
+
+		// Amplifier comparison
+		currentMult := 1.0
+		targetMult := 1.0
+		if currentEngine != nil && currentEngine.Amplifier.PerformanceMultiplier > 0 {
+			currentMult = currentEngine.Amplifier.PerformanceMultiplier
+		}
+		if targetEngine != nil && targetEngine.Amplifier.PerformanceMultiplier > 0 {
+			targetMult = targetEngine.Amplifier.PerformanceMultiplier
+		}
+		result["current_multiplier"] = currentMult
+		result["target_multiplier"] = targetMult
+
+		if targetMult > currentMult*1.1 {
+			result["recommendation"] = "switch"
+			result["reason"] = fmt.Sprintf("target %.1fx vs current %.1fx performance multiplier (>10%% gain)", targetMult, currentMult)
+		} else {
+			result["recommendation"] = "stay"
+			result["reason"] = fmt.Sprintf("target %.1fx vs current %.1fx — gain insufficient to justify switch cost", targetMult, currentMult)
+		}
+		return json.Marshal(result)
+	}
+
+	// 9i. Open questions (I6)
+	deps.OpenQuestions = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Action   string `json:"action"`
+			Status   string `json:"status"`
+			ID       string `json:"id"`
+			Result   string `json:"result"`
+			Hardware string `json:"hardware"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.Action == "resolve" {
+			if p.ID == "" {
+				return nil, fmt.Errorf("id required for resolve action")
+			}
+			status := "confirmed"
+			if p.Status != "" {
+				status = p.Status
+			}
+			if err := db.ResolveOpenQuestion(ctx, p.ID, status, p.Result, p.Hardware); err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]string{"status": "resolved", "id": p.ID})
+		}
+		// Default: list
+		questions, err := db.ListOpenQuestions(ctx, p.Status)
+		if err != nil {
+			return nil, err
+		}
+		if questions == nil {
+			questions = []map[string]any{}
+		}
+		return json.Marshal(questions)
+	}
+
+	// Load open questions from catalog into DB
+	go func() {
+		bgCtx := context.Background()
+		for _, ea := range cat.EngineAssets {
+			for _, oq := range ea.OpenQuestions {
+				id := fmt.Sprintf("%x", sha256.Sum256([]byte(ea.Metadata.Name+":"+oq.Question)))[:16]
+				_ = db.UpsertOpenQuestion(bgCtx, id, "engine:"+ea.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, "untested")
+			}
+		}
+		for _, sc := range cat.StackComponents {
+			for _, oq := range sc.OpenQuestions {
+				id := fmt.Sprintf("%x", sha256.Sum256([]byte(sc.Metadata.Name+":"+oq.Question)))[:16]
+				_ = db.UpsertOpenQuestion(bgCtx, id, "stack:"+sc.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, "untested")
+			}
+		}
+	}()
+
+	// 9j. App management (D4)
+	deps.AppRegister = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Name            string `json:"name"`
+			InferenceNeeds  json.RawMessage `json:"inference_needs"`
+			ResourceBudget  json.RawMessage `json:"resource_budget"`
+			TimeConstraints json.RawMessage `json:"time_constraints"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.Name == "" {
+			return nil, fmt.Errorf("name required")
+		}
+		id := fmt.Sprintf("%x", sha256.Sum256([]byte(p.Name)))[:16]
+		specBytes, _ := json.Marshal(map[string]any{
+			"name":             p.Name,
+			"inference_needs":  json.RawMessage(p.InferenceNeeds),
+			"resource_budget":  json.RawMessage(p.ResourceBudget),
+			"time_constraints": json.RawMessage(p.TimeConstraints),
+		})
+		if err := db.InsertApp(ctx, id, p.Name, string(specBytes)); err != nil {
+			return nil, err
+		}
+
+		// Parse inference needs and record dependencies
+		var needs []struct {
+			Type        string `json:"type"`
+			Model       string `json:"model"`
+			Required    bool   `json:"required"`
+			Performance string `json:"performance"`
+		}
+		if p.InferenceNeeds != nil {
+			_ = json.Unmarshal(p.InferenceNeeds, &needs)
+		}
+		for _, need := range needs {
+			_ = db.UpsertAppDependency(ctx, id, need.Type, need.Model, "", false)
+		}
+
+		return json.Marshal(map[string]any{"id": id, "name": p.Name, "status": "registered", "dependencies": len(needs)})
+	}
+	deps.AppProvision = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		apps, err := db.ListApps(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Find the app
+		var appSpec map[string]any
+		var appID string
+		for _, a := range apps {
+			if a["name"] == p.Name {
+				appID, _ = a["id"].(string)
+				if specRaw, ok := a["spec"].(json.RawMessage); ok {
+					_ = json.Unmarshal(specRaw, &appSpec)
+				}
+				break
+			}
+		}
+		if appID == "" {
+			return nil, fmt.Errorf("app %q not found", p.Name)
+		}
+
+		// Parse inference needs from spec
+		var needs []struct {
+			Type        string `json:"type"`
+			Model       string `json:"model"`
+			Required    bool   `json:"required"`
+			Performance string `json:"performance"`
+		}
+		if needsRaw, ok := appSpec["inference_needs"]; ok {
+			needsBytes, _ := json.Marshal(needsRaw)
+			_ = json.Unmarshal(needsBytes, &needs)
+		}
+
+		// Check existing deployments
+		deploys, _ := deps.DeployList(ctx)
+		var deployList []map[string]any
+		_ = json.Unmarshal(deploys, &deployList)
+
+		report := make([]map[string]any, 0, len(needs))
+		allSatisfied := true
+		for _, need := range needs {
+			satisfied := false
+			deployName := ""
+			// Check if already deployed
+			for _, d := range deployList {
+				dModel, _ := d["model"].(string)
+				if need.Model != "" && strings.Contains(dModel, need.Model) {
+					satisfied = true
+					deployName, _ = d["name"].(string)
+					break
+				}
+			}
+			_ = db.UpsertAppDependency(ctx, appID, need.Type, need.Model, deployName, satisfied)
+			if !satisfied && need.Required {
+				allSatisfied = false
+			}
+			report = append(report, map[string]any{
+				"type": need.Type, "model": need.Model, "satisfied": satisfied,
+				"deploy_name": deployName, "required": need.Required,
+			})
+		}
+
+		status := "provisioned"
+		if !allSatisfied {
+			status = "partial"
+		}
+		_ = db.UpdateAppStatus(ctx, appID, status)
+
+		return json.Marshal(map[string]any{
+			"app": p.Name, "status": status, "dependencies": report,
+		})
+	}
+	deps.AppList = func(ctx context.Context) (json.RawMessage, error) {
+		apps, err := db.ListApps(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if apps == nil {
+			apps = []map[string]any{}
+		}
+		return json.Marshal(apps)
+	}
+
+	// 9k. Knowledge sync (K6)
+	deps.SyncPush = func(ctx context.Context) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured — use system.config set central.endpoint <url>")
+		}
+		// Export local knowledge
+		exportData, err := deps.ExportKnowledge(ctx, json.RawMessage(`{}`))
+		if err != nil {
+			return nil, fmt.Errorf("export failed: %w", err)
+		}
+		// POST to central
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint+"/api/v1/ingest", strings.NewReader(string(exportData)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("push to central: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d", resp.StatusCode)
+		}
+		_ = db.SetSyncTimestamp(ctx, "push")
+		return json.Marshal(map[string]string{"status": "pushed", "endpoint": endpoint})
+	}
+	deps.SyncPull = func(ctx context.Context) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured — use system.config set central.endpoint <url>")
+		}
+		since, _ := db.GetSyncTimestamp(ctx, "pull")
+		url := endpoint + "/api/v1/sync"
+		if since != "" {
+			url += "?since=" + since
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pull from central: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d", resp.StatusCode)
+		}
+		// Import the response
+		var body json.RawMessage
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return nil, fmt.Errorf("decode central response: %w", err)
+		}
+		result, err := deps.ImportKnowledge(ctx, body)
+		if err != nil {
+			return nil, fmt.Errorf("import pulled knowledge: %w", err)
+		}
+		_ = db.SetSyncTimestamp(ctx, "pull")
+		return result, nil
+	}
+	deps.SyncStatus = func(ctx context.Context) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		pushAt, _ := db.GetSyncTimestamp(ctx, "push")
+		pullAt, _ := db.GetSyncTimestamp(ctx, "pull")
+		connected := false
+		if endpoint != "" {
+			req, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/v1/stats", nil)
+			if err == nil {
+				resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+				if err == nil {
+					resp.Body.Close()
+					connected = resp.StatusCode == http.StatusOK
+				}
+			}
+		}
+		return json.Marshal(map[string]any{
+			"endpoint":    endpoint,
+			"connected":   connected,
+			"last_push":   pushAt,
+			"last_pull":   pullAt,
+		})
+	}
+
+	// 9l. Power mode (S3)
+	deps.PowerMode = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Action string `json:"action"`
+			Mode   string `json:"mode"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		hw, err := hal.Detect(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Look up power modes from hardware profile
+		var powerModes []int
+		var tdpWatts int
+		gpuArch := ""
+		if hw.GPU != nil {
+			gpuArch = hw.GPU.Arch
+		}
+		for _, hp := range cat.HardwareProfiles {
+			if hp.Hardware.GPU.Arch == gpuArch {
+				powerModes = hp.Constraints.PowerModes
+				tdpWatts = hp.Constraints.TDPWatts
+				break
+			}
+		}
+		result := map[string]any{
+			"gpu_arch":    gpuArch,
+			"tdp_watts":   tdpWatts,
+			"power_modes": powerModes,
+		}
+		if hw.GPU != nil {
+			result["current_power_draw_watts"] = hw.GPU.PowerDrawWatts
+			result["power_limit_watts"] = hw.GPU.PowerLimitWatts
+		}
+		return json.Marshal(result)
+	}
+
+	// 9h. Register all tools (after all deps are fully wired)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 10. Build App and run CLI
@@ -1195,6 +1712,7 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 	if hw, err := hal.Detect(ctx); err == nil {
 		if hw.GPU != nil {
 			hwInfo.GPUArch = hw.GPU.Arch
+			hwInfo.GPUModel = hw.GPU.Name
 			hwInfo.GPUVRAMMiB = hw.GPU.VRAMMiB
 			hwInfo.GPUCount = hw.GPU.Count
 			hwInfo.UnifiedMemory = hw.GPU.UnifiedMemory
@@ -1219,8 +1737,8 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 
 // resolveWithFallback tries catalog resolution first; on "not found in catalog",
 // falls back to building a synthetic ModelAsset from the model's DB scan record.
-func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string) (*knowledge.ResolvedConfig, string, error) {
-	resolved, err := cat.Resolve(hw, modelName, engineType, overrides)
+func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string, opts ...knowledge.ResolveOption) (*knowledge.ResolvedConfig, string, error) {
+	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, opts...)
 	if err == nil {
 		// Catalog hit — but ModelPath may be empty if no override was given.
 		// Look up DB for the actual registered path from scan/import.
@@ -1256,7 +1774,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	}
 	overrides["model_path"] = dbModel.Path
 
-	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides)
+	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, opts...)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve auto-detected config for %s: %w", dbModel.Name, err)
 	}
@@ -1312,31 +1830,34 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		overrides["slot"] = slot
 	}
 
-	// First resolve to get canonical model name, then query golden config
-	userKeys := make(map[string]bool, len(overrides))
-	for k := range overrides {
-		userKeys[k] = true
-	}
-
-	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
-	if err != nil {
-		return nil, err
-	}
-
-	// L2: query golden config using canonical name and resolved engine (not the possibly-empty
-	// user input) to prevent cross-engine injection (e.g. vLLM golden params leaking to llama.cpp).
-	goldenEngine := engineType
-	if goldenEngine == "" {
-		goldenEngine = resolved.Engine
-	}
-	goldenConfig := queryGoldenOverrides(ctx, kStore, hwInfo.GPUArch, goldenEngine, canonicalName)
-	if len(goldenConfig) > 0 {
-		for k, v := range goldenConfig {
-			if !userKeys[k] {
-				resolved.Config[k] = v
-				resolved.Provenance[k] = "L2"
+	// Extract deployment constraints (not config params)
+	var resolveOpts []knowledge.ResolveOption
+	if mcs, ok := overrides["max_cold_start_s"]; ok {
+		var v int
+		switch x := mcs.(type) {
+		case float64:
+			v = int(x)
+		case int:
+			v = x
+		case json.Number:
+			if n, err := x.Int64(); err == nil {
+				v = int(n)
 			}
 		}
+		if v > 0 {
+			resolveOpts = append(resolveOpts, knowledge.WithMaxColdStart(v))
+		}
+		delete(overrides, "max_cold_start_s")
+	}
+
+	// L2c: inject golden config into resolve chain (applied between L0 and L1 inside Resolve)
+	resolveOpts = append(resolveOpts, knowledge.WithGoldenConfig(func(hardware, engine, model string) map[string]any {
+		return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
+	}))
+
+	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir, resolveOpts...)
+	if err != nil {
+		return nil, err
 	}
 
 	fit := knowledge.CheckFit(resolved, hwInfo)
@@ -1920,9 +2441,25 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				result["engine_power_watts"] = map[string]int{"min": resolved.EnginePowerWattsMin, "max": resolved.EnginePowerWattsMax}
 			}
 
-			// Resource estimates
+			// Resource estimates (full cost vector)
 			resourceEstimate := map[string]any{}
-			if resolved.EstimatedVRAMMiB > 0 {
+			if resolved.ResourceEstimate != nil {
+				if resolved.ResourceEstimate.VRAMMiB > 0 {
+					resourceEstimate["vram_mib"] = resolved.ResourceEstimate.VRAMMiB
+				}
+				if resolved.ResourceEstimate.RAMMiB > 0 {
+					resourceEstimate["ram_mib"] = resolved.ResourceEstimate.RAMMiB
+				}
+				if resolved.ResourceEstimate.CPUCores > 0 {
+					resourceEstimate["cpu_cores"] = resolved.ResourceEstimate.CPUCores
+				}
+				if resolved.ResourceEstimate.DiskMiB > 0 {
+					resourceEstimate["disk_mib"] = resolved.ResourceEstimate.DiskMiB
+				}
+				if resolved.ResourceEstimate.PowerWatts > 0 {
+					resourceEstimate["power_watts"] = resolved.ResourceEstimate.PowerWatts
+				}
+			} else if resolved.EstimatedVRAMMiB > 0 {
 				resourceEstimate["vram_mib"] = resolved.EstimatedVRAMMiB
 			}
 			if resolved.Partition != nil {
@@ -1939,6 +2476,30 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if len(resourceEstimate) > 0 {
 				result["resource_estimate"] = resourceEstimate
 			}
+
+			// Amplifier info
+			if resolved.AmplifierScore > 0 {
+				result["amplifier_score"] = resolved.AmplifierScore
+			}
+			if resolved.OffloadPath {
+				result["offload_path"] = true
+			}
+
+			// Performance reference (K4 — attach best known perf data)
+			perfRef := map[string]any{"source": "unknown"}
+			if golden, goldenBench, err := db.FindGoldenBenchmark(ctx, hwInfo.GPUArch, resolved.Engine, rd.ModelName); err == nil && golden != nil && goldenBench != nil {
+				perfRef = map[string]any{
+					"source":         "benchmark",
+					"benchmark_id":   goldenBench.ID,
+					"throughput_tps": goldenBench.ThroughputTPS,
+					"ttft_ms_p95":    goldenBench.TTFTP95ms,
+					"power_watts":    goldenBench.PowerDrawWatts,
+				}
+			} else if resolved.ResourceEstimate != nil && resolved.ResourceEstimate.PowerWatts > 0 {
+				perfRef["source"] = "yaml_estimate"
+				perfRef["power_watts"] = resolved.ResourceEstimate.PowerWatts
+			}
+			result["performance_reference"] = perfRef
 
 			if runtimeName == "k3s" {
 				if podYAML, podErr := knowledge.GeneratePod(resolved); podErr == nil {
@@ -2144,7 +2705,10 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if slot != "" {
 				overrides["slot"] = slot
 			}
-			resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir)
+			goldenOpt := knowledge.WithGoldenConfig(func(hardware, engine, model string) map[string]any {
+				return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
+			})
+			resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir, goldenOpt)
 			if err != nil {
 				return nil, err
 			}
@@ -2427,6 +2991,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					if oldID != "" {
 						resp["old_golden_id"] = oldID
 					}
+				}
+
+				// K5: Update runtime overlay with actual performance data
+				if p.Model != "" {
+					go updatePerfOverlay(dataDir, p.Model, p.Hardware, p.Engine, result)
 				}
 			}
 			return json.Marshal(resp)
@@ -3153,6 +3722,49 @@ func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, new
 		return true, goldenCfg.ID
 	}
 	return false, ""
+}
+
+// updatePerfOverlay writes actual benchmark performance data to the runtime overlay YAML (K5).
+// This closes the feedback loop: future Resolve() calls see real measured performance.
+func updatePerfOverlay(dataDir, model, hardware, engine string, result *benchpkg.RunResult) {
+	overlayDir := filepath.Join(dataDir, "catalog", "models")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		slog.Warn("perf overlay: mkdir failed", "error", err)
+		return
+	}
+
+	// Sanitize model name for filename
+	safeName := strings.ReplaceAll(model, "/", "_")
+	safeName = strings.ReplaceAll(safeName, ":", "_")
+	overlayPath := filepath.Join(overlayDir, safeName+"-perf.yaml")
+
+	// Build overlay content with actual measured performance
+	overlay := map[string]any{
+		"kind": "model_asset",
+		"metadata": map[string]any{
+			"name": model,
+		},
+		"_perf_overlay": map[string]any{
+			"hardware":       hardware,
+			"engine":         engine,
+			"throughput_tps": result.ThroughputTPS,
+			"ttft_ms_p50":    result.TTFTP50ms,
+			"ttft_ms_p95":    result.TTFTP95ms,
+			"tpot_ms_p50":    result.TPOTP50ms,
+			"qps":            result.QPS,
+			"updated_at":     time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+	data, err := yaml.Marshal(overlay)
+	if err != nil {
+		slog.Warn("perf overlay: marshal failed", "error", err)
+		return
+	}
+	if err := os.WriteFile(overlayPath, data, 0o644); err != nil {
+		slog.Warn("perf overlay: write failed", "path", overlayPath, "error", err)
+		return
+	}
+	slog.Info("perf overlay updated", "model", model, "path", overlayPath, "throughput_tps", result.ThroughputTPS)
 }
 
 // tokenBucket converts a token count to a human-readable bucket string.

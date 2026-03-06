@@ -790,6 +790,236 @@ func TestGenerateID(t *testing.T) {
 	}
 }
 
+// --- P0 Feature C: Patrol auto-heal tests ---
+
+func TestExtractDeployName(t *testing.T) {
+	tests := []struct {
+		message string
+		want    string
+	}{
+		{"Deployment qwen3-8b is in CrashLoopBackOff state", "qwen3-8b"},
+		{"Deployment my-model-v2 is in Error state", "my-model-v2"},
+		{"Deployment a is in Failed state", "a"},
+		{"Some other message", ""},
+		{"Deployment  is in Error state", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			got := extractDeployName(tt.message)
+			if got != tt.want {
+				t.Errorf("extractDeployName(%q) = %q, want %q", tt.message, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPatrolRecentActions(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[]`},
+		},
+	}
+
+	p := NewPatrol(DefaultPatrolConfig(), tools, nil)
+
+	// Initially no actions
+	actions := p.RecentActions(10)
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions initially, got %d", len(actions))
+	}
+
+	// Run a cycle — no alerts means no actions
+	p.RunOnce(context.Background())
+	actions = p.RecentActions(10)
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions after clean cycle, got %d", len(actions))
+	}
+}
+
+func TestPatrolCrashAlertTriggersHealAttempt(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[{"name":"test-deploy","status":"CrashLoopBackOff"}]`},
+			"deploy.logs":    {Content: `some log: CUDA out of memory`},
+		},
+	}
+
+	var actionLog []PatrolAction
+	healer := NewHealer(tools)
+	p := NewPatrol(DefaultPatrolConfig(), tools, nil,
+		WithHealer(healer),
+		WithActionCallback(func(ctx context.Context, a PatrolAction) {
+			actionLog = append(actionLog, a)
+		}),
+	)
+
+	alerts := p.RunOnce(context.Background())
+
+	// Should have a critical deploy_crash alert
+	var hasCrash bool
+	for _, a := range alerts {
+		if a.Type == "deploy_crash" && a.Severity == "critical" {
+			hasCrash = true
+			break
+		}
+	}
+	if !hasCrash {
+		t.Fatal("expected deploy_crash alert")
+	}
+
+	// Should have recorded at least one heal action
+	actions := p.RecentActions(10)
+	if len(actions) == 0 {
+		t.Fatal("expected at least one action from heal attempt")
+	}
+	if actions[0].Type != "heal" {
+		t.Errorf("action type = %q, want heal", actions[0].Type)
+	}
+
+	// Callback should have been called
+	if len(actionLog) == 0 {
+		t.Fatal("expected action callback to be called")
+	}
+}
+
+func TestPatrolWithoutHealerRecordsNotify(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[{"name":"broken","status":"Error"}]`},
+		},
+	}
+
+	// No healer → should record notify action
+	p := NewPatrol(DefaultPatrolConfig(), tools, nil)
+	p.RunOnce(context.Background())
+
+	actions := p.RecentActions(10)
+	if len(actions) == 0 {
+		t.Fatal("expected notify action when healer is nil")
+	}
+	if actions[0].Type != "notify" {
+		t.Errorf("action type = %q, want notify", actions[0].Type)
+	}
+}
+
+func TestPatrolSelfHealDisabled(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[{"name":"broken","status":"CrashLoopBackOff"}]`},
+		},
+	}
+
+	config := DefaultPatrolConfig()
+	config.SelfHealEnabled = false
+	p := NewPatrol(config, tools, nil, WithHealer(NewHealer(tools)))
+	p.RunOnce(context.Background())
+
+	// With self-heal disabled, no actions should be taken even with alerts
+	actions := p.RecentActions(10)
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions with SelfHealEnabled=false, got %d", len(actions))
+	}
+}
+
+func TestPatrolStatusCounters(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":{"temperature_celsius":90,"utilization_percent":80,"memory_used_mib":4096,"memory_total_mib":8192}}`},
+			"deploy.list":    {Content: `[]`},
+		},
+	}
+
+	p := NewPatrol(DefaultPatrolConfig(), tools, nil)
+	p.RunOnce(context.Background())
+
+	status := p.Status()
+	if status.AlertCount == 0 {
+		t.Error("expected at least one alert (GPU temp 90 > threshold 85)")
+	}
+	if status.LastRun.IsZero() {
+		t.Error("expected LastRun to be set after RunOnce")
+	}
+}
+
+func TestPatrolRecentActionsLimit(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[{"name":"d1","status":"Error"},{"name":"d2","status":"Failed"}]`},
+		},
+	}
+
+	// No healer → generates notify actions for each crash
+	p := NewPatrol(DefaultPatrolConfig(), tools, nil)
+	p.RunOnce(context.Background())
+
+	all := p.RecentActions(100)
+	limited := p.RecentActions(1)
+	if len(limited) != 1 {
+		t.Errorf("RecentActions(1) = %d, want 1", len(limited))
+	}
+	if len(all) < 2 {
+		t.Errorf("RecentActions(100) = %d, want >= 2", len(all))
+	}
+	// Limited should return the most recent
+	if len(all) > 0 && len(limited) > 0 && limited[0].AlertID != all[len(all)-1].AlertID {
+		t.Error("RecentActions(1) should return the most recent action")
+	}
+}
+
+func TestHealerDiagnoseOOM(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"deploy.logs": {Content: `Error: torch.cuda.OutOfMemoryError: tried to allocate 2.00 GiB`},
+		},
+	}
+
+	healer := NewHealer(tools)
+	diag, err := healer.Diagnose(context.Background(), "test-deploy")
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if diag.Type != "oom" {
+		t.Errorf("diagnosis type = %q, want oom", diag.Type)
+	}
+	if diag.Remedy != "reduce_gmu" {
+		t.Errorf("remedy = %q, want reduce_gmu", diag.Remedy)
+	}
+}
+
+func TestHealerDiagnoseUnknown(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"deploy.logs": {Content: `some random log output without known patterns`},
+		},
+	}
+
+	healer := NewHealer(tools)
+	diag, err := healer.Diagnose(context.Background(), "test-deploy")
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if diag.Type != "unknown" {
+		t.Errorf("diagnosis type = %q, want unknown", diag.Type)
+	}
+	if diag.Remedy != "escalate" {
+		t.Errorf("remedy = %q, want escalate", diag.Remedy)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

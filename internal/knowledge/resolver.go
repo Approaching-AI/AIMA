@@ -17,6 +17,7 @@ type HardwareInfo struct {
 	CPUArch         string
 	CPUCores        int // Physical CPU core count
 	RAMTotalMiB     int // Total system RAM
+	GPUModel        string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
 	HardwareProfile string // Name of a matching HardwareProfile, if known
 	Platform        string // "linux/amd64", "darwin/arm64", etc.
 	RuntimeType     string // "k3s" or "native"
@@ -72,15 +73,46 @@ type ResolvedConfig struct {
 	EnginePowerWattsMax int // engine typical power draw upper bound
 
 	// Resource estimates (zero = unknown)
-	EstimatedVRAMMiB int // expected VRAM usage from model variant
+	EstimatedVRAMMiB int              // expected VRAM usage from model variant
+	ResourceEstimate *ResourceEstimate // full cost(path, R) estimate
+
+	// Amplifier info (from engine selection)
+	AmplifierScore float64 // performance multiplier of selected engine
+	OffloadPath    bool    // true if engine was selected via effective_R offload
+
+	// Performance reference (K4 — historical data or YAML estimate)
+	PerformanceRef *PerformanceReference
+}
+
+// PerformanceReference attaches known performance data to a resolved config.
+type PerformanceReference struct {
+	ThroughputTPS float64 `json:"throughput_tps,omitempty"`
+	TTFTMsP95     float64 `json:"ttft_ms_p95,omitempty"`
+	PowerWatts    float64 `json:"power_watts,omitempty"`
+	Source        string  `json:"source"` // "benchmark", "yaml_estimate", "unknown"
+	BenchmarkID   string  `json:"benchmark_id,omitempty"`
+}
+
+// ResourceEstimate is the full cost(path, R) output for a deployment.
+type ResourceEstimate struct {
+	VRAMMiB    int `json:"vram_mib"`
+	RAMMiB     int `json:"ram_mib"`
+	CPUCores   int `json:"cpu_cores"`
+	DiskMiB    int `json:"disk_mib"`
+	PowerWatts int `json:"power_watts"`
 }
 
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
 // L2 (knowledge notes from DB) is not applied here; it is merged by the caller when available.
-func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any) (*ResolvedConfig, error) {
+func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any, opts ...ResolveOption) (*ResolvedConfig, error) {
+	var ropts resolveOpts
+	for _, o := range opts {
+		o(&ropts)
+	}
+
 	// Auto-detect engine from model variants when not specified
 	if engineType == "" {
-		inferred, err := c.InferEngineType(modelName, hw)
+		inferred, err := c.InferEngineType(modelName, hw, opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +166,15 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		for k, v := range variant.DefaultConfig {
 			config[k] = v
 			provenance[k] = "L0"
+		}
+	}
+
+	// L2c: Golden config from benchmark-promoted optimal (between L0 and L1)
+	if ropts.GoldenConfig != nil {
+		goldenOverrides := ropts.GoldenConfig(hw.GPUArch, engineType, model.Metadata.Name)
+		for k, v := range goldenOverrides {
+			config[k] = v
+			provenance[k] = "L2c"
 		}
 	}
 
@@ -191,7 +232,14 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		resolved.EnginePowerWattsMax = engine.PowerConstraints.TypicalDrawWatts[1]
 	}
 
-	// Model variant estimates
+	// Amplifier info from selected engine
+	mult := engine.Amplifier.PerformanceMultiplier
+	if mult <= 0 {
+		mult = 1.0
+	}
+	resolved.AmplifierScore = mult
+
+	// Model variant estimates + resource estimation
 	if variant != nil {
 		perf := variant.ParsedExpectedPerf()
 		resolved.StartupTimeS = perf.StartupTimeS
@@ -200,6 +248,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		} else if variant.Hardware.VRAMMinMiB > 0 {
 			resolved.EstimatedVRAMMiB = variant.Hardware.VRAMMinMiB
 		}
+		resolved.ResourceEstimate = estimateResources(engine, variant, hw)
 	}
 
 	// Set ModelPath from user overrides or default pattern
@@ -242,41 +291,151 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
 }
 
+// engineCandidate holds an engine option with its amplifier score for ranking.
+type engineCandidate struct {
+	engineType  string
+	multiplier  float64
+	coldStartS  int  // engine cold start upper bound (0 = unknown)
+	offload     bool // selected via effective_R (offload path)
+	exactArch   bool // true if gpu_arch matched exactly (not wildcard)
+}
+
+// GoldenConfigFunc returns the golden (L2c) config overrides for a hardware/engine/model triple.
+// Returns nil map if no golden config exists (graceful degradation).
+type GoldenConfigFunc func(hardware, engine, model string) map[string]any
+
+// ResolveOption configures optional constraints for engine selection.
+type ResolveOption func(*resolveOpts)
+
+type resolveOpts struct {
+	MaxColdStartS int
+	GoldenConfig  GoldenConfigFunc
+}
+
+// WithMaxColdStart filters engines whose cold start exceeds the given seconds.
+func WithMaxColdStart(s int) ResolveOption {
+	return func(o *resolveOpts) { o.MaxColdStartS = s }
+}
+
+// WithGoldenConfig injects L2c (benchmark-promoted optimal) config lookup into the resolve chain.
+func WithGoldenConfig(fn GoldenConfigFunc) ResolveOption {
+	return func(o *resolveOpts) { o.GoldenConfig = fn }
+}
+
 // InferEngineType picks the best engine for a model on the given hardware.
-// Priority: exact gpu_arch match first, then wildcard. Skips variants whose
-// VRAM requirements exceed the detected GPU VRAM.
-func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo) (string, error) {
+// Priority: collect all candidates that can run (format + VRAM fit or offload),
+// then rank by amplifier.performance_multiplier (descending), cold_start as tiebreaker.
+func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...ResolveOption) (string, error) {
+	var ropts resolveOpts
+	for _, o := range opts {
+		o(&ropts)
+	}
 	for _, ma := range c.ModelAssets {
 		if !strings.EqualFold(ma.Metadata.Name, modelName) {
 			continue
 		}
-		// First pass: exact gpu_arch match
+		var candidates []engineCandidate
+
 		for _, v := range ma.Variants {
-			if v.Hardware.GPUArch != hw.GPUArch {
+			if v.Hardware.GPUArch != hw.GPUArch && v.Hardware.GPUArch != "*" {
 				continue
 			}
-			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
+			engine, err := c.findEngine(v.Engine, hw)
+			if err != nil {
 				continue
 			}
-			if _, err := c.findEngine(v.Engine, hw); err == nil {
-				return v.Engine, nil
+
+			fitsRawVRAM := hw.GPUVRAMMiB == 0 || v.Hardware.VRAMMinMiB == 0 || v.Hardware.VRAMMinMiB <= hw.GPUVRAMMiB
+
+			// Get cold start upper bound for filtering and tiebreaking
+			var coldStartMax int
+			if len(engine.TimeConstraints.ColdStartS) >= 2 {
+				coldStartMax = engine.TimeConstraints.ColdStartS[1]
+			}
+
+			exact := v.Hardware.GPUArch == hw.GPUArch
+
+			if fitsRawVRAM {
+				mult := engine.Amplifier.PerformanceMultiplier
+				if mult <= 0 {
+					mult = 1.0
+				}
+				candidates = append(candidates, engineCandidate{
+					engineType: v.Engine,
+					multiplier: mult,
+					coldStartS: coldStartMax,
+					exactArch:  exact,
+				})
+				continue
+			}
+
+			// Doesn't fit raw VRAM — check effective_R with offload
+			if engine.Amplifier.ExtendsResourceBoundary && engine.Amplifier.EffectiveVRAMMultiplier > 1.0 {
+				effVRAM := effectiveVRAM(hw, engine.Amplifier.EffectiveVRAMMultiplier)
+				if v.Hardware.VRAMMinMiB <= effVRAM {
+					mult := engine.Amplifier.PerformanceMultiplier
+					if mult <= 0 {
+						mult = 1.0
+					}
+					candidates = append(candidates, engineCandidate{
+						engineType: v.Engine,
+						multiplier: mult,
+						coldStartS: coldStartMax,
+						offload:    true,
+						exactArch:  exact,
+					})
+				}
 			}
 		}
-		// Second pass: wildcard variant
-		for _, v := range ma.Variants {
-			if v.Hardware.GPUArch != "*" {
-				continue
+
+		if len(candidates) == 0 {
+			return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q (vram %d MiB)", modelName, hw.GPUArch, hw.GPUVRAMMiB)
+		}
+
+		// Filter: max cold start constraint
+		if ropts.MaxColdStartS > 0 {
+			var filtered []engineCandidate
+			for _, c := range candidates {
+				if c.coldStartS == 0 || c.coldStartS <= ropts.MaxColdStartS {
+					filtered = append(filtered, c)
+				}
 			}
-			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
-				continue
+			if len(filtered) > 0 {
+				candidates = filtered
 			}
-			if _, err := c.findEngine(v.Engine, hw); err == nil {
-				return v.Engine, nil
+			// If all filtered out, keep all candidates (graceful degradation)
+		}
+
+		// Rank: exact arch > wildcard, then highest multiplier, then non-offload > offload,
+		// then lower cold_start as final tiebreaker.
+		best := candidates[0]
+		for _, c := range candidates[1:] {
+			if c.exactArch && !best.exactArch {
+				best = c
+			} else if c.exactArch == best.exactArch {
+				if c.multiplier > best.multiplier {
+					best = c
+				} else if c.multiplier == best.multiplier {
+					if !c.offload && best.offload {
+						best = c
+					} else if c.offload == best.offload && c.coldStartS > 0 && best.coldStartS > 0 && c.coldStartS < best.coldStartS {
+						best = c
+					}
+				}
 			}
 		}
-		return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q (vram %d MiB)", modelName, hw.GPUArch, hw.GPUVRAMMiB)
+		return best.engineType, nil
 	}
 	return "", fmt.Errorf("model %q not found in catalog", modelName)
+}
+
+// effectiveVRAM computes expanded VRAM when an engine supports CPU/RAM offload.
+func effectiveVRAM(hw HardwareInfo, vramMultiplier float64) int {
+	if hw.RAMTotalMiB == 0 {
+		return hw.GPUVRAMMiB
+	}
+	ramContribution := int(float64(hw.RAMTotalMiB) * (vramMultiplier - 1.0) / vramMultiplier)
+	return hw.GPUVRAMMiB + ramContribution
 }
 
 // ResolveVariantForPull finds the best model variant for downloading on the given hardware.
@@ -403,9 +562,9 @@ func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo
 		if !strings.EqualFold(ma.Metadata.Name, modelName) {
 			continue
 		}
-		// Find best variant: exact gpu_arch+engine match first, then wildcard.
+		// Find best variant: gpu_arch+gpu_model > gpu_arch > wildcard.
 		// Filter by VRAM and unified_memory when hardware info is available.
-		var exactMatch, wildcardMatch *ModelVariant
+		var gpuModelMatch, archMatch, wildcardMatch *ModelVariant
 		for j := range ma.Variants {
 			v := &ma.Variants[j]
 			if !strings.EqualFold(v.Engine, engineType) {
@@ -422,15 +581,25 @@ func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo
 				}
 			}
 			if v.Hardware.GPUArch == hw.GPUArch {
-				exactMatch = v
-				break // exact arch + passes filters = best possible
+				// GPU model match: highest priority (e.g. "RTX 4060" vs "RTX 4090")
+				if v.Hardware.GPUModel != "" && hw.GPUModel != "" &&
+					strings.Contains(strings.ToUpper(hw.GPUModel), strings.ToUpper(v.Hardware.GPUModel)) {
+					gpuModelMatch = v
+					break
+				}
+				if archMatch == nil {
+					archMatch = v
+				}
 			}
 			if v.Hardware.GPUArch == "*" && wildcardMatch == nil {
 				wildcardMatch = v
 			}
 		}
-		if exactMatch != nil {
-			return ma, exactMatch, nil
+		if gpuModelMatch != nil {
+			return ma, gpuModelMatch, nil
+		}
+		if archMatch != nil {
+			return ma, archMatch, nil
 		}
 		if wildcardMatch != nil {
 			return ma, wildcardMatch, nil
@@ -632,6 +801,35 @@ func (c *Catalog) RegisterModel(ma ModelAsset) {
 	c.ModelAssets = append(c.ModelAssets, ma)
 }
 
+// estimateResources computes cost(path, R) — the full resource consumption estimate.
+func estimateResources(engine *EngineAsset, variant *ModelVariant, hw HardwareInfo) *ResourceEstimate {
+	perf := variant.ParsedExpectedPerf()
+	est := &ResourceEstimate{
+		VRAMMiB: perf.VRAMMiB,
+		RAMMiB:  perf.RAMMiB,
+	}
+	if est.VRAMMiB == 0 {
+		est.VRAMMiB = variant.Hardware.VRAMMinMiB
+	}
+	if est.RAMMiB == 0 {
+		est.RAMMiB = 2048 // default engine process overhead
+	}
+
+	est.CPUCores = perf.CPUCores
+	if est.CPUCores == 0 {
+		est.CPUCores = 4 // reasonable default
+	}
+
+	est.DiskMiB = perf.DiskMiB
+
+	// Power from engine typical draw midpoint
+	if len(engine.PowerConstraints.TypicalDrawWatts) >= 2 {
+		est.PowerWatts = (engine.PowerConstraints.TypicalDrawWatts[0] + engine.PowerConstraints.TypicalDrawWatts[1]) / 2
+	}
+
+	return est
+}
+
 // FitReport describes how well a resolved config fits the actual hardware.
 type FitReport struct {
 	Fit         bool           // true if config can run (possibly with adjustments)
@@ -745,6 +943,16 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 			r.Warnings = append(r.Warnings, fmt.Sprintf(
 				"engine power draw may reach %d W, exceeding hardware TDP (%d W)",
 				resolved.EnginePowerWattsMax, hw.TDPWatts))
+		}
+	}
+
+	// RAM sufficiency check: reject if estimated RAM exceeds available
+	if resolved.ResourceEstimate != nil && hw.RAMAvailMiB > 0 && resolved.ResourceEstimate.RAMMiB > 0 {
+		if resolved.ResourceEstimate.RAMMiB > hw.RAMAvailMiB {
+			r.Fit = false
+			r.Reason = fmt.Sprintf("insufficient RAM: need %d MiB, available %d MiB",
+				resolved.ResourceEstimate.RAMMiB, hw.RAMAvailMiB)
+			return r
 		}
 	}
 

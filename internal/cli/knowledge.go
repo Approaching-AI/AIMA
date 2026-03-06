@@ -18,6 +18,8 @@ func newKnowledgeCmd(app *App) *cobra.Command {
 		newKnowledgeResolveCmd(app),
 		newKnowledgeExportCmd(app),
 		newKnowledgeImportCmd(app),
+		newKnowledgeSyncCmd(app),
+		newKnowledgeValidateCmd(app),
 	)
 
 	return cmd
@@ -159,4 +161,60 @@ Examples:
 	_ = cmd.MarkFlagRequired("input")
 
 	return cmd
+}
+
+func newKnowledgeSyncCmd(app *App) *cobra.Command {
+	var push, pull bool
+
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync knowledge with central server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !push && !pull {
+				push = true
+				pull = true
+			}
+			if push {
+				data, err := app.ToolDeps.SyncPush(cmd.Context())
+				if err != nil {
+					return fmt.Errorf("push: %w", err)
+				}
+				fmt.Println("Push:", formatJSON(data))
+			}
+			if pull {
+				data, err := app.ToolDeps.SyncPull(cmd.Context())
+				if err != nil {
+					return fmt.Errorf("pull: %w", err)
+				}
+				fmt.Println("Pull:", formatJSON(data))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&push, "push", false, "Push local knowledge to central")
+	cmd.Flags().BoolVar(&pull, "pull", false, "Pull knowledge from central")
+	return cmd
+}
+
+func newKnowledgeValidateCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate",
+		Short: "Compare predicted vs actual performance",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hardware, _ := cmd.Flags().GetString("hardware")
+			engine, _ := cmd.Flags().GetString("engine")
+			model, _ := cmd.Flags().GetString("model")
+
+			params, _ := json.Marshal(map[string]string{
+				"hardware": hardware, "engine": engine, "model": model,
+			})
+			data, err := app.ToolDeps.ValidateKnowledge(cmd.Context(), params)
+			if err != nil {
+				return err
+			}
+			fmt.Println(formatJSON(data))
+			return nil
+		},
+	}
 }

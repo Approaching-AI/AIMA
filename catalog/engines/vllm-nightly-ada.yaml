@@ -91,6 +91,9 @@ amplifier:
     cpu_offload: false
     ssd_offload: false
     npu_offload: false
+  performance_multiplier: 2.5
+  extends_resource_boundary: false
+  effective_vram_multiplier: 1.0
 partition_hints:
   min_gpu_memory_mib: 4096
   recommended_gpu_cores_percent: 50

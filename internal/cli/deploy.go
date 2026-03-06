@@ -15,6 +15,7 @@ func newDeployCmd(app *App) *cobra.Command {
 		slot            string
 		dryRun          bool
 		configOverrides []string
+		maxColdStartS   int
 	)
 
 	cmd := &cobra.Command{
@@ -28,6 +29,12 @@ func newDeployCmd(app *App) *cobra.Command {
 			configMap, err := parseConfigOverrides(configOverrides)
 			if err != nil {
 				return err
+			}
+			if maxColdStartS > 0 {
+				if configMap == nil {
+					configMap = map[string]any{}
+				}
+				configMap["max_cold_start_s"] = maxColdStartS
 			}
 
 			if dryRun {
@@ -53,6 +60,7 @@ func newDeployCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&slot, "slot", "", "Partition slot name")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployment without executing")
 	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
+	cmd.Flags().IntVar(&maxColdStartS, "max-cold-start", 0, "Max acceptable cold start seconds (0=no constraint)")
 	cmd.AddCommand(newDeployListCmd(app))
 	cmd.AddCommand(newDeployStatusCmd(app))
 	cmd.AddCommand(newDeployLogsCmd(app))

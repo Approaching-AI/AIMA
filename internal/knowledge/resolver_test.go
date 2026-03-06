@@ -1031,6 +1031,151 @@ func TestFindHardwareTDP(t *testing.T) {
 	}
 }
 
+// --- P0 Feature A: L2c Golden Config injection tests ---
+
+func TestResolveWithGoldenConfig(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192}
+
+	goldenFn := func(hardware, engine, model string) map[string]any {
+		// Only return golden config for the expected triple
+		if hardware == "TestArch" && engine == "testengine" && model == "test-model-8b" {
+			return map[string]any{
+				"max_batch_size": 64,   // override L0 engine default (32) and variant default (16)
+				"golden_param":   "yes", // new key only in L2c
+			}
+		}
+		return nil
+	}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil, WithGoldenConfig(goldenFn))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// L2c should override L0 defaults
+	if resolved.Config["max_batch_size"] != 64 {
+		t.Errorf("Config[max_batch_size] = %v, want 64 (L2c golden)", resolved.Config["max_batch_size"])
+	}
+	if resolved.Provenance["max_batch_size"] != "L2c" {
+		t.Errorf("Provenance[max_batch_size] = %q, want L2c", resolved.Provenance["max_batch_size"])
+	}
+
+	// New L2c key should be present
+	if resolved.Config["golden_param"] != "yes" {
+		t.Errorf("Config[golden_param] = %v, want yes", resolved.Config["golden_param"])
+	}
+	if resolved.Provenance["golden_param"] != "L2c" {
+		t.Errorf("Provenance[golden_param] = %q, want L2c", resolved.Provenance["golden_param"])
+	}
+
+	// L0 keys not overridden by L2c should remain at L0
+	if resolved.Config["port"] != 8000 {
+		t.Errorf("Config[port] = %v, want 8000 (L0 engine default)", resolved.Config["port"])
+	}
+	if resolved.Provenance["port"] != "L0" {
+		t.Errorf("Provenance[port] = %q, want L0", resolved.Provenance["port"])
+	}
+}
+
+func TestResolveGoldenConfigOverriddenByUser(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192}
+
+	goldenFn := func(hardware, engine, model string) map[string]any {
+		return map[string]any{"max_batch_size": 64}
+	}
+	userOverrides := map[string]any{"max_batch_size": 128}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", userOverrides, WithGoldenConfig(goldenFn))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// L1 (user) must override L2c (golden)
+	if resolved.Config["max_batch_size"] != 128 {
+		t.Errorf("Config[max_batch_size] = %v, want 128 (L1 user override wins over L2c)", resolved.Config["max_batch_size"])
+	}
+	if resolved.Provenance["max_batch_size"] != "L1" {
+		t.Errorf("Provenance[max_batch_size] = %q, want L1", resolved.Provenance["max_batch_size"])
+	}
+}
+
+func TestResolveGoldenConfigNil(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192}
+
+	// GoldenConfigFunc returns nil — should not affect resolution
+	goldenFn := func(hardware, engine, model string) map[string]any {
+		return nil
+	}
+
+	resolved, err := cat.Resolve(hw, "test-model-8b", "testengine", nil, WithGoldenConfig(goldenFn))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// Should still have L0 defaults
+	if resolved.Config["max_batch_size"] != 16 {
+		t.Errorf("Config[max_batch_size] = %v, want 16 (variant L0)", resolved.Config["max_batch_size"])
+	}
+	if resolved.Provenance["max_batch_size"] != "L0" {
+		t.Errorf("Provenance[max_batch_size] = %q, want L0", resolved.Provenance["max_batch_size"])
+	}
+}
+
+// --- P0 Feature B: Time constraint filtering tests ---
+
+func TestInferEngineWithMaxColdStart(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	hw := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", GPUVRAMMiB: 8192}
+
+	t.Run("cold start within limit picks testengine", func(t *testing.T) {
+		// testengine cold_start_s: [10, 30], limit=60 → testengine OK
+		engine, err := cat.InferEngineType("test-model-8b", hw, WithMaxColdStart(60))
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		if engine != "testengine" {
+			t.Errorf("engine = %q, want testengine (cold start 30 <= 60)", engine)
+		}
+	})
+
+	t.Run("cold start exceeds limit falls back to universal", func(t *testing.T) {
+		// testengine cold_start_s max=30, universal cold_start_s max=10
+		// limit=15 → testengine filtered, universal passes
+		engine, err := cat.InferEngineType("test-model-8b", hw, WithMaxColdStart(15))
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		if engine != "universal" {
+			t.Errorf("engine = %q, want universal (testengine cold_start 30 > 15)", engine)
+		}
+	})
+
+	t.Run("all exceed limit degrades gracefully", func(t *testing.T) {
+		// limit=1 → both testengine(30) and universal(10) exceed → graceful degradation keeps all
+		engine, err := cat.InferEngineType("test-model-8b", hw, WithMaxColdStart(1))
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		// Should still pick testengine (best amplifier for TestArch, graceful degradation)
+		if engine != "testengine" {
+			t.Errorf("engine = %q, want testengine (graceful degradation when all filtered)", engine)
+		}
+	})
+
+	t.Run("zero limit means no constraint", func(t *testing.T) {
+		engine, err := cat.InferEngineType("test-model-8b", hw, WithMaxColdStart(0))
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		if engine != "testengine" {
+			t.Errorf("engine = %q, want testengine (0 = no constraint)", engine)
+		}
+	})
+}
+
 func TestFindEngineByName(t *testing.T) {
 	cat := mustLoadCatalog(t)
 

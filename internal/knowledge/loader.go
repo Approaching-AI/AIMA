@@ -148,6 +148,7 @@ type EngineAsset struct {
 	Runtime          EngineRuntime    `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Patterns         []string         `yaml:"patterns,omitempty" json:"patterns,omitempty"`
 	Source           *EngineSource    `yaml:"source,omitempty"  json:"source,omitempty"`
+	OpenQuestions    []StackQuestion  `yaml:"open_questions,omitempty" json:"open_questions,omitempty"`
 }
 
 type EngineMetadata struct {
@@ -220,9 +221,13 @@ type EngineAPI struct {
 }
 
 type EngineAmplifier struct {
-	Features          []string        `yaml:"features"           json:"features"`
-	PerformanceGain   string          `yaml:"performance_gain"   json:"performance_gain"`
-	ResourceExpansion map[string]bool `yaml:"resource_expansion" json:"resource_expansion"`
+	Features                []string        `yaml:"features"                    json:"features"`
+	PerformanceGain         string          `yaml:"performance_gain"            json:"performance_gain"`
+	ResourceExpansion       map[string]bool `yaml:"resource_expansion"          json:"resource_expansion"`
+	PerformanceMultiplier   float64         `yaml:"performance_multiplier"      json:"performance_multiplier"`
+	ExtendsResourceBoundary bool            `yaml:"extends_resource_boundary"   json:"extends_resource_boundary"`
+	EffectiveVRAMMultiplier float64         `yaml:"effective_vram_multiplier"   json:"effective_vram_multiplier"`
+	OffloadConfigKey        string          `yaml:"offload_config_key"          json:"offload_config_key,omitempty"`
 }
 
 type PartitionHints struct {
@@ -285,6 +290,9 @@ type ExpectedPerf struct {
 	ColdStartTimeS int        // full cold start time (seconds)
 	TokensPerSecond [2]float64 // [min, max] throughput estimate
 	VRAMMiB        int        // expected VRAM usage
+	RAMMiB         int        // engine process RAM overhead
+	CPUCores       int        // recommended CPU allocation
+	DiskMiB        int        // model file size on disk
 }
 
 // ParsedExpectedPerf extracts structured performance fields from the variant's
@@ -297,6 +305,9 @@ func (v *ModelVariant) ParsedExpectedPerf() ExpectedPerf {
 	p.StartupTimeS = int(toFloat64(v.ExpectedPerformance["startup_time_s"]))
 	p.ColdStartTimeS = int(toFloat64(v.ExpectedPerformance["cold_start_time_s"]))
 	p.VRAMMiB = int(toFloat64(v.ExpectedPerformance["vram_mib"]))
+	p.RAMMiB = int(toFloat64(v.ExpectedPerformance["ram_mib"]))
+	p.CPUCores = int(toFloat64(v.ExpectedPerformance["cpu_cores"]))
+	p.DiskMiB = int(toFloat64(v.ExpectedPerformance["disk_mib"]))
 	if tps, ok := v.ExpectedPerformance["tokens_per_second"]; ok {
 		if arr, ok := tps.([]any); ok && len(arr) >= 2 {
 			p.TokensPerSecond[0] = toFloat64(arr[0])
@@ -308,6 +319,7 @@ func (v *ModelVariant) ParsedExpectedPerf() ExpectedPerf {
 
 type ModelVariantHardware struct {
 	GPUArch       string `yaml:"gpu_arch"`
+	GPUModel      string `yaml:"gpu_model,omitempty"`
 	VRAMMinMiB    int    `yaml:"vram_min_mib"`
 	UnifiedMemory *bool  `yaml:"unified_memory,omitempty"`
 }

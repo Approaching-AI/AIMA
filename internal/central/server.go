@@ -98,11 +98,15 @@ CREATE TABLE IF NOT EXISTS configurations (
     engine_type TEXT NOT NULL,
     engine_version TEXT,
     model TEXT NOT NULL,
+    slot TEXT,
     config TEXT NOT NULL,
     config_hash TEXT NOT NULL,
     status TEXT DEFAULT 'experiment',
     derived_from TEXT,
+    tags TEXT,
+    source TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_config_hash ON configurations(config_hash);
@@ -113,33 +117,90 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     config_id TEXT NOT NULL REFERENCES configurations(id),
     device_id TEXT REFERENCES devices(id),
     concurrency INTEGER,
+    input_len_bucket TEXT,
+    output_len_bucket TEXT,
+    modality TEXT,
     throughput_tps REAL,
-    ttft_ms_p50 REAL,
-    ttft_ms_p95 REAL,
-    ttft_ms_p99 REAL,
-    tpot_ms_p50 REAL,
-    tpot_ms_p95 REAL,
-    total_tokens INTEGER,
-    duration_s REAL,
+    ttft_p50_ms REAL,
+    ttft_p95_ms REAL,
+    ttft_p99_ms REAL,
+    tpot_p50_ms REAL,
+    tpot_p95_ms REAL,
+    qps REAL,
+    vram_usage_mib INTEGER,
+    ram_usage_mib INTEGER,
     power_draw_watts REAL,
-    vram_used_mib INTEGER,
+    gpu_utilization_pct REAL,
+    error_rate REAL,
+    oom_occurred BOOLEAN,
+    stability TEXT,
+    duration_s INTEGER,
+    sample_count INTEGER,
+    agent_model TEXT,
+    notes TEXT,
     tested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_bench_config ON benchmark_results(config_id);`
+CREATE INDEX IF NOT EXISTS idx_bench_config ON benchmark_results(config_id);
 
-	_, err := s.db.ExecContext(ctx, ddl)
-	return err
+CREATE TABLE IF NOT EXISTS knowledge_notes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    tags TEXT,
+    hardware_profile TEXT,
+    model TEXT,
+    engine TEXT,
+    content TEXT NOT NULL,
+    confidence TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`
+
+	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+		return err
+	}
+
+	alterStmts := []string{
+		`ALTER TABLE configurations ADD COLUMN slot TEXT`,
+		`ALTER TABLE configurations ADD COLUMN tags TEXT`,
+		`ALTER TABLE configurations ADD COLUMN source TEXT`,
+		`ALTER TABLE configurations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE benchmark_results ADD COLUMN input_len_bucket TEXT`,
+		`ALTER TABLE benchmark_results ADD COLUMN output_len_bucket TEXT`,
+		`ALTER TABLE benchmark_results ADD COLUMN modality TEXT`,
+		`ALTER TABLE benchmark_results ADD COLUMN ttft_p50_ms REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN ttft_p95_ms REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN ttft_p99_ms REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN tpot_p50_ms REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN tpot_p95_ms REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN qps REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN vram_usage_mib INTEGER`,
+		`ALTER TABLE benchmark_results ADD COLUMN ram_usage_mib INTEGER`,
+		`ALTER TABLE benchmark_results ADD COLUMN gpu_utilization_pct REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN error_rate REAL`,
+		`ALTER TABLE benchmark_results ADD COLUMN oom_occurred BOOLEAN`,
+		`ALTER TABLE benchmark_results ADD COLUMN stability TEXT`,
+		`ALTER TABLE benchmark_results ADD COLUMN sample_count INTEGER`,
+		`ALTER TABLE benchmark_results ADD COLUMN agent_model TEXT`,
+		`ALTER TABLE benchmark_results ADD COLUMN notes TEXT`,
+	}
+	for _, stmt := range alterStmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // IngestPayload is the expected JSON body for POST /api/v1/ingest.
 // It mirrors the knowledge.export output format.
 type IngestPayload struct {
-	SchemaVersion int                `json:"schema_version"`
-	DeviceID      string             `json:"device_id"`
-	GPUArch       string             `json:"gpu_arch"`
+	SchemaVersion  int               `json:"schema_version"`
+	DeviceID       string            `json:"device_id"`
+	GPUArch        string            `json:"gpu_arch"`
 	Configurations []IngestConfig    `json:"configurations"`
 	Benchmarks     []IngestBenchmark `json:"benchmarks"`
+	KnowledgeNotes []IngestNote      `json:"knowledge_notes"`
 }
 
 type IngestConfig struct {
@@ -153,26 +214,51 @@ type IngestConfig struct {
 	Status        string          `json:"status"`
 	DerivedFrom   string          `json:"derived_from"`
 	CreatedAt     string          `json:"created_at"`
+	UpdatedAt     string          `json:"updated_at"`
 	Slot          string          `json:"slot"`
 	Source        string          `json:"source"`
 	DeviceID      string          `json:"device_id"`
+	Tags          []string        `json:"tags"`
 }
 
 type IngestBenchmark struct {
-	ID             string  `json:"id"`
-	ConfigID       string  `json:"config_id"`
-	Concurrency    int     `json:"concurrency"`
-	ThroughputTPS  float64 `json:"throughput_tps"`
-	TTFTP50ms      float64 `json:"ttft_ms_p50"`
-	TTFTP95ms      float64 `json:"ttft_ms_p95"`
-	TTFTP99ms      float64 `json:"ttft_ms_p99"`
-	TPOTP50ms      float64 `json:"tpot_ms_p50"`
-	TPOTP95ms      float64 `json:"tpot_ms_p95"`
-	TotalTokens    int     `json:"total_tokens"`
-	DurationS      float64 `json:"duration_s"`
-	PowerDrawWatts float64 `json:"power_draw_watts"`
-	VRAMUsedMiB    int     `json:"vram_used_mib"`
-	TestedAt       string  `json:"tested_at"`
+	ID              string  `json:"id"`
+	ConfigID        string  `json:"config_id"`
+	Concurrency     int     `json:"concurrency"`
+	InputLenBucket  string  `json:"input_len_bucket"`
+	OutputLenBucket string  `json:"output_len_bucket"`
+	Modality        string  `json:"modality"`
+	TTFTP50ms       float64 `json:"ttft_p50_ms"`
+	TTFTP95ms       float64 `json:"ttft_p95_ms"`
+	TTFTP99ms       float64 `json:"ttft_p99_ms"`
+	TPOTP50ms       float64 `json:"tpot_p50_ms"`
+	TPOTP95ms       float64 `json:"tpot_p95_ms"`
+	ThroughputTPS   float64 `json:"throughput_tps"`
+	QPS             float64 `json:"qps"`
+	VRAMUsageMiB    int     `json:"vram_usage_mib"`
+	RAMUsageMiB     int     `json:"ram_usage_mib"`
+	PowerDrawWatts  float64 `json:"power_draw_watts"`
+	GPUUtilPct      float64 `json:"gpu_util_pct"`
+	ErrorRate       float64 `json:"error_rate"`
+	OOMOccurred     bool    `json:"oom_occurred"`
+	Stability       string  `json:"stability"`
+	DurationS       int     `json:"duration_s"`
+	SampleCount     int     `json:"sample_count"`
+	TestedAt        string  `json:"tested_at"`
+	AgentModel      string  `json:"agent_model"`
+	Notes           string  `json:"notes"`
+}
+
+type IngestNote struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Tags            []string `json:"tags"`
+	HardwareProfile string   `json:"hardware_profile"`
+	Model           string   `json:"model"`
+	Engine          string   `json:"engine"`
+	Content         string   `json:"content"`
+	Confidence      string   `json:"confidence"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +279,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	ingested, duplicates := 0, 0
 	benchIngested := 0
+	noteIngested := 0
 
 	for _, c := range payload.Configurations {
 		configHash := c.ConfigHash
@@ -218,11 +305,20 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if createdAt == "" {
 			createdAt = time.Now().UTC().Format(time.RFC3339)
 		}
+		updatedAt := c.UpdatedAt
+		if updatedAt == "" {
+			updatedAt = createdAt
+		}
+		deviceID := c.DeviceID
+		if deviceID == "" {
+			deviceID = payload.DeviceID
+		}
+		tagsJSON, _ := json.Marshal(c.Tags)
 		_, err := s.db.ExecContext(r.Context(),
-			`INSERT INTO configurations (id, device_id, hardware, engine_type, engine_version, model, config, config_hash, status, derived_from, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ID, payload.DeviceID, c.Hardware, c.EngineType, c.EngineVersion, c.Model,
-			string(c.Config), configHash, c.Status, derivedFrom, createdAt)
+			`INSERT INTO configurations (id, device_id, hardware, engine_type, engine_version, model, slot, config, config_hash, status, derived_from, tags, source, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ID, deviceID, c.Hardware, c.EngineType, c.EngineVersion, c.Model, c.Slot,
+			string(c.Config), configHash, c.Status, derivedFrom, string(tagsJSON), c.Source, createdAt, updatedAt)
 		if err != nil {
 			slog.Warn("ingest config", "id", c.ID, "error", err)
 			continue
@@ -236,11 +332,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			testedAt = time.Now().UTC().Format(time.RFC3339)
 		}
 		_, err := s.db.ExecContext(r.Context(),
-			`INSERT OR IGNORE INTO benchmark_results (id, config_id, device_id, concurrency, throughput_tps, ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95, total_tokens, duration_s, power_draw_watts, vram_used_mib, tested_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			b.ID, b.ConfigID, payload.DeviceID, b.Concurrency, b.ThroughputTPS,
-			b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
-			b.TotalTokens, b.DurationS, b.PowerDrawWatts, b.VRAMUsedMiB, testedAt)
+			`INSERT OR IGNORE INTO benchmark_results (id, config_id, device_id, concurrency, input_len_bucket, output_len_bucket, modality,
+			 throughput_tps, ttft_p50_ms, ttft_p95_ms, ttft_p99_ms, tpot_p50_ms, tpot_p95_ms, qps, vram_usage_mib, ram_usage_mib,
+			 power_draw_watts, gpu_utilization_pct, error_rate, oom_occurred, stability, duration_s, sample_count, tested_at, agent_model, notes)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			b.ID, b.ConfigID, payload.DeviceID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
+			b.ThroughputTPS, b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB,
+			b.PowerDrawWatts, b.GPUUtilPct, b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, testedAt, b.AgentModel, b.Notes)
 		if err != nil {
 			slog.Warn("ingest benchmark", "id", b.ID, "error", err)
 			continue
@@ -248,10 +346,28 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		benchIngested++
 	}
 
+	for _, n := range payload.KnowledgeNotes {
+		createdAt := n.CreatedAt
+		if createdAt == "" {
+			createdAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		tagsJSON, _ := json.Marshal(n.Tags)
+		_, err := s.db.ExecContext(r.Context(),
+			`INSERT OR REPLACE INTO knowledge_notes (id, title, tags, hardware_profile, model, engine, content, confidence, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			n.ID, n.Title, string(tagsJSON), n.HardwareProfile, n.Model, n.Engine, n.Content, n.Confidence, createdAt)
+		if err != nil {
+			slog.Warn("ingest note", "id", n.ID, "error", err)
+			continue
+		}
+		noteIngested++
+	}
+
 	writeJSON(w, map[string]any{
-		"ingested":        ingested,
-		"duplicates":      duplicates,
-		"benchmarks":      benchIngested,
+		"ingested":   ingested,
+		"duplicates": duplicates,
+		"benchmarks": benchIngested,
+		"notes":      noteIngested,
 	})
 }
 
@@ -309,7 +425,8 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	since := r.URL.Query().Get("since")
 	hardware := r.URL.Query().Get("hardware")
 
-	configQuery := `SELECT id, hardware, engine_type, model, config, config_hash, status, created_at FROM configurations WHERE 1=1`
+	configQuery := `SELECT id, device_id, hardware, engine_type, model, slot, config, config_hash, derived_from, status, tags, source, created_at, updated_at
+		FROM configurations WHERE 1=1`
 	var configArgs []any
 	if since != "" {
 		configQuery += ` AND created_at > ?`
@@ -331,22 +448,33 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	var configs []map[string]any
 	var configIDs []string
 	for rows.Next() {
-		var id, hw, eng, mdl, config, configHash, status, createdAt string
-		if err := rows.Scan(&id, &hw, &eng, &mdl, &config, &configHash, &status, &createdAt); err != nil {
+		var id, hw, eng, mdl, slot, config, configHash, status, tagsJSON, source, createdAt, updatedAt string
+		var deviceID, derivedFrom sql.NullString
+		if err := rows.Scan(&id, &deviceID, &hw, &eng, &mdl, &slot, &config, &configHash, &derivedFrom, &status, &tagsJSON, &source, &createdAt, &updatedAt); err != nil {
 			continue
 		}
-		configs = append(configs, map[string]any{
+		var tags []string
+		_ = json.Unmarshal([]byte(tagsJSON), &tags)
+		entry := map[string]any{
 			"id": id, "hardware_id": hw, "engine_id": eng, "model_id": mdl,
-			"config": json.RawMessage(config), "config_hash": configHash,
-			"status": status, "created_at": createdAt,
-		})
+			"slot": slot, "config": json.RawMessage(config), "config_hash": configHash,
+			"status": status, "tags": tags, "source": source, "created_at": createdAt, "updated_at": updatedAt,
+		}
+		if deviceID.Valid {
+			entry["device_id"] = deviceID.String
+		}
+		if derivedFrom.Valid {
+			entry["derived_from"] = derivedFrom.String
+		}
+		configs = append(configs, entry)
 		configIDs = append(configIDs, id)
 	}
 
 	// Fetch benchmarks: for synced configs, plus any benchmarks added since last sync
 	var benchmarks []map[string]any
-	benchQuery := `SELECT id, config_id, concurrency, throughput_tps, ttft_ms_p50, ttft_ms_p95, ttft_ms_p99,
-		 tpot_ms_p50, tpot_ms_p95, total_tokens, duration_s, power_draw_watts, vram_used_mib, tested_at
+	benchQuery := `SELECT id, config_id, concurrency, input_len_bucket, output_len_bucket, modality, throughput_tps, ttft_p50_ms, ttft_p95_ms, ttft_p99_ms,
+		 tpot_p50_ms, tpot_p95_ms, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, error_rate, oom_occurred,
+		 stability, duration_s, sample_count, tested_at, agent_model, notes
 		 FROM benchmark_results WHERE 1=1`
 	var benchArgs []any
 
@@ -373,19 +501,43 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		defer bRows.Close()
 		for bRows.Next() {
-			var id, configID, testedAt string
-			var conc, totalTokens, vramUsed int
-			var tps, ttft50, ttft95, ttft99, tpot50, tpot95, dur, power float64
-			if err := bRows.Scan(&id, &configID, &conc, &tps, &ttft50, &ttft95, &ttft99,
-				&tpot50, &tpot95, &totalTokens, &dur, &power, &vramUsed, &testedAt); err != nil {
+			var id, configID, inBucket, outBucket, modality, stability, testedAt, agentModel, notes string
+			var conc, vramUsed, ramUsed, durationS, sampleCount int
+			var tps, ttft50, ttft95, ttft99, tpot50, tpot95, qps, power, gpuUtil, errorRate float64
+			var oomOccurred bool
+			if err := bRows.Scan(&id, &configID, &conc, &inBucket, &outBucket, &modality, &tps, &ttft50, &ttft95, &ttft99,
+				&tpot50, &tpot95, &qps, &vramUsed, &ramUsed, &power, &gpuUtil, &errorRate, &oomOccurred,
+				&stability, &durationS, &sampleCount, &testedAt, &agentModel, &notes); err != nil {
 				continue
 			}
 			benchmarks = append(benchmarks, map[string]any{
-				"id": id, "config_id": configID, "concurrency": conc,
-				"throughput_tps": tps, "ttft_ms_p50": ttft50, "ttft_ms_p95": ttft95,
-				"ttft_ms_p99": ttft99, "tpot_ms_p50": tpot50, "tpot_ms_p95": tpot95,
-				"total_tokens": totalTokens, "duration_s": dur,
-				"power_draw_watts": power, "vram_used_mib": vramUsed, "tested_at": testedAt,
+				"id": id, "config_id": configID, "concurrency": conc, "input_len_bucket": inBucket,
+				"output_len_bucket": outBucket, "modality": modality, "throughput_tps": tps,
+				"ttft_p50_ms": ttft50, "ttft_p95_ms": ttft95, "ttft_p99_ms": ttft99,
+				"tpot_p50_ms": tpot50, "tpot_p95_ms": tpot95, "qps": qps,
+				"vram_usage_mib": vramUsed, "ram_usage_mib": ramUsed, "power_draw_watts": power,
+				"gpu_util_pct": gpuUtil, "error_rate": errorRate, "oom_occurred": oomOccurred,
+				"stability": stability, "duration_s": durationS, "sample_count": sampleCount,
+				"tested_at": testedAt, "agent_model": agentModel, "notes": notes,
+			})
+		}
+	}
+
+	var notes []map[string]any
+	noteQuery := `SELECT id, title, tags, hardware_profile, model, engine, content, confidence, created_at FROM knowledge_notes ORDER BY created_at ASC LIMIT 1000`
+	nRows, err := s.db.QueryContext(r.Context(), noteQuery)
+	if err == nil {
+		defer nRows.Close()
+		for nRows.Next() {
+			var id, title, tagsJSON, hardwareProfile, model, engine, content, confidence, createdAt string
+			if err := nRows.Scan(&id, &title, &tagsJSON, &hardwareProfile, &model, &engine, &content, &confidence, &createdAt); err != nil {
+				continue
+			}
+			var tags []string
+			_ = json.Unmarshal([]byte(tagsJSON), &tags)
+			notes = append(notes, map[string]any{
+				"id": id, "title": title, "tags": tags, "hardware_profile": hardwareProfile,
+				"model": model, "engine": engine, "content": content, "confidence": confidence, "created_at": createdAt,
 			})
 		}
 	}
@@ -394,17 +546,19 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"schema_version": 1,
 		"data": map[string]any{
-			"configurations":   configs,
+			"configurations":    configs,
 			"benchmark_results": benchmarks,
+			"knowledge_notes":   notes,
 		},
 	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	var deviceCount, configCount, benchCount int
+	var deviceCount, configCount, benchCount, noteCount int
 	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices`).Scan(&deviceCount)
 	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM configurations`).Scan(&configCount)
 	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM benchmark_results`).Scan(&benchCount)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM knowledge_notes`).Scan(&noteCount)
 
 	// Coverage matrix: distinct hardware x engine x model combos
 	coverageRows, _ := s.db.QueryContext(r.Context(),
@@ -423,10 +577,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"devices":        deviceCount,
-		"configurations": configCount,
-		"benchmarks":     benchCount,
-		"coverage":       coverage,
+		"devices":         deviceCount,
+		"configurations":  configCount,
+		"benchmarks":      benchCount,
+		"knowledge_notes": noteCount,
+		"coverage":        coverage,
 	})
 }
 

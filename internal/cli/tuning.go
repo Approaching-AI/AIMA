@@ -21,12 +21,16 @@ func newTuningCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			model, _ := cmd.Flags().GetString("model")
 			engine, _ := cmd.Flags().GetString("engine")
+			hardware, _ := cmd.Flags().GetString("hardware")
 			endpoint, _ := cmd.Flags().GetString("endpoint")
 			maxConfigs, _ := cmd.Flags().GetInt("max-configs")
 
 			params := map[string]any{"model": model}
 			if engine != "" {
 				params["engine"] = engine
+			}
+			if hardware != "" {
+				params["hardware"] = hardware
 			}
 			if endpoint != "" {
 				params["endpoint"] = endpoint
@@ -46,6 +50,7 @@ func newTuningCmd(app *App) *cobra.Command {
 	}
 	startCmd.Flags().String("model", "", "Model to tune")
 	startCmd.Flags().String("engine", "", "Engine type")
+	startCmd.Flags().String("hardware", "", "Hardware profile for benchmark persistence")
 	startCmd.Flags().String("endpoint", "", "Inference endpoint")
 	startCmd.Flags().Int("max-configs", 20, "Maximum configs to evaluate")
 

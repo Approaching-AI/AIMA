@@ -426,6 +426,8 @@ type StackQuestion struct {
 	Question   string `yaml:"question"`
 	Hypothesis string `yaml:"hypothesis"`
 	TestMethod string `yaml:"test_method"`
+	Status     string `yaml:"status,omitempty"`
+	Finding    string `yaml:"finding,omitempty"`
 }
 
 // --- Partition Strategy ---

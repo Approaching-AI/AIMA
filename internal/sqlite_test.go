@@ -278,6 +278,50 @@ func TestKnowledgeNoteCRUD(t *testing.T) {
 	})
 }
 
+func TestUpsertOpenQuestion_SeedsCatalogStatusAndPreservesRuntimeResolution(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	if err := db.UpsertOpenQuestion(ctx, "oq-001", "stack:hami", "question", "test", "hypothesis", "untested", ""); err != nil {
+		t.Fatalf("UpsertOpenQuestion initial: %v", err)
+	}
+	if err := db.UpsertOpenQuestion(ctx, "oq-001", "stack:hami", "question", "test", "hypothesis", "confirmed_incompatible", "known finding"); err != nil {
+		t.Fatalf("UpsertOpenQuestion catalog update: %v", err)
+	}
+
+	q, err := db.GetOpenQuestion(ctx, "oq-001")
+	if err != nil {
+		t.Fatalf("GetOpenQuestion: %v", err)
+	}
+	if q.Status != "confirmed_incompatible" {
+		t.Fatalf("status = %q, want confirmed_incompatible", q.Status)
+	}
+	if q.ActualResult != "known finding" {
+		t.Fatalf("actual_result = %q, want known finding", q.ActualResult)
+	}
+
+	if err := db.ResolveOpenQuestion(ctx, "oq-001", "tested", "runtime result", "apple-m4-arm64"); err != nil {
+		t.Fatalf("ResolveOpenQuestion: %v", err)
+	}
+	if err := db.UpsertOpenQuestion(ctx, "oq-001", "stack:hami", "question", "test", "hypothesis", "untested", ""); err != nil {
+		t.Fatalf("UpsertOpenQuestion preserve runtime: %v", err)
+	}
+
+	q, err = db.GetOpenQuestion(ctx, "oq-001")
+	if err != nil {
+		t.Fatalf("GetOpenQuestion after resolve: %v", err)
+	}
+	if q.Status != "tested" {
+		t.Fatalf("status after resolve = %q, want tested", q.Status)
+	}
+	if q.ActualResult != "runtime result" {
+		t.Fatalf("actual_result after resolve = %q, want runtime result", q.ActualResult)
+	}
+	if q.Hardware != "apple-m4-arm64" {
+		t.Fatalf("hardware = %q, want apple-m4-arm64", q.Hardware)
+	}
+}
+
 func TestConfig(t *testing.T) {
 	db := mustOpen(t)
 	ctx := context.Background()

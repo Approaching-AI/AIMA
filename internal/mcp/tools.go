@@ -15,20 +15,20 @@ type ToolDeps struct {
 	CollectMetrics func(ctx context.Context) (json.RawMessage, error)
 
 	// Model management
-	ScanModels  func(ctx context.Context) (json.RawMessage, error)
-	ListModels  func(ctx context.Context) (json.RawMessage, error)
-	PullModel   func(ctx context.Context, name string) error
-	ImportModel func(ctx context.Context, path string) (json.RawMessage, error)
+	ScanModels   func(ctx context.Context) (json.RawMessage, error)
+	ListModels   func(ctx context.Context) (json.RawMessage, error)
+	PullModel    func(ctx context.Context, name string) error
+	ImportModel  func(ctx context.Context, path string) (json.RawMessage, error)
 	GetModelInfo func(ctx context.Context, name string) (json.RawMessage, error)
-	RemoveModel func(ctx context.Context, name string, deleteFiles bool) error
+	RemoveModel  func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines    func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
-	ListEngines    func(ctx context.Context) (json.RawMessage, error)
-	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
-	PullEngine     func(ctx context.Context, name string) error
-	ImportEngine   func(ctx context.Context, path string) error
-	RemoveEngine   func(ctx context.Context, name string) error
+	ScanEngines   func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
+	ListEngines   func(ctx context.Context) (json.RawMessage, error)
+	GetEngineInfo func(ctx context.Context, name string) (json.RawMessage, error)
+	PullEngine    func(ctx context.Context, name string) error
+	ImportEngine  func(ctx context.Context, path string) error
+	RemoveEngine  func(ctx context.Context, name string) error
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
@@ -55,11 +55,11 @@ type ToolDeps struct {
 	PromoteConfig      func(ctx context.Context, configID, status string) (json.RawMessage, error)
 
 	// Knowledge query (enhanced — powered by SQLite relational queries)
-	SearchConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	CompareConfigs    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	SimilarConfigs    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	LineageConfigs    func(ctx context.Context, configID string) (json.RawMessage, error)
-	GapsKnowledge     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	SearchConfigs      func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	CompareConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	SimilarConfigs     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	LineageConfigs     func(ctx context.Context, configID string) (json.RawMessage, error)
+	GapsKnowledge      func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 	AggregateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
 	// Stack management
@@ -116,6 +116,12 @@ type ToolDeps struct {
 	TuningStop    func(ctx context.Context) (json.RawMessage, error)
 	TuningResults func(ctx context.Context) (json.RawMessage, error)
 
+	// Exploration runner
+	ExploreStart  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExploreStatus func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreStop   func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreResult func(ctx context.Context, runID string) (json.RawMessage, error)
+
 	// Power history (F4)
 	PowerHistory func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
@@ -149,9 +155,9 @@ var validConfigKeys = map[string]bool{
 	"llm.model":        true,
 	"llm.api_key":      true,
 	"llm.user_agent":   true,
-	"llm.extra_params":  true,
-	"central.endpoint":  true,
-	"central.api_key":   true,
+	"llm.extra_params": true,
+	"central.endpoint": true,
+	"central.api_key":  true,
 }
 
 // IsValidConfigKey reports whether key is a recognized configuration key.
@@ -176,15 +182,15 @@ func isCommandAllowed(command string) bool {
 	allowedWithSafeFlags := map[string][]string{
 		"nvidia-smi": {
 			"-q", "--query", // query modes (--query-gpu, --query-compute-apps, etc.)
-			"-L", "--list",  // list GPUs
-			"-i",            // select GPU by index (read-only)
-			"--format",      // output format (csv, noheader, etc.)
-			"--id",          // select GPU by ID
+			"-L", "--list", // list GPUs
+			"-i",       // select GPU by index (read-only)
+			"--format", // output format (csv, noheader, etc.)
+			"--id",     // select GPU by ID
 		},
 		"df": {
 			"-h", "--human", // human-readable
-			"-T", "--type",  // show filesystem type
-			"-a", "--all",   // show all filesystems
+			"-T", "--type", // show filesystem type
+			"-a", "--all", // show all filesystems
 		},
 		"uname": {
 			"-a", "-s", "-r", "-m", "-n", "-v", "-p", "-o", // all flags are read-only
@@ -344,7 +350,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.PullModel == nil {
 				return ErrorResult("model.pull not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -367,7 +375,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.ImportModel == nil {
 				return ErrorResult("model.import not implemented"), nil
 			}
-			var p struct{ Path string `json:"path"` }
+			var p struct {
+				Path string `json:"path"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -391,7 +401,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.GetModelInfo == nil {
 				return ErrorResult("model.info not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -472,7 +484,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.GetEngineInfo == nil {
 				return ErrorResult("engine.info not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -513,7 +527,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.PullEngine == nil {
 				return ErrorResult("engine.pull not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if len(params) > 0 {
 				if err := json.Unmarshal(params, &p); err != nil {
 					return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
@@ -537,7 +553,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.ImportEngine == nil {
 				return ErrorResult("engine.import not implemented"), nil
 			}
-			var p struct{ Path string `json:"path"` }
+			var p struct {
+				Path string `json:"path"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -560,7 +578,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.RemoveEngine == nil {
 				return ErrorResult("engine.remove not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -590,11 +610,11 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return ErrorResult("deploy.apply not implemented"), nil
 			}
 			var p struct {
-				Model          string         `json:"model"`
-				Engine         string         `json:"engine"`
-				Slot           string         `json:"slot"`
-				Config         map[string]any `json:"config"`
-				MaxColdStartS  int            `json:"max_cold_start_s"`
+				Model         string         `json:"model"`
+				Engine        string         `json:"engine"`
+				Slot          string         `json:"slot"`
+				Config        map[string]any `json:"config"`
+				MaxColdStartS int            `json:"max_cold_start_s"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -690,7 +710,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.DeployDelete == nil {
 				return ErrorResult("deploy.delete not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -713,7 +735,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.DeployStatus == nil {
 				return ErrorResult("deploy.status not implemented"), nil
 			}
-			var p struct{ Name string `json:"name"` }
+			var p struct {
+				Name string `json:"name"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -857,7 +881,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.SaveKnowledge == nil {
 				return ErrorResult("knowledge.save not implemented"), nil
 			}
-			var p struct{ Note json.RawMessage `json:"note"` }
+			var p struct {
+				Note json.RawMessage `json:"note"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -1035,7 +1061,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.ExecShell == nil {
 				return ErrorResult("shell.exec not implemented"), nil
 			}
-			var p struct{ Command string `json:"command"` }
+			var p struct {
+				Command string `json:"command"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -1123,7 +1151,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.LineageConfigs == nil {
 				return ErrorResult("knowledge.lineage not implemented"), nil
 			}
-			var p struct{ ConfigID string `json:"config_id"` }
+			var p struct {
+				ConfigID string `json:"config_id"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -1305,10 +1335,10 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "benchmark.list",
 		Description: "List benchmark results from the knowledge database. Filter by model, hardware, or configuration ID. Use to review historical performance data or compare configurations.",
 		InputSchema: schema(
-			`"config_id":{"type":"string","description":"Filter by configuration ID"},`+
-				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
-				`"model":{"type":"string","description":"Filter by model name"},`+
-				`"engine":{"type":"string","description":"Filter by engine type"},`+
+			`"config_id":{"type":"string","description":"Filter by configuration ID"},` +
+				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},` +
+				`"model":{"type":"string","description":"Filter by model name"},` +
+				`"engine":{"type":"string","description":"Filter by engine type"},` +
 				`"limit":{"type":"integer","description":"Max results to return (default: 20)"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ListBenchmarks == nil {
@@ -1327,9 +1357,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "knowledge.export",
 		Description: "Export knowledge data (configurations, benchmark results, knowledge notes) to a JSON file. Filter by hardware, model, or engine. Use to share tuning results with other devices or create backups. If output_path is omitted, returns JSON directly.",
 		InputSchema: schema(
-			`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
-				`"model":{"type":"string","description":"Filter by model name"},`+
-				`"engine":{"type":"string","description":"Filter by engine type"},`+
+			`"hardware":{"type":"string","description":"Filter by hardware profile ID"},` +
+				`"model":{"type":"string","description":"Filter by model name"},` +
+				`"engine":{"type":"string","description":"Filter by engine type"},` +
 				`"output_path":{"type":"string","description":"File path to write JSON. If omitted, returns JSON in response."}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ExportKnowledge == nil {
@@ -1485,7 +1515,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				return ErrorResult("agent.ask not implemented"), nil
 			}
 			var p struct {
-				Query     string `json:"query"`
+				Query      string `json:"query"`
 				ForceLocal bool   `json:"force_local"`
 				ForceDeep  bool   `json:"force_deep"`
 				SkipPerms  bool   `json:"dangerously_skip_permissions"`
@@ -1687,7 +1717,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.FleetDeviceInfo == nil {
 				return ErrorResult("fleet.device_info not implemented"), nil
 			}
-			var p struct{ DeviceID string `json:"device_id"` }
+			var p struct {
+				DeviceID string `json:"device_id"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -1711,7 +1743,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if deps.FleetDeviceTools == nil {
 				return ErrorResult("fleet.device_tools not implemented"), nil
 			}
-			var p struct{ DeviceID string `json:"device_id"` }
+			var p struct {
+				DeviceID string `json:"device_id"`
+			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
@@ -1837,14 +1871,121 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
+	// --- Exploration Runner ---
+
+	s.RegisterTool(&Tool{
+		Name:        "explore.start",
+		Description: "Start a persisted exploration run. Supports tuning, validation, and open-question validation runs, with optional ZeroClaw planning.",
+		InputSchema: schema(
+			`"kind":{"type":"string","enum":["tune","validate","open_question"],"description":"Exploration kind."},`+
+				`"goal":{"type":"string","description":"Human-readable objective for the run."},`+
+				`"requested_by":{"type":"string","description":"Who requested the run, e.g. user or zeroclaw."},`+
+				`"planner":{"type":"string","description":"Planner identity.","enum":["none","zeroclaw"]},`+
+				`"executor":{"type":"string","description":"Executor identity. Currently only local_go is supported."},`+
+				`"approval_mode":{"type":"string","description":"Approval mode metadata for the run."},`+
+				`"source_ref":{"type":"string","description":"Optional source reference such as gap_id, open_question_id, or alert_id."},`+
+				`"target":{"type":"object","description":"Exploration target","properties":{"hardware":{"type":"string"},"model":{"type":"string"},"engine":{"type":"string"}}},`+
+				`"search_space":{"type":"object","description":"Parameter grid as key -> candidate array."},`+
+				`"constraints":{"type":"object","description":"Execution constraints","properties":{"max_candidates":{"type":"integer"}}},`+
+				`"benchmark_profile":{"type":"object","description":"Benchmark profile","properties":{"endpoint":{"type":"string"},"concurrency":{"type":"integer"},"rounds":{"type":"integer"}}}`,
+			"target"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ExploreStart == nil {
+				return ErrorResult("explore.start not implemented"), nil
+			}
+			data, err := deps.ExploreStart(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "explore.status",
+		Description: "Get the current status for an exploration run, including persisted events and live tuning progress when available.",
+		InputSchema: schema(`"id":{"type":"string","description":"Exploration run ID."}`, "id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ExploreStatus == nil {
+				return ErrorResult("explore.status not implemented"), nil
+			}
+			var p struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ID == "" {
+				return ErrorResult("id is required"), nil
+			}
+			data, err := deps.ExploreStatus(ctx, p.ID)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "explore.stop",
+		Description: "Stop a running exploration run.",
+		InputSchema: schema(`"id":{"type":"string","description":"Exploration run ID."}`, "id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ExploreStop == nil {
+				return ErrorResult("explore.stop not implemented"), nil
+			}
+			var p struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ID == "" {
+				return ErrorResult("id is required"), nil
+			}
+			data, err := deps.ExploreStop(ctx, p.ID)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	s.RegisterTool(&Tool{
+		Name:        "explore.result",
+		Description: "Get the final or current result for an exploration run, including events and summaries.",
+		InputSchema: schema(`"id":{"type":"string","description":"Exploration run ID."}`, "id"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ExploreResult == nil {
+				return ErrorResult("explore.result not implemented"), nil
+			}
+			var p struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.ID == "" {
+				return ErrorResult("id is required"), nil
+			}
+			data, err := deps.ExploreResult(ctx, p.ID)
+			if err != nil {
+				return nil, err
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
 	// --- Auto-tuning (A3) ---
 
 	s.RegisterTool(&Tool{
 		Name:        "tuning.start",
-		Description: "Start an auto-tuning session. Iterates config parameter combinations, benchmarks each, and promotes the best. Parameters: model (required), engine (optional), parameters (list of tunable params with key/values or min/max/step).",
+		Description: "Start an auto-tuning session. Iterates config parameter combinations, benchmarks each, and promotes the best. Parameters: model (required), hardware/engine/endpoint (optional), parameters (list of tunable params with key/values or min/max/step).",
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model name to tune"},`+
+				`"hardware":{"type":"string","description":"Hardware profile used to persist benchmark results."},`+
 				`"engine":{"type":"string","description":"Engine type (auto-detect if empty)"},`+
+				`"endpoint":{"type":"string","description":"Inference endpoint override for benchmarking."},`+
 				`"parameters":{"type":"array","items":{"type":"object"},"description":"Tunable parameter definitions"},`+
 				`"max_configs":{"type":"integer","description":"Maximum configs to test (default: 20)"}`,
 			"model"),
@@ -1914,7 +2055,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "device.power_history",
 		Description: "Query historical GPU power, temperature, and utilization samples over time. Returns time series data for trend analysis.",
 		InputSchema: schema(
-			`"from":{"type":"string","description":"Start time (ISO 8601 or 'now-1h', 'now-6h', 'now-24h')"},`+
+			`"from":{"type":"string","description":"Start time (ISO 8601 or 'now-1h', 'now-6h', 'now-24h')"},` +
 				`"to":{"type":"string","description":"End time (ISO 8601 or 'now')"}`,
 		),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -1935,8 +2076,8 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "knowledge.validate",
 		Description: "Compare predicted vs actual performance for a hardware/engine/model combination. Shows deviation percentage and flags divergent predictions (>20% off).",
 		InputSchema: schema(
-			`"hardware":{"type":"string","description":"GPU architecture"},`+
-				`"engine":{"type":"string","description":"Engine type"},`+
+			`"hardware":{"type":"string","description":"GPU architecture"},` +
+				`"engine":{"type":"string","description":"Engine type"},` +
 				`"model":{"type":"string","description":"Model name"}`,
 		),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -1977,13 +2118,20 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// I6: Open questions
 	s.RegisterTool(&Tool{
 		Name:        "knowledge.open_questions",
-		Description: "List and resolve open questions from knowledge assets. Questions are YAML-declared uncertainties that need real-device validation.",
+		Description: "List, resolve, or launch exploration runs for open questions from knowledge assets. Questions are YAML-declared uncertainties that need real-device validation.",
 		InputSchema: schema(
-			`"action":{"type":"string","description":"Action: list (default), resolve","enum":["list","resolve"]},`+
-				`"status":{"type":"string","description":"Filter by status: untested, confirmed, rejected"},`+
-				`"id":{"type":"string","description":"Question ID (for resolve action)"},`+
-				`"result":{"type":"string","description":"Actual test result (for resolve action)"},`+
-				`"hardware":{"type":"string","description":"Hardware that tested (for resolve action)"}`,
+			`"action":{"type":"string","description":"Action: list (default), resolve, run/validate to create an exploration run","enum":["list","resolve","run","validate"]},` +
+				`"status":{"type":"string","description":"Filter by status: untested, tested, confirmed, confirmed_incompatible, rejected"},` +
+				`"id":{"type":"string","description":"Question ID (for resolve action)"},` +
+				`"result":{"type":"string","description":"Actual test result (for resolve action)"},` +
+				`"hardware":{"type":"string","description":"Hardware that tested (for resolve/run action)"},` +
+				`"model":{"type":"string","description":"Model used for automated validation runs"},` +
+				`"engine":{"type":"string","description":"Engine used for automated validation runs"},` +
+				`"endpoint":{"type":"string","description":"Inference endpoint override for automated validation runs"},` +
+				`"planner":{"type":"string","description":"Planner to use when launching a run","enum":["","none","zeroclaw"]},` +
+				`"requested_by":{"type":"string","description":"Who requested the run"},` +
+				`"concurrency":{"type":"integer","description":"Benchmark concurrency for automated validation runs"},` +
+				`"rounds":{"type":"integer","description":"Benchmark rounds for automated validation runs"}`,
 		),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.OpenQuestions == nil {
@@ -2103,7 +2251,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		Name:        "device.power_mode",
 		Description: "List available power modes and current mode for the device. On supported hardware, can switch between performance/balanced/powersave modes.",
 		InputSchema: schema(
-			`"action":{"type":"string","description":"Action: get (default) or set","enum":["get","set"]},`+
+			`"action":{"type":"string","description":"Action: get (default) or set","enum":["get","set"]},` +
 				`"mode":{"type":"string","description":"Power mode to set (for set action)"}`,
 		),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {

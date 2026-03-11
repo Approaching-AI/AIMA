@@ -3,10 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	state "github.com/jguan/aima/internal"
+	benchpkg "github.com/jguan/aima/internal/benchmark"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 )
@@ -46,6 +51,7 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		wantBlock bool
 	}{
 		{name: "blocked static", tool: "shell.exec", args: json.RawMessage(`{"command":"whoami"}`), wantBlock: true},
+		{name: "explore start blocked for agent", tool: "explore.start", args: json.RawMessage(`{"kind":"tune","target":{"model":"qwen3-8b"}}`), wantBlock: true},
 		{name: "allowed readonly", tool: "knowledge.resolve", args: json.RawMessage(`{"model":"qwen3-8b"}`), wantBlock: false},
 		{name: "system config read allowed", tool: "system.config", args: json.RawMessage(`{"key":"foo"}`), wantBlock: false},
 		{name: "system config write blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":"bar"}`), wantBlock: true},
@@ -103,7 +109,7 @@ func TestFleetBlockedTools(t *testing.T) {
 	// All destructive tools must be in the fleet denylist
 	mustBlock := []string{
 		"model.remove", "engine.remove", "deploy.delete",
-		"agent.install", "stack.init", "agent.rollback", "shell.exec",
+		"explore.start", "agent.install", "stack.init", "agent.rollback", "shell.exec",
 	}
 	for _, tool := range mustBlock {
 		if _, ok := fleetBlockedTools[tool]; !ok {
@@ -297,6 +303,106 @@ func TestL2ProvenanceMerge(t *testing.T) {
 	}
 }
 
+func TestLoadLLMSettings_Defaults(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	t.Setenv("AIMA_LLM_ENDPOINT", "")
+	t.Setenv("AIMA_LLM_MODEL", "")
+	t.Setenv("AIMA_API_KEY", "")
+	t.Setenv("AIMA_LLM_USER_AGENT", "")
+	t.Setenv("AIMA_LLM_EXTRA_PARAMS", "")
+
+	settings := loadLLMSettings(ctx, db)
+	if settings.Endpoint != "http://localhost:6188/v1" {
+		t.Fatalf("Endpoint = %q, want http://localhost:6188/v1", settings.Endpoint)
+	}
+	if settings.Model != "" {
+		t.Fatalf("Model = %q, want empty", settings.Model)
+	}
+	if settings.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty", settings.APIKey)
+	}
+}
+
+func TestSyncZeroClawConfig_WritesManagedConfig(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "test-model"}},
+		})
+	}))
+	defer server.Close()
+
+	if err := db.SetConfig(ctx, "llm.endpoint", server.URL+"/v1"); err != nil {
+		t.Fatalf("SetConfig llm.endpoint: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "zeroclaw")
+	script := `#!/bin/sh
+if [ "$1" != "config" ]; then
+  exit 1
+fi
+shift
+if [ "$1" != "--config-dir" ]; then
+  exit 1
+fi
+cfgdir="$2"
+mkdir -p "$cfgdir"
+cat > "$cfgdir/config.toml" <<'EOF'
+default_provider = "openrouter"
+default_model = "old-model"
+default_temperature = 0.7
+
+[transcription]
+enabled = false
+api_url = "https://example.invalid/v1"
+api_key = "old-secret"
+EOF
+echo '{}'
+`
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake zeroclaw: %v", err)
+	}
+
+	if err := syncZeroClawConfig(ctx, db, dataDir, binPath); err != nil {
+		t.Fatalf("syncZeroClawConfig: %v", err)
+	}
+
+	configPath := filepath.Join(dataDir, "zeroclaw", "config.toml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw config: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`default_provider = "openai"`,
+		`default_model = "test-model"`,
+		`api_url = "` + server.URL + `/v1"`,
+		`api_key = "aima-local"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestMCPToolAdapter_SystemConfigReadAllowedWriteBlocked(t *testing.T) {
 	s := mcp.NewServer()
 	called := 0
@@ -335,5 +441,151 @@ func TestMCPToolAdapter_SystemConfigReadAllowedWriteBlocked(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("blocked write should not execute tool handler, called=%d", called)
+	}
+}
+
+func TestIsLocalLLMEndpoint(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		want     bool
+	}{
+		{endpoint: "http://localhost:6188/v1", want: true},
+		{endpoint: "http://127.0.0.1:6188/v1", want: true},
+		{endpoint: "http://[::1]:6188/v1", want: true},
+		{endpoint: "https://api.openai.com/v1", want: false},
+		{endpoint: "not a url", want: false},
+	}
+	for _, tt := range tests {
+		if got := isLocalLLMEndpoint(tt.endpoint); got != tt.want {
+			t.Fatalf("isLocalLLMEndpoint(%q) = %v, want %v", tt.endpoint, got, tt.want)
+		}
+	}
+}
+
+func TestWriteBenchmarkValidationFallsBackToExpectedPerf(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	seedBenchmarkPredictionTables(t, ctx, db)
+
+	cfg := &state.Configuration{
+		ID:         "cfg-bench-001",
+		HardwareID: "nvidia-gb10-arm64",
+		EngineID:   "vllm-nightly",
+		ModelID:    "qwen3-8b",
+		Config:     `{"gpu_memory_utilization":0.85}`,
+		ConfigHash: "cfg-bench-hash-001",
+		Status:     "experiment",
+		Source:     "benchmark",
+	}
+	if err := db.InsertConfiguration(ctx, cfg); err != nil {
+		t.Fatalf("InsertConfiguration: %v", err)
+	}
+
+	if err := writeBenchmarkValidation(ctx, db, "bench-001", cfg.ID, cfg.HardwareID, cfg.EngineID, cfg.ModelID, 36); err != nil {
+		t.Fatalf("writeBenchmarkValidation: %v", err)
+	}
+
+	rows, err := db.ListValidations(ctx, cfg.HardwareID, cfg.EngineID, cfg.ModelID)
+	if err != nil {
+		t.Fatalf("ListValidations: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("validation rows = %d, want 1", len(rows))
+	}
+	if rows[0]["metric"] != "throughput_tps" {
+		t.Fatalf("metric = %v, want throughput_tps", rows[0]["metric"])
+	}
+	if rows[0]["predicted"] != 30.0 {
+		t.Fatalf("predicted = %v, want 30", rows[0]["predicted"])
+	}
+	if rows[0]["actual"] != 36.0 {
+		t.Fatalf("actual = %v, want 36", rows[0]["actual"])
+	}
+}
+
+func TestLookupPredictedThroughputPrefersGoldenBenchmark(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	seedBenchmarkPredictionTables(t, ctx, db)
+
+	cfg := &state.Configuration{
+		ID:         "cfg-golden-bench",
+		HardwareID: "nvidia-gb10-arm64",
+		EngineID:   "vllm-nightly",
+		ModelID:    "qwen3-8b",
+		Config:     `{"gpu_memory_utilization":0.9}`,
+		ConfigHash: "cfg-golden-bench-hash",
+		Status:     "golden",
+		Source:     "benchmark",
+	}
+	if err := db.InsertConfiguration(ctx, cfg); err != nil {
+		t.Fatalf("InsertConfiguration: %v", err)
+	}
+	if err := db.InsertBenchmarkResult(ctx, &state.BenchmarkResult{
+		ID:            "bench-golden-001",
+		ConfigID:      cfg.ID,
+		Concurrency:   1,
+		ThroughputTPS: 44,
+	}); err != nil {
+		t.Fatalf("InsertBenchmarkResult: %v", err)
+	}
+
+	predicted, err := lookupPredictedThroughput(ctx, db.RawDB(), cfg.HardwareID, cfg.EngineID, cfg.ModelID)
+	if err != nil {
+		t.Fatalf("lookupPredictedThroughput: %v", err)
+	}
+	if predicted != 44 {
+		t.Fatalf("predicted = %v, want 44", predicted)
+	}
+}
+
+func TestUpdatePerfOverlayWritesObservationOutsideCatalog(t *testing.T) {
+	dir := t.TempDir()
+	updatePerfOverlay(dir, "qwen3-8b", "nvidia-gb10-arm64", "vllm-nightly", &benchpkg.RunResult{
+		ThroughputTPS: 42.5,
+		TTFTP50ms:     10,
+		TTFTP95ms:     20,
+		TPOTP50ms:     3,
+		QPS:           5,
+	})
+
+	observationPath := filepath.Join(dir, "observations", "models", "qwen3-8b-perf.json")
+	if _, err := os.Stat(observationPath); err != nil {
+		t.Fatalf("expected observation file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "catalog", "models", "qwen3-8b-perf.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("expected no catalog overlay file, got err=%v", err)
+	}
+}
+
+func seedBenchmarkPredictionTables(t *testing.T, ctx context.Context, db *state.DB) {
+	t.Helper()
+
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO engine_assets (id, type, version) VALUES ('vllm-nightly', 'vllm-nightly', 'v0.16')`); err != nil {
+		t.Fatalf("insert engine_asset: %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO hardware_profiles (id, name, gpu_arch) VALUES ('nvidia-gb10-arm64', 'GB10', 'Blackwell')`); err != nil {
+		t.Fatalf("insert hardware_profile: %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO model_assets (id, name, type) VALUES ('qwen3-8b', 'qwen3-8b', 'llm')`); err != nil {
+		t.Fatalf("insert model_asset: %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO model_variants (id, model_id, hardware_id, engine_type, format, default_config, expected_perf, vram_min_mib)
+		 VALUES ('qwen3-8b-gb10-vllm', 'qwen3-8b', 'nvidia-gb10-arm64', 'vllm-nightly', 'safetensors', '{}', '{"tokens_per_second":[20,40]}', 8192)`); err != nil {
+		t.Fatalf("insert model_variant: %v", err)
 	}
 }

@@ -117,10 +117,11 @@ type ToolDeps struct {
 	TuningResults func(ctx context.Context) (json.RawMessage, error)
 
 	// Exploration runner
-	ExploreStart  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	ExploreStatus func(ctx context.Context, runID string) (json.RawMessage, error)
-	ExploreStop   func(ctx context.Context, runID string) (json.RawMessage, error)
-	ExploreResult func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreStart        func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExploreStartAndWait func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExploreStatus       func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreStop         func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreResult       func(ctx context.Context, runID string) (json.RawMessage, error)
 
 	// Power history (F4)
 	PowerHistory func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)

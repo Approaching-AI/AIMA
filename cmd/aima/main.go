@@ -589,6 +589,17 @@ func run() error {
 		}
 		return json.Marshal(run)
 	}
+	deps.ExploreStartAndWait = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var req agent.ExplorationStart
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, err
+		}
+		status, err := explorationMgr.StartAndWait(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(status)
+	}
 	deps.ExploreStatus = func(ctx context.Context, runID string) (json.RawMessage, error) {
 		status, err := explorationMgr.Status(ctx, runID)
 		if err != nil {

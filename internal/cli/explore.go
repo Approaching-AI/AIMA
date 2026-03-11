@@ -30,6 +30,7 @@ func newExploreCmd(app *App) *cobra.Command {
 			maxCandidates, _ := cmd.Flags().GetInt("max-candidates")
 			concurrency, _ := cmd.Flags().GetInt("concurrency")
 			rounds, _ := cmd.Flags().GetInt("rounds")
+			noWait, _ := cmd.Flags().GetBool("no-wait")
 
 			params := map[string]any{
 				"kind": kind,
@@ -61,7 +62,17 @@ func newExploreCmd(app *App) *cobra.Command {
 			}
 
 			paramsBytes, _ := json.Marshal(params)
-			data, err := app.ToolDeps.ExploreStart(context.Background(), paramsBytes)
+
+			if noWait {
+				data, err := app.ToolDeps.ExploreStart(context.Background(), paramsBytes)
+				if err != nil {
+					return err
+				}
+				fmt.Println(formatJSON(data))
+				return nil
+			}
+
+			data, err := app.ToolDeps.ExploreStartAndWait(context.Background(), paramsBytes)
 			if err != nil {
 				return err
 			}
@@ -81,6 +92,7 @@ func newExploreCmd(app *App) *cobra.Command {
 	startCmd.Flags().Int("max-candidates", 20, "Maximum candidate configs")
 	startCmd.Flags().Int("concurrency", 1, "Benchmark concurrency")
 	startCmd.Flags().Int("rounds", 1, "Benchmark rounds")
+	startCmd.Flags().Bool("no-wait", false, "Return immediately without waiting for completion")
 	_ = startCmd.MarkFlagRequired("model")
 
 	statusCmd := &cobra.Command{

@@ -157,6 +157,35 @@ func (m *ExplorationManager) Start(ctx context.Context, req ExplorationStart) (*
 	return run, nil
 }
 
+// StartAndWait starts an exploration run and blocks until it reaches a terminal state.
+func (m *ExplorationManager) StartAndWait(ctx context.Context, req ExplorationStart) (*ExplorationStatus, error) {
+	run, err := m.Start(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(30 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return m.Stop(context.Background(), run.ID)
+		case <-timeout:
+			_, _ = m.Stop(context.Background(), run.ID)
+			return nil, fmt.Errorf("exploration %s timed out after 30 minutes", run.ID)
+		case <-ticker.C:
+			status, err := m.Status(ctx, run.ID)
+			if err != nil {
+				return nil, err
+			}
+			switch status.Run.Status {
+			case "completed", "failed", "cancelled":
+				return status, nil
+			}
+		}
+	}
+}
+
 func (m *ExplorationManager) Stop(ctx context.Context, runID string) (*ExplorationStatus, error) {
 	run, err := m.db.GetExplorationRun(ctx, runID)
 	if err != nil {

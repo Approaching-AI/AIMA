@@ -890,7 +890,7 @@ func (d *DB) ListPatrolAlerts(ctx context.Context, onlyActive bool) ([]map[strin
 		return nil, err
 	}
 	defer rows.Close()
-	var alerts []map[string]any
+	alerts := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, severity, typ, message, createdAt string
 		var resolvedAt sql.NullString
@@ -937,7 +937,7 @@ func (d *DB) QueryPowerHistory(ctx context.Context, fromTime, toTime string, int
 		return nil, err
 	}
 	defer rows.Close()
-	var results []map[string]any
+	results := make([]map[string]any, 0)
 	for rows.Next() {
 		var bucket string
 		var avgPower, maxPower, avgTemp, avgUtil, avgVRAM float64
@@ -990,7 +990,7 @@ func (d *DB) ListValidations(ctx context.Context, hardware, engine, model string
 		return nil, err
 	}
 	defer rows.Close()
-	var results []map[string]any
+	results := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, configID, hw, eng, mdl, metric, validatedAt string
 		var predicted, actual, deviation float64
@@ -1835,7 +1835,7 @@ func (d *DB) ListOpenQuestions(ctx context.Context, status string) ([]map[string
 		return nil, err
 	}
 	defer rows.Close()
-	var results []map[string]any
+	results := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, source, question, status string
 		var testCmd, expected, actualResult, testedAt, hardware sql.NullString
@@ -1978,7 +1978,7 @@ FROM exploration_runs`
 	}
 	defer rows.Close()
 
-	var runs []*ExplorationRun
+	runs := make([]*ExplorationRun, 0)
 	for rows.Next() {
 		var run ExplorationRun
 		var hardwareID, engineID, modelID, sourceRef, errStr, summary sql.NullString
@@ -2053,7 +2053,7 @@ ORDER BY id ASC`, runID)
 	}
 	defer rows.Close()
 
-	var events []*ExplorationEvent
+	events := make([]*ExplorationEvent, 0)
 	for rows.Next() {
 		var event ExplorationEvent
 		if err := rows.Scan(&event.ID, &event.RunID, &event.StepIndex, &event.StepKind, &event.Status,
@@ -2086,7 +2086,7 @@ func (d *DB) ListApps(ctx context.Context) ([]map[string]any, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var results []map[string]any
+	results := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, name, spec, status, createdAt string
 		var totalDeps, satisfiedDeps int

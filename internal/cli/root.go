@@ -24,9 +24,9 @@ type App struct {
 // NewRootCmd creates the root aima command with all subcommands.
 func NewRootCmd(app *App) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "aima",
-		Short: "AI-Inference-Managed-by-AI",
-		Long:  "AIMA manages AI inference on edge devices — hardware detection, knowledge-driven config, multi-model deployment.",
+		Use:           "aima",
+		Short:         "AI-Inference-Managed-by-AI",
+		Long:          "AIMA manages AI inference on edge devices — hardware detection, knowledge-driven config, multi-model deployment.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -49,6 +49,7 @@ func NewRootCmd(app *App) *cobra.Command {
 		newDiscoverCmd(app),
 		newFleetCmd(app),
 		newTUICmd(app),
+		newExploreCmd(app),
 		newTuningCmd(app),
 		newAppCmd(app),
 		newVersionCmd(),

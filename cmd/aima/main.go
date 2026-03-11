@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,16 @@ func isLightweightInvocation() bool {
 	}
 	// No subcommand at all → root help
 	return len(os.Args) <= 1
+}
+
+func isServeInvocation() bool {
+	for _, a := range os.Args[1:] {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a == "serve"
+	}
+	return false
 }
 
 func run() error {
@@ -133,7 +144,12 @@ func run() error {
 	// 6. Create infrastructure components
 	k3sClient := newK3SClient(dataDir)
 	proxyServer := proxy.NewServer()
+	zeroClawBinaryPath := "zeroclaw"
+	if installedPath, err := zeroclaw.InstalledBinaryPath(filepath.Join(dataDir, "bin")); err == nil {
+		zeroClawBinaryPath = installedPath
+	}
 	zeroClawMgr := zeroclaw.NewManager(
+		zeroclaw.WithBinaryPath(zeroClawBinaryPath),
 		zeroclaw.WithDataDir(dataDir),
 	)
 
@@ -151,6 +167,9 @@ func run() error {
 	rt := selectDefaultRuntime(k3sRt, dockerRt, nativeRt)
 	slog.Info("runtime selected", "runtime", rt.Name(),
 		"docker_available", dockerRt != nil, "k3s_available", k3sRt != nil)
+	if err := seedCatalogOpenQuestions(ctx, db, cat); err != nil {
+		return err
+	}
 
 	// 8. Create MCP server with tool deps wired
 	mcpServer := mcp.NewServer()
@@ -158,7 +177,28 @@ func run() error {
 
 	// 9. Create agent (L3a Go Agent)
 	toolAdapter := &mcpToolAdapter{server: mcpServer, db: db, pending: make(map[int64]*pendingApproval)}
+	automationTools := &automationToolAdapter{base: toolAdapter}
+	var explorationMgr *agent.ExplorationManager
 	llmClient := buildLLMClient(ctx, db)
+	if zeroClawMgr.Available() {
+		if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
+			slog.Warn("sync zeroclaw config failed", "error", err)
+		}
+		if isServeInvocation() {
+			startErr := zeroClawMgr.Start(ctx)
+			if startErr != nil {
+				slog.Warn("zeroclaw sidecar start failed; falling back to one-shot mode", "error", startErr)
+			} else {
+				defer func() {
+					stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := zeroClawMgr.Stop(stopCtx); err != nil {
+						slog.Warn("stop zeroclaw sidecar", "error", err)
+					}
+				}()
+			}
+		}
+	}
 	sessionStore := agent.NewSessionStore()
 	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
 	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
@@ -183,12 +223,20 @@ func run() error {
 		if err != nil {
 			return nil, err
 		}
+		if err := syncZeroClawConfig(ctx, db, dataDir, binPath); err != nil {
+			slog.Warn("sync zeroclaw config failed after install", "error", err)
+		}
 		return json.Marshal(map[string]string{"path": binPath})
 	}
 	deps.AgentStatus = func(ctx context.Context) (json.RawMessage, error) {
+		activeRuns := 0
+		if explorationMgr != nil {
+			activeRuns = explorationMgr.ActiveCount()
+		}
 		return json.Marshal(map[string]any{
-			"zeroclaw_available": zeroClawMgr.Available(),
-			"zeroclaw_healthy":   zeroClawMgr.Health(),
+			"zeroclaw_available":      zeroClawMgr.Available(),
+			"zeroclaw_healthy":        zeroClawMgr.Health(),
+			"active_exploration_runs": activeRuns,
 		})
 	}
 	deps.AgentGuide = func(ctx context.Context) (json.RawMessage, error) {
@@ -415,12 +463,27 @@ func run() error {
 		case "llm.endpoint":
 			llmClient.SetEndpoint(value)
 			slog.Info("LLM endpoint hot-swapped via system.config", "endpoint", value)
+			if zeroClawMgr.Available() {
+				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
+					slog.Warn("sync zeroclaw config failed", "error", err)
+				}
+			}
 		case "llm.model":
 			llmClient.SetModel(value)
 			slog.Info("LLM model hot-swapped via system.config", "model", value)
+			if zeroClawMgr.Available() {
+				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
+					slog.Warn("sync zeroclaw config failed", "error", err)
+				}
+			}
 		case "llm.api_key":
 			llmClient.SetAPIKey(value)
 			slog.Info("LLM API key hot-swapped via system.config")
+			if zeroClawMgr.Available() {
+				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
+					slog.Warn("sync zeroclaw config failed", "error", err)
+				}
+			}
 		case "llm.user_agent":
 			llmClient.SetUserAgent(value)
 			slog.Info("LLM User-Agent hot-swapped via system.config", "user_agent", value)
@@ -432,8 +495,9 @@ func run() error {
 	}
 
 	// 9g. Patrol, tuner, healer (A2, A3, A4)
-	healer := agent.NewHealer(toolAdapter)
-	tuner := agent.NewTuner(toolAdapter)
+	healer := agent.NewHealer(automationTools)
+	tuner := agent.NewTuner(automationTools)
+	explorationMgr = agent.NewExplorationManager(db, tuner, automationTools, zeroClawMgr)
 	patrol = agent.NewPatrol(agent.DefaultPatrolConfig(), toolAdapter, db.InsertPatrolAlert,
 		agent.WithHealer(healer),
 		agent.WithActionCallback(func(ctx context.Context, a agent.PatrolAction) {
@@ -513,6 +577,125 @@ func run() error {
 			return json.Marshal(map[string]string{"status": "no session"})
 		}
 		return json.Marshal(s)
+	}
+	deps.ExploreStart = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var req agent.ExplorationStart
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, err
+		}
+		run, err := explorationMgr.Start(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(run)
+	}
+	deps.ExploreStatus = func(ctx context.Context, runID string) (json.RawMessage, error) {
+		status, err := explorationMgr.Status(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(status)
+	}
+	deps.ExploreStop = func(ctx context.Context, runID string) (json.RawMessage, error) {
+		status, err := explorationMgr.Stop(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(status)
+	}
+	deps.ExploreResult = func(ctx context.Context, runID string) (json.RawMessage, error) {
+		result, err := explorationMgr.Result(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OpenQuestions = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Action      string `json:"action"`
+			Status      string `json:"status"`
+			ID          string `json:"id"`
+			Result      string `json:"result"`
+			Hardware    string `json:"hardware"`
+			Model       string `json:"model"`
+			Engine      string `json:"engine"`
+			Endpoint    string `json:"endpoint"`
+			Planner     string `json:"planner"`
+			RequestedBy string `json:"requested_by"`
+			Concurrency int    `json:"concurrency"`
+			Rounds      int    `json:"rounds"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		switch p.Action {
+		case "resolve":
+			if p.ID == "" {
+				return nil, fmt.Errorf("id required for resolve action")
+			}
+			status := "confirmed"
+			if p.Status != "" {
+				status = p.Status
+			}
+			if err := db.ResolveOpenQuestion(ctx, p.ID, status, p.Result, p.Hardware); err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]string{"status": "resolved", "id": p.ID})
+		case "run", "validate":
+			if explorationMgr == nil {
+				return nil, fmt.Errorf("exploration manager unavailable")
+			}
+			if p.ID == "" {
+				return nil, fmt.Errorf("id required for %s action", p.Action)
+			}
+			question, err := db.GetOpenQuestion(ctx, p.ID)
+			if err != nil {
+				return nil, err
+			}
+			hardware := p.Hardware
+			if hardware == "" {
+				hardware = question.Hardware
+			}
+			requestedBy := p.RequestedBy
+			if requestedBy == "" {
+				requestedBy = "user"
+			}
+			run, err := explorationMgr.Start(ctx, agent.ExplorationStart{
+				Kind: "open_question",
+				Goal: fmt.Sprintf("validate open question: %s", question.Question),
+				Target: agent.ExplorationTarget{
+					Hardware: hardware,
+					Model:    p.Model,
+					Engine:   p.Engine,
+				},
+				Planner:      p.Planner,
+				RequestedBy:  requestedBy,
+				SourceRef:    p.ID,
+				ApprovalMode: "none",
+				Benchmark: agent.ExplorationBenchmarkProfile{
+					Endpoint:    p.Endpoint,
+					Concurrency: p.Concurrency,
+					Rounds:      p.Rounds,
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{
+				"status":   "queued",
+				"question": question,
+				"run":      run,
+			})
+		default:
+			questions, err := db.ListOpenQuestions(ctx, p.Status)
+			if err != nil {
+				return nil, err
+			}
+			if questions == nil {
+				questions = []map[string]any{}
+			}
+			return json.Marshal(questions)
+		}
 	}
 	deps.PowerHistory = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
@@ -595,64 +778,10 @@ func run() error {
 		}
 		return json.Marshal(result)
 	}
-
-	// 9i. Open questions (I6)
-	deps.OpenQuestions = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-		var p struct {
-			Action   string `json:"action"`
-			Status   string `json:"status"`
-			ID       string `json:"id"`
-			Result   string `json:"result"`
-			Hardware string `json:"hardware"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		if p.Action == "resolve" {
-			if p.ID == "" {
-				return nil, fmt.Errorf("id required for resolve action")
-			}
-			status := "confirmed"
-			if p.Status != "" {
-				status = p.Status
-			}
-			if err := db.ResolveOpenQuestion(ctx, p.ID, status, p.Result, p.Hardware); err != nil {
-				return nil, err
-			}
-			return json.Marshal(map[string]string{"status": "resolved", "id": p.ID})
-		}
-		// Default: list
-		questions, err := db.ListOpenQuestions(ctx, p.Status)
-		if err != nil {
-			return nil, err
-		}
-		if questions == nil {
-			questions = []map[string]any{}
-		}
-		return json.Marshal(questions)
-	}
-
-	// Load open questions from catalog into DB
-	go func() {
-		bgCtx := context.Background()
-		for _, ea := range cat.EngineAssets {
-			for _, oq := range ea.OpenQuestions {
-				id := fmt.Sprintf("%x", sha256.Sum256([]byte(ea.Metadata.Name+":"+oq.Question)))[:16]
-				_ = db.UpsertOpenQuestion(bgCtx, id, "engine:"+ea.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, "untested")
-			}
-		}
-		for _, sc := range cat.StackComponents {
-			for _, oq := range sc.OpenQuestions {
-				id := fmt.Sprintf("%x", sha256.Sum256([]byte(sc.Metadata.Name+":"+oq.Question)))[:16]
-				_ = db.UpsertOpenQuestion(bgCtx, id, "stack:"+sc.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, "untested")
-			}
-		}
-	}()
-
 	// 9j. App management (D4)
 	deps.AppRegister = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
-			Name            string `json:"name"`
+			Name            string          `json:"name"`
 			InferenceNeeds  json.RawMessage `json:"inference_needs"`
 			ResourceBudget  json.RawMessage `json:"resource_budget"`
 			TimeConstraints json.RawMessage `json:"time_constraints"`
@@ -797,8 +926,9 @@ func run() error {
 		// Ingest: {configurations, benchmarks, device_id, gpu_arch}
 		var exportEnvelope struct {
 			Data struct {
-				Configurations  []json.RawMessage `json:"configurations"`
+				Configurations   []json.RawMessage `json:"configurations"`
 				BenchmarkResults []json.RawMessage `json:"benchmark_results"`
+				KnowledgeNotes   []json.RawMessage `json:"knowledge_notes"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(exportData, &exportEnvelope); err != nil {
@@ -813,11 +943,12 @@ func run() error {
 		}
 
 		ingestPayload, err := json.Marshal(map[string]any{
-			"schema_version": 1,
-			"device_id":      deviceID,
-			"gpu_arch":       gpuArch,
-			"configurations": exportEnvelope.Data.Configurations,
-			"benchmarks":     exportEnvelope.Data.BenchmarkResults,
+			"schema_version":  1,
+			"device_id":       deviceID,
+			"gpu_arch":        gpuArch,
+			"configurations":  exportEnvelope.Data.Configurations,
+			"benchmarks":      exportEnvelope.Data.BenchmarkResults,
+			"knowledge_notes": exportEnvelope.Data.KnowledgeNotes,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("marshal ingest payload: %w", err)
@@ -922,10 +1053,10 @@ func run() error {
 			}
 		}
 		return json.Marshal(map[string]any{
-			"endpoint":    endpoint,
-			"connected":   connected,
-			"last_push":   pushAt,
-			"last_pull":   pullAt,
+			"endpoint":  endpoint,
+			"connected": connected,
+			"last_push": pushAt,
+			"last_pull": pullAt,
 		})
 	}
 
@@ -1112,6 +1243,7 @@ var fleetBlockedTools = map[string]string{
 	"model.remove":   "destructive: deletes model data",
 	"engine.remove":  "destructive: deletes engine image",
 	"deploy.delete":  "destructive: stops running deployment",
+	"explore.start":  "orchestration: run-scoped approval not implemented remotely",
 	"agent.install":  "infrastructure: installs agent binary",
 	"stack.init":     "infrastructure: modifies system services",
 	"agent.rollback": "destructive: rolls back state",
@@ -1128,14 +1260,15 @@ var confirmableTools = map[string]string{
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
-	"model.remove":    "destructive operation",
-	"engine.remove":   "destructive operation",
-	"deploy.delete":   "destructive operation",
-	"shell.exec":      "arbitrary command execution",
-	"stack.init":      "infrastructure mutation",
-	"agent.ask":       "recursive agent invocation",
-	"agent.install":   "agent binary installation",
-	"agent.rollback":  "state rollback mutation",
+	"model.remove":   "destructive operation",
+	"engine.remove":  "destructive operation",
+	"deploy.delete":  "destructive operation",
+	"explore.start":  "run-scoped approval not implemented for agent-initiated exploration",
+	"shell.exec":     "arbitrary command execution",
+	"stack.init":     "infrastructure mutation",
+	"agent.ask":      "recursive agent invocation",
+	"agent.install":  "agent binary installation",
+	"agent.rollback": "state rollback mutation",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -1412,6 +1545,19 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 	return defs
 }
 
+type automationToolAdapter struct {
+	base *mcpToolAdapter
+}
+
+func (a *automationToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
+	ctx = context.WithValue(ctx, ctxKeySkipPerms, true)
+	return a.base.ExecuteTool(ctx, name, arguments)
+}
+
+func (a *automationToolAdapter) ListTools() []agent.ToolDefinition {
+	return a.base.ListTools()
+}
+
 // fleetMCPAdapter bridges mcp.Server to fleet.MCPExecutor interface.
 type fleetMCPAdapter struct {
 	server *mcp.Server
@@ -1563,45 +1709,165 @@ func buildNativeRuntime(dataDir string, engineAssets []knowledge.EngineAsset) ru
 	)
 }
 
+type llmSettings struct {
+	Endpoint    string
+	Model       string
+	APIKey      string
+	UserAgent   string
+	ExtraParams map[string]any
+}
+
 // buildLLMClient creates an OpenAI-compatible LLM client for the Go Agent.
 // Endpoint defaults to localhost proxy; model auto-discovered from /v1/models.
 func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
-	// Precedence: env var > SQLite > default
-	endpoint := os.Getenv("AIMA_LLM_ENDPOINT")
-	if endpoint == "" {
-		if v, err := db.GetConfig(ctx, "llm.endpoint"); err == nil && v != "" {
-			endpoint = v
+	settings := loadLLMSettings(ctx, db)
+	opts := []agent.OpenAIOption{agent.WithDiscoverFunc(discoverFleetLLM)}
+	if settings.Model != "" {
+		opts = append(opts, agent.WithModel(settings.Model))
+	}
+	if settings.APIKey != "" {
+		opts = append(opts, agent.WithAPIKey(settings.APIKey))
+	}
+	if settings.UserAgent != "" {
+		opts = append(opts, agent.WithUserAgent(settings.UserAgent))
+	}
+	if settings.ExtraParams != nil {
+		opts = append(opts, agent.WithExtraParams(settings.ExtraParams))
+	}
+	return agent.NewOpenAIClient(settings.Endpoint, opts...)
+}
+
+func loadLLMSettings(ctx context.Context, db *state.DB) llmSettings {
+	settings := llmSettings{
+		Endpoint: fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort),
+	}
+	if endpoint := os.Getenv("AIMA_LLM_ENDPOINT"); endpoint != "" {
+		settings.Endpoint = endpoint
+	} else if v, err := db.GetConfig(ctx, "llm.endpoint"); err == nil && v != "" {
+		settings.Endpoint = v
+	}
+	if model := os.Getenv("AIMA_LLM_MODEL"); model != "" {
+		settings.Model = model
+	} else if v, err := db.GetConfig(ctx, "llm.model"); err == nil && v != "" {
+		settings.Model = v
+	}
+	if apiKey := os.Getenv("AIMA_API_KEY"); apiKey != "" {
+		settings.APIKey = apiKey
+	} else if v, err := db.GetConfig(ctx, "llm.api_key"); err == nil && v != "" {
+		settings.APIKey = v
+	}
+	if userAgent := os.Getenv("AIMA_LLM_USER_AGENT"); userAgent != "" {
+		settings.UserAgent = userAgent
+	} else if v, err := db.GetConfig(ctx, "llm.user_agent"); err == nil && v != "" {
+		settings.UserAgent = v
+	}
+	if extra := os.Getenv("AIMA_LLM_EXTRA_PARAMS"); extra != "" {
+		settings.ExtraParams = parseExtraParams(extra)
+	} else if v, err := db.GetConfig(ctx, "llm.extra_params"); err == nil && v != "" {
+		settings.ExtraParams = parseExtraParams(v)
+	}
+	return settings
+}
+
+func syncZeroClawConfig(ctx context.Context, db *state.DB, dataDir, binaryPath string) error {
+	settings := loadLLMSettings(ctx, db)
+	cfg := zeroclaw.ManagedConfig{
+		Provider: "openai",
+		APIURL:   settings.Endpoint,
+		Model:    settings.Model,
+		APIKey:   settings.APIKey,
+	}
+	if cfg.APIKey == "" && isLocalLLMEndpoint(settings.Endpoint) {
+		cfg.APIKey = "aima-local"
+	}
+	if cfg.Model == "" && isLocalLLMEndpoint(settings.Endpoint) {
+		if discovered, err := discoverDefaultLLMModel(ctx, settings); err == nil {
+			cfg.Model = discovered
 		} else {
-			endpoint = fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort)
+			slog.Debug("zeroclaw model discovery skipped", "endpoint", settings.Endpoint, "error", err)
 		}
 	}
-	var opts []agent.OpenAIOption
-	if m := os.Getenv("AIMA_LLM_MODEL"); m != "" {
-		opts = append(opts, agent.WithModel(m))
-	} else if m, err := db.GetConfig(ctx, "llm.model"); err == nil && m != "" {
-		opts = append(opts, agent.WithModel(m))
-	}
-	if k := os.Getenv("AIMA_API_KEY"); k != "" {
-		opts = append(opts, agent.WithAPIKey(k))
-	} else if k, err := db.GetConfig(ctx, "llm.api_key"); err == nil && k != "" {
-		opts = append(opts, agent.WithAPIKey(k))
-	}
-	if ua := os.Getenv("AIMA_LLM_USER_AGENT"); ua != "" {
-		opts = append(opts, agent.WithUserAgent(ua))
-	} else if ua, err := db.GetConfig(ctx, "llm.user_agent"); err == nil && ua != "" {
-		opts = append(opts, agent.WithUserAgent(ua))
-	}
-	if ep := os.Getenv("AIMA_LLM_EXTRA_PARAMS"); ep != "" {
-		if p := parseExtraParams(ep); p != nil {
-			opts = append(opts, agent.WithExtraParams(p))
-		}
-	} else if ep, err := db.GetConfig(ctx, "llm.extra_params"); err == nil && ep != "" {
-		if p := parseExtraParams(ep); p != nil {
-			opts = append(opts, agent.WithExtraParams(p))
+	return zeroclaw.EnsureManagedConfig(ctx, binaryPath, dataDir, cfg)
+}
+
+func seedCatalogOpenQuestions(ctx context.Context, db *state.DB, cat *knowledge.Catalog) error {
+	for _, ea := range cat.EngineAssets {
+		for _, oq := range ea.OpenQuestions {
+			id := fmt.Sprintf("%x", sha256.Sum256([]byte(ea.Metadata.Name+":"+oq.Question)))[:16]
+			status := strings.TrimSpace(oq.Status)
+			if status == "" {
+				status = "untested"
+			}
+			if err := db.UpsertOpenQuestion(ctx, id, "engine:"+ea.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, status, oq.Finding); err != nil {
+				return fmt.Errorf("seed engine open question %s: %w", ea.Metadata.Name, err)
+			}
 		}
 	}
-	opts = append(opts, agent.WithDiscoverFunc(discoverFleetLLM))
-	return agent.NewOpenAIClient(endpoint, opts...)
+	for _, sc := range cat.StackComponents {
+		for _, oq := range sc.OpenQuestions {
+			id := fmt.Sprintf("%x", sha256.Sum256([]byte(sc.Metadata.Name+":"+oq.Question)))[:16]
+			status := strings.TrimSpace(oq.Status)
+			if status == "" {
+				status = "untested"
+			}
+			if err := db.UpsertOpenQuestion(ctx, id, "stack:"+sc.Metadata.Name, oq.Question, oq.TestMethod, oq.Hypothesis, status, oq.Finding); err != nil {
+				return fmt.Errorf("seed stack open question %s: %w", sc.Metadata.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func isLocalLLMEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	return strings.EqualFold(host, "localhost") || proxy.IsLocalIP(host)
+}
+
+func discoverDefaultLLMModel(ctx context.Context, settings llmSettings) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, settings.Endpoint+"/models", nil)
+	if err != nil {
+		return "", fmt.Errorf("create models request: %w", err)
+	}
+	if settings.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+settings.APIKey)
+	}
+	if settings.UserAgent != "" {
+		req.Header.Set("User-Agent", settings.UserAgent)
+	}
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return "", fmt.Errorf("read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("models endpoint: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var models struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &models); err != nil {
+		return "", fmt.Errorf("decode models: %w", err)
+	}
+	if len(models.Data) == 0 || models.Data[0].ID == "" {
+		return "", fmt.Errorf("no models available at %s/models", settings.Endpoint)
+	}
+	return models.Data[0].ID, nil
 }
 
 // parseExtraParams parses a JSON string into a map for LLM extra parameters.
@@ -2455,7 +2721,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			})
 			deployName := knowledge.SanitizePodName(modelName + "-" + resolved.Engine)
 			result := map[string]any{
-				"name": deployName,
+				"name":  deployName,
 				"model": modelName, "engine": resolved.Engine,
 				"slot": resolved.Slot, "status": "deploying",
 				"runtime": activeRt.Name(),
@@ -2960,6 +3226,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := db.InsertBenchmarkResult(ctx, br); err != nil {
 				return nil, fmt.Errorf("insert benchmark: %w", err)
 			}
+			postProcessBenchmarkSave(ctx, db, kStore, benchID, cfg.ID, p.Hardware, p.Engine, p.Model, p.ThroughputTPS)
 
 			return json.Marshal(map[string]any{
 				"benchmark_id": benchID,
@@ -3051,6 +3318,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				if err != nil {
 					return nil, err
 				}
+				postProcessBenchmarkSave(ctx, db, kStore, benchmarkID, configID, p.Hardware, p.Engine, p.Model, result.ThroughputTPS)
 			}
 
 			resp := map[string]any{
@@ -3111,14 +3379,15 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			endpoint := resolveEndpoint(p.Endpoint, p.Model)
 
 			type matrixCell struct {
-				Concurrency int                `json:"concurrency"`
-				InputTokens int                `json:"input_tokens"`
-				MaxTokens   int                `json:"max_tokens"`
+				Concurrency int                 `json:"concurrency"`
+				InputTokens int                 `json:"input_tokens"`
+				MaxTokens   int                 `json:"max_tokens"`
 				Result      *benchpkg.RunResult `json:"result"`
-				Error       string             `json:"error,omitempty"`
+				Error       string              `json:"error,omitempty"`
 			}
 
 			var cells []matrixCell
+			refreshVectors := false
 			for _, conc := range p.ConcurrencyLevels {
 				for _, inTok := range p.InputTokenLevels {
 					for _, maxTok := range p.MaxTokenLevels {
@@ -3148,18 +3417,29 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 							save := p.Save == nil || *p.Save
 							if save && p.Hardware != "" && p.Engine != "" {
 								notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
-								saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, conc, inTok, maxTok, notes)
+								benchmarkID, configID, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, conc, inTok, maxTok, notes)
+								if saveErr != nil {
+									slog.Warn("benchmark matrix: save failed", "error", saveErr, "concurrency", conc, "input_tokens", inTok, "max_tokens", maxTok)
+								} else {
+									refreshVectors = true
+									if err := writeBenchmarkValidation(ctx, db, benchmarkID, configID, p.Hardware, p.Engine, p.Model, result.ThroughputTPS); err != nil {
+										slog.Warn("benchmark validation: write failed", "error", err, "benchmark_id", benchmarkID)
+									}
+								}
 							}
 						}
 						cells = append(cells, cell)
 					}
 				}
 			}
+			if refreshVectors {
+				refreshPerfVectors(ctx, kStore)
+			}
 
 			return json.Marshal(map[string]any{
-				"model":  p.Model,
-				"cells":  cells,
-				"total":  len(cells),
+				"model": p.Model,
+				"cells": cells,
+				"total": len(cells),
 			})
 		},
 
@@ -3257,14 +3537,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				"aima_version":   cli.Version,
 				"filter":         map[string]string{"hardware": p.Hardware, "model": p.Model, "engine": p.Engine},
 				"data": map[string]any{
-					"configurations":   configs,
+					"configurations":    configs,
 					"benchmark_results": benchmarks,
-					"knowledge_notes":  notes,
+					"knowledge_notes":   notes,
 				},
 				"stats": map[string]int{
-					"configurations":   len(configs),
+					"configurations":    len(configs),
 					"benchmark_results": len(benchmarks),
-					"knowledge_notes":  len(notes),
+					"knowledge_notes":   len(notes),
 				},
 			}
 
@@ -3307,7 +3587,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			var envelope struct {
 				SchemaVersion int `json:"schema_version"`
 				Data          struct {
-					Configurations   []*state.Configuration  `json:"configurations"`
+					Configurations   []*state.Configuration   `json:"configurations"`
 					BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
 					KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
 				} `json:"data"`
@@ -3438,6 +3718,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if !p.DryRun {
 				if err := tx.Commit(); err != nil {
 					return nil, fmt.Errorf("commit import: %w", err)
+				}
+				if imported["benchmark_results"] > 0 {
+					refreshPerfVectors(ctx, kStore)
 				}
 			}
 
@@ -3725,6 +4008,127 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 	}
 }
 
+func postProcessBenchmarkSave(ctx context.Context, db *state.DB, kStore *knowledge.Store, benchmarkID, configID, hardware, engine, model string, throughputTPS float64) {
+	if err := writeBenchmarkValidation(ctx, db, benchmarkID, configID, hardware, engine, model, throughputTPS); err != nil {
+		slog.Warn("benchmark validation: write failed", "error", err, "benchmark_id", benchmarkID)
+	}
+	refreshPerfVectors(ctx, kStore)
+}
+
+func writeBenchmarkValidation(ctx context.Context, db *state.DB, benchmarkID, configID, hardware, engine, model string, actualThroughput float64) error {
+	if db == nil || benchmarkID == "" || configID == "" || actualThroughput <= 0 || hardware == "" || engine == "" || model == "" {
+		return nil
+	}
+
+	predicted, err := lookupPredictedThroughput(ctx, db.RawDB(), hardware, engine, model)
+	if err != nil {
+		return err
+	}
+	if predicted <= 0 {
+		return nil
+	}
+
+	deviation := ((actualThroughput - predicted) / predicted) * 100
+	id := fmt.Sprintf("%x", sha256.Sum256([]byte(benchmarkID+"|throughput_tps")))[:16]
+	return db.InsertValidation(ctx, id, configID, hardware, engine, model, "throughput_tps", predicted, actualThroughput, deviation)
+}
+
+func lookupPredictedThroughput(ctx context.Context, db *sql.DB, hardware, engine, model string) (float64, error) {
+	if db == nil {
+		return 0, nil
+	}
+
+	var throughput sql.NullFloat64
+	err := db.QueryRowContext(ctx, `
+SELECT b.throughput_tps
+FROM configurations c
+JOIN benchmark_results b ON b.config_id = c.id
+WHERE c.status = 'golden'
+  AND c.hardware_id = ? AND c.engine_id = ? AND c.model_id = ?
+ORDER BY b.throughput_tps DESC
+LIMIT 1`, hardware, engine, model).Scan(&throughput)
+	switch {
+	case err == nil && throughput.Valid && throughput.Float64 > 0:
+		return throughput.Float64, nil
+	case err != nil && err != sql.ErrNoRows:
+		return 0, fmt.Errorf("query golden throughput: %w", err)
+	}
+
+	var expectedPerf string
+	err = db.QueryRowContext(ctx, `
+SELECT expected_perf
+FROM model_variants
+WHERE model_id = ? AND engine_type = ?
+  AND (
+    hardware_id = ?
+    OR hardware_id IN (SELECT id FROM hardware_profiles WHERE gpu_arch = ?)
+  )
+ORDER BY CASE WHEN hardware_id = ? THEN 0 ELSE 1 END
+LIMIT 1`, model, engine, hardware, hardware, hardware).Scan(&expectedPerf)
+	switch {
+	case err == sql.ErrNoRows:
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("query expected throughput: %w", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(expectedPerf), &payload); err != nil {
+		return 0, fmt.Errorf("parse expected throughput: %w", err)
+	}
+
+	rawTPS, ok := payload["tokens_per_second"]
+	if !ok {
+		return 0, nil
+	}
+	switch v := rawTPS.(type) {
+	case float64:
+		return v, nil
+	case []any:
+		if len(v) == 0 {
+			return 0, nil
+		}
+		min := toFloat64(v[0])
+		if len(v) == 1 {
+			return min, nil
+		}
+		max := toFloat64(v[1])
+		if max == 0 {
+			return min, nil
+		}
+		return (min + max) / 2, nil
+	default:
+		return 0, nil
+	}
+}
+
+func toFloat64(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func refreshPerfVectors(ctx context.Context, kStore *knowledge.Store) {
+	if kStore == nil {
+		return
+	}
+	if err := kStore.RefreshPerfVectors(ctx); err != nil {
+		slog.Warn("perf vectors: refresh failed", "error", err)
+	}
+}
+
 // saveBenchmarkResult saves a benchmark result and its configuration to the DB.
 // Returns (benchmarkID, configID) or error.
 func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
@@ -3762,7 +4166,7 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		InputLenBucket:  tokenBucket(result.AvgInputTokens),
 		OutputLenBucket: tokenBucket(result.AvgOutputTokens),
 		Modality:        "text",
-		TTFTP50ms: result.TTFTP50ms, TTFTP95ms: result.TTFTP95ms, TTFTP99ms: result.TTFTP99ms,
+		TTFTP50ms:       result.TTFTP50ms, TTFTP95ms: result.TTFTP95ms, TTFTP99ms: result.TTFTP99ms,
 		TPOTP50ms: result.TPOTP50ms, TPOTP95ms: result.TPOTP95ms,
 		ThroughputTPS: result.ThroughputTPS, QPS: result.QPS,
 		ErrorRate: result.ErrorRate, SampleCount: result.TotalRequests,
@@ -3819,47 +4223,42 @@ func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, new
 	return false, ""
 }
 
-// updatePerfOverlay writes actual benchmark performance data to the runtime overlay YAML (K5).
-// This closes the feedback loop: future Resolve() calls see real measured performance.
+// updatePerfOverlay writes benchmark observations outside the catalog merge path.
+// Runtime overlays must not masquerade as model assets because same-name assets
+// replace the embedded catalog on restart.
 func updatePerfOverlay(dataDir, model, hardware, engine string, result *benchpkg.RunResult) {
-	overlayDir := filepath.Join(dataDir, "catalog", "models")
-	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
-		slog.Warn("perf overlay: mkdir failed", "error", err)
+	observationsDir := filepath.Join(dataDir, "observations", "models")
+	if err := os.MkdirAll(observationsDir, 0o755); err != nil {
+		slog.Warn("perf observations: mkdir failed", "error", err)
 		return
 	}
 
 	// Sanitize model name for filename
 	safeName := strings.ReplaceAll(model, "/", "_")
 	safeName = strings.ReplaceAll(safeName, ":", "_")
-	overlayPath := filepath.Join(overlayDir, safeName+"-perf.yaml")
+	observationPath := filepath.Join(observationsDir, safeName+"-perf.json")
 
-	// Build overlay content with actual measured performance
-	overlay := map[string]any{
-		"kind": "model_asset",
-		"metadata": map[string]any{
-			"name": model,
-		},
-		"_perf_overlay": map[string]any{
-			"hardware":       hardware,
-			"engine":         engine,
-			"throughput_tps": result.ThroughputTPS,
-			"ttft_ms_p50":    result.TTFTP50ms,
-			"ttft_ms_p95":    result.TTFTP95ms,
-			"tpot_ms_p50":    result.TPOTP50ms,
-			"qps":            result.QPS,
-			"updated_at":     time.Now().UTC().Format(time.RFC3339),
-		},
+	observation := map[string]any{
+		"model":          model,
+		"hardware":       hardware,
+		"engine":         engine,
+		"throughput_tps": result.ThroughputTPS,
+		"ttft_p50_ms":    result.TTFTP50ms,
+		"ttft_p95_ms":    result.TTFTP95ms,
+		"tpot_p50_ms":    result.TPOTP50ms,
+		"qps":            result.QPS,
+		"updated_at":     time.Now().UTC().Format(time.RFC3339),
 	}
-	data, err := yaml.Marshal(overlay)
+	data, err := json.MarshalIndent(observation, "", "  ")
 	if err != nil {
-		slog.Warn("perf overlay: marshal failed", "error", err)
+		slog.Warn("perf observations: marshal failed", "error", err)
 		return
 	}
-	if err := os.WriteFile(overlayPath, data, 0o644); err != nil {
-		slog.Warn("perf overlay: write failed", "path", overlayPath, "error", err)
+	if err := os.WriteFile(observationPath, data, 0o644); err != nil {
+		slog.Warn("perf observations: write failed", "path", observationPath, "error", err)
 		return
 	}
-	slog.Info("perf overlay updated", "model", model, "path", overlayPath, "throughput_tps", result.ThroughputTPS)
+	slog.Info("perf observation updated", "model", model, "path", observationPath, "throughput_tps", result.ThroughputTPS)
 }
 
 // tokenBucket converts a token count to a human-readable bucket string.
@@ -3926,7 +4325,7 @@ func handlePowerSnapshot(cat *knowledge.Catalog) http.HandlerFunc {
 		} else {
 			resp["available"] = true
 			resp["gpu"] = map[string]any{
-				"power_draw_watts":  metrics.GPU.PowerDrawWatts,
+				"power_draw_watts": metrics.GPU.PowerDrawWatts,
 				"temperature_c":    metrics.GPU.TemperatureCelsius,
 				"utilization_pct":  metrics.GPU.UtilizationPercent,
 				"memory_used_mib":  metrics.GPU.MemoryUsedMiB,

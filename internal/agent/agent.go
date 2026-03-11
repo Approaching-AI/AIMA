@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // LLMClient sends messages to an LLM and returns the response.
@@ -76,6 +77,19 @@ type StreamEvent struct {
 type StreamCallback func(StreamEvent)
 
 const defaultMaxTurns = 30
+
+func toolResultError(result *ToolResult) error {
+	if result == nil {
+		return fmt.Errorf("empty tool result")
+	}
+	if result.IsError {
+		return fmt.Errorf("%s", result.Content)
+	}
+	if strings.Contains(result.Content, "NEEDS_APPROVAL") {
+		return fmt.Errorf("tool requires approval: %s", result.Content)
+	}
+	return nil
+}
 
 // Agent is the L3a Go Agent (simple tool-calling loop).
 type Agent struct {

@@ -23,7 +23,9 @@ type TunableParam struct {
 // TuningConfig defines what to tune.
 type TuningConfig struct {
 	Model       string         `json:"model"`
+	Hardware    string         `json:"hardware,omitempty"`
 	Engine      string         `json:"engine,omitempty"`
+	Endpoint    string         `json:"endpoint,omitempty"`
 	Parameters  []TunableParam `json:"parameters"`
 	Concurrency int            `json:"concurrency,omitempty"`
 	Rounds      int            `json:"rounds,omitempty"`
@@ -73,8 +75,29 @@ func (t *Tuner) Start(ctx context.Context, config TuningConfig) (*TuningSession,
 		t.mu.Unlock()
 		return nil, fmt.Errorf("tuning session %s already running", t.session.ID)
 	}
+	t.mu.Unlock()
+
+	if len(config.Parameters) == 0 {
+		defaults, resolvedEngine, err := t.defaultParameters(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		config.Parameters = defaults
+		if config.Engine == "" {
+			config.Engine = resolvedEngine
+		}
+	} else if config.Engine == "" {
+		resolvedEngine, err := t.resolveEngine(ctx, config.Model)
+		if err != nil {
+			return nil, err
+		}
+		config.Engine = resolvedEngine
+	}
 
 	candidates := generateCandidates(config.Parameters)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no tuning candidates generated; provide parameters or a supported engine")
+	}
 	if config.MaxConfigs > 0 && len(candidates) > config.MaxConfigs {
 		candidates = candidates[:config.MaxConfigs]
 	}
@@ -86,6 +109,12 @@ func (t *Tuner) Start(ctx context.Context, config TuningConfig) (*TuningSession,
 		Status:    "running",
 		Total:     len(candidates),
 		StartedAt: time.Now(),
+	}
+
+	t.mu.Lock()
+	if t.session != nil && t.session.Status == "running" {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("tuning session %s already running", t.session.ID)
 	}
 	t.session = session
 
@@ -137,11 +166,15 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 
 		// Deploy with this config
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":            session.Config.Model,
-			"engine":           session.Config.Engine,
-			"config_overrides": candidate,
+			"model":  session.Config.Model,
+			"engine": session.Config.Engine,
+			"config": candidate,
 		})
-		if _, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs); err != nil {
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		if err == nil {
+			err = toolResultError(deployResult)
+		}
+		if err != nil {
 			slog.Warn("tuning: deploy failed, skipping config", "error", err)
 			continue
 		}
@@ -149,10 +182,16 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		// Benchmark
 		benchArgs, _ := json.Marshal(map[string]any{
 			"model":       session.Config.Model,
+			"endpoint":    session.Config.Endpoint,
 			"concurrency": session.Config.Concurrency,
 			"rounds":      session.Config.Rounds,
+			"hardware":    session.Config.Hardware,
+			"engine":      session.Config.Engine,
 		})
 		result, err := t.tools.ExecuteTool(ctx, "benchmark.run", benchArgs)
+		if err == nil {
+			err = toolResultError(result)
+		}
 		if err != nil {
 			slog.Warn("tuning: benchmark failed, skipping config", "error", err)
 			continue
@@ -160,16 +199,32 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 
 		// Parse benchmark result
 		var benchResult struct {
+			Result struct {
+				ThroughputTPS float64 `json:"throughput_tps"`
+				TTFTP95Ms     float64 `json:"ttft_p95_ms"`
+			} `json:"result"`
 			ThroughputTPS float64 `json:"throughput_tps"`
-			TTFTP95       float64 `json:"ttft_ms_p95"`
+			TTFTP95Ms     float64 `json:"ttft_p95_ms"`
 		}
-		_ = json.Unmarshal([]byte(result.Content), &benchResult)
+		if err := json.Unmarshal([]byte(result.Content), &benchResult); err != nil {
+			slog.Warn("tuning: benchmark result parse failed, skipping config", "error", err)
+			continue
+		}
 
-		score := benchResult.ThroughputTPS // simple scoring: maximize throughput
+		throughput := benchResult.Result.ThroughputTPS
+		if throughput == 0 {
+			throughput = benchResult.ThroughputTPS
+		}
+		ttftP95 := benchResult.Result.TTFTP95Ms
+		if ttftP95 == 0 {
+			ttftP95 = benchResult.TTFTP95Ms
+		}
+
+		score := throughput // simple scoring: maximize throughput
 		tr := TuningResult{
 			ConfigOverrides: candidate,
-			ThroughputTPS:   benchResult.ThroughputTPS,
-			TTFTP95Ms:       benchResult.TTFTP95,
+			ThroughputTPS:   throughput,
+			TTFTP95Ms:       ttftP95,
 			Score:           score,
 		}
 
@@ -186,16 +241,82 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 	// Redeploy best config as final state
 	if session.BestConfig != nil {
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":            session.Config.Model,
-			"engine":           session.Config.Engine,
-			"config_overrides": session.BestConfig,
+			"model":  session.Config.Model,
+			"engine": session.Config.Engine,
+			"config": session.BestConfig,
 		})
-		if _, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs); err != nil {
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		if err == nil {
+			err = toolResultError(deployResult)
+		}
+		if err != nil {
 			slog.Warn("tuning: failed to deploy best config", "error", err)
 		} else {
 			slog.Info("tuning: deployed best config", "score", session.BestScore, "config", session.BestConfig)
 		}
 	}
+}
+
+func (t *Tuner) defaultParameters(ctx context.Context, config TuningConfig) ([]TunableParam, string, error) {
+	resolved, err := t.resolveTarget(ctx, config.Model, config.Engine)
+	if err != nil {
+		return nil, "", err
+	}
+
+	params := defaultTuningParams(resolved.Config)
+	if len(params) == 0 {
+		return nil, "", fmt.Errorf("no default tuning parameters for resolved config of engine %q; specify parameters explicitly", resolved.Engine)
+	}
+	return params, resolved.Engine, nil
+}
+
+func (t *Tuner) resolveTarget(ctx context.Context, model, engine string) (*resolvedTuningTarget, error) {
+	resolveArgs := map[string]any{"model": model}
+	if engine != "" {
+		resolveArgs["engine"] = engine
+	}
+	payload, _ := json.Marshal(resolveArgs)
+	result, err := t.tools.ExecuteTool(ctx, "knowledge.resolve", payload)
+	if err == nil {
+		err = toolResultError(result)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve tuning target for %s: %w", model, err)
+	}
+
+	var resolved resolvedTuningTarget
+	if err := json.Unmarshal([]byte(result.Content), &resolved); err != nil {
+		return nil, fmt.Errorf("parse resolved tuning target for %s: %w", model, err)
+	}
+	if resolved.Engine == "" {
+		return nil, fmt.Errorf("resolved engine for %s is empty", model)
+	}
+	return &resolved, nil
+}
+
+type resolvedTuningTarget struct {
+	Engine string         `json:"engine"`
+	Config map[string]any `json:"config"`
+}
+
+func (t *Tuner) resolveEngine(ctx context.Context, model string) (string, error) {
+	resolved, err := t.resolveTarget(ctx, model, "")
+	if err != nil {
+		return "", err
+	}
+	return resolved.Engine, nil
+}
+
+func defaultTuningParams(config map[string]any) []TunableParam {
+	for _, key := range []string{"gpu_memory_utilization", "mem_fraction_static"} {
+		if _, ok := config[key]; ok {
+			return []TunableParam{{
+				Key:    key,
+				Values: []any{0.7, 0.75, 0.8, 0.85, 0.9},
+			}}
+		}
+	}
+	return nil
 }
 
 // generateCandidates produces the cross-product of all parameter values.

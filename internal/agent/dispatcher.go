@@ -9,6 +9,7 @@ import (
 // ZeroClawClient is the interface for the ZeroClaw sidecar (L3b).
 type ZeroClawClient interface {
 	Available() bool
+	SupportsSessions() bool
 	Ask(ctx context.Context, query string) (string, error)
 	AskWithSession(ctx context.Context, sessionID, query string) (string, error)
 }
@@ -49,6 +50,9 @@ func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption)
 			return "", "", nil, fmt.Errorf("ZeroClaw (L3b) is not available")
 		}
 		if opts.SessionID != "" {
+			if !d.zeroClawSupportsSessions() {
+				return "", "", nil, fmt.Errorf("ZeroClaw (L3b) does not support named sessions in daemon mode; retry without --session or use --local")
+			}
 			r, err := d.zeroclaw.AskWithSession(ctx, opts.SessionID, query)
 			return r, opts.SessionID, nil, err
 		}
@@ -58,7 +62,7 @@ func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption)
 
 	// Session ID without force-deep → try L3b, fall back to L3a
 	if opts.SessionID != "" {
-		if d.zeroClawAvailable() {
+		if d.zeroClawAvailable() && d.zeroClawSupportsSessions() {
 			r, err := d.zeroclaw.AskWithSession(ctx, opts.SessionID, query)
 			return r, opts.SessionID, nil, err
 		}
@@ -78,6 +82,10 @@ func (d *Dispatcher) Ask(ctx context.Context, query string, opts DispatchOption)
 
 func (d *Dispatcher) zeroClawAvailable() bool {
 	return d.zeroclaw != nil && d.zeroclaw.Available()
+}
+
+func (d *Dispatcher) zeroClawSupportsSessions() bool {
+	return d.zeroclaw != nil && d.zeroclaw.SupportsSessions()
 }
 
 // complexKeywords triggers routing to L3b when present in the query.

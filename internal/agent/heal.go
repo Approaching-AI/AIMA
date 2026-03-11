@@ -56,8 +56,11 @@ func NewHealer(tools ToolExecutor) *Healer {
 // Diagnose inspects a failed deployment and returns a diagnosis.
 func (h *Healer) Diagnose(ctx context.Context, deployName string) (*Diagnosis, error) {
 	// Get deploy logs
-	logsArgs, _ := json.Marshal(map[string]any{"name": deployName, "lines": 100})
+	logsArgs, _ := json.Marshal(map[string]any{"name": deployName, "tail": 100})
 	result, err := h.tools.ExecuteTool(ctx, "deploy.logs", logsArgs)
+	if err == nil {
+		err = toolResultError(result)
+	}
 	if err != nil {
 		return &Diagnosis{Type: "unknown", Cause: "could not fetch logs: " + err.Error(), Remedy: "escalate"}, nil
 	}
@@ -107,32 +110,26 @@ func (h *Healer) healOOM(ctx context.Context, deployName string, action *HealAct
 	for attempt := 1; attempt <= h.maxRetries; attempt++ {
 		action.Attempt = attempt
 
-		// Get current config
-		listArgs, _ := json.Marshal(map[string]any{"name": deployName})
-		result, err := h.tools.ExecuteTool(ctx, "deploy.list", listArgs)
+		deploy, err := h.lookupDeployment(ctx, deployName)
 		if err != nil {
 			continue
 		}
-
-		// Extract current gmu from deploy info
-		var deploys []struct {
-			Config map[string]any `json:"config"`
-			Model  string         `json:"model"`
-			Engine string         `json:"engine"`
-		}
-		if err := json.Unmarshal([]byte(result.Content), &deploys); err != nil || len(deploys) == 0 {
+		resolvedConfig, err := h.resolveDeploymentConfig(ctx, deploy)
+		if err != nil {
+			slog.Warn("self-heal: resolve config failed", "deploy", deployName, "error", err, "attempt", attempt)
 			continue
 		}
 
-		deploy := deploys[0]
-		currentGMU := 0.9 // default
-		for _, key := range []string{"gpu_memory_utilization", "mem_fraction_static"} {
-			if v, ok := deploy.Config[key]; ok {
-				if f, ok := v.(float64); ok {
-					currentGMU = f
-					break
-				}
-			}
+		gmuKey := memoryUtilizationKey(resolvedConfig)
+		if gmuKey == "" {
+			slog.Warn("self-heal: deployment has no supported memory utilization key",
+				"deploy", deployName, "attempt", attempt)
+			action.Success = false
+			return action, nil
+		}
+		currentGMU, _ := resolvedConfig[gmuKey].(float64)
+		if currentGMU == 0 {
+			currentGMU = 0.9
 		}
 
 		newGMU := currentGMU - 0.1
@@ -146,15 +143,19 @@ func (h *Healer) healOOM(ctx context.Context, deployName string, action *HealAct
 		slog.Info("self-heal: reducing gmu for OOM recovery",
 			"deploy", deployName, "old_gmu", currentGMU, "new_gmu", newGMU, "attempt", attempt)
 
-		// Redeploy with reduced gmu
+		nextConfig := cloneConfigMap(resolvedConfig)
+		nextConfig[gmuKey] = newGMU
 		redeployArgs, _ := json.Marshal(map[string]any{
 			"model":  deploy.Model,
 			"engine": deploy.Engine,
-			"config_overrides": map[string]any{
-				"gpu_memory_utilization": newGMU,
-			},
+			"slot":   deploy.Slot,
+			"config": nextConfig,
 		})
-		if _, err := h.tools.ExecuteTool(ctx, "deploy.apply", redeployArgs); err != nil {
+		redeployResult, err := h.tools.ExecuteTool(ctx, "deploy.apply", redeployArgs)
+		if err == nil {
+			err = toolResultError(redeployResult)
+		}
+		if err != nil {
 			slog.Warn("self-heal: redeploy failed", "deploy", deployName, "error", err, "attempt", attempt)
 			continue
 		}
@@ -173,13 +174,129 @@ func (h *Healer) healImagePull(ctx context.Context, deployName string, action *H
 	action.Action = "retry_pull"
 	action.Attempt = 1
 
-	// Simply retry the deployment — the runtime may pick a different registry
-	redeployArgs, _ := json.Marshal(map[string]any{"name": deployName})
-	if _, err := h.tools.ExecuteTool(ctx, "deploy.apply", redeployArgs); err != nil {
+	deploy, err := h.lookupDeployment(ctx, deployName)
+	if err != nil {
+		action.Success = false
+		return action, nil
+	}
+
+	resolvedConfig, err := h.resolveDeploymentConfig(ctx, deploy)
+	if err != nil {
+		action.Success = false
+		return action, nil
+	}
+
+	redeployArgs, _ := json.Marshal(map[string]any{
+		"model":  deploy.Model,
+		"engine": deploy.Engine,
+		"slot":   deploy.Slot,
+		"config": cloneConfigMap(resolvedConfig),
+	})
+	redeployResult, err := h.tools.ExecuteTool(ctx, "deploy.apply", redeployArgs)
+	if err == nil {
+		err = toolResultError(redeployResult)
+	}
+	if err != nil {
 		action.Success = false
 		return action, nil
 	}
 
 	action.Success = true
 	return action, nil
+}
+
+type deploymentMetadata struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels"`
+	Model  string
+	Engine string
+	Slot   string
+}
+
+func (h *Healer) lookupDeployment(ctx context.Context, deployName string) (*deploymentMetadata, error) {
+	result, err := h.tools.ExecuteTool(ctx, "deploy.list", nil)
+	if err == nil {
+		err = toolResultError(result)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var deploys []deploymentMetadata
+	if err := json.Unmarshal([]byte(result.Content), &deploys); err != nil {
+		return nil, fmt.Errorf("parse deploy list: %w", err)
+	}
+
+	var modelMatches []*deploymentMetadata
+	for i := range deploys {
+		deploys[i].Model = deploys[i].Labels["aima.dev/model"]
+		deploys[i].Engine = deploys[i].Labels["aima.dev/engine"]
+		deploys[i].Slot = deploys[i].Labels["aima.dev/slot"]
+		if deploys[i].Name == deployName {
+			return validateDeploymentMetadata(&deploys[i], deployName)
+		}
+		if deploys[i].Model == deployName {
+			modelMatches = append(modelMatches, &deploys[i])
+		}
+	}
+	if len(modelMatches) == 1 {
+		return validateDeploymentMetadata(modelMatches[0], deployName)
+	}
+	if len(modelMatches) > 1 {
+		return nil, fmt.Errorf("deployment %s is ambiguous; matches %d active deployments", deployName, len(modelMatches))
+	}
+	return nil, fmt.Errorf("deployment %s not found", deployName)
+}
+
+func validateDeploymentMetadata(deploy *deploymentMetadata, deployRef string) (*deploymentMetadata, error) {
+	if deploy.Model == "" || deploy.Engine == "" {
+		return nil, fmt.Errorf("deployment %s missing model or engine labels", deployRef)
+	}
+	return deploy, nil
+}
+
+func (h *Healer) resolveDeploymentConfig(ctx context.Context, deploy *deploymentMetadata) (map[string]any, error) {
+	previewArgs, _ := json.Marshal(map[string]any{
+		"model":  deploy.Model,
+		"engine": deploy.Engine,
+		"slot":   deploy.Slot,
+	})
+	result, err := h.tools.ExecuteTool(ctx, "deploy.dry_run", previewArgs)
+	if err == nil {
+		err = toolResultError(result)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var preview struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &preview); err != nil {
+		return nil, fmt.Errorf("parse deployment preview: %w", err)
+	}
+	if preview.Config == nil {
+		return nil, fmt.Errorf("deployment preview config is empty")
+	}
+	return preview.Config, nil
+}
+
+func memoryUtilizationKey(config map[string]any) string {
+	for _, key := range []string{"gpu_memory_utilization", "mem_fraction_static"} {
+		if _, ok := config[key]; ok {
+			return key
+		}
+	}
+	return ""
+}
+
+func cloneConfigMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"time"
+
+	state "github.com/jguan/aima/internal"
 )
 
 // mockLLM is a test double that returns predefined responses in sequence.
@@ -30,10 +34,14 @@ type mockTools struct {
 	tools   []ToolDefinition
 	results map[string]*ToolResult
 	calls   []string // record of tool calls
+	execute func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error)
 }
 
 func (m *mockTools) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 	m.calls = append(m.calls, name)
+	if m.execute != nil {
+		return m.execute(ctx, name, arguments)
+	}
 	if r, ok := m.results[name]; ok {
 		return r, nil
 	}
@@ -46,13 +54,20 @@ func (m *mockTools) ListTools() []ToolDefinition {
 
 // mockZeroClaw implements ZeroClawClient.
 type mockZeroClaw struct {
-	available bool
-	response  string
-	sessions  map[string]string
+	available  bool
+	sessionsOK bool
+	response   string
+	sessions   map[string]string
+	plan       json.RawMessage
+	planErr    error
 }
 
 func (m *mockZeroClaw) Available() bool {
 	return m.available
+}
+
+func (m *mockZeroClaw) SupportsSessions() bool {
+	return m.sessionsOK
 }
 
 func (m *mockZeroClaw) Ask(ctx context.Context, query string) (string, error) {
@@ -64,6 +79,16 @@ func (m *mockZeroClaw) AskWithSession(ctx context.Context, sessionID, query stri
 		return r, nil
 	}
 	return m.response, nil
+}
+
+func (m *mockZeroClaw) Plan(ctx context.Context, request json.RawMessage) (json.RawMessage, error) {
+	if m.planErr != nil {
+		return nil, m.planErr
+	}
+	if len(m.plan) != 0 {
+		return m.plan, nil
+	}
+	return nil, fmt.Errorf("no plan configured")
 }
 
 func TestAgent_SimpleQuery(t *testing.T) {
@@ -408,8 +433,9 @@ func TestDispatcher_SessionRouting(t *testing.T) {
 	goAgent := NewAgent(llm, tools)
 
 	zc := &mockZeroClaw{
-		available: true,
-		sessions:  map[string]string{"sess-1": "session response"},
+		available:  true,
+		sessionsOK: true,
+		sessions:   map[string]string{"sess-1": "session response"},
 	}
 	d := NewDispatcher(goAgent, zc)
 
@@ -446,6 +472,45 @@ func TestDispatcher_SessionFallbackToL3a(t *testing.T) {
 	}
 	if sid != "my-session" {
 		t.Errorf("sessionID = %q, want my-session", sid)
+	}
+}
+
+func TestDispatcher_SessionFallbackToL3aWhenZeroClawHasNoSessionSupport(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "from L3a with session"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	store := NewSessionStore()
+	goAgent := NewAgent(llm, tools, WithSessions(store))
+
+	zc := &mockZeroClaw{available: true, response: "from L3b"}
+	d := NewDispatcher(goAgent, zc)
+
+	result, sid, _, err := d.Ask(context.Background(), "continue", DispatchOption{SessionID: "my-session"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result != "from L3a with session" {
+		t.Errorf("result = %q, want from L3a with session", result)
+	}
+	if sid != "my-session" {
+		t.Errorf("sessionID = %q, want my-session", sid)
+	}
+}
+
+func TestDispatcher_ForceDeepSessionRequiresZeroClawSessionSupport(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "from L3a"}},
+	}
+	tools := &mockTools{tools: []ToolDefinition{}}
+	goAgent := NewAgent(llm, tools)
+
+	zc := &mockZeroClaw{available: true, response: "from L3b"}
+	d := NewDispatcher(goAgent, zc)
+
+	_, _, _, err := d.Ask(context.Background(), "continue", DispatchOption{ForceDeep: true, SessionID: "sess-1"})
+	if err == nil {
+		t.Fatal("expected error when forcing deep with unsupported ZeroClaw sessions")
 	}
 }
 
@@ -1017,6 +1082,477 @@ func TestHealerDiagnoseUnknown(t *testing.T) {
 	}
 	if diag.Remedy != "escalate" {
 		t.Errorf("remedy = %q, want escalate", diag.Remedy)
+	}
+}
+
+func TestHealerHealOOMUsesMatchingDeployment(t *testing.T) {
+	var redeployArgs map[string]any
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			switch name {
+			case "deploy.list":
+				return &ToolResult{Content: `[
+						{"name":"other-deploy","labels":{"aima.dev/model":"other-model","aima.dev/engine":"vllm"}},
+						{"name":"target-deploy","labels":{"aima.dev/model":"qwen3-8b","aima.dev/engine":"sglang","aima.dev/slot":"slot-b"}}
+					]`}, nil
+			case "deploy.dry_run":
+				return &ToolResult{Content: `{"engine":"sglang","slot":"slot-b","config":{"mem_fraction_static":0.8,"max_running_requests":16}}`}, nil
+			case "deploy.apply":
+				if err := json.Unmarshal(arguments, &redeployArgs); err != nil {
+					t.Fatalf("unmarshal redeploy args: %v", err)
+				}
+				return &ToolResult{Content: `{"status":"ok"}`}, nil
+			default:
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+		},
+	}
+
+	healer := NewHealer(tools)
+	action, err := healer.Heal(context.Background(), "target-deploy", &Diagnosis{Type: "oom"})
+	if err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if !action.Success {
+		t.Fatalf("expected successful heal action, got %+v", action)
+	}
+	if redeployArgs["model"] != "qwen3-8b" {
+		t.Fatalf("redeploy model = %v, want qwen3-8b", redeployArgs["model"])
+	}
+	if redeployArgs["engine"] != "sglang" {
+		t.Fatalf("redeploy engine = %v, want sglang", redeployArgs["engine"])
+	}
+	if redeployArgs["slot"] != "slot-b" {
+		t.Fatalf("redeploy slot = %v, want slot-b", redeployArgs["slot"])
+	}
+	config, ok := redeployArgs["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("redeploy config missing: %#v", redeployArgs)
+	}
+	if _, exists := config["config_overrides"]; exists {
+		t.Fatalf("redeploy used legacy config_overrides field: %#v", config)
+	}
+	got, ok := config["mem_fraction_static"].(float64)
+	if !ok || math.Abs(got-0.7) > 1e-9 {
+		t.Fatalf("mem_fraction_static = %v, want 0.7", config["mem_fraction_static"])
+	}
+	if config["max_running_requests"] != float64(16) {
+		t.Fatalf("max_running_requests = %v, want 16", config["max_running_requests"])
+	}
+}
+
+func TestHealerLookupDeploymentRejectsAmbiguousModelName(t *testing.T) {
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "deploy.list" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			return &ToolResult{Content: `[
+				{"name":"qwen3-a","labels":{"aima.dev/model":"qwen3-8b","aima.dev/engine":"vllm","aima.dev/slot":"slot-a"}},
+				{"name":"qwen3-b","labels":{"aima.dev/model":"qwen3-8b","aima.dev/engine":"vllm","aima.dev/slot":"slot-b"}}
+			]`}, nil
+		},
+	}
+
+	healer := NewHealer(tools)
+	_, err := healer.lookupDeployment(context.Background(), "qwen3-8b")
+	if err == nil {
+		t.Fatal("expected ambiguity error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("error = %v, want ambiguous", err)
+	}
+}
+
+func TestTunerStartDerivesDefaultParametersFromResolvedEngine(t *testing.T) {
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "knowledge.resolve" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			return &ToolResult{Content: `{"engine":"vllm","config":{"gpu_memory_utilization":0.8}}`}, nil
+		},
+	}
+
+	tuner := NewTuner(tools)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	session, err := tuner.Start(ctx, TuningConfig{
+		Model:      "qwen3-8b",
+		MaxConfigs: 2,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	tuner.Stop()
+
+	if len(session.Config.Parameters) != 1 {
+		t.Fatalf("parameters = %d, want 1", len(session.Config.Parameters))
+	}
+	if session.Config.Parameters[0].Key != "gpu_memory_utilization" {
+		t.Fatalf("parameter key = %q, want gpu_memory_utilization", session.Config.Parameters[0].Key)
+	}
+	if session.Total != 2 {
+		t.Fatalf("total = %d, want 2", session.Total)
+	}
+}
+
+func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
+	var deployArgs []map[string]any
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			switch name {
+			case "deploy.apply":
+				var payload map[string]any
+				if err := json.Unmarshal(arguments, &payload); err != nil {
+					t.Fatalf("unmarshal deploy args: %v", err)
+				}
+				deployArgs = append(deployArgs, payload)
+				return &ToolResult{Content: `{"status":"ok"}`}, nil
+			case "benchmark.run":
+				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
+			default:
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+		},
+	}
+
+	tuner := NewTuner(tools)
+	session, err := tuner.Start(context.Background(), TuningConfig{
+		Model:      "qwen3-8b",
+		Engine:     "vllm",
+		MaxConfigs: 1,
+		Parameters: []TunableParam{{
+			Key:    "gpu_memory_utilization",
+			Values: []any{0.8},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		current := tuner.CurrentSession()
+		if current != nil && current.Status != "running" {
+			session = current
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if session.Status != "completed" {
+		t.Fatalf("session status = %q, want completed", session.Status)
+	}
+	if len(session.Results) != 1 {
+		t.Fatalf("results = %d, want 1", len(session.Results))
+	}
+	if session.Results[0].ThroughputTPS != 42.5 {
+		t.Fatalf("throughput = %v, want 42.5", session.Results[0].ThroughputTPS)
+	}
+	if session.Results[0].TTFTP95Ms != 123.4 {
+		t.Fatalf("ttft_p95 = %v, want 123.4", session.Results[0].TTFTP95Ms)
+	}
+	if len(deployArgs) != 2 {
+		t.Fatalf("deploy.apply calls = %d, want 2", len(deployArgs))
+	}
+	for _, payload := range deployArgs {
+		if _, ok := payload["config"]; !ok {
+			t.Fatalf("deploy payload missing config field: %#v", payload)
+		}
+		if _, ok := payload["config_overrides"]; ok {
+			t.Fatalf("deploy payload still uses config_overrides: %#v", payload)
+		}
+	}
+}
+
+func TestExplorationManagerTunePersistsRun(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			switch name {
+			case "deploy.apply":
+				return &ToolResult{Content: `{"status":"ok"}`}, nil
+			case "benchmark.run":
+				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
+			default:
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+		},
+	}
+
+	tuner := NewTuner(tools)
+	manager := NewExplorationManager(db, tuner, tools, nil)
+	run, err := manager.Start(ctx, ExplorationStart{
+		Kind: "tune",
+		Target: ExplorationTarget{
+			Hardware: "nvidia-gb10-arm64",
+			Model:    "qwen3-8b",
+			Engine:   "vllm",
+		},
+		SearchSpace: map[string][]any{
+			"gpu_memory_utilization": {0.8},
+		},
+		Constraints: ExplorationConstraints{
+			MaxCandidates: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var status *ExplorationStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err = manager.Result(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("Result: %v", err)
+		}
+		if status.Run.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if status == nil || status.Run.Status != "completed" {
+		t.Fatalf("run status = %v, want completed", status)
+	}
+	if status.Run.SummaryJSON == "" {
+		t.Fatal("expected summary_json to be populated")
+	}
+	if len(status.Events) < 2 {
+		t.Fatalf("events = %d, want at least 2", len(status.Events))
+	}
+}
+
+func TestExplorationManagerValidatePersistsRun(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "benchmark.run" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			var args map[string]any
+			if err := json.Unmarshal(arguments, &args); err != nil {
+				t.Fatalf("Unmarshal benchmark args: %v", err)
+			}
+			if args["model"] != "qwen3-8b" {
+				t.Fatalf("model = %v, want qwen3-8b", args["model"])
+			}
+			if args["hardware"] != "nvidia-gb10-arm64" {
+				t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
+			}
+			if args["engine"] != "vllm" {
+				t.Fatalf("engine = %v, want vllm", args["engine"])
+			}
+			return &ToolResult{Content: `{"result":{"throughput_tps":51.2},"saved":true,"benchmark_id":"bench-001","config_id":"cfg-001"}`}, nil
+		},
+	}
+
+	manager := NewExplorationManager(db, nil, tools, nil)
+	run, err := manager.Start(ctx, ExplorationStart{
+		Kind: "validate",
+		Target: ExplorationTarget{
+			Hardware: "nvidia-gb10-arm64",
+			Model:    "qwen3-8b",
+			Engine:   "vllm",
+		},
+		Benchmark: ExplorationBenchmarkProfile{
+			Concurrency: 2,
+			Rounds:      3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var status *ExplorationStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err = manager.Result(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("Result: %v", err)
+		}
+		if status.Run.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if status == nil || status.Run.Status != "completed" {
+		t.Fatalf("run status = %v, want completed", status)
+	}
+	if status.Run.SummaryJSON == "" {
+		t.Fatal("expected summary_json to be populated")
+	}
+	if len(status.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(status.Events))
+	}
+	if status.Events[1].ToolName != "benchmark.run" {
+		t.Fatalf("tool name = %q, want benchmark.run", status.Events[1].ToolName)
+	}
+	if status.Events[1].ArtifactID != "bench-001" {
+		t.Fatalf("artifact_id = %q, want bench-001", status.Events[1].ArtifactID)
+	}
+}
+
+func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpsertOpenQuestion(ctx, "oq-001", "stack:hami", "What deviceMemoryScaling works best for vLLM on GB10?", "benchmark", "1.0", "untested", ""); err != nil {
+		t.Fatalf("UpsertOpenQuestion: %v", err)
+	}
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "benchmark.run" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			return &ToolResult{Content: `{"result":{"throughput_tps":48.9},"saved":true,"benchmark_id":"bench-oq-001","config_id":"cfg-oq-001"}`}, nil
+		},
+	}
+
+	manager := NewExplorationManager(db, nil, tools, nil)
+	run, err := manager.Start(ctx, ExplorationStart{
+		Kind:      "open_question",
+		SourceRef: "oq-001",
+		Target: ExplorationTarget{
+			Hardware: "nvidia-gb10-arm64",
+			Model:    "qwen3-8b",
+			Engine:   "vllm",
+		},
+		Benchmark: ExplorationBenchmarkProfile{
+			Concurrency: 2,
+			Rounds:      1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var status *ExplorationStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err = manager.Result(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("Result: %v", err)
+		}
+		if status.Run.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if status == nil || status.Run.Status != "completed" {
+		t.Fatalf("run status = %v, want completed", status)
+	}
+	question, err := db.GetOpenQuestion(ctx, "oq-001")
+	if err != nil {
+		t.Fatalf("GetOpenQuestion: %v", err)
+	}
+	if question.Status != "tested" {
+		t.Fatalf("question status = %q, want tested", question.Status)
+	}
+	if !strings.Contains(question.ActualResult, `"benchmark_id":"bench-oq-001"`) {
+		t.Fatalf("actual_result = %q, want benchmark reference", question.ActualResult)
+	}
+	if len(status.Events) != 3 {
+		t.Fatalf("events = %d, want 3", len(status.Events))
+	}
+	if status.Events[2].ToolName != "knowledge.open_questions" {
+		t.Fatalf("tool name = %q, want knowledge.open_questions", status.Events[2].ToolName)
+	}
+}
+
+func TestExplorationManagerValidateUsesZeroClawPlanner(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "benchmark.run" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			var args map[string]any
+			if err := json.Unmarshal(arguments, &args); err != nil {
+				t.Fatalf("Unmarshal benchmark args: %v", err)
+			}
+			if args["engine"] != "vllm" {
+				t.Fatalf("engine = %v, want vllm", args["engine"])
+			}
+			if args["hardware"] != "nvidia-gb10-arm64" {
+				t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
+			}
+			if args["concurrency"] != float64(4) {
+				t.Fatalf("concurrency = %v, want 4", args["concurrency"])
+			}
+			if args["rounds"] != float64(2) {
+				t.Fatalf("rounds = %v, want 2", args["rounds"])
+			}
+			return &ToolResult{Content: `{"result":{"throughput_tps":52.1},"saved":true,"benchmark_id":"bench-plan-001","config_id":"cfg-plan-001"}`}, nil
+		},
+	}
+
+	zc := &mockZeroClaw{
+		available: true,
+		plan:      json.RawMessage(`{"plan":{"kind":"validate","goal":"planner goal","target":{"model":"qwen3-8b","engine":"vllm","hardware":"nvidia-gb10-arm64"},"benchmark_profile":{"concurrency":4,"rounds":2}}}`),
+	}
+
+	manager := NewExplorationManager(db, nil, tools, zc)
+	run, err := manager.Start(ctx, ExplorationStart{
+		Kind:    "validate",
+		Planner: "zeroclaw",
+		Target: ExplorationTarget{
+			Model: "qwen3-8b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if run.Goal != "planner goal" {
+		t.Fatalf("goal = %q, want planner goal", run.Goal)
+	}
+	if !strings.Contains(run.PlanJSON, `"engine":"vllm"`) {
+		t.Fatalf("plan_json = %s, want planned engine", run.PlanJSON)
+	}
+
+	var status *ExplorationStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err = manager.Result(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("Result: %v", err)
+		}
+		if status.Run.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if status == nil || status.Run.Status != "completed" {
+		t.Fatalf("run status = %v, want completed", status)
 	}
 }
 

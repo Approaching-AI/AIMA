@@ -104,6 +104,29 @@ func TestBuildRunArgs_ModelVolume(t *testing.T) {
 	assertContains(t, argStr, "/models/model.gguf", "model path replaced in command")
 }
 
+func TestBuildRunArgs_ConfigFlags(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "test",
+		Engine:    "llamacpp",
+		Image:     "ghcr.io/ggml-org/llama.cpp:server",
+		Command:   []string{"llama-server", "--model", "{{.ModelPath}}/model.gguf"},
+		ModelPath: "/mnt/data/models/phi3",
+		Config: map[string]any{
+			"ctx_size":    16384,
+			"flash_attn":  true,
+			"ubatch_size": 256,
+		},
+	}
+
+	args := r.buildRunArgs("test-llamacpp", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--ctx-size 16384", "ctx_size config flag")
+	assertContains(t, argStr, "--ubatch-size 256", "ubatch_size config flag")
+	assertContains(t, argStr, "--flash-attn", "bool config flag")
+}
+
 func TestBuildRunArgs_Labels(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

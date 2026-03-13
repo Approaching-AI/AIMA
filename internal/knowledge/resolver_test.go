@@ -202,6 +202,58 @@ func TestResolveAutoEngine(t *testing.T) {
 	})
 }
 
+func TestResolvePrefersExactEngineAssetVariant(t *testing.T) {
+	cat := mustLoadCatalog(t)
+	cat.RegisterModel(ModelAsset{
+		Metadata: ModelMetadata{
+			Name: "named-engine-model",
+			Type: "llm",
+		},
+		Variants: []ModelVariant{
+			{
+				Name:     "named-engine-exact",
+				Hardware: ModelVariantHardware{GPUArch: "TestArch"},
+				Engine:   "testengine-1.0",
+				Format:   "safetensors",
+				DefaultConfig: map[string]any{
+					"ctx_size": 8192,
+				},
+			},
+			{
+				Name:     "named-engine-generic",
+				Hardware: ModelVariantHardware{GPUArch: "*"},
+				Engine:   "testengine",
+				Format:   "safetensors",
+				DefaultConfig: map[string]any{
+					"ctx_size": 4096,
+				},
+			},
+		},
+	})
+
+	hw := HardwareInfo{
+		GPUArch:    "TestArch",
+		CPUArch:    "x86_64",
+		GPUVRAMMiB: 8192,
+	}
+
+	resolved, err := cat.Resolve(hw, "named-engine-model", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Config["ctx_size"] != 8192 {
+		t.Fatalf("ctx_size = %v, want 8192 from exact engine asset variant", resolved.Config["ctx_size"])
+	}
+
+	engine, err := cat.InferEngineType("named-engine-model", hw)
+	if err != nil {
+		t.Fatalf("InferEngineType: %v", err)
+	}
+	if engine != "testengine-1.0" {
+		t.Fatalf("InferEngineType = %q, want %q", engine, "testengine-1.0")
+	}
+}
+
 func TestBuildSyntheticModelAsset(t *testing.T) {
 	// Build a catalog with engines that declare supported_formats.
 	// This mirrors the real catalog: llamacpp supports gguf, vllm supports safetensors.
@@ -290,10 +342,10 @@ func TestFormatToEngine(t *testing.T) {
 		want   string
 	}{
 		{"gguf", "llamacpp"},
-		{"GGUF", "llamacpp"},        // case insensitive
+		{"GGUF", "llamacpp"}, // case insensitive
 		{"safetensors", "vllm"},
 		{"Safetensors", "vllm"},
-		{"awq", ""},                 // unknown
+		{"awq", ""}, // unknown
 		{"", ""},
 	}
 	for _, tt := range tests {
@@ -1041,7 +1093,7 @@ func TestResolveWithGoldenConfig(t *testing.T) {
 		// Only return golden config for the expected triple
 		if hardware == "TestArch" && engine == "testengine" && model == "test-model-8b" {
 			return map[string]any{
-				"max_batch_size": 64,   // override L0 engine default (32) and variant default (16)
+				"max_batch_size": 64,    // override L0 engine default (32) and variant default (16)
 				"golden_param":   "yes", // new key only in L2c
 			}
 		}
@@ -1180,10 +1232,10 @@ func TestFindEngineByName(t *testing.T) {
 	cat := mustLoadCatalog(t)
 
 	tests := []struct {
-		name       string
-		query      string
-		hw         HardwareInfo
-		wantName   string // expected engine metadata.name, "" if nil
+		name     string
+		query    string
+		hw       HardwareInfo
+		wantName string // expected engine metadata.name, "" if nil
 	}{
 		{
 			name:     "exact metadata.name",

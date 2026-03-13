@@ -107,7 +107,8 @@ variants:
   # MoE 35B total / 3B active, Vulkan GPU acceleration
   # llamacpp b8148+ 支持 qwen3_5_moe 架构 (当前 b8157)
   # 带宽 ~120 GB/s LPDDR5X, 3B active → 预估 15-30 tok/s decode
-  # vllm-rocm 路径不可用: vLLM 官方不支持 gfx1151, ROCm 性能远逊 Vulkan
+  # AMD 最新文档已列出 gfx1151 的 vLLM/llama.cpp 支持, 但在这台 64GB UMA 主机上,
+  # 当前成功路径仍是 llamacpp-vulkan + GGUF; 现有 vLLM 数据不足且未跑赢 Vulkan
   - name: qwen3.5-35b-a3b-rdna35-llamacpp-q4
     hardware:
       gpu_arch: RDNA3.5
@@ -121,13 +122,14 @@ variants:
     default_config:
       n_gpu_layers: 999
       ctx_size: 16384
+      ubatch_size: 256
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 60
       tokens_per_second: [15, 30]
       latency_first_token_ms: [50, 200]
       vram_mib: 22000
-      notes: "llamacpp-vulkan b8157, GGUF Q4_K_M, untested estimate, 62GB unified LPDDR5X"
+      notes: "llamacpp-vulkan b8157, GGUF Q4_K_M, 62GB unified LPDDR5X. Measured on amd395 with RADV 25.2.8: pp2048 improved from 628 t/s at ubatch=512 to 667 t/s at ubatch=256; keep this override variant-specific because qwen3-30b-a3b regressed at ubatch=256."
 
   # --- linux-1 (Ada, 2× RTX 4090 = 48GB total) ---
   # BF16 权重 ~72GB, TP=2 → 每 GPU 36GB, 48GB VRAM 充裕

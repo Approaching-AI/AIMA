@@ -15,14 +15,14 @@ type HardwareInfo struct {
 	GPUCount        int  // Number of GPUs
 	UnifiedMemory   bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
 	CPUArch         string
-	CPUCores        int // Physical CPU core count
-	RAMTotalMiB     int // Total system RAM
+	CPUCores        int    // Physical CPU core count
+	RAMTotalMiB     int    // Total system RAM
 	GPUModel        string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
 	HardwareProfile string // Name of a matching HardwareProfile, if known
 	Platform        string // "linux/amd64", "darwin/arm64", etc.
 	RuntimeType     string // "k3s" or "native"
-	SwapTotalMiB int // Total swap space (0 = unknown or none)
-	TDPWatts     int // hardware TDP from profile (0 = unknown)
+	SwapTotalMiB    int    // Total swap space (0 = unknown or none)
+	TDPWatts        int    // hardware TDP from profile (0 = unknown)
 	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
 	GPUMemUsedMiB int // Currently used GPU memory
 	GPUMemFreeMiB int // Currently free GPU memory
@@ -41,20 +41,20 @@ type PartitionSlot struct {
 
 // ResolvedConfig is the merged output of the L0-L2 config resolution process.
 type ResolvedConfig struct {
-	Engine          string
-	EngineImage     string
-	ModelPath       string
-	ModelName       string
-	Slot            string
-	Config          map[string]any
-	Provenance      map[string]string
-	Partition       *PartitionSlot
-	Command         []string
-	InitCommands    []string       // pre-commands to run before main server (from engine YAML)
-	ExtraVolumes    []ContainerVolume // additional host volumes to mount (from engine YAML)
-	HealthCheck     *HealthCheck
-	Warmup          *WarmupConfig // post-healthcheck warmup config (nil = no warmup)
-	Source          *EngineSource // native binary source info (nil if container-only)
+	Engine                string
+	EngineImage           string
+	ModelPath             string
+	ModelName             string
+	Slot                  string
+	Config                map[string]any
+	Provenance            map[string]string
+	Partition             *PartitionSlot
+	Command               []string
+	InitCommands          []string          // pre-commands to run before main server (from engine YAML)
+	ExtraVolumes          []ContainerVolume // additional host volumes to mount (from engine YAML)
+	HealthCheck           *HealthCheck
+	Warmup                *WarmupConfig     // post-healthcheck warmup config (nil = no warmup)
+	Source                *EngineSource     // native binary source info (nil if container-only)
 	Env                   map[string]string // Extra env vars for the container (from engine YAML)
 	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource request)
 	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
@@ -73,7 +73,7 @@ type ResolvedConfig struct {
 	EnginePowerWattsMax int // engine typical power draw upper bound
 
 	// Resource estimates (zero = unknown)
-	EstimatedVRAMMiB int              // expected VRAM usage from model variant
+	EstimatedVRAMMiB int               // expected VRAM usage from model variant
 	ResourceEstimate *ResourceEstimate // full cost(path, R) estimate
 
 	// Amplifier info (from engine selection)
@@ -124,7 +124,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		return nil, err
 	}
 
-	model, variant, err := c.findModelVariant(modelName, engineType, hw)
+	model, variant, err := c.findModelVariant(modelName, engineType, engine, hw)
 	if err != nil {
 		return nil, err
 	}
@@ -264,44 +264,57 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 }
 
 func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, error) {
-	// Prefer exact gpu_arch match, then wildcard
-	var wildcard *EngineAsset
+	compatible := func(ea *EngineAsset) bool {
+		if hw.RuntimeType != "native" {
+			return true
+		}
+		if ea.Source == nil {
+			return false
+		}
+		return platformInList(hw.Platform, ea.Source.Platforms)
+	}
+
+	// Prefer exact metadata.name match, then metadata.type.
+	// Within each class, prefer exact gpu_arch match over wildcard.
+	var nameWildcard, typeWildcard *EngineAsset
 	for i := range c.EngineAssets {
 		ea := &c.EngineAssets[i]
-		if !strings.EqualFold(ea.Metadata.Type, engineType) {
+		if !compatible(ea) {
 			continue
 		}
-
-		// Native runtime: engine must have source and platform must match
-		if hw.RuntimeType == "native" {
-			if ea.Source == nil {
-				continue
+		if strings.EqualFold(ea.Metadata.Name, engineType) {
+			if ea.Hardware.GPUArch == hw.GPUArch {
+				return ea, nil
 			}
-			if !platformInList(hw.Platform, ea.Source.Platforms) {
-				continue
+			if ea.Hardware.GPUArch == "*" && nameWildcard == nil {
+				nameWildcard = ea
 			}
 		}
-
-		if ea.Hardware.GPUArch == hw.GPUArch {
-			return ea, nil
-		}
-		if ea.Hardware.GPUArch == "*" {
-			wildcard = ea
+		if strings.EqualFold(ea.Metadata.Type, engineType) {
+			if ea.Hardware.GPUArch == hw.GPUArch {
+				return ea, nil
+			}
+			if ea.Hardware.GPUArch == "*" && typeWildcard == nil {
+				typeWildcard = ea
+			}
 		}
 	}
-	if wildcard != nil {
-		return wildcard, nil
+	if nameWildcard != nil {
+		return nameWildcard, nil
+	}
+	if typeWildcard != nil {
+		return typeWildcard, nil
 	}
 	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
 }
 
 // engineCandidate holds an engine option with its amplifier score for ranking.
 type engineCandidate struct {
-	engineType  string
-	multiplier  float64
-	coldStartS  int  // engine cold start upper bound (0 = unknown)
-	offload     bool // selected via effective_R (offload path)
-	exactArch   bool // true if gpu_arch matched exactly (not wildcard)
+	engineType string
+	multiplier float64
+	coldStartS int  // engine cold start upper bound (0 = unknown)
+	offload    bool // selected via effective_R (offload path)
+	exactArch  bool // true if gpu_arch matched exactly (not wildcard)
 }
 
 // GoldenConfigFunc returns the golden (L2c) config overrides for a hardware/engine/model triple.
@@ -457,7 +470,11 @@ func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*Mod
 		}
 		return nil, nil, "", err
 	}
-	ma, variant, err := c.findModelVariant(modelName, engineType, hw)
+	engine, ferr := c.findEngine(engineType, hw)
+	if ferr != nil {
+		return nil, nil, engineType, ferr
+	}
+	ma, variant, err := c.findModelVariant(modelName, engineType, engine, hw)
 	if err != nil {
 		return ma, nil, engineType, err
 	}
@@ -593,7 +610,25 @@ func platformInList(platform string, platforms []string) bool {
 	return false
 }
 
-func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
+func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *EngineAsset, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
+	type rankedVariant struct {
+		variant *ModelVariant
+		rank    int
+	}
+
+	matchRank := func(v *ModelVariant) int {
+		if engine != nil && strings.EqualFold(v.Engine, engine.Metadata.Name) {
+			return 0
+		}
+		if strings.EqualFold(v.Engine, engineQuery) {
+			return 1
+		}
+		if engine != nil && strings.EqualFold(v.Engine, engine.Metadata.Type) {
+			return 2
+		}
+		return -1
+	}
+
 	for i := range c.ModelAssets {
 		ma := &c.ModelAssets[i]
 		if !strings.EqualFold(ma.Metadata.Name, modelName) {
@@ -601,10 +636,11 @@ func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo
 		}
 		// Find best variant: gpu_arch+gpu_model > gpu_arch > wildcard.
 		// Filter by VRAM and unified_memory when hardware info is available.
-		var gpuModelMatch, archMatch, wildcardMatch *ModelVariant
+		var gpuModelMatch, archMatch, wildcardMatch *rankedVariant
 		for j := range ma.Variants {
 			v := &ma.Variants[j]
-			if !strings.EqualFold(v.Engine, engineType) {
+			rank := matchRank(v)
+			if rank < 0 {
 				continue
 			}
 			// VRAM filter: skip variants requiring more VRAM than available
@@ -621,27 +657,28 @@ func (c *Catalog) findModelVariant(modelName, engineType string, hw HardwareInfo
 				// GPU model match: highest priority (e.g. "RTX 4060" vs "RTX 4090")
 				if v.Hardware.GPUModel != "" && hw.GPUModel != "" &&
 					strings.Contains(strings.ToUpper(hw.GPUModel), strings.ToUpper(v.Hardware.GPUModel)) {
-					gpuModelMatch = v
-					break
+					if gpuModelMatch == nil || rank < gpuModelMatch.rank {
+						gpuModelMatch = &rankedVariant{variant: v, rank: rank}
+					}
 				}
-				if archMatch == nil {
-					archMatch = v
+				if archMatch == nil || rank < archMatch.rank {
+					archMatch = &rankedVariant{variant: v, rank: rank}
 				}
 			}
-			if v.Hardware.GPUArch == "*" && wildcardMatch == nil {
-				wildcardMatch = v
+			if v.Hardware.GPUArch == "*" && (wildcardMatch == nil || rank < wildcardMatch.rank) {
+				wildcardMatch = &rankedVariant{variant: v, rank: rank}
 			}
 		}
 		if gpuModelMatch != nil {
-			return ma, gpuModelMatch, nil
+			return ma, gpuModelMatch.variant, nil
 		}
 		if archMatch != nil {
-			return ma, archMatch, nil
+			return ma, archMatch.variant, nil
 		}
 		if wildcardMatch != nil {
-			return ma, wildcardMatch, nil
+			return ma, wildcardMatch.variant, nil
 		}
-		return nil, nil, fmt.Errorf("no variant of model %q for engine %q gpu_arch %q (vram %d MiB)", modelName, engineType, hw.GPUArch, hw.GPUVRAMMiB)
+		return nil, nil, fmt.Errorf("no variant of model %q for engine %q gpu_arch %q (vram %d MiB)", modelName, engineQuery, hw.GPUArch, hw.GPUVRAMMiB)
 	}
 	return nil, nil, fmt.Errorf("model %q not found in catalog", modelName)
 }

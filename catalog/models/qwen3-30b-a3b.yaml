@@ -51,11 +51,12 @@ variants:
       tokens_per_second: [20, 40]
       latency_first_token_ms: [30, 100]
 
-  # --- AMD395 (RDNA3.5, 64GB unified) --- vLLM 不可用:
-  # FP8: ROCm vLLM TheRock 不支持 FP8 MoE kernels (gfx1151)
-  # BF16: 58GiB 权重 + 5GiB PyTorch overhead > 64GiB VRAM → OOM
+  # --- AMD395 (RDNA3.5, 64GB unified) --- AIMA 当前仍不默认启用 vLLM:
+  # AMD 最新文档已列出 gfx1151 的 vLLM 支持, 但本地 AIMA 只有失败记录
+  # FP8: ROCm vLLM TheRock 仍缺少可用的 FP8 MoE kernels (gfx1151)
+  # BF16: 58GiB 权重 + ~5GiB PyTorch overhead > 64GiB UMA 可映射空间 → OOM
   # CPU offload 无效: unified memory 下 CPU/GPU 共享物理内存池
-  # 此设备需要 llamacpp + GGUF 量化 (走下方 universal variant)
+  # 此设备当前稳定路径仍是 llamacpp + GGUF 量化 (走下方 universal variant)
 
   # --- Moore Threads MUSA (M1000, 62GB unified, GPTQ-Int4) ---
   # GPTQ-Int4 权重 ~16GB, M1000 unified memory 62GB

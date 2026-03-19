@@ -5,7 +5,7 @@ metadata:
   description: "HAMi GPU virtualization middleware for fine-grained GPU sharing"
 
 compatibility:
-  aima_min: "0.1.0"
+  aima_min: "0.0.1"
 
 # HAMi supports heterogeneous devices: NVIDIA, Ascend, HYGON DCU, Cambricon,
 # Iluvatar, Moore Threads, MetaX. Skip on unsupported hardware:

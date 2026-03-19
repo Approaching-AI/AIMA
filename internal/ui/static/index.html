@@ -1593,8 +1593,8 @@ var I18N = {
     settings_saved: 'Settings saved successfully.',
     settings_error: 'Failed to save settings.',
     settings_cleared: 'Settings cleared.',
-    cli_help_header: 'CLI Mode — Available MCP Tools',
-    cli_help_usage: 'Usage: /cli <tool> [params]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_help_header: 'CLI Mode — Supports both CLI commands and MCP tool names',
+    cli_help_usage: 'Usage:\n  CLI style:  /cli model pull qwen3-8b\n              /cli deploy qwen3-8b\n              /cli status\n              /cli config set llm.model gpt-4o\n  MCP style:  /cli model.pull name=qwen3-8b\n              /cli deploy.apply model=qwen3-8b\n              /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: 'Unknown tool: ',
   },
   zh: {
@@ -1646,8 +1646,8 @@ var I18N = {
     settings_saved: '\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002',
     settings_error: '\u4FDD\u5B58\u8BBE\u7F6E\u5931\u8D25\u3002',
     settings_cleared: '\u8BBE\u7F6E\u5DF2\u6E05\u9664\u3002',
-    cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u53EF\u7528 MCP \u5DE5\u5177',
-    cli_help_usage: '\u7528\u6CD5: /cli <\u5DE5\u5177\u540D> [\u53C2\u6570]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u652F\u6301 CLI \u547D\u4EE4\u548C MCP \u5DE5\u5177\u540D',
+    cli_help_usage: '\u7528\u6CD5:\n  CLI \u98CE\u683C:  /cli model pull qwen3-8b\n              /cli deploy qwen3-8b\n              /cli status\n              /cli config set llm.model gpt-4o\n  MCP \u98CE\u683C:  /cli model.pull name=qwen3-8b\n              /cli deploy.apply model=qwen3-8b\n              /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: '\u672A\u77E5\u5DE5\u5177: ',
   },
   ja: {
@@ -2471,6 +2471,113 @@ function aimaApp() {
     },
 
     // ── CLI Mode (/cli prefix) ──
+    // Auto-maps "noun verb args..." → MCP tool "noun.verb" with schema-based
+    // positional arg binding. Only a handful of namespace exceptions needed.
+
+    // Namespace remap: CLI noun → MCP namespace (when they differ)
+    _cliNS: { hal: 'hardware', config: 'system' },
+    // Direct command map: single-word CLI commands → MCP tool
+    _cliDirect: {
+      undeploy: 'deploy.delete',
+      init: 'stack.init',
+      ask: 'agent.ask',
+      discover: 'discover.lan',
+    },
+
+    // Resolve "noun verb ..." or "noun.verb ..." into { tool, params }.
+    // Uses _cliToolsCache inputSchema.required for positional arg names.
+    _resolveCLI(args) {
+      const tokens = args.split(/\s+/);
+      const first = tokens[0].toLowerCase();
+
+      // Already a dotted MCP tool name? Pass through.
+      if (first.includes('.')) {
+        const paramStr = tokens.slice(1).join(' ');
+        return { tool: first, params: this._parseCLIParams(paramStr) };
+      }
+
+      // Direct single-command mapping
+      if (this._cliDirect[first]) {
+        return this._buildParams(this._cliDirect[first], tokens.slice(1));
+      }
+
+      // "status" special case: no args → system.status, with args → deploy.status
+      if (first === 'status') {
+        if (tokens.length <= 1) return { tool: 'system.status', params: {} };
+        return this._buildParams('deploy.status', tokens.slice(1));
+      }
+
+      // "config get/set" → system.config
+      if (first === 'config') {
+        const sub = (tokens[1] || '').toLowerCase();
+        if (sub === 'get' || sub === 'set') {
+          return this._buildParams('system.config', tokens.slice(2));
+        }
+      }
+
+      // Two-token: "noun verb" → "ns.verb" (with namespace remap)
+      const ns = this._cliNS[first] || first;
+      if (tokens.length >= 2) {
+        const verb = tokens[1].toLowerCase().replace(/-/g, '_');
+        const tool = ns + '.' + verb;
+        return this._buildParams(tool, tokens.slice(2));
+      }
+
+      // Single noun with no verb: try ns.detect (hal), ns.list, or ns.apply
+      const defaults = [ns + '.detect', ns + '.list', ns + '.apply'];
+      const cache = this._cliToolsCache;
+      if (cache) {
+        const found = defaults.find(d => cache.some(t => t.name === d));
+        if (found) return this._buildParams(found, tokens.slice(1));
+      }
+      // Fallback: treat single word as tool name
+      return { tool: first, params: {} };
+    },
+
+    // Map positional tokens to named params using tool inputSchema.required.
+    _buildParams(tool, tokens) {
+      const params = {};
+      const positional = [];
+      for (const t of tokens) {
+        const eq = t.indexOf('=');
+        if (eq > 0) {
+          const k = t.slice(0, eq);
+          let v = t.slice(eq + 1);
+          if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+            v = v.slice(1, -1);
+          if (v === 'true') params[k] = true;
+          else if (v === 'false') params[k] = false;
+          else if (/^\d+$/.test(v)) params[k] = parseInt(v, 10);
+          else if (/^\d+\.\d+$/.test(v)) params[k] = parseFloat(v);
+          else params[k] = v;
+        } else {
+          positional.push(t);
+        }
+      }
+      if (positional.length > 0) {
+        // Get required param names from cached tool schema
+        const schema = this._getToolSchema(tool);
+        const reqKeys = schema ? (schema.required || []) : [];
+        if (reqKeys.length === 1 && positional.length > 1) {
+          // Single required param + multiple words → join (e.g. "ask hello world")
+          params[reqKeys[0]] = positional.join(' ');
+        } else {
+          for (let i = 0; i < positional.length && i < reqKeys.length; i++) {
+            let v = positional[i];
+            if (/^\d+$/.test(v)) v = parseInt(v, 10);
+            params[reqKeys[i]] = v;
+          }
+        }
+      }
+      return { tool, params };
+    },
+
+    // Look up a tool's inputSchema from the cached tool list.
+    _getToolSchema(name) {
+      if (!this._cliToolsCache) return null;
+      const t = this._cliToolsCache.find(t => t.name === name);
+      return t ? t.inputSchema : null;
+    },
 
     async sendCLI(args) {
       if (!args || args === 'help') {
@@ -2478,11 +2585,29 @@ function aimaApp() {
         return;
       }
 
-      // Parse: first token = tool name, rest = params
-      const spaceIdx = args.indexOf(' ');
-      const toolName = spaceIdx === -1 ? args : args.slice(0, spaceIdx);
-      const paramStr = spaceIdx === -1 ? '' : args.slice(spaceIdx + 1).trim();
-      const params = this._parseCLIParams(paramStr);
+      // "version" → fetch from system.status (no hardcoded version string)
+      if (args.trim().toLowerCase() === 'version') {
+        const data = await this.callTool('system.status');
+        const ver = data && data.version ? data.version : '(unknown)';
+        this.messages.push({ role: 'ai', text: 'aima ' + ver + ' (web ui)' });
+        this.scrollChat();
+        return;
+      }
+
+      // Ensure tool cache is loaded for schema-based positional arg mapping
+      if (!this._cliToolsCache) {
+        const headers = {};
+        if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+        try {
+          const resp = await fetch('/api/v1/tools', { headers });
+          if (resp.ok) {
+            this._cliToolsCache = await resp.json();
+            this._cliToolsCacheTime = Date.now();
+          }
+        } catch {}
+      }
+
+      const { tool: toolName, params } = this._resolveCLI(args);
 
       const toolIndex = this.messages.length;
       const startTime = Date.now();

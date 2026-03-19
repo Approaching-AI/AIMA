@@ -509,13 +509,30 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	return ds
 }
 
-// metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness.
+// metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness
+// and HTTP health endpoint (not just TCP). vLLM and other engines bind the port early,
+// before model weights are loaded, so TCP alive does NOT mean ready to serve.
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
 
 	phase := "running"
-	ready := alive
-	if !alive {
+	ready := false
+	if alive {
+		// Port is alive (TCP), but check HTTP health to confirm engine is truly ready.
+		// Look up engine asset for the health check path.
+		engineName := ""
+		if meta.Labels != nil {
+			engineName = meta.Labels["aima.dev/engine"]
+		}
+		if meta.HealthCheckPath != "" {
+			ready = httpHealthy(meta.Port, meta.HealthCheckPath)
+		} else if asset := findEngineAsset(r.engineAssets, engineName); asset != nil && asset.Startup.HealthCheck.Path != "" {
+			ready = httpHealthy(meta.Port, asset.Startup.HealthCheck.Path)
+		} else {
+			// No health check info available; fall back to TCP alive.
+			ready = true
+		}
+	} else {
 		timeout := meta.HealthCheckTimeout
 		if timeout == 0 {
 			timeout = 60
@@ -774,7 +791,7 @@ func (r *NativeRuntime) enrichNativeProgress(ds *DeploymentStatus, logPath strin
 		ds.StartupMessage = errMsg
 	}
 
-	if ds.Phase == "starting" {
+	if ds.Phase == "starting" || (ds.Phase == "running" && !ds.Ready) {
 		sp := DetectStartupProgress(logs, asset.Startup.LogPatterns)
 		if sp.Progress > 0 {
 			ds.StartupPhase = sp.Phase

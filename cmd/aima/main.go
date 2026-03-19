@@ -3894,11 +3894,14 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					status["metrics"] = b
 				}
 			}
-			// Add hostname and primary IP for device identification
+			// Add hostname, version, and primary IP for device identification
 			if hostname, err := os.Hostname(); err == nil {
 				if b, e := json.Marshal(hostname); e == nil {
 					status["hostname"] = b
 				}
+			}
+			if b, e := json.Marshal(cli.Version); e == nil {
+				status["version"] = b
 			}
 			return json.Marshal(status)
 		},

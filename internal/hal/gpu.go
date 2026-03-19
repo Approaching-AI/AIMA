@@ -61,12 +61,17 @@ var npuSMIMetricsArgs = []string{"info"}
 var mthreadsGMIArgs = []string{"-q", "-j"}
 var mthreadsGMIMetricsArgs = []string{"--metrics", "-j"}
 
+// MetaX args — no args for standard table output (has name, memory, temp, power, utilization)
+var metaxSMIArgs = []string{}
+var metaxSMIMetricsArgs = []string{}
+
 var gpuProbes = []gpuProbe{
 	{"nvidia", "nvidia-smi", nvidiaSMIQueryArgs, parseNvidiaGPU},
 	{"amd", "rocm-smi", rocmSMIArgs, parseAMDGPU},
 	{"intel", "xpu-smi", xpuSMIArgs, parseIntelGPU},
 	{"huawei", "npu-smi", npuSMIArgs, parseHuaweiNPU},
 	{"mthreads", "mthreads-gmi", mthreadsGMIArgs, parseMThreadsGPU},
+	{"metax", "mx-smi", metaxSMIArgs, parseMetaXGPU},
 }
 
 var gpuMetricsProbes = []gpuMetricsProbe{
@@ -75,6 +80,7 @@ var gpuMetricsProbes = []gpuMetricsProbe{
 	{"intel", "xpu-smi", xpuSMIMetricsArgs, parseIntelGPUMetrics},
 	{"huawei", "npu-smi", npuSMIMetricsArgs, parseHuaweiNPUMetrics},
 	{"mthreads", "mthreads-gmi", mthreadsGMIMetricsArgs, parseMThreadsGPUMetrics},
+	{"metax", "mx-smi", metaxSMIMetricsArgs, parseMetaXGPUMetrics},
 }
 
 func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
@@ -272,6 +278,7 @@ var gpuEnrichers = map[string]func(context.Context, CommandRunner, *GPUInfo){
 	"nvidia": enrichNvidiaGPU,
 	"amd":    enrichAMDGPU,
 	"huawei": enrichHuaweiNPU,
+	"metax":  enrichMetaXGPU,
 }
 
 // enrichGPU fills in fields that the primary probe couldn't provide.
@@ -1137,6 +1144,280 @@ func collectHygonDCUMetrics(ctx context.Context, runner CommandRunner) *GPUMetri
 		}
 	}
 	return nil
+}
+
+// --- MetaX (mx-smi text table parser) ---
+
+// parseMetaXGPU parses the standard text output of mx-smi (no flags).
+// Table format per GPU (2 rows):
+//
+//	| 0       MetaX N260             Off | 0000:01:00.0        | 0%            Native |
+//	| 37C     29W / 225W              P0 | 666/65536 MiB       | Available            |
+func parseMetaXGPU(output string) *GPUInfo {
+	lines := strings.Split(output, "\n")
+
+	var name, driverVersion, sdkVersion string
+	var vram int
+	var temp, powerDraw, powerLimit float64
+	var count int
+
+	// Extract driver and MACA version from header lines
+	for _, line := range lines {
+		if idx := strings.Index(line, "Kernel Mode Driver Version:"); idx >= 0 {
+			rest := strings.TrimSpace(line[idx+len("Kernel Mode Driver Version:"):])
+			rest = strings.TrimRight(rest, "| ")
+			driverVersion = rest
+		}
+		if idx := strings.Index(line, "MACA Version:"); idx >= 0 {
+			rest := line[idx+len("MACA Version:"):]
+			// MACA version ends at next whitespace or field
+			fields := strings.Fields(rest)
+			if len(fields) > 0 {
+				sdkVersion = "MACA " + fields[0]
+			}
+		}
+	}
+
+	// Parse GPU data rows. Each GPU is 2 consecutive data rows between separator lines.
+	// Data rows start with "| " and contain actual GPU info (not headers or separators).
+	inGPUTable := false
+	expectRow2 := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect start of GPU table (after ====+====+==== separator)
+		if strings.Contains(trimmed, "====") && strings.Contains(trimmed, "+") {
+			inGPUTable = true
+			continue
+		}
+		if !inGPUTable {
+			continue
+		}
+		// Skip separator lines
+		if strings.HasPrefix(trimmed, "+--") {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+
+		cells := splitTableCells(trimmed)
+		if len(cells) < 3 {
+			continue
+		}
+
+		if !expectRow2 {
+			// Row 1: | <id> <name> <persist-mode> | <bus-id> | <util>% <sgpu-mode> |
+			cell0 := strings.TrimSpace(cells[0])
+			fields := strings.Fields(cell0)
+			if len(fields) < 2 {
+				continue
+			}
+			// First field should be numeric device ID
+			if _, err := strconv.Atoi(fields[0]); err != nil {
+				continue
+			}
+			count++
+
+			if name == "" {
+				// Extract GPU name: fields between device_id and persistence mode (On/Off)
+				nameEnd := len(fields)
+				for i, f := range fields {
+					if f == "On" || f == "Off" {
+						nameEnd = i
+						break
+					}
+				}
+				if nameEnd > 1 {
+					name = strings.Join(fields[1:nameEnd], " ")
+				}
+			}
+			expectRow2 = true
+		} else {
+			// Row 2: | <temp>C <power>W / <cap>W <perf> | <mem_used>/<mem_total> MiB | <state> |
+			if count == 1 {
+				cell0 := strings.TrimSpace(cells[0])
+				cell1 := strings.TrimSpace(cells[1])
+
+				// Parse temp and power from cell 0
+				cFields := strings.Fields(cell0)
+				for i, f := range cFields {
+					if strings.HasSuffix(f, "C") && !strings.Contains(f, "P") {
+						t, err := strconv.ParseFloat(strings.TrimSuffix(f, "C"), 64)
+						if err == nil {
+							temp = t
+						}
+					}
+					if strings.HasSuffix(f, "W") && !strings.HasSuffix(f, "PW") {
+						w, err := strconv.ParseFloat(strings.TrimSuffix(f, "W"), 64)
+						if err == nil {
+							if i+1 < len(cFields) && cFields[i+1] == "/" {
+								powerDraw = w
+							} else if i > 0 && cFields[i-1] == "/" {
+								powerLimit = w
+							} else {
+								powerDraw = w
+							}
+						}
+					}
+				}
+
+				// Parse memory from cell 1: "666/65536 MiB"
+				memStr := strings.TrimSuffix(cell1, "MiB")
+				memStr = strings.TrimSpace(memStr)
+				parts := strings.Split(memStr, "/")
+				if len(parts) == 2 {
+					vram, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+				}
+			}
+			expectRow2 = false
+		}
+	}
+
+	if count == 0 || name == "" {
+		return nil
+	}
+
+	return &GPUInfo{
+		Name:               name,
+		Arch:               metaxGPUToArch(name),
+		VRAMMiB:            vram,
+		DriverVersion:      driverVersion,
+		SDKVersion:         sdkVersion,
+		TemperatureCelsius: temp,
+		PowerDrawWatts:     powerDraw,
+		PowerLimitWatts:    powerLimit,
+		Count:              count,
+	}
+}
+
+// parseMetaXGPUMetrics extracts real-time metrics from mx-smi text output.
+func parseMetaXGPUMetrics(output string) *GPUMetrics {
+	lines := strings.Split(output, "\n")
+
+	var util, memUsed, memTotal int
+	var temp, power float64
+
+	inGPUTable := false
+	expectRow2 := false
+	found := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.Contains(trimmed, "====") && strings.Contains(trimmed, "+") {
+			inGPUTable = true
+			continue
+		}
+		if !inGPUTable {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "+--") || !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+
+		cells := splitTableCells(trimmed)
+		if len(cells) < 3 {
+			continue
+		}
+
+		if !expectRow2 {
+			cell0 := strings.TrimSpace(cells[0])
+			fields := strings.Fields(cell0)
+			if len(fields) < 2 {
+				continue
+			}
+			if _, err := strconv.Atoi(fields[0]); err != nil {
+				continue
+			}
+
+			if !found {
+				// Extract utilization from cell 2 of first GPU
+				cell2 := strings.TrimSpace(cells[2])
+				for _, f := range strings.Fields(cell2) {
+					if strings.HasSuffix(f, "%") {
+						util, _ = strconv.Atoi(strings.TrimSuffix(f, "%"))
+						break
+					}
+				}
+			}
+			expectRow2 = true
+		} else {
+			if !found {
+				cell0 := strings.TrimSpace(cells[0])
+				cell1 := strings.TrimSpace(cells[1])
+
+				// Parse temp and power
+				for _, f := range strings.Fields(cell0) {
+					if strings.HasSuffix(f, "C") && !strings.Contains(f, "P") {
+						t, err := strconv.ParseFloat(strings.TrimSuffix(f, "C"), 64)
+						if err == nil {
+							temp = t
+						}
+					}
+					if strings.HasSuffix(f, "W") && !strings.HasSuffix(f, "PW") {
+						w, err := strconv.ParseFloat(strings.TrimSuffix(f, "W"), 64)
+						if err == nil {
+							power = w
+							break // take first W value (usage, not cap)
+						}
+					}
+				}
+
+				// Parse memory: "666/65536 MiB"
+				memStr := strings.TrimSuffix(cell1, "MiB")
+				memStr = strings.TrimSpace(memStr)
+				parts := strings.Split(memStr, "/")
+				if len(parts) == 2 {
+					memUsed, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
+					memTotal, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+				}
+				found = true
+			}
+			expectRow2 = false
+		}
+	}
+
+	if !found || (memTotal == 0 && util == 0) {
+		return nil
+	}
+
+	return &GPUMetrics{
+		UtilizationPercent: util,
+		MemoryUsedMiB:      memUsed,
+		MemoryTotalMiB:     memTotal,
+		TemperatureCelsius: temp,
+		PowerDrawWatts:     roundTo(power, 2),
+	}
+}
+
+// enrichMetaXGPU supplements GPUInfo with driver and MACA SDK version from mx-smi JSON output.
+func enrichMetaXGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	out, err := runner.Run(ctx, "mx-smi", "-j")
+	if err != nil {
+		return
+	}
+	var raw map[string]interface{}
+	if json.Unmarshal(out, &raw) != nil {
+		return
+	}
+	if gpu.DriverVersion == "" {
+		if v := jsonStr(raw, "driver_version"); v != "" {
+			gpu.DriverVersion = v
+		}
+	}
+	if gpu.SDKVersion == "" {
+		if v := jsonStr(raw, "maca_version"); v != "" {
+			gpu.SDKVersion = "MACA " + v
+		}
+	}
+}
+
+// metaxGPUToArch returns the architecture family for a MetaX GPU.
+// All current MetaX GPUs (N260, N100, C500, C280) use the MACA architecture.
+func metaxGPUToArch(_ string) string {
+	return "MACA"
 }
 
 // --- JSON helpers ---

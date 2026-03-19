@@ -5,7 +5,7 @@ metadata:
   description: "Docker Engine via static binaries for container inference"
 
 compatibility:
-  aima_min: "0.1.0"
+  aima_min: "0.0.1"
 
 source:
   archive: "docker-27.5.1.tgz"

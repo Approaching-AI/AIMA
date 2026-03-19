@@ -362,6 +362,15 @@ func run() error {
 	}
 	openclawRoutes := openclaw.RegisterRoutes(openclawDeps)
 	deps.OpenClawSync = func(ctx context.Context, dryRun bool) (json.RawMessage, error) {
+		// Ensure proxy has up-to-date backends (CLI mode has no sync loop).
+		if deps.DeployList != nil {
+			if raw, err := deps.DeployList(ctx); err == nil {
+				var infos []*proxy.DeploymentInfo
+				if err := json.Unmarshal(raw, &infos); err == nil {
+					proxy.SyncBackends(proxyServer, infos)
+				}
+			}
+		}
 		result, err := openclaw.Sync(ctx, openclawDeps, dryRun)
 		if err != nil {
 			return nil, err

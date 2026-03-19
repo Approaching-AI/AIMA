@@ -1,0 +1,65 @@
+kind: engine_asset
+metadata:
+  name: qwen-tts-fastapi-cuda-blackwell
+  type: qwen-tts-fastapi-cuda
+  version: "1.0"
+image:
+  # ARM64 CUDA TTS image built on GB10 from CPU image + PyTorch cu130
+  # Base: qujing-qwen3-tts-real + torch 2.10.0+cu130 + torchaudio 2.10.0+cu130
+  # OpenAI compat /v1/audio/speech + /v1/tts + /health endpoints
+  name: qwen3-tts-cuda-arm64
+  tag: "latest"
+  size_approx_mb: 4000
+  platforms: [linux/arm64]
+patterns:
+  - "^qwen-tts-fastapi-cuda-blackwell$"
+  - "tts-fastapi-cuda-blackwell"
+  - "tts-cuda-arm64"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 2048
+startup:
+  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--port", "8002", "--device", "cuda"]
+  init_commands:
+    - "rm -rf /model && ln -s /models /model"
+  default_args:
+    port: 8002
+  # No health_check: TTS server is single-threaded; liveness probe
+  # kills the pod during long inference requests (2-5 min).
+  warmup:
+    enabled: false
+  log_patterns:
+    phases:
+      - name: loading_model
+        pattern: "Loading model|loading model"
+        progress: 50
+      - name: ready
+        pattern: "Application startup complete|Uvicorn running"
+        progress: 100
+    errors:
+      - pattern: "ImportError|ModuleNotFoundError"
+        message: "Missing Python dependency"
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  features:
+    - gpu_inference
+    - openai_compatible_tts
+  performance_gain: "CUDA GPU TTS on Blackwell ARM64"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+partition_hints:
+  min_gpu_memory_mib: 2048
+  recommended_gpu_cores_percent: 5
+time_constraints:
+  cold_start_s: [10, 30]
+  model_switch_s: [10, 30]
+power_constraints:
+  typical_draw_watts: [20, 60]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

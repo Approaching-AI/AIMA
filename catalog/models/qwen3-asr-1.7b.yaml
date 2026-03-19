@@ -17,6 +17,19 @@ storage:
     - type: local_path
       path: ""
 variants:
+  # --- CPU-only 容器 (任何硬件) ---
+  # 1.7B 参数, CPU 推理, 使用 glm-asr-fastapi 引擎 (OpenAI 兼容 /v1/audio/transcriptions)
+  - name: qwen3-asr-1.7b-cpu-fastapi
+    hardware:
+      gpu_arch: "*"
+    engine: glm-asr-fastapi
+    format: safetensors
+    default_config:
+      port: 8003
+    expected_performance:
+      vram_mib: 0
+      notes: "CPU-only ASR inference. NOTE: Qwen3-ASR is HuggingFace transformers model, incompatible with glm-asr-fastapi (FunASR). This variant is non-functional — use vllm-nightly variants instead, or use sensevoice-small for CPU ASR."
+
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # BF16 权重 ~3.4GB, 128GB unified 余量充足
   # 复用 vllm-nightly (qwen3_5-cu130 镜像), gmu=0.1 (0.05 不够 CUDA context 开销)
@@ -34,7 +47,7 @@ variants:
       trust_remote_code: true
     expected_performance:
       vram_mib: 3870
-      notes: "3.87 GiB model, KV cache 5.25 GiB (49K tokens), max audio 157s (encoder cache 2048), latency 0.14s@10s, 4-conc peak 10.4 req/s"
+      notes: "3.87 GiB model + 4.43 GiB KV cache (41K tokens) + 2.17 GiB CUDA graphs ≈ 10.5 GiB total (gmu=0.1). Encoder cache 2048 tokens. RTF 0.076-0.17 (6-13x real-time): 1.3s audio→0.22s, 7s→0.59s, 20s→1.56s. API: /v1/chat/completions with input_audio base64 (not /v1/audio/transcriptions). Needs vllm[audio] deps (librosa+soundfile). Cold start ~90s (load 20s + compile 15s + CUDA graphs 62s). Validated on GB10 2026-03-20."
 
   # --- GB10 vllm-spark variant (vllm-spark-tf5 镜像, 已在 containerd) ---
   - name: qwen3-asr-1.7b-blackwell-vllm-spark-bf16

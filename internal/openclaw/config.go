@@ -90,13 +90,16 @@ func MergeAIMAConfig(existing map[string]any, result *SyncResult) map[string]any
 		}
 	}
 
-	// --- Image Generation: tools.media.image ---
-	if len(result.ImageGenModels) > 0 {
+	// --- Image Understanding: tools.media.image ---
+	// This configures inbound image understanding (VLM describes/OCRs images users send),
+	// NOT image generation. Use VLM models (those with image input capability) from LLMModels.
+	vlmModels := vlmFromLLMs(result.LLMModels)
+	if len(vlmModels) > 0 {
 		tools := ensureMap(existing, "tools")
 		media := ensureMap(tools, "media")
 
-		imageModels := make([]any, len(result.ImageGenModels))
-		for i, m := range result.ImageGenModels {
+		imageModels := make([]any, len(vlmModels))
+		for i, m := range vlmModels {
 			imageModels[i] = map[string]any{
 				"provider": "openai",
 				"model":    m.ID,
@@ -109,15 +112,19 @@ func MergeAIMAConfig(existing map[string]any, result *SyncResult) map[string]any
 		}
 	}
 
-	// --- TTS: messages.tts ---
+	// --- TTS: messages.tts + env.OPENAI_TTS_BASE_URL ---
+	// OpenClaw's TTS reads the base URL from the OPENAI_TTS_BASE_URL env var,
+	// NOT from messages.tts.openai.baseUrl (which is rejected by the schema).
 	if result.TTSModel != nil {
+		env := ensureMap(existing, "env")
+		env["OPENAI_TTS_BASE_URL"] = result.ProxyAddr
+
 		messages := ensureMap(existing, "messages")
 		messages["tts"] = map[string]any{
 			"provider": "openai",
 			"openai": map[string]any{
-				"model":   result.TTSModel.ID,
-				"baseUrl": result.ProxyAddr,
-				"voice":   "default",
+				"model": result.TTSModel.ID,
+				"voice": "default",
 			},
 		}
 	}
@@ -142,6 +149,20 @@ func removeAIMAProvider(cfg map[string]any, proxyAddr string) {
 	if baseURL, _ := vllm["baseUrl"].(string); baseURL == proxyAddr {
 		delete(providers, "vllm")
 	}
+}
+
+// vlmFromLLMs filters LLMModels to those with image input capability (VLMs).
+func vlmFromLLMs(models []ModelEntry) []ModelEntry {
+	var vlms []ModelEntry
+	for _, m := range models {
+		for _, inp := range m.Input {
+			if inp == "image" {
+				vlms = append(vlms, m)
+				break
+			}
+		}
+	}
+	return vlms
 }
 
 // ensureMap returns cfg[key] as map[string]any, creating it if needed.

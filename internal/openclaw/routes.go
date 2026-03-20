@@ -23,6 +23,11 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 
 // handleTTS proxies TTS requests to the backend serving the requested model.
 // Expects JSON body: {"model":"<model-name>", "input":"...", "voice":"..."}
+//
+// The proxy strips unsupported response_format values before forwarding.
+// Some TTS backends (e.g. qwen3-tts FastAPI) only support "wav" output;
+// clients like OpenClaw always request "mp3". Removing the field lets the
+// backend use its default format, avoiding 422 errors.
 func (d *Deps) handleTTS(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -37,17 +42,28 @@ func (d *Deps) handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Model string `json:"model"`
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		return
 	}
-	if err := json.Unmarshal(body, &req); err != nil || req.Model == "" {
+
+	model, _ := raw["model"].(string)
+	if model == "" {
 		http.Error(w, `{"error":"missing or invalid model field"}`, http.StatusBadRequest)
 		return
 	}
 
-	backend := d.findBackend(req.Model)
+	// Strip response_format if it's not "wav" — our TTS backends only produce WAV.
+	// Callers get valid audio regardless; most HTTP audio clients handle WAV fine.
+	if fmt, ok := raw["response_format"].(string); ok && fmt != "wav" {
+		delete(raw, "response_format")
+		body, _ = json.Marshal(raw)
+	}
+
+	backend := d.findBackend(model)
 	if backend == nil {
-		http.Error(w, fmt.Sprintf(`{"error":"model %q not found"}`, req.Model), http.StatusNotFound)
+		http.Error(w, fmt.Sprintf(`{"error":"model %q not found"}`, model), http.StatusNotFound)
 		return
 	}
 

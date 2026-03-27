@@ -87,6 +87,12 @@ type WarmupConfig struct {
 	TimeoutS  int
 }
 
+// isPortFlag reports whether a command element is a port-related flag
+// (e.g. --port, --http_port, --grpc_port, --port-id).
+func isPortFlag(s string) bool {
+	return strings.HasPrefix(s, "--") && strings.Contains(s, "port")
+}
+
 // configToFlags converts a Config map into CLI flags.
 // Keys are underscore-separated (e.g. "mem_fraction_static") → "--mem-fraction-static".
 // "port" is excluded (handled separately by each runtime).

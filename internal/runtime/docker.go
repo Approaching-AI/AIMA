@@ -167,10 +167,10 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		command[i] = c
 	}
 
-	// Append --port if not already present in the startup command
+	// Append --port if no port-related flag is already present.
 	hasPort := false
 	for _, c := range command {
-		if strings.Contains(c, "--port") {
+		if isPortFlag(c) {
 			hasPort = true
 			break
 		}

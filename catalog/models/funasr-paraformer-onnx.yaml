@@ -12,19 +12,20 @@ storage:
       repo: iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx
       format: onnx
     - type: local_path
-      path: "/opt/mt-ai/asr/models/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx"
+      path: "/opt/mt-ai/asr/models"
+      notes: "AIBook M1000 SoC pre-loaded: Paraformer-large (offline+online) + FSMN-VAD + CT-Punctuation"
 variants:
-  # --- CPU-only (any hardware) ---
-  # FunASR Paraformer-Large ONNX, Chinese ASR, 16kHz
+  # --- CPU-only (ARM64, ONNX Runtime) ---
+  # Paraformer-large ~220M params, ONNX quantized (~200MB total)
+  # Pipeline: FSMN-VAD → Paraformer (offline+online) → CT-Punctuation
   # CPU inference via ONNX Runtime, no GPU needed
-  # Part of the FunASR pipeline: VAD → ASR → Punctuation
-  - name: funasr-paraformer-onnx-cpu
+  - name: funasr-paraformer-onnx-cpu-arm64
     hardware:
       gpu_arch: "*"
     engine: funasr
     format: onnx
     default_config:
-      port: 10095
+      port: 32103
     expected_performance:
       vram_mib: 0
-      notes: "FunASR Paraformer-Large ONNX. CPU-only, ~500MB model. Chinese speech recognition, 16kHz input. ONNX Runtime inference. Pre-installed on AIBook at /opt/mt-ai/asr/models/. Pipeline: FSMN-VAD (495KB) → Paraformer (offline/online) → CT-Transformer punctuation. Also includes streaming online variant."
+      notes: "FunASR Paraformer-large ONNX. CPU-only ARM64, ~200MB models. Measured 2026-03-28 on AIBook M1000 SoC: cold start ~10s. gRPC streaming ASR, 16kHz 16-bit PCM input. Pipeline: FSMN-VAD + Paraformer (offline+online) + CT-Punctuation. Zero GPU impact."

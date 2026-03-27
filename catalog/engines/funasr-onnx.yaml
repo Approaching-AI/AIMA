@@ -1,0 +1,70 @@
+kind: engine_asset
+metadata:
+  name: funasr-onnx
+  type: funasr
+  version: "1.0"
+  supported_formats: [onnx]
+hardware:
+  gpu_arch: "*"
+  vram_min_mib: 0
+source:
+  binary: paraformer-server
+startup:
+  # paraformer-server is a C++ gRPC/WebSocket ASR server from FunASR.
+  # All model paths are relative to work_dir. The --save-path flag is required
+  # to avoid writing logs to / (permission denied).
+  command:
+    - "./paraformer-server"
+    - "--model-dir"
+    - "models/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx"
+    - "--online-model-dir"
+    - "models/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx"
+    - "--quantize"
+    - "true"
+    - "--vad-dir"
+    - "models/speech_fsmn_vad_zh-cn-16k-common-onnx"
+    - "--vad-quant"
+    - "true"
+    - "--port-id"
+    - "32103"
+    - "--hotword"
+    - "tmp"
+    - "--save-path"
+    - "/tmp/funasr-recordings"
+  work_dir: /opt/mt-ai/asr  # AIBook factory image path — override via ~/.aima/catalog/
+  env:
+    LD_LIBRARY_PATH: "/opt/mt-ai/asr"  # contains libfunasr.so, libonnxruntime.so etc.
+    GLOG_logtostderr: "1"
+  default_args:
+    port: 32103  # AIMA uses this for health check; actual flag is --port-id in command
+  health_check:
+    path: ""  # gRPC server, no HTTP health endpoint — AIMA falls back to TCP port check
+    timeout_s: 30
+  log_patterns:
+    phases:
+      - name: loading_vad
+        pattern: "Successfully load model from.*fsmn"
+        progress: 30
+      - name: loading_online
+        pattern: "Successfully load model from.*online"
+        progress: 60
+      - name: loading_offline
+        pattern: "Successfully load model from.*vocab8404-onnx"
+        progress: 80
+      - name: ready
+        pattern: "Server listening on"
+        progress: 100
+    errors:
+      - pattern: "Permission denied"
+        message: "Log path not writable — ensure --save-path points to writable dir"
+      - pattern: "Unable to open hotwords file"
+        message: "Hotword file not found (non-fatal, can ignore if not using hotwords)"
+api:
+  protocol: grpc
+  base_path: /
+time_constraints:
+  cold_start_s: [8, 15]
+runtime:
+  default: "native"
+  platform_recommendations:
+    linux/arm64: "native"

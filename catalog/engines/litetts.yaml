@@ -14,7 +14,7 @@ startup:
   # AIMA's configToFlags converts underscores to hyphens, so we put all TTS-specific
   # args directly in the command to avoid the mismatch.
   command: ["./start_server.sh", "--target_voices", "AIBC006_lite", "--grpc_port_v1beta1", "32108", "--grpc_port", "32109", "--http_port", "32110"]
-  work_dir: /opt/mt-ai/tts
+  work_dir: /opt/mt-ai/tts  # AIBook factory image path — override via ~/.aima/catalog/
   env:
     TARGET_DEVICE: cpu
     PROSODY_MODEL_TARGET_DEVICE: cpu
@@ -26,8 +26,8 @@ startup:
     MKL_NUM_THREADS: "2"
     NUM_FFMPEG_THREADS: "2"
     TOKENIZERS_PARALLELISM: "true"
-    TOS_ACCESS_KEY: XXX
-    TOS_SECRET_KEY: XXX
+    TOS_ACCESS_KEY: XXX  # dummy — start.sh reads these but TOS upload is unused in offline mode
+    TOS_SECRET_KEY: XXX  # dummy — same as above
     LOG_DIR: /tmp
     POD_NAME: latest_lite
     TZ: Asia/Shanghai

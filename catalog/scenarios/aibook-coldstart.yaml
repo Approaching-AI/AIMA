@@ -43,13 +43,13 @@ deployments:
     notes: "1024-dim embeddings, gmu=0.2 → 6.4GB GPU alloc. 240-370ms single, 35ms/item batch-20. Cold start 80s."
 
   - model: funasr-paraformer-onnx
-    engine: funasr
+    engine: funasr-onnx
     slot: ""
     role: auxiliary
     modalities: [asr]
     config:
-      port: 10095
-    notes: "CPU-only ONNX ASR pipeline: FSMN-VAD + Paraformer + Punctuation. Zero GPU impact."
+      port: 32103
+    notes: "CPU-only ONNX ASR pipeline: FSMN-VAD + Paraformer + Punctuation. gRPC on 32103. Cold start ~10s. Zero GPU impact."
 
   - model: litetts-mnn
     engine: litetts
@@ -123,7 +123,7 @@ verified:
     embedding: pass
     llm_emb_coexist: pass
     mooer_asr: pass
-    asr_onnx: untested  # FunASR integrated in mt_digitalme_sdk_server, no standalone service
+    asr_onnx: pass       # Standalone paraformer-server at /opt/mt-ai/asr/, gRPC on 32103, cold start ~10s
     tts_mnn: pass       # Requires TARGET_DEVICE=cpu env var; RTF 0.25-0.30
   notes: "LLM: 7.5 tok/s, 525ms TTFT, 117s cold start. Embedding: 240-370ms, 80s cold start. LLM+EMB coexist at 26GB/32GB. MoOER ASR: RTF 0.55-0.67, 42s warmup, ~15GB GPU — cannot triple-coexist with LLM+EMB. TTS: RTF 0.25-0.30, CPU-only, must set TARGET_DEVICE=cpu."
 
@@ -131,9 +131,9 @@ open_questions:
   - question: "MoOER ASR 启动后额外 GPU 内存占用是多少？能否与 LLM+EMB 三服务共存？"
     answer: "实测 ~15GB GPU（远超预估 3GB）。三服务共存会 OOM (16+6.4+15=37GB > 32GB)。仅能 LLM+MoOER 二服务共存 (16+15=31GB)。"
     verified: "2026-03-27"
-  - question: "FunASR ONNX 在 ARM64 上的实时率 (RTF) 是多少？"
-    answer: "未能单独测试。AIBook 上 FunASR 被集成在 mt_digitalme_sdk_server 内部，无独立 FunASR 服务端。"
-    verified: "2026-03-27"
+  - question: "FunASR ONNX 在 ARM64 上能否独立部署？"
+    answer: "可以。/opt/mt-ai/asr/paraformer-server 是独立 C++ gRPC 服务端（非 mt_digitalme_sdk_server 内嵌版）。含 Paraformer-large offline+online + FSMN-VAD，端口 32103，冷启动 ~10s，CPU-only。需设 LD_LIBRARY_PATH 到 /opt/mt-ai/asr。"
+    verified: "2026-03-28"
   - question: "LiteTTS MNN 在 M1000 ARM64 上的 RTF？"
     answer: "RTF 0.25-0.30 (CPU-only, ARM64 Cortex-A78 12C)。短句 0.36s, 中句 1.40s, 长句 5.72s。必须设置 TARGET_DEVICE=cpu 环境变量，否则 prosody predictor 默认找 GPU 会崩溃。通过 start.sh 启动即可。"
     verified: "2026-03-27"

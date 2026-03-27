@@ -177,6 +177,7 @@ type EngineStartup struct {
 	Command      []string          `yaml:"command"                    json:"command"`
 	InitCommands []string          `yaml:"init_commands,omitempty"    json:"init_commands,omitempty"`
 	Env          map[string]string `yaml:"env,omitempty"              json:"env,omitempty"`
+	WorkDir      string            `yaml:"work_dir,omitempty"         json:"work_dir,omitempty"`
 	DefaultArgs  map[string]any    `yaml:"default_args"               json:"default_args"`
 	HealthCheck  HealthCheck       `yaml:"health_check"               json:"health_check"`
 	Warmup       WarmupConfig      `yaml:"warmup"                     json:"warmup"`

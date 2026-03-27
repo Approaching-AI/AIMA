@@ -40,6 +40,7 @@ type DeployRequest struct {
 	Warmup       *WarmupConfig  // post-healthcheck warmup (send dummy inference request)
 	CPUArch          string                     // "arm64", "amd64" -- for platform-specific paths in Pod spec
 	Env              map[string]string          // extra env vars (engine YAML + hardware YAML merged)
+	WorkDir          string                     // working directory for native process (from engine YAML)
 	Container        *knowledge.ContainerAccess // vendor-specific container access (K3S, Docker)
 	GPUResourceName  string                     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
 	ExtraVolumes     []knowledge.ContainerVolume // additional host volumes to mount (K3S, Docker)

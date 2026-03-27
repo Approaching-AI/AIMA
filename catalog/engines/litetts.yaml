@@ -9,15 +9,13 @@ hardware:
   vram_min_mib: 0
 source:
   binary: integrated_server
-  base_path: /opt/mt-ai/tts
 startup:
-  command: ["./start_server.sh"]
-  default_args:
-    target_voices: AIBC006_lite
-    grpc_port_v1beta1: 32108
-    grpc_port: 32109
-    http_port: 32110
-  required_env:
+  # start_server.sh uses parse_options.sh which expects --flag_name (underscores).
+  # AIMA's configToFlags converts underscores to hyphens, so we put all TTS-specific
+  # args directly in the command to avoid the mismatch.
+  command: ["./start_server.sh", "--target_voices", "AIBC006_lite", "--grpc_port_v1beta1", "32108", "--grpc_port", "32109", "--http_port", "32110"]
+  work_dir: /opt/mt-ai/tts
+  env:
     TARGET_DEVICE: cpu
     PROSODY_MODEL_TARGET_DEVICE: cpu
     PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
@@ -33,13 +31,17 @@ startup:
     LOG_DIR: /tmp
     POD_NAME: latest_lite
     TZ: Asia/Shanghai
+  default_args:
+    port: 32110  # AIMA uses this for health check URL; actual flag is --http_port in command
   health_check:
-    path: /tts/api/v1/generate
-    method: POST
-    timeout_s: 30
+    path: /
+    timeout_s: 60
   log_patterns:
     phases:
-      - name: model_loaded
+      - name: loading_models
+        pattern: "Loading model from cache|use runtime"
+        progress: 30
+      - name: loading_mnn
         pattern: "MNNLiteTtsService.*streaming"
         progress: 80
       - name: ready
@@ -53,19 +55,8 @@ startup:
 api:
   protocol: http
   base_path: /tts/api/v1
-  endpoints:
-    - path: /generate
-      method: POST
-      content_type: application/json
-      request_body:
-        text: string
-        speaker: string  # voice name, e.g. "AIBC006_lite"
-        pitch_rate: number
-        energy_rate: number
-        speech_rate: number
-        volume: number
-        version: string  # "v2.0"
-      response_type: audio/wav
+time_constraints:
+  cold_start_s: [15, 30]
 runtime:
   default: "native"
   platform_recommendations:

@@ -58,10 +58,7 @@ deployments:
     modalities: [tts]
     config:
       port: 32110
-      grpc_port: 32109
-      grpc_port_v1beta1: 32108
-      target_voices: AIBC006_lite
-    notes: "CPU-only MNN TTS: LiteTTS + HiFiGAN vocoder. RTF 0.25-0.30 (3-4x realtime). Zero GPU impact. MUST set TARGET_DEVICE=cpu env var."
+    notes: "CPU-only MNN TTS: LiteTTS + HiFiGAN vocoder. RTF 0.25-0.30 (3-4x realtime). Zero GPU impact. All env vars in engine YAML."
 
 memory_budget:
   total_unified_mib: 32768

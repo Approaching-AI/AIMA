@@ -56,6 +56,7 @@ type ResolvedConfig struct {
 	Warmup                *WarmupConfig     // post-healthcheck warmup config (nil = no warmup)
 	Source                *EngineSource     // native binary source info (nil if container-only)
 	Env                   map[string]string // Extra env vars for the container (from engine YAML)
+	WorkDir               string            // Working directory for native process (from engine YAML)
 	GPUResourceName       string            // K8s resource name, e.g. "nvidia.com/gpu" (empty = no GPU resource request)
 	RuntimeClassName      string            // K8s runtimeClassName for GPU containers, e.g. "nvidia" (from hardware profile)
 	RuntimeRecommendation string            // "native" or "container" or "" — from engine's platform_recommendations
@@ -203,6 +204,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		InitCommands:     engine.Startup.InitCommands,
 		ExtraVolumes:     engine.Startup.ExtraVolumes,
 		Env:              engine.Startup.Env,
+		WorkDir:          engine.Startup.WorkDir,
 		HealthCheck:      &engine.Startup.HealthCheck,
 		Source:           engine.Source,
 		EngineRegistries: engine.Image.Registries,

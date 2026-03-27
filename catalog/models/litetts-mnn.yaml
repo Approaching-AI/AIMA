@@ -23,22 +23,6 @@ variants:
     format: mnn
     default_config:
       port: 32110
-      grpc_port: 32109
-      grpc_port_v1beta1: 32108
-      target_voices: AIBC006_lite
-    startup_env:
-      TARGET_DEVICE: cpu
-      PROSODY_MODEL_TARGET_DEVICE: cpu
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
-      ONNX_INTRA_OP_NUM_THREADS: "2"
-      ONNX_INTER_OP_NUM_THREADS: "2"
-      TORCH_NUM_THREADS: "2"
-      OMP_NUM_THREADS: "2"
-      MKL_NUM_THREADS: "2"
-      NUM_FFMPEG_THREADS: "2"
-      TOKENIZERS_PARALLELISM: "true"
-      TOS_ACCESS_KEY: XXX
-      TOS_SECRET_KEY: XXX
     expected_performance:
       vram_mib: 0
-      notes: "LiteTTS v0.4d MNN. CPU-only ARM64 inference, ~107MB model. Measured 2026-03-27 on AIBook M1000 SoC: RTF 0.25-0.30 (3-4x realtime). Short 4字=0.36s, medium 28字=1.40s, long 94字=5.72s. 22050Hz mono 16-bit WAV output. CRITICAL: must set TARGET_DEVICE=cpu and PROSODY_MODEL_TARGET_DEVICE=cpu env vars, otherwise prosody predictor defaults to GPU and crashes. Start via: cd /opt/mt-ai/tts && ./start.sh (uses start_server.sh wrapper). HTTP API: POST /tts/api/v1/generate with JSON {text, speaker:'AIBC006_lite', pitch_rate:0, energy_rate:0, speech_rate:0, volume:50, version:'v2.0'}. Available voices: AIBC006_lite (可爱女声). Also supports gRPC on ports 32108/32109."
+      notes: "LiteTTS v0.4d MNN. CPU-only ARM64, ~107MB model. Measured 2026-03-27 on AIBook M1000 SoC: RTF 0.25-0.30 (3-4x realtime). Short 4字=0.36s, medium 28字=1.40s, long 94字=5.72s. 22050Hz mono 16-bit WAV output. All env vars (TARGET_DEVICE=cpu etc) are in engine YAML litetts.yaml. HTTP API: POST /tts/api/v1/generate {text, speaker:'AIBC006_lite', version:'v2.0'}. gRPC: 32108/32109."

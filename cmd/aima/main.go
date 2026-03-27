@@ -2891,6 +2891,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				RuntimeClassName: resolved.RuntimeClassName,
 				CPUArch:          resolved.CPUArch,
 				Env:              resolved.Env,
+				WorkDir:          resolved.WorkDir,
 				Container:        resolved.Container,
 				GPUResourceName:  resolved.GPUResourceName,
 				ExtraVolumes:     resolved.ExtraVolumes,

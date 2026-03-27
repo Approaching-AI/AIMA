@@ -211,8 +211,11 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	if len(env) > 0 {
 		cmd.Env = env
 	}
+	if req.WorkDir != "" {
+		cmd.Dir = req.WorkDir
+	}
 
-	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "))
+	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "), "work_dir", req.WorkDir)
 
 	if err := cmd.Start(); err != nil {
 		cancel()

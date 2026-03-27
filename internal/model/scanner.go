@@ -42,11 +42,13 @@ type ConfigParentPattern struct {
 
 // ConfigPattern defines model detection from YAML.
 type ConfigPattern struct {
-	Name        string   `yaml:"name"`
-	ConfigFiles []string `yaml:"config_files"`
-	WeightExts  []string `yaml:"weight_exts"`
-	Format      string   `yaml:"format"`
-	TypeHint    string   `yaml:"type_hint"`
+	Name         string            `yaml:"name"`
+	ConfigFiles  []string          `yaml:"config_files"`
+	WeightExts   []string          `yaml:"weight_exts"`
+	Format       string            `yaml:"format"`
+	TypeHint     string            `yaml:"type_hint"`
+	TaskMappings map[string]string `yaml:"task_mappings"` // config "task" substring → model type
+	SkipMinSize  bool              `yaml:"skip_min_size"` // true = exempt from min size filter
 }
 
 // ParentPattern is internal representation.
@@ -122,11 +124,13 @@ func NewScanConfig() *ScanConfig {
 			continue
 		}
 		sc.ModelPatterns = append(sc.ModelPatterns, ModelPattern{
-			name:        p.Name,
-			configFiles: p.ConfigFiles,
-			weightExts:  p.WeightExts,
-			format:      p.Format,
-			typeHint:    p.TypeHint,
+			name:         p.Name,
+			configFiles:  p.ConfigFiles,
+			weightExts:   p.WeightExts,
+			format:       p.Format,
+			typeHint:     p.TypeHint,
+			taskMappings: p.TaskMappings,
+			skipMinSize:  p.SkipMinSize,
 		})
 	}
 
@@ -199,18 +203,27 @@ func (sc *ScanConfig) applyDefaultPatterns() {
 			configFiles: []string{"configuration.json"},
 			weightExts:  []string{".onnx"},
 			format:      "onnx",
+			skipMinSize: true,
+			taskMappings: map[string]string{
+				"speech-recognition":       "asr",
+				"voice-activity-detection": "vad",
+				"text-to-speech":           "tts",
+				"punctuation":              "nlp",
+			},
 		},
 		{
 			name:        "onnx",
 			configFiles: []string{"config.json", "config.yaml"},
 			weightExts:  []string{".onnx"},
 			format:      "onnx",
+			skipMinSize: true,
 		},
 		{
 			name:        "mnn",
 			configFiles: []string{},
 			weightExts:  []string{".mnn"},
 			format:      "mnn",
+			skipMinSize: true,
 		},
 		{
 			name:        "gguf",
@@ -224,11 +237,13 @@ func (sc *ScanConfig) applyDefaultPatterns() {
 
 // ModelPattern defines how to detect a model format (internal).
 type ModelPattern struct {
-	name        string   // Pattern name for debugging
-	configFiles []string // Possible config filenames (empty = no config needed)
-	weightExts  []string // Possible weight file extensions
-	format      string   // Output format name
-	typeHint    string   // Type hint when detectArch fails
+	name         string            // Pattern name for debugging
+	configFiles  []string          // Possible config filenames (empty = no config needed)
+	weightExts   []string          // Possible weight file extensions
+	format       string            // Output format name
+	typeHint     string            // Type hint when detectArch fails
+	taskMappings map[string]string // config "task" field substring → model type
+	skipMinSize  bool              // true = exempt from min size filter
 }
 
 // ModelInfo represents a discovered local model.
@@ -610,48 +625,27 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPat
 	modelType, _ := config["model_type"].(string)
 	arch := detectArch(modelType)
 	mType := p.typeHint
-	if mType == "" {
+	if mType == "" && arch != "" {
 		mType = detectModelType(arch)
 	}
 
-	// FunASR/ONNX models: detect type from "task" field in configuration.json
-	if (mType == "" || mType == "llm") && config != nil {
+	// Task-field type mapping (driven by pattern's taskMappings from YAML)
+	if (mType == "" || mType == "llm") && config != nil && len(p.taskMappings) > 0 {
 		if task, _ := config["task"].(string); task != "" {
-			switch {
-			case strings.Contains(task, "speech-recognition"):
-				mType = "asr"
-			case strings.Contains(task, "voice-activity-detection"):
-				mType = "vad"
-			case strings.Contains(task, "text-to-speech"):
-				mType = "tts"
-			case strings.Contains(task, "punctuation"):
-				mType = "nlp"
+			for substring, modelType := range p.taskMappings {
+				if strings.Contains(task, substring) {
+					mType = modelType
+					break
+				}
 			}
-		}
-	}
-
-	// Fallback: infer type from directory path for edge-inference models
-	if (mType == "" || mType == "llm") && (p.format == "onnx" || p.format == "mnn") {
-		dirLower := strings.ToLower(dir)
-		switch {
-		case strings.Contains(dirLower, "/tts/") || strings.Contains(dirLower, "_tts_"):
-			mType = "tts"
-		case strings.Contains(dirLower, "/asr/") || strings.Contains(dirLower, "_asr_"):
-			mType = "asr"
-		case strings.Contains(dirLower, "/vad/") || strings.Contains(dirLower, "_vad_"):
-			mType = "vad"
-		case strings.Contains(dirLower, "/ocr/") || strings.Contains(dirLower, "_ocr_"):
-			mType = "ocr"
-		case strings.Contains(dirLower, "/emb/") || strings.Contains(dirLower, "embedding"):
-			mType = "embedding"
 		}
 	}
 
 	sizeBytes := calculateModelSize(dir, entries, p.weightExts)
 
 	// Filter out incomplete models (below minimum size).
-	// ONNX/MNN models are often small (quantized edge models) — skip size filter.
-	if sizeBytes < minSize && p.format != "onnx" && p.format != "mnn" {
+	// Patterns with skip_min_size (e.g. ONNX edge models) are exempt.
+	if sizeBytes < minSize && !p.skipMinSize {
 		return nil
 	}
 

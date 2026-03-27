@@ -86,18 +86,26 @@ config:
       config_files: ["configuration.json"]
       weight_exts: [".onnx"]
       format: "onnx"
+      skip_min_size: true
+      task_mappings:
+        "speech-recognition": "asr"
+        "voice-activity-detection": "vad"
+        "text-to-speech": "tts"
+        "punctuation": "nlp"
 
     # ONNX (generic, with config.json or config.yaml)
     - name: onnx
       config_files: ["config.json", "config.yaml"]
       weight_exts: [".onnx"]
       format: "onnx"
+      skip_min_size: true
 
     # MNN (Mobile Neural Network, edge inference)
     - name: mnn
       config_files: []
       weight_exts: [".mnn"]
       format: "mnn"
+      skip_min_size: true
 
     # GGUF
     - name: gguf

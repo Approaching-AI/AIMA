@@ -27,7 +27,8 @@ const (
 	ConfigInviteCode = "support.invite_code"
 	ConfigWorkerCode = "support.worker_code"
 
-	DefaultEndpoint = "https://aimaserver.com/platform"
+	DefaultEndpoint   = "https://aimaserver.com/platform"
+	DefaultInviteCode = "channel-aima"
 
 	configStateDeviceID             = "support.state.device_id"
 	configStateToken                = "support.state.token"
@@ -715,7 +716,7 @@ func (s *Service) ensureRegistered(ctx context.Context, req AskRequest) (deviceS
 	}
 	invite := s.optionalConfig(ctx, ConfigInviteCode, "AIMA_SUPPORT_INVITE_CODE")
 	if invite == "" {
-		invite = "channel-aima"
+		invite = DefaultInviteCode
 	}
 	registerReq["invite_code"] = invite
 	if worker := s.optionalConfig(ctx, ConfigWorkerCode, "AIMA_SUPPORT_WORKER_CODE"); worker != "" {

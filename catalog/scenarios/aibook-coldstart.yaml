@@ -57,8 +57,11 @@ deployments:
     role: auxiliary
     modalities: [tts]
     config:
-      port: 8081
-    notes: "CPU-only MNN TTS: LiteTTS encoder/decoder + HiFiGAN vocoder. Zero GPU impact."
+      port: 32110
+      grpc_port: 32109
+      grpc_port_v1beta1: 32108
+      target_voices: AIBC006_lite
+    notes: "CPU-only MNN TTS: LiteTTS + HiFiGAN vocoder. RTF 0.25-0.30 (3-4x realtime). Zero GPU impact. MUST set TARGET_DEVICE=cpu env var."
 
 memory_budget:
   total_unified_mib: 32768
@@ -124,8 +127,8 @@ verified:
     llm_emb_coexist: pass
     mooer_asr: pass
     asr_onnx: untested  # FunASR integrated in mt_digitalme_sdk_server, no standalone service
-    tts_mnn: fail       # PyInstaller binary missing torch_musa, crashes on startup
-  notes: "LLM: 7.5 tok/s, 525ms TTFT, 117s cold start. Embedding: 240-370ms, 80s cold start. LLM+EMB coexist at 26GB/32GB. MoOER ASR: RTF 0.55-0.67, 42s warmup, ~15GB GPU — cannot triple-coexist with LLM+EMB. TTS blocked by vendor binary issue."
+    tts_mnn: pass       # Requires TARGET_DEVICE=cpu env var; RTF 0.25-0.30
+  notes: "LLM: 7.5 tok/s, 525ms TTFT, 117s cold start. Embedding: 240-370ms, 80s cold start. LLM+EMB coexist at 26GB/32GB. MoOER ASR: RTF 0.55-0.67, 42s warmup, ~15GB GPU — cannot triple-coexist with LLM+EMB. TTS: RTF 0.25-0.30, CPU-only, must set TARGET_DEVICE=cpu."
 
 open_questions:
   - question: "MoOER ASR 启动后额外 GPU 内存占用是多少？能否与 LLM+EMB 三服务共存？"
@@ -135,5 +138,5 @@ open_questions:
     answer: "未能单独测试。AIBook 上 FunASR 被集成在 mt_digitalme_sdk_server 内部，无独立 FunASR 服务端。"
     verified: "2026-03-27"
   - question: "LiteTTS MNN 在 M1000 ARM64 上的 RTF？"
-    answer: "无法测试。integrated_server 二进制启动失败：RuntimeError Device string must not be empty — PyInstaller 打包环境缺少 torch_musa。需厂商更新打包。"
+    answer: "RTF 0.25-0.30 (CPU-only, ARM64 Cortex-A78 12C)。短句 0.36s, 中句 1.40s, 长句 5.72s。必须设置 TARGET_DEVICE=cpu 环境变量，否则 prosody predictor 默认找 GPU 会崩溃。通过 start.sh 启动即可。"
     verified: "2026-03-27"

@@ -1,0 +1,72 @@
+kind: engine_asset
+metadata:
+  name: litetts
+  type: litetts
+  version: "0.4d"
+  supported_formats: [mnn]
+hardware:
+  gpu_arch: "*"
+  vram_min_mib: 0
+source:
+  binary: integrated_server
+  base_path: /opt/mt-ai/tts
+startup:
+  command: ["./start_server.sh"]
+  default_args:
+    target_voices: AIBC006_lite
+    grpc_port_v1beta1: 32108
+    grpc_port: 32109
+    http_port: 32110
+  required_env:
+    TARGET_DEVICE: cpu
+    PROSODY_MODEL_TARGET_DEVICE: cpu
+    PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+    ONNX_INTRA_OP_NUM_THREADS: "2"
+    ONNX_INTER_OP_NUM_THREADS: "2"
+    TORCH_NUM_THREADS: "2"
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    NUM_FFMPEG_THREADS: "2"
+    TOKENIZERS_PARALLELISM: "true"
+    TOS_ACCESS_KEY: XXX
+    TOS_SECRET_KEY: XXX
+    LOG_DIR: /tmp
+    POD_NAME: latest_lite
+    TZ: Asia/Shanghai
+  health_check:
+    path: /tts/api/v1/generate
+    method: POST
+    timeout_s: 30
+  log_patterns:
+    phases:
+      - name: model_loaded
+        pattern: "MNNLiteTtsService.*streaming"
+        progress: 80
+      - name: ready
+        pattern: "Running on all addresses|Start TTS gRPC service"
+        progress: 100
+    errors:
+      - pattern: "Device string must not be empty"
+        message: "Missing TARGET_DEVICE=cpu env var — prosody predictor defaults to GPU"
+      - pattern: "RuntimeError"
+        message: "Runtime error during TTS initialization"
+api:
+  protocol: http
+  base_path: /tts/api/v1
+  endpoints:
+    - path: /generate
+      method: POST
+      content_type: application/json
+      request_body:
+        text: string
+        speaker: string  # voice name, e.g. "AIBC006_lite"
+        pitch_rate: number
+        energy_rate: number
+        speech_rate: number
+        volume: number
+        version: string  # "v2.0"
+      response_type: audio/wav
+runtime:
+  default: "native"
+  platform_recommendations:
+    linux/arm64: "native"

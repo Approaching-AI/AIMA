@@ -140,10 +140,11 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		command[i] = c
 	}
 
-	// Append --port if not already present
+	// Append --port if no port-related flag is already present.
+	// Check for any flag containing "port" (e.g. --port, --http_port, --grpc_port).
 	hasPort := false
 	for _, c := range command {
-		if strings.Contains(c, "--port") {
+		if strings.HasPrefix(c, "--") && strings.Contains(c, "port") {
 			hasPort = true
 			break
 		}

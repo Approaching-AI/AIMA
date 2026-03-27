@@ -12,6 +12,9 @@ source:
 startup:
   command: ["./mooer_server_aibook2"]
   work_dir: /opt/mt-ai/mooer
+  env:
+    LD_LIBRARY_PATH: "/usr/local/musa/lib:/usr/lib/aarch64-linux-gnu/musa:/usr/lib/aarch64-linux-gnu"
+    MUSA_HOME: "/usr/local/musa"
   default_args:
     port: 32107
     only_ast: false

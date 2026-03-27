@@ -18,7 +18,8 @@ storage:
       repo: Qwen/Qwen3-8B
       format: safetensors
     - type: local_path
-      path: ""
+      path: "/opt/mt-ai/llm/models/gptq-Qwen3-8B"
+      notes: "AIBook M1000 SoC pre-loaded GPTQ-Int4"
 variants:
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # FP16 weights ~16GB, GB10 unified memory 128GB

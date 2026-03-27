@@ -270,6 +270,10 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 		if hw.RuntimeType != "native" {
 			return true
 		}
+		// Engine with an explicit command can run natively (pre-installed binary / system package).
+		if len(ea.Startup.Command) > 0 {
+			return true
+		}
 		if ea.Source == nil {
 			return false
 		}

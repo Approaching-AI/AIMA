@@ -18,14 +18,15 @@ import (
 
 // Catalog holds all knowledge assets loaded from embedded YAML files.
 type Catalog struct {
-	mu                   sync.Mutex
-	HardwareProfiles     []HardwareProfile
-	PartitionStrategies  []PartitionStrategy
-	EngineAssets         []EngineAsset
-	ModelAssets          []ModelAsset
-	StackComponents      []StackComponent
-	DeploymentScenarios  []DeploymentScenario
-	EngineProfiles       map[string]*EngineProfile // name -> profile (loaded from engines/profiles/)
+	mu                  sync.Mutex
+	HardwareProfiles    []HardwareProfile
+	PartitionStrategies []PartitionStrategy
+	EngineAssets        []EngineAsset
+	RawEngineAssets     []EngineAsset // unresolved engine assets before profile inheritance/template expansion
+	ModelAssets         []ModelAsset
+	StackComponents     []StackComponent
+	DeploymentScenarios []DeploymentScenario
+	EngineProfiles      map[string]*EngineProfile // name -> profile (loaded from engines/profiles/)
 }
 
 // EngineProfile captures the shared identity of an engine type.
@@ -62,19 +63,19 @@ type HardwareMetadata struct {
 }
 
 type HardwareSpec struct {
-	GPU           GPUSpec  `yaml:"gpu"`
-	CPU           CPUSpec  `yaml:"cpu"`
-	RAM           RAMSpec  `yaml:"ram"`
+	GPU           GPUSpec `yaml:"gpu"`
+	CPU           CPUSpec `yaml:"cpu"`
+	RAM           RAMSpec `yaml:"ram"`
 	UnifiedMemory bool    `yaml:"unified_memory"`
 }
 
 type GPUSpec struct {
-	Arch              string `yaml:"arch"`
-	VRAMMiB           int    `yaml:"vram_mib"`
-	ComputeID    string `yaml:"compute_id"`
-	ComputeUnits int    `yaml:"compute_units"`
-	ResourceName      string `yaml:"resource_name,omitempty"`     // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
-	RuntimeClassName  string `yaml:"runtime_class_name,omitempty"` // K8s runtimeClassName for GPU containers, e.g. "nvidia"
+	Arch             string `yaml:"arch"`
+	VRAMMiB          int    `yaml:"vram_mib"`
+	ComputeID        string `yaml:"compute_id"`
+	ComputeUnits     int    `yaml:"compute_units"`
+	ResourceName     string `yaml:"resource_name,omitempty"`      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	RuntimeClassName string `yaml:"runtime_class_name,omitempty"` // K8s runtimeClassName for GPU containers, e.g. "nvidia"
 }
 
 type CPUSpec struct {
@@ -84,7 +85,7 @@ type CPUSpec struct {
 }
 
 type RAMSpec struct {
-	TotalMiB     int `yaml:"total_mib"`
+	TotalMiB      int `yaml:"total_mib"`
 	BandwidthGbps int `yaml:"bandwidth_gbps"`
 }
 
@@ -103,15 +104,15 @@ type HardwarePartition struct {
 // (devices, env vars, volumes, security) for GPU containers. Lives in
 // hardware profile YAML so adding a new GPU vendor = YAML only, no Go code.
 type ContainerAccess struct {
-	Devices             []string          `yaml:"devices,omitempty"`
-	Env                 map[string]string `yaml:"env,omitempty"`
-	PartitionRemoveEnv  []string          `yaml:"partition_remove_env,omitempty"`
-	Volumes             []ContainerVolume `yaml:"volumes,omitempty"`
-	Security            *ContainerSecurity `yaml:"security,omitempty"`
-	DockerRuntime       string            `yaml:"docker_runtime,omitempty"`  // --runtime flag (e.g. "ascend")
-	NetworkMode         string            `yaml:"network_mode,omitempty"`    // "host" for --network host
-	ShmSize             string            `yaml:"shm_size,omitempty"`        // --shm-size (e.g. "500g")
-	Init                bool              `yaml:"init,omitempty"`            // --init flag
+	Devices            []string           `yaml:"devices,omitempty"`
+	Env                map[string]string  `yaml:"env,omitempty"`
+	PartitionRemoveEnv []string           `yaml:"partition_remove_env,omitempty"`
+	Volumes            []ContainerVolume  `yaml:"volumes,omitempty"`
+	Security           *ContainerSecurity `yaml:"security,omitempty"`
+	DockerRuntime      string             `yaml:"docker_runtime,omitempty"` // --runtime flag (e.g. "ascend")
+	NetworkMode        string             `yaml:"network_mode,omitempty"`   // "host" for --network host
+	ShmSize            string             `yaml:"shm_size,omitempty"`       // --shm-size (e.g. "500g")
+	Init               bool               `yaml:"init,omitempty"`           // --init flag
 }
 
 type ContainerVolume struct {
@@ -208,13 +209,13 @@ type EngineHardware struct {
 }
 
 type EngineStartup struct {
-	Command      []string          `yaml:"command"                    json:"command"`
-	InitCommands []string          `yaml:"init_commands,omitempty"    json:"init_commands,omitempty"`
-	Env          map[string]string `yaml:"env,omitempty"              json:"env,omitempty"`
-	DefaultArgs  map[string]any    `yaml:"default_args"               json:"default_args"`
-	HealthCheck  HealthCheck       `yaml:"health_check"               json:"health_check"`
-	Warmup       WarmupConfig      `yaml:"warmup"                     json:"warmup"`
-	ExtraVolumes []ContainerVolume `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
+	Command      []string            `yaml:"command"                    json:"command"`
+	InitCommands []string            `yaml:"init_commands,omitempty"    json:"init_commands,omitempty"`
+	Env          map[string]string   `yaml:"env,omitempty"              json:"env,omitempty"`
+	DefaultArgs  map[string]any      `yaml:"default_args"               json:"default_args"`
+	HealthCheck  HealthCheck         `yaml:"health_check"               json:"health_check"`
+	Warmup       WarmupConfig        `yaml:"warmup"                     json:"warmup"`
+	ExtraVolumes []ContainerVolume   `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
 	LogPatterns  *StartupLogPatterns `yaml:"log_patterns,omitempty"   json:"log_patterns,omitempty"`
 }
 
@@ -282,9 +283,9 @@ type PowerConstraints struct {
 // --- Model Asset ---
 
 type ModelAsset struct {
-	Kind     string        `yaml:"kind"`
-	Metadata ModelMetadata `yaml:"metadata"`
-	Storage  ModelStorage  `yaml:"storage"`
+	Kind     string         `yaml:"kind"`
+	Metadata ModelMetadata  `yaml:"metadata"`
+	Storage  ModelStorage   `yaml:"storage"`
 	Variants []ModelVariant `yaml:"variants"`
 }
 
@@ -309,25 +310,25 @@ type ModelSource struct {
 }
 
 type ModelVariant struct {
-	Name     string              `yaml:"name"`
-	Hardware ModelVariantHardware `yaml:"hardware"`
-	Engine   string              `yaml:"engine"`
-	Format   string              `yaml:"format"`
-	Source   *ModelSource        `yaml:"source,omitempty"` // variant-specific download source; overrides global sources when present
-	DefaultConfig map[string]any `yaml:"default_config"`
-	ExpectedPerformance map[string]any `yaml:"expected_performance"`
+	Name                string               `yaml:"name"`
+	Hardware            ModelVariantHardware `yaml:"hardware"`
+	Engine              string               `yaml:"engine"`
+	Format              string               `yaml:"format"`
+	Source              *ModelSource         `yaml:"source,omitempty"` // variant-specific download source; overrides global sources when present
+	DefaultConfig       map[string]any       `yaml:"default_config"`
+	ExpectedPerformance map[string]any       `yaml:"expected_performance"`
 }
 
 // ExpectedPerf holds structured performance estimates extracted from a variant's
 // ExpectedPerformance map. Zero-valued fields mean "not specified".
 type ExpectedPerf struct {
-	StartupTimeS   int        // model loading time (seconds)
-	ColdStartTimeS int        // full cold start time (seconds)
+	StartupTimeS    int        // model loading time (seconds)
+	ColdStartTimeS  int        // full cold start time (seconds)
 	TokensPerSecond [2]float64 // [min, max] throughput estimate
-	VRAMMiB        int        // expected VRAM usage
-	RAMMiB         int        // engine process RAM overhead
-	CPUCores       int        // recommended CPU allocation
-	DiskMiB        int        // model file size on disk
+	VRAMMiB         int        // expected VRAM usage
+	RAMMiB          int        // engine process RAM overhead
+	CPUCores        int        // recommended CPU allocation
+	DiskMiB         int        // model file size on disk
 }
 
 // ParsedExpectedPerf extracts structured performance fields from the variant's
@@ -367,16 +368,16 @@ type StackConditions struct {
 }
 
 type StackComponent struct {
-	Kind          string               `yaml:"kind"`
-	Metadata      StackMetadata        `yaml:"metadata"`
-	Compatibility StackCompatibility   `yaml:"compatibility"`
-	Source        StackSource          `yaml:"source"`
-	Install       StackInstall         `yaml:"install"`
-	Verify        StackVerify          `yaml:"verify"`
-	Conditions    *StackConditions     `yaml:"conditions,omitempty"`
+	Kind          string                  `yaml:"kind"`
+	Metadata      StackMetadata           `yaml:"metadata"`
+	Compatibility StackCompatibility      `yaml:"compatibility"`
+	Source        StackSource             `yaml:"source"`
+	Install       StackInstall            `yaml:"install"`
+	Verify        StackVerify             `yaml:"verify"`
+	Conditions    *StackConditions        `yaml:"conditions,omitempty"`
 	Profiles      map[string]StackProfile `yaml:"profiles,omitempty"`
-	Registries    map[string]any       `yaml:"registries,omitempty"`   // container registry mirror config (written as-is to registries.yaml)
-	OpenQuestions []StackQuestion      `yaml:"open_questions,omitempty"`
+	Registries    map[string]any          `yaml:"registries,omitempty"` // container registry mirror config (written as-is to registries.yaml)
+	OpenQuestions []StackQuestion         `yaml:"open_questions,omitempty"`
 }
 
 type StackMetadata struct {
@@ -396,9 +397,9 @@ type StackSource struct {
 	ExtractBinaries []string            `yaml:"extract_binaries,omitempty"` // paths within archive to extract (e.g. "docker/dockerd")
 	Airgap          string              `yaml:"airgap,omitempty"`           // airgap image tar filename (stored in dist/)
 	Platforms       []string            `yaml:"platforms"`
-	Download        map[string]string   `yaml:"download,omitempty"`         // platform → URL
-	Mirror          map[string][]string `yaml:"mirror,omitempty"`           // platform → fallback URLs (tried in order)
-	SHA256          map[string]string   `yaml:"sha256,omitempty"`           // platform → expected SHA-256 hex digest
+	Download        map[string]string   `yaml:"download,omitempty"`        // platform → URL
+	Mirror          map[string][]string `yaml:"mirror,omitempty"`          // platform → fallback URLs (tried in order)
+	SHA256          map[string]string   `yaml:"sha256,omitempty"`          // platform → expected SHA-256 hex digest
 	AirgapDownload  map[string]string   `yaml:"airgap_download,omitempty"` // platform → airgap tar URL
 	AirgapMirror    map[string][]string `yaml:"airgap_mirror,omitempty"`   // platform → airgap tar mirror URLs (tried in order)
 	AirgapSHA256    map[string]string   `yaml:"airgap_sha256,omitempty"`   // platform → expected SHA-256 hex digest for airgap tar
@@ -407,10 +408,10 @@ type StackSource struct {
 type StackInstall struct {
 	Method       string            `yaml:"method"`
 	Daemon       bool              `yaml:"daemon,omitempty"`
-	Subcommand   string            `yaml:"subcommand,omitempty"`    // daemon ExecStart subcommand (default "server")
-	ServiceType  string            `yaml:"service_type,omitempty"`  // systemd Type= (default "notify")
-	Priority     int               `yaml:"priority,omitempty"`      // lower = installed first (default 0)
-	Tier         string            `yaml:"tier,omitempty"`          // "docker" or "k3s" — used for tiered init filtering
+	Subcommand   string            `yaml:"subcommand,omitempty"`   // daemon ExecStart subcommand (default "server")
+	ServiceType  string            `yaml:"service_type,omitempty"` // systemd Type= (default "notify")
+	Priority     int               `yaml:"priority,omitempty"`     // lower = installed first (default 0)
+	Tier         string            `yaml:"tier,omitempty"`         // "docker" or "k3s" — used for tiered init filtering
 	Args         []StackArg        `yaml:"args,omitempty"`
 	Env          map[string]string `yaml:"env,omitempty"`
 	Helm         *StackHelm        `yaml:"helm,omitempty"`
@@ -453,7 +454,7 @@ type StackVerifyPod struct {
 }
 
 type StackProfile struct {
-	ExtraArgs []StackArg `yaml:"extra_args,omitempty"`
+	ExtraArgs []StackArg        `yaml:"extra_args,omitempty"`
 	ExtraEnv  map[string]string `yaml:"extra_env,omitempty"`
 }
 
@@ -485,11 +486,11 @@ type PartitionTarget struct {
 }
 
 type PartitionSlotDef struct {
-	Name string         `yaml:"name"`
-	GPU  SlotGPU        `yaml:"gpu"`
-	CPU  SlotCPU        `yaml:"cpu"`
-	RAM  SlotRAM        `yaml:"ram"`
-	Note string         `yaml:"note,omitempty"`
+	Name string  `yaml:"name"`
+	GPU  SlotGPU `yaml:"gpu"`
+	CPU  SlotCPU `yaml:"cpu"`
+	RAM  SlotRAM `yaml:"ram"`
+	Note string  `yaml:"note,omitempty"`
 }
 
 type SlotGPU struct {
@@ -509,13 +510,13 @@ type SlotRAM struct {
 // --- Deployment Scenario ---
 
 type DeploymentScenario struct {
-	Kind         string                 `yaml:"kind"`
-	Metadata     ScenarioMetadata       `yaml:"metadata"`
-	Target       ScenarioTarget         `yaml:"target"`
-	Deployments  []ScenarioDeployment   `yaml:"deployments"`
-	PostDeploy   []ScenarioAction       `yaml:"post_deploy,omitempty"`
-	Integrations map[string]any         `yaml:"integrations,omitempty"`
-	Verified     *ScenarioVerification  `yaml:"verified,omitempty"`
+	Kind          string                `yaml:"kind"`
+	Metadata      ScenarioMetadata      `yaml:"metadata"`
+	Target        ScenarioTarget        `yaml:"target"`
+	Deployments   []ScenarioDeployment  `yaml:"deployments"`
+	PostDeploy    []ScenarioAction      `yaml:"post_deploy,omitempty"`
+	Integrations  map[string]any        `yaml:"integrations,omitempty"`
+	Verified      *ScenarioVerification `yaml:"verified,omitempty"`
 	OpenQuestions []StackQuestion       `yaml:"open_questions,omitempty"`
 }
 
@@ -605,18 +606,8 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	}
 
 	// Phase 3: Merge profiles into assets and expand URL templates
-	for i := range cat.EngineAssets {
-		ea := &cat.EngineAssets[i]
-		if ea.Profile != "" {
-			if p, ok := cat.EngineProfiles[ea.Profile]; ok {
-				mergeEngineProfile(ea, p)
-			} else {
-				slog.Warn("engine asset references unknown profile", "asset", ea.Metadata.Name, "profile", ea.Profile)
-			}
-		}
-		if ea.Source != nil {
-			expandURLTemplate(ea.Source, ea.Metadata.Version)
-		}
+	for _, warning := range finalizeEngineAssets(cat) {
+		slog.Warn(warning)
 	}
 
 	return cat, nil
@@ -660,6 +651,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	if len(dst.Command) == 0 {
 		dst.Command = src.Command
 	}
+	if len(dst.InitCommands) == 0 {
+		dst.InitCommands = src.InitCommands
+	}
 	if dst.DefaultArgs == nil {
 		dst.DefaultArgs = src.DefaultArgs
 	} else if src.DefaultArgs != nil {
@@ -685,11 +679,28 @@ func mergeStartup(dst, src *EngineStartup) {
 		}
 		dst.Env = merged
 	}
-	if dst.HealthCheck.Path == "" && dst.HealthCheck.TimeoutS == 0 {
-		dst.HealthCheck = src.HealthCheck
+	if dst.HealthCheck.Path == "" {
+		dst.HealthCheck.Path = src.HealthCheck.Path
 	}
+	if dst.HealthCheck.TimeoutS == 0 {
+		dst.HealthCheck.TimeoutS = src.HealthCheck.TimeoutS
+	}
+	// Bool zero values cannot distinguish "unset" from "explicitly false".
+	// Profile true is inherited unless the asset already enabled warmup itself.
 	if !dst.Warmup.Enabled && src.Warmup.Enabled {
-		dst.Warmup = src.Warmup
+		dst.Warmup.Enabled = true
+	}
+	if dst.Warmup.Prompt == "" {
+		dst.Warmup.Prompt = src.Warmup.Prompt
+	}
+	if dst.Warmup.MaxTokens == 0 {
+		dst.Warmup.MaxTokens = src.Warmup.MaxTokens
+	}
+	if dst.Warmup.TimeoutS == 0 {
+		dst.Warmup.TimeoutS = src.Warmup.TimeoutS
+	}
+	if len(dst.ExtraVolumes) == 0 {
+		dst.ExtraVolumes = src.ExtraVolumes
 	}
 	if dst.LogPatterns == nil {
 		dst.LogPatterns = src.LogPatterns
@@ -755,6 +766,119 @@ func expandURLTemplate(src *EngineSource, version string) {
 	}
 }
 
+func finalizeEngineAssets(cat *Catalog) []string {
+	rawAssets := cat.RawEngineAssets
+	if len(rawAssets) == 0 && len(cat.EngineAssets) > 0 {
+		rawAssets = cat.EngineAssets
+	}
+	if len(rawAssets) == 0 {
+		cat.EngineAssets = nil
+		return nil
+	}
+
+	finalized := make([]EngineAsset, 0, len(rawAssets))
+	var warnings []string
+	for _, raw := range rawAssets {
+		ea := cloneEngineAsset(raw)
+		if ea.Profile != "" {
+			if p, ok := cat.EngineProfiles[ea.Profile]; ok {
+				mergeEngineProfile(&ea, p)
+			} else {
+				warnings = append(warnings, fmt.Sprintf("engine %s: unknown profile %q", ea.Metadata.Name, ea.Profile))
+			}
+		}
+		if ea.Source != nil {
+			expandURLTemplate(ea.Source, ea.Metadata.Version)
+		}
+		finalized = append(finalized, ea)
+	}
+	cat.EngineAssets = finalized
+	return warnings
+}
+
+func cloneEngineAsset(src EngineAsset) EngineAsset {
+	dst := src
+
+	dst.Metadata.SupportedFormats = append([]string(nil), src.Metadata.SupportedFormats...)
+	dst.Image.Platforms = append([]string(nil), src.Image.Platforms...)
+	dst.Image.Registries = append([]string(nil), src.Image.Registries...)
+	dst.Startup.Command = append([]string(nil), src.Startup.Command...)
+	dst.Startup.InitCommands = append([]string(nil), src.Startup.InitCommands...)
+	dst.Startup.Env = cloneStringMap(src.Startup.Env)
+	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
+	dst.Startup.ExtraVolumes = append([]ContainerVolume(nil), src.Startup.ExtraVolumes...)
+	if src.Startup.LogPatterns != nil {
+		logPatterns := *src.Startup.LogPatterns
+		logPatterns.Phases = append([]StartupPhasePattern(nil), src.Startup.LogPatterns.Phases...)
+		logPatterns.Errors = append([]StartupErrorPattern(nil), src.Startup.LogPatterns.Errors...)
+		dst.Startup.LogPatterns = &logPatterns
+	}
+	dst.Amplifier.Features = append([]string(nil), src.Amplifier.Features...)
+	dst.Amplifier.ResourceExpansion = cloneBoolMap(src.Amplifier.ResourceExpansion)
+	dst.TimeConstraints.ColdStartS = append([]int(nil), src.TimeConstraints.ColdStartS...)
+	dst.TimeConstraints.ModelSwitchS = append([]int(nil), src.TimeConstraints.ModelSwitchS...)
+	dst.PowerConstraints.TypicalDrawWatts = append([]int(nil), src.PowerConstraints.TypicalDrawWatts...)
+	dst.Runtime.PlatformRecommendations = cloneStringMap(src.Runtime.PlatformRecommendations)
+	dst.Patterns = append([]string(nil), src.Patterns...)
+	dst.OpenQuestions = append([]StackQuestion(nil), src.OpenQuestions...)
+	if src.Source != nil {
+		source := *src.Source
+		source.Platforms = append([]string(nil), src.Source.Platforms...)
+		source.Download = cloneStringMap(src.Source.Download)
+		source.SHA256 = cloneStringMap(src.Source.SHA256)
+		source.PlatformFiles = cloneStringMap(src.Source.PlatformFiles)
+		source.MirrorTemplates = append([]string(nil), src.Source.MirrorTemplates...)
+		if src.Source.Mirror != nil {
+			source.Mirror = make(map[string][]string, len(src.Source.Mirror))
+			for k, v := range src.Source.Mirror {
+				source.Mirror[k] = append([]string(nil), v...)
+			}
+		}
+		if src.Source.Probe != nil {
+			probe := *src.Source.Probe
+			probe.Paths = append([]string(nil), src.Source.Probe.Paths...)
+			probe.VersionCommand = append([]string(nil), src.Source.Probe.VersionCommand...)
+			source.Probe = &probe
+		}
+		dst.Source = &source
+	}
+
+	return dst
+}
+
+func cloneStringMap[T ~string](src map[string]T) map[string]T {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]T, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func cloneBoolMap(src map[string]bool) map[string]bool {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]bool, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = normalizeValue(v)
+	}
+	return dst
+}
+
 // normalizeMap recursively converts map[interface{}]interface{} values (from YAML)
 // to map[string]interface{} so the map is JSON-safe.
 func normalizeMap(m map[string]any) map[string]any {
@@ -814,6 +938,11 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 			return fmt.Errorf("parse engine asset %s: %w", path, err)
 		}
 		cat.EngineAssets = append(cat.EngineAssets, ea)
+		var raw EngineAsset
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse raw engine asset %s: %w", path, err)
+		}
+		cat.RawEngineAssets = append(cat.RawEngineAssets, raw)
 	case "model_asset":
 		var ma ModelAsset
 		if err := yaml.Unmarshal(data, &ma); err != nil {
@@ -948,19 +1077,7 @@ func LoadCatalogLenient(fsys fs.FS) (*Catalog, []string) {
 	}
 
 	// Phase 3: Merge profiles + expand URL templates
-	for i := range cat.EngineAssets {
-		ea := &cat.EngineAssets[i]
-		if ea.Profile != "" {
-			if p, ok := cat.EngineProfiles[ea.Profile]; ok {
-				mergeEngineProfile(ea, p)
-			} else {
-				warnings = append(warnings, fmt.Sprintf("engine %s: unknown profile %q", ea.Metadata.Name, ea.Profile))
-			}
-		}
-		if ea.Source != nil {
-			expandURLTemplate(ea.Source, ea.Metadata.Version)
-		}
-	}
+	warnings = append(warnings, finalizeEngineAssets(cat)...)
 
 	return cat, warnings
 }
@@ -1020,12 +1137,35 @@ func extractName(data []byte) string {
 // Returns the mutated base catalog.
 func MergeCatalog(base, overlay *Catalog) *Catalog {
 	base.HardwareProfiles = mergeSlice(base.HardwareProfiles, overlay.HardwareProfiles, func(v HardwareProfile) string { return v.Metadata.Name })
-	base.EngineAssets = mergeSlice(base.EngineAssets, overlay.EngineAssets, func(v EngineAsset) string { return v.Metadata.Name })
+	base.RawEngineAssets = mergeSlice(rawEngineAssets(base), rawEngineAssets(overlay), func(v EngineAsset) string { return v.Metadata.Name })
 	base.ModelAssets = mergeSlice(base.ModelAssets, overlay.ModelAssets, func(v ModelAsset) string { return v.Metadata.Name })
 	base.PartitionStrategies = mergeSlice(base.PartitionStrategies, overlay.PartitionStrategies, func(v PartitionStrategy) string { return v.Metadata.Name })
 	base.StackComponents = mergeSlice(base.StackComponents, overlay.StackComponents, func(v StackComponent) string { return v.Metadata.Name })
 	base.DeploymentScenarios = mergeSlice(base.DeploymentScenarios, overlay.DeploymentScenarios, func(v DeploymentScenario) string { return v.Metadata.Name })
+	base.EngineProfiles = mergeEngineProfiles(base.EngineProfiles, overlay.EngineProfiles)
+	_ = finalizeEngineAssets(base)
 	return base
+}
+
+func rawEngineAssets(cat *Catalog) []EngineAsset {
+	if len(cat.RawEngineAssets) > 0 {
+		return cat.RawEngineAssets
+	}
+	return cat.EngineAssets
+}
+
+func mergeEngineProfiles(base, overlay map[string]*EngineProfile) map[string]*EngineProfile {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	merged := make(map[string]*EngineProfile, len(base)+len(overlay))
+	for name, profile := range base {
+		merged[name] = profile
+	}
+	for name, profile := range overlay {
+		merged[name] = profile
+	}
+	return merged
 }
 
 // MergeCatalogWithDigests merges overlay into base and checks for staleness.

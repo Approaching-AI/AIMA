@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jguan/aima/internal/knowledge"
 )
 
 // mockRunner implements CommandRunner for tests
@@ -85,7 +87,7 @@ func TestScanWithCrictl(t *testing.T) {
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		AssetPatterns: engineAssets,
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -260,7 +262,6 @@ func TestPatternMatchDeterministicPriority(t *testing.T) {
 	}
 }
 
-
 func TestScanFallbackToDocker(t *testing.T) {
 	// Docker image list JSON format (one JSON object per line)
 	dockerImages := []string{
@@ -273,7 +274,7 @@ func TestScanFallbackToDocker(t *testing.T) {
 
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl images -o json":                                                    {err: fmt.Errorf("crictl not found")},
+			"crictl images -o json":                        {err: fmt.Errorf("crictl not found")},
 			"docker images --format {{json .}} --no-trunc": {output: []byte(dockerOutput)},
 		},
 	}
@@ -284,7 +285,7 @@ func TestScanFallbackToDocker(t *testing.T) {
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		AssetPatterns: engineAssets,
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -305,7 +306,7 @@ func TestScanBothFail(t *testing.T) {
 	// it returns an empty list without error (native scan still runs).
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl images -o json":                         {err: fmt.Errorf("crictl not found")},
+			"crictl images -o json":                        {err: fmt.Errorf("crictl not found")},
 			"docker images --format {{json .}} --no-trunc": {err: fmt.Errorf("docker not found")},
 		},
 	}
@@ -342,7 +343,7 @@ func TestScanNoMatchingImages(t *testing.T) {
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -372,7 +373,7 @@ func TestScanEmptyAssetPatterns(t *testing.T) {
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		AssetPatterns: map[string][]string{},
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -405,7 +406,7 @@ func TestPullFirstRegistrySucceeds(t *testing.T) {
 func TestPullFirstFailsSecondSucceeds(t *testing.T) {
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl pull docker.io/vllm/vllm-openai:latest":                                       {err: fmt.Errorf("timeout")},
+			"crictl pull docker.io/vllm/vllm-openai:latest":                         {err: fmt.Errorf("timeout")},
 			"crictl pull registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai:latest": {output: []byte("pulled")},
 		},
 	}
@@ -424,7 +425,7 @@ func TestPullFirstFailsSecondSucceeds(t *testing.T) {
 func TestPullAllRegistriesFail(t *testing.T) {
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl pull docker.io/vllm/vllm-openai:latest":                                       {err: fmt.Errorf("timeout")},
+			"crictl pull docker.io/vllm/vllm-openai:latest":                         {err: fmt.Errorf("timeout")},
 			"crictl pull registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai:latest": {err: fmt.Errorf("auth fail")},
 		},
 	}
@@ -542,8 +543,8 @@ func TestImportNonExistentFile(t *testing.T) {
 func TestImportDockerToContainerdPipe(t *testing.T) {
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"docker save vllm/vllm-openai:latest":   {output: []byte("ok")},
-			"k3s ctr -n k8s.io images import -":     {output: []byte("ok")},
+			"docker save vllm/vllm-openai:latest": {output: []byte("ok")},
+			"k3s ctr -n k8s.io images import -":   {output: []byte("ok")},
 		},
 	}
 
@@ -576,7 +577,7 @@ func TestScanContextCancellation(t *testing.T) {
 
 	_, err := ScanUnified(ctx, ScanOptions{
 		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err == nil {
 		t.Error("expected error from cancelled context")
@@ -608,7 +609,7 @@ func TestScanImageWithRegistry(t *testing.T) {
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		AssetPatterns: engineAssets,
-		Runner:       runner,
+		Runner:        runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -675,6 +676,47 @@ func TestScanCustomFastAPIContainers(t *testing.T) {
 	}
 	if typeCount["glm-asr-fastapi"] != 1 {
 		t.Errorf("expected 1 glm-asr-fastapi match, got %d", typeCount["glm-asr-fastapi"])
+	}
+}
+
+func TestScanPreinstalledProbeUsesDiscoveredBinaryPath(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "fake-engine")
+	if err := os.WriteFile(binPath, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write fake engine: %v", err)
+	}
+
+	runner := &mockRunner{
+		responses: map[string]mockResponse{
+			binPath + " --version": {output: []byte("FakeEngine 1.2.3")},
+		},
+	}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		Runner:   runner,
+		Platform: "linux/arm64",
+		PreinstalledProbes: map[string]*knowledge.EngineSourceProbe{
+			"fake-engine": {
+				Paths:          []string{binPath},
+				VersionCommand: []string{"./fake-engine", "--version"},
+				VersionPattern: `FakeEngine ([\d.]+)`,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 preinstalled engine, got %d", len(results))
+	}
+	if got := results[0].BinaryPath; got != binPath {
+		t.Errorf("BinaryPath = %q, want %q", got, binPath)
+	}
+	if got := results[0].DetectedVersion; got != "1.2.3" {
+		t.Errorf("DetectedVersion = %q, want 1.2.3", got)
+	}
+	if got := results[0].VersionMatch; got != "exact" {
+		t.Errorf("VersionMatch = %q, want exact", got)
 	}
 }
 

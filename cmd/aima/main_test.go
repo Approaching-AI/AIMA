@@ -18,6 +18,43 @@ import (
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 )
 
+func TestParseExtraParamsStrict(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantNil bool
+		wantErr bool
+	}{
+		{name: "empty clears", input: "", wantNil: true},
+		{name: "whitespace clears", input: "   ", wantNil: true},
+		{name: "valid object", input: `{"temperature":0.7}`, wantNil: false},
+		{name: "invalid json", input: `{"temperature":`, wantErr: true},
+		{name: "array rejected", input: `[]`, wantErr: true},
+		{name: "null rejected", input: `null`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseExtraParamsStrict(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantNil && got != nil {
+				t.Fatalf("expected nil, got %#v", got)
+			}
+			if !tt.wantNil && got == nil {
+				t.Fatal("expected parsed object, got nil")
+			}
+		})
+	}
+}
+
 func TestValidateOverlayAssetName(t *testing.T) {
 	tests := []struct {
 		name    string

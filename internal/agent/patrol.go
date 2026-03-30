@@ -213,6 +213,7 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 func (p *Patrol) checkMetrics(ctx context.Context, config PatrolConfig, now time.Time) []Alert {
 	result, err := p.tools.ExecuteTool(ctx, "device.metrics", nil)
 	if err != nil {
+		p.resetGPUIdleObservation()
 		slog.Debug("patrol: device.metrics unavailable", "error", err)
 		return nil
 	}
@@ -227,6 +228,7 @@ func (p *Patrol) checkMetrics(ctx context.Context, config PatrolConfig, now time
 		} `json:"gpu"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &metrics); err != nil || metrics.GPU == nil {
+		p.resetGPUIdleObservation()
 		return nil
 	}
 
@@ -398,6 +400,12 @@ func (p *Patrol) observeGPUIdle(config PatrolConfig, utilization int, now time.T
 		return idleFor, true
 	}
 	return idleFor, idleFor >= required
+}
+
+func (p *Patrol) resetGPUIdleObservation() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gpuIdleSince = time.Time{}
 }
 
 func stopTimer(timer *time.Timer) {

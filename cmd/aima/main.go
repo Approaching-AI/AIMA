@@ -579,6 +579,11 @@ func run() error {
 	// 9f. Wrap SetConfig for API key hot-reload (needs proxyServer + fleetClient in scope)
 	baseSetConfig := deps.SetConfig
 	deps.SetConfig = func(ctx context.Context, key, value string) error {
+		if key == "llm.extra_params" {
+			if _, err := parseExtraParamsStrict(value); err != nil {
+				return err
+			}
+		}
 		if err := baseSetConfig(ctx, key, value); err != nil {
 			return err
 		}
@@ -2158,12 +2163,26 @@ func discoverDefaultLLMModel(ctx context.Context, settings llmSettings) (string,
 
 // parseExtraParams parses a JSON string into a map for LLM extra parameters.
 func parseExtraParams(s string) map[string]any {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
+	m, err := parseExtraParamsStrict(s)
+	if err != nil {
 		slog.Warn("invalid llm.extra_params JSON, ignoring", "error", err)
 		return nil
 	}
 	return m
+}
+
+func parseExtraParamsStrict(s string) (map[string]any, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, fmt.Errorf("llm.extra_params must be a JSON object: %w", err)
+	}
+	if m == nil {
+		return nil, fmt.Errorf("llm.extra_params must be a JSON object")
+	}
+	return m, nil
 }
 
 // discoverFleetLLM discovers LLM endpoints from fleet devices via mDNS.

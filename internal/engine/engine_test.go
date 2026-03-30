@@ -38,6 +38,17 @@ func (m *mockRunner) Pipe(ctx context.Context, from, to []string) error {
 	return err
 }
 
+func (m *mockRunner) RunStream(ctx context.Context, onLine func(line string), name string, args ...string) error {
+	out, err := m.Run(ctx, name, args...)
+	if err != nil {
+		return err
+	}
+	if onLine != nil && len(out) > 0 {
+		onLine(string(out))
+	}
+	return nil
+}
+
 // --- crictl image list format for tests ---
 type crictlImageList struct {
 	Images []crictlImage `json:"images"`

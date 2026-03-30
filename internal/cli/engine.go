@@ -2,7 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"sync"
+	"time"
 
+	"github.com/jguan/aima/internal/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -19,6 +23,7 @@ func newEngineCmd(app *App) *cobra.Command {
 		newEnginePullCmd(app),
 		newEngineImportCmd(app),
 		newEngineRemoveCmd(app),
+		newEnginePlanCmd(app),
 	)
 
 	return cmd
@@ -111,11 +116,156 @@ func newEnginePullCmd(app *App) *cobra.Command {
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "Pulling engine %s...\n", name)
 			}
-			if err := app.ToolDeps.PullEngine(ctx, name); err != nil {
-				return fmt.Errorf("pull engine: %w", err)
+
+			w := cmd.OutOrStdout()
+			isTTY := isTerminal(w)
+
+			pr := &pullProgressRenderer{
+				w:          w,
+				isTTY:      isTTY,
+				lastReport: -1,
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Engine pulled successfully")
+			if err := app.ToolDeps.PullEngine(ctx, name, pr.onProgress); err != nil {
+				pr.finish()
+				return fmt.Errorf("pull engine: %w", err)
+			}
+			pr.finish()
+
+			fmt.Fprintln(w, "Engine pulled and registered successfully")
+			return nil
+		},
+	}
+}
+
+// pullProgressRenderer renders download progress to a terminal or log output.
+type pullProgressRenderer struct {
+	mu         sync.Mutex
+	w          interface{ Write([]byte) (int, error) }
+	isTTY      bool
+	lastReport int   // last reported percentage (for non-TTY deduplication)
+	started    bool  // whether we've printed any progress line
+	lastUpdate time.Time
+}
+
+func (r *pullProgressRenderer) onProgress(ev engine.ProgressEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	switch ev.Phase {
+	case "already_available":
+		fmt.Fprintf(r.w, "  %s\n", ev.Message)
+		return
+	case "complete":
+		return // handled by finish()
+	case "extracting":
+		if r.started && r.isTTY {
+			fmt.Fprintf(r.w, "\r\033[K")
+		}
+		fmt.Fprintf(r.w, "  Extracting...\n")
+		r.started = false
+		return
+	}
+
+	// Rate-limit updates: at most every 200ms for TTY, every 5% for non-TTY
+	now := time.Now()
+	if r.isTTY && now.Sub(r.lastUpdate) < 200*time.Millisecond {
+		return
+	}
+	r.lastUpdate = now
+
+	if ev.Total > 0 && ev.Downloaded > 0 {
+		pct := int(ev.Downloaded * 100 / ev.Total)
+		downMB := float64(ev.Downloaded) / (1024 * 1024)
+		totalMB := float64(ev.Total) / (1024 * 1024)
+
+		if r.isTTY {
+			// Single-line overwrite progress bar
+			barWidth := 30
+			filled := barWidth * pct / 100
+			bar := make([]byte, barWidth)
+			for i := range bar {
+				if i < filled {
+					bar[i] = '='
+				} else if i == filled {
+					bar[i] = '>'
+				} else {
+					bar[i] = ' '
+				}
+			}
+
+			speedStr := ""
+			if ev.Speed > 0 {
+				speedMBs := float64(ev.Speed) / (1024 * 1024)
+				remaining := float64(ev.Total-ev.Downloaded) / float64(ev.Speed)
+				speedStr = fmt.Sprintf("  %.1f MB/s  ~%s", speedMBs, formatDuration(remaining))
+			}
+			fmt.Fprintf(r.w, "\r  [%s] %.0f MB / %.0f MB  %d%%%s", string(bar), downMB, totalMB, pct, speedStr)
+			r.started = true
+		} else {
+			// Non-TTY: print every 10%
+			bucket := (pct / 10) * 10
+			if bucket > r.lastReport {
+				r.lastReport = bucket
+				fmt.Fprintf(r.w, "  %.0f MB / %.0f MB  %d%%\n", downMB, totalMB, pct)
+			}
+		}
+	} else if ev.Downloaded > 0 {
+		// Unknown total size
+		downMB := float64(ev.Downloaded) / (1024 * 1024)
+		if r.isTTY {
+			fmt.Fprintf(r.w, "\r  %.0f MB downloaded...", downMB)
+			r.started = true
+		}
+	}
+}
+
+func (r *pullProgressRenderer) finish() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.started && r.isTTY {
+		fmt.Fprintf(r.w, "\n")
+		r.started = false
+	}
+}
+
+// isTerminal checks if w is a terminal (character device).
+func isTerminal(w interface{ Write([]byte) (int, error) }) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// formatDuration formats seconds into a human-readable duration string.
+func formatDuration(seconds float64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", int(seconds))
+	}
+	m := int(seconds) / 60
+	s := int(seconds) % 60
+	return fmt.Sprintf("%dm%02ds", m, s)
+}
+
+func newEnginePlanCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "plan",
+		Short: "Show compatible engines for current hardware with install status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.EnginePlan == nil {
+				return fmt.Errorf("engine.plan not implemented")
+			}
+			data, err := app.ToolDeps.EnginePlan(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("engine plan: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}
@@ -141,7 +291,8 @@ func newEngineImportCmd(app *App) *cobra.Command {
 }
 
 func newEngineRemoveCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	var deleteFiles bool
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove an engine from the database",
 		Args:  cobra.ExactArgs(1),
@@ -152,12 +303,18 @@ func newEngineRemoveCmd(app *App) *cobra.Command {
 			if app.ToolDeps.RemoveEngine == nil {
 				return fmt.Errorf("engine.remove not implemented")
 			}
-			if err := app.ToolDeps.RemoveEngine(ctx, name); err != nil {
+			if err := app.ToolDeps.RemoveEngine(ctx, name, deleteFiles); err != nil {
 				return fmt.Errorf("remove engine %s: %w", name, err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Engine %s removed\n", name)
+			if deleteFiles {
+				fmt.Fprintf(cmd.OutOrStdout(), "Engine %s removed (files cleaned up)\n", name)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Engine %s removed\n", name)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&deleteFiles, "delete-files", "f", false, "Also delete the actual container image or native binary")
+	return cmd
 }

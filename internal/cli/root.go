@@ -34,6 +34,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	}
 
 	root.AddCommand(
+		newRunCmd(app),
 		newInitCmd(app),
 		newHalCmd(app),
 		newDeployCmd(app),

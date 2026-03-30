@@ -33,6 +33,9 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 	// Pipe connects stdout of 'from' to stdin of 'to' (e.g. docker save | k3s ctr import).
 	Pipe(ctx context.Context, from, to []string) error
+	// RunStream executes a command and calls onLine for each line of combined stdout+stderr.
+	// Used to capture streaming output from commands like 'docker pull'.
+	RunStream(ctx context.Context, onLine func(line string), name string, args ...string) error
 }
 
 // ScanOptions configures engine scanning (both container and native).

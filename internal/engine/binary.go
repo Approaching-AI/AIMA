@@ -82,7 +82,7 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 		return "", fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	if err := m.download(ctx, url, mirrorURLs, m.distDir, name); err != nil {
+	if err := m.download(ctx, url, mirrorURLs, m.distDir, name, nil); err != nil {
 		return "", fmt.Errorf("download %s: %w", name, err)
 	}
 
@@ -99,7 +99,8 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 
 // Download forces download of the binary for the current platform,
 // regardless of whether it already exists in distDir or PATH.
-func (m *BinaryManager) Download(ctx context.Context, source *BinarySource) error {
+// onProgress is called with download progress events (may be nil).
+func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onProgress func(ProgressEvent)) error {
 	if source == nil {
 		return fmt.Errorf("no binary source configured")
 	}
@@ -115,11 +116,11 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource) erro
 		return fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary)
+	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary, onProgress)
 }
 
 // download tries mirror URLs first, then primary. Extracts zip/tar.gz archives.
-func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []string, destDir, binaryName string) error {
+func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []string, destDir, binaryName string, onProgress func(ProgressEvent)) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create dist dir: %w", err)
 	}
@@ -134,7 +135,7 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 	var lastErr error
 	for _, u := range urls {
 		slog.Info("downloading engine binary", "url", u, "dest", destDir)
-		if err := downloadAndExtract(ctx, u, destDir, binaryName); err != nil {
+		if err := downloadAndExtract(ctx, u, destDir, binaryName, onProgress); err != nil {
 			slog.Warn("download failed, trying next source", "url", u, "error", err)
 			lastErr = err
 			continue
@@ -157,6 +158,9 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 		}
 
 		slog.Info("engine binary ready", "dir", destDir, "binary", binaryName)
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "complete", Message: "engine binary ready"})
+		}
 		return nil
 	}
 
@@ -164,7 +168,7 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 }
 
 // downloadAndExtract downloads url to a temp file then extracts or renames it.
-func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) error {
+func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, onProgress func(ProgressEvent)) error {
 	tmpFile, err := os.CreateTemp(destDir, ".download-*")
 	if err != nil {
 		return fmt.Errorf("create temp file in %s: %w", destDir, err)
@@ -192,7 +196,21 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) er
 	}
 
 	h := sha256.New()
-	written, err := io.Copy(io.MultiWriter(tmpFile, h), resp.Body)
+
+	// Wrap body with progress tracking
+	var body io.Reader = resp.Body
+	if onProgress != nil {
+		tracker := newProgressTracker(resp.ContentLength)
+		body = &progressReader{
+			reader: resp.Body,
+			onRead: func(n int) {
+				ev := tracker.update(tracker.downloaded + int64(n))
+				onProgress(ev)
+			},
+		}
+	}
+
+	written, err := io.Copy(io.MultiWriter(tmpFile, h), body)
 	if err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
@@ -204,8 +222,14 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string) er
 	urlLower := strings.ToLower(url)
 	switch {
 	case strings.HasSuffix(urlLower, ".tar.gz") || strings.HasSuffix(urlLower, ".tgz"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
+		}
 		return extractTarGz(tmpPath, destDir)
 	case strings.HasSuffix(urlLower, ".zip"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
+		}
 		return extractZip(tmpPath, destDir)
 	default:
 		// Plain binary — rename directly

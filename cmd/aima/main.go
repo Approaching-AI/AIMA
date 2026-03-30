@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1735,6 +1737,25 @@ func (r *execRunner) Pipe(ctx context.Context, from, to []string) error {
 	return nil
 }
 
+func (r *execRunner) RunStream(ctx context.Context, onLine func(line string), name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe for %s: %w", name, err)
+	}
+	cmd.Stderr = cmd.Stdout // merge stderr into stdout
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+	scanner := bufio.NewScanner(stdout)
+	// Docker pull JSON lines can be long; increase buffer
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+	for scanner.Scan() {
+		onLine(scanner.Text())
+	}
+	return cmd.Wait()
+}
+
 // podQuerierAdapter bridges k3s.Client to stack.PodQuerier interface.
 type podQuerierAdapter struct {
 	client *k3s.Client
@@ -2184,6 +2205,177 @@ func staticKnowledgeLoaded(ctx context.Context, sqlDB *sql.DB) bool {
 }
 
 // buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
+// splitImageRef splits a container image reference into name and tag,
+// handling registry:port/image:tag correctly by finding the last colon
+// after the last slash.
+func splitImageRef(ref string) (name, tag string) {
+	// Find the last slash to isolate the image+tag portion from registry:port
+	slashIdx := strings.LastIndex(ref, "/")
+	afterSlash := ref
+	if slashIdx >= 0 {
+		afterSlash = ref[slashIdx+1:]
+	}
+	colonIdx := strings.LastIndex(afterSlash, ":")
+	if colonIdx < 0 {
+		return ref, "latest"
+	}
+	// colonIdx is relative to afterSlash; convert to absolute position
+	absColon := colonIdx
+	if slashIdx >= 0 {
+		absColon = slashIdx + 1 + colonIdx
+	}
+	return ref[:absColon], ref[absColon+1:]
+}
+
+type deployOptions struct {
+	allowAutoPull bool
+}
+
+type deployOptionsKey struct{}
+
+func withDeployAutoPull(ctx context.Context, allow bool) context.Context {
+	return context.WithValue(ctx, deployOptionsKey{}, deployOptions{allowAutoPull: allow})
+}
+
+func deployAutoPullAllowed(ctx context.Context) bool {
+	opts, ok := ctx.Value(deployOptionsKey{}).(deployOptions)
+	if !ok {
+		return true
+	}
+	return opts.allowAutoPull
+}
+
+func stringInSliceFold(values []string, want string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func imageSupportsPlatform(ea *knowledge.EngineAsset, platform string) bool {
+	if ea == nil || ea.Image.Name == "" {
+		return false
+	}
+	if platform == "" {
+		return true
+	}
+	return len(ea.Image.Platforms) == 0 || stringInSliceFold(ea.Image.Platforms, platform)
+}
+
+func engineMatchesHardware(ea *knowledge.EngineAsset, hw knowledge.HardwareInfo) bool {
+	if ea == nil {
+		return false
+	}
+	arch := strings.TrimSpace(ea.Hardware.GPUArch)
+	return arch == "" || arch == "*" || strings.EqualFold(arch, hw.GPUArch)
+}
+
+func engineSupportsPlatform(ea *knowledge.EngineAsset, platform string) bool {
+	if ea == nil || platform == "" {
+		return ea != nil
+	}
+	if ea.Source != nil && ea.Source.Supports(platform) {
+		return true
+	}
+	return imageSupportsPlatform(ea, platform)
+}
+
+func engineCompatibleWithHost(ea *knowledge.EngineAsset, hw knowledge.HardwareInfo) bool {
+	return engineMatchesHardware(ea, hw) && engineSupportsPlatform(ea, hw.Platform)
+}
+
+func preferredEngineRuntimeType(ea *knowledge.EngineAsset, platform string) string {
+	if ea == nil {
+		return "container"
+	}
+
+	recommendation := ea.Runtime.Default
+	if platform != "" {
+		if rec, ok := ea.Runtime.PlatformRecommendations[platform]; ok && rec != "" {
+			recommendation = rec
+		}
+	}
+
+	switch recommendation {
+	case "native":
+		if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+			return "native"
+		}
+		if imageSupportsPlatform(ea, platform) {
+			return "container"
+		}
+	case "container":
+		if imageSupportsPlatform(ea, platform) {
+			return "container"
+		}
+		if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+			return "native"
+		}
+	}
+
+	if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+		return "native"
+	}
+	if imageSupportsPlatform(ea, platform) {
+		return "container"
+	}
+	return "container"
+}
+
+func requiresRootImportForK3S(inContainerd, inDocker, isRoot bool) bool {
+	return inDocker && !inContainerd && !isRoot
+}
+
+func installedRuntimeTypesForEngine(installed []*state.Engine, engineName, engineType string) []string {
+	keys := map[string]bool{
+		strings.ToLower(engineName): true,
+		strings.ToLower(engineType): true,
+	}
+	set := make(map[string]bool)
+	for _, e := range installed {
+		if e == nil {
+			continue
+		}
+		if keys[strings.ToLower(e.ID)] || keys[strings.ToLower(e.Type)] {
+			if e.RuntimeType != "" {
+				set[e.RuntimeType] = true
+			}
+		}
+	}
+	runtimeTypes := make([]string, 0, len(set))
+	for rt := range set {
+		runtimeTypes = append(runtimeTypes, rt)
+	}
+	sort.Strings(runtimeTypes)
+	return runtimeTypes
+}
+
+func defaultEngineAsset(cat *knowledge.Catalog, hw knowledge.HardwareInfo) *knowledge.EngineAsset {
+	if cat == nil {
+		return nil
+	}
+	if name := cat.DefaultEngine(); name != "" {
+		if ea := cat.FindEngineByName(name, hw); engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	for i := range cat.EngineAssets {
+		ea := &cat.EngineAssets[i]
+		if ea.Metadata.Default && engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	for i := range cat.EngineAssets {
+		ea := &cat.EngineAssets[i]
+		if engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	return nil
+}
+
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
 // Missing data results in zero values, which downstream functions treat as "unknown" and skip.
 func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName string) knowledge.HardwareInfo {
@@ -2452,7 +2644,197 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		return "http://localhost:6188/v1/chat/completions"
 	}
 
-	return &mcp.ToolDeps{
+	// pullModelCore extracts the model download logic so it can be reused
+	// by both PullModel and DeployApply (auto-pull).
+	pullModelCore := func(ctx context.Context, name string) error {
+		ma, matchedVariant := findModelAssetOrVariant(cat, name)
+		if ma == nil {
+			return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
+		}
+		if matchedVariant != nil && matchedVariant.Source != nil {
+			slog.Info("model pull: using variant source", "variant", matchedVariant.Name, "repo", matchedVariant.Source.Repo)
+			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+			sources := []model.Source{{Type: matchedVariant.Source.Type, Repo: matchedVariant.Source.Repo}}
+			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+				return fmt.Errorf("download model %s: %w", name, err)
+			}
+			return registerPulledModel(ctx, destPath, dataDir, db)
+		}
+		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
+		_, resolvedVariant, engineType, _ := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
+		requiredFormat := ""
+		if resolvedVariant != nil {
+			requiredFormat = resolvedVariant.Format
+		}
+		if engineType != "" {
+			variantName := ""
+			if resolvedVariant != nil {
+				variantName = resolvedVariant.Name
+			}
+			slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat, "variant", variantName)
+		}
+		if resolvedVariant != nil && resolvedVariant.Source != nil {
+			slog.Info("model pull: using variant source", "variant", resolvedVariant.Name, "repo", resolvedVariant.Source.Repo)
+			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+			sources := []model.Source{{Type: resolvedVariant.Source.Type, Repo: resolvedVariant.Source.Repo}}
+			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+				return fmt.Errorf("download model %s: %w", name, err)
+			}
+			return registerPulledModel(ctx, destPath, dataDir, db)
+		}
+		destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
+		var sources []model.Source
+		for _, s := range ma.Storage.Sources {
+			if s.Type == "local_path" {
+				continue
+			}
+			if requiredFormat != "" && s.Format != "" && s.Format != requiredFormat {
+				continue
+			}
+			sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
+		}
+		if len(sources) == 0 {
+			return fmt.Errorf("no download source for model %q with format %q", name, requiredFormat)
+		}
+		if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
+			return fmt.Errorf("download model %s: %w", name, err)
+		}
+		return registerPulledModel(ctx, destPath, dataDir, db)
+	}
+
+	// deployRunCore orchestrates the full run workflow: resolve → pull → deploy → wait.
+	// Business logic lives here so CLI remains a thin presentation layer.
+	var deps *mcp.ToolDeps
+	deployRunCore := func(ctx context.Context, model, engineType, slot string, noPull bool,
+		onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error) {
+
+		notify := func(phase, msg string) {
+			if onPhase != nil {
+				onPhase(phase, msg)
+			}
+		}
+
+		// Step 1: Resolve via dry-run
+		notify("resolving", model)
+		dryRunData, err := deps.DeployDryRun(ctx, engineType, model, slot, nil)
+		if err != nil {
+			return nil, fmt.Errorf("resolve: %w", err)
+		}
+		var plan struct {
+			Engine    string `json:"engine"`
+			Runtime   string `json:"runtime"`
+			FitReport struct {
+				Fit    bool     `json:"fit"`
+				Reason string   `json:"reason"`
+				Warns  []string `json:"warnings"`
+			} `json:"fit_report"`
+		}
+		if err := json.Unmarshal(dryRunData, &plan); err != nil {
+			return nil, fmt.Errorf("parse resolve result: %w", err)
+		}
+		if !plan.FitReport.Fit {
+			return nil, fmt.Errorf("hardware not compatible: %s", plan.FitReport.Reason)
+		}
+		notify("resolved", fmt.Sprintf("engine=%s runtime=%s", plan.Engine, plan.Runtime))
+		for _, warn := range plan.FitReport.Warns {
+			notify("warning", warn)
+		}
+
+		// Step 2: Pull engine
+		if !noPull {
+			notify("pulling_engine", plan.Engine)
+			if err := deps.PullEngine(ctx, plan.Engine, onEngineProgress); err != nil {
+				return nil, fmt.Errorf("pull engine: %w", err)
+			}
+		}
+
+		// Step 3: Pull model (non-fatal — may be local or pre-installed)
+		if !noPull {
+			notify("pulling_model", model)
+			if err := deps.PullModel(ctx, model); err != nil {
+				notify("model_skip", err.Error())
+			}
+		}
+
+		// Step 4: Deploy
+		notify("deploying", model)
+		deployCtx := ctx
+		if noPull {
+			deployCtx = withDeployAutoPull(ctx, false)
+		}
+		deployData, err := deps.DeployApply(deployCtx, engineType, model, slot, nil)
+		if err != nil {
+			return nil, fmt.Errorf("deploy: %w", err)
+		}
+		var deployResult struct {
+			Name    string `json:"name"`
+			Runtime string `json:"runtime"`
+		}
+		if err := json.Unmarshal(deployData, &deployResult); err != nil || deployResult.Name == "" {
+			return deployData, nil
+		}
+
+		// Step 5: Poll until ready (context-aware, no blocking sleep)
+		notify("waiting", deployResult.Name)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		timer := time.NewTimer(10 * time.Minute)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+				return json.Marshal(map[string]any{
+					"name": deployResult.Name, "status": "timeout",
+					"message": "deployment started but not ready within 10 minutes",
+				})
+			case <-ticker.C:
+				statusData, err := deps.DeployStatus(ctx, deployResult.Name)
+				if err != nil {
+					continue
+				}
+				var status struct {
+					Phase           string `json:"phase"`
+					Ready           bool   `json:"ready"`
+					Address         string `json:"address"`
+					StartupPhase    string `json:"startup_phase"`
+					StartupProgress int    `json:"startup_progress"`
+					StartupMessage  string `json:"startup_message"`
+					Message         string `json:"message,omitempty"`
+				}
+				if err := json.Unmarshal(statusData, &status); err != nil {
+					continue
+				}
+				if status.Ready {
+					notify("ready", status.Address)
+					return json.Marshal(map[string]any{
+						"name": deployResult.Name, "model": model, "engine": plan.Engine,
+						"runtime": deployResult.Runtime, "address": status.Address, "status": "ready",
+					})
+				}
+				if status.Phase == "failed" {
+					msg := status.Message
+					if msg == "" {
+						msg = status.StartupMessage
+					}
+					return nil, fmt.Errorf("deployment failed: %s", msg)
+				}
+				// Report startup progress
+				phase := status.StartupPhase
+				if phase == "" {
+					phase = status.Phase
+				}
+				if status.StartupProgress > 0 {
+					phase = fmt.Sprintf("%s %d%%", phase, status.StartupProgress)
+				}
+				notify("startup", phase)
+			}
+		}
+	}
+
+	deps = &mcp.ToolDeps{
 		// Hardware
 		DetectHardware: func(ctx context.Context) (json.RawMessage, error) {
 			hw, err := hal.Detect(ctx)
@@ -2502,68 +2884,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			// Try model name first, then variant name
-			ma, matchedVariant := findModelAssetOrVariant(cat, name)
-			if ma == nil {
-				return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
-			}
-
-			// If matched by variant name, use variant's source directly if available
-			if matchedVariant != nil && matchedVariant.Source != nil {
-				slog.Info("model pull: using variant source", "variant", matchedVariant.Name, "repo", matchedVariant.Source.Repo)
-				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
-				sources := []model.Source{{Type: matchedVariant.Source.Type, Repo: matchedVariant.Source.Repo}}
-				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-					return fmt.Errorf("download model %s: %w", name, err)
-				}
-				return registerPulledModel(ctx, destPath, dataDir, db)
-			}
-
-			// Determine required format via hardware-aware variant resolution.
-			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-			_, resolvedVariant, engineType, _ := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
-			requiredFormat := ""
-			if resolvedVariant != nil {
-				requiredFormat = resolvedVariant.Format
-			}
-			if engineType != "" {
-				variantName := ""
-				if resolvedVariant != nil {
-					variantName = resolvedVariant.Name
-				}
-				slog.Info("model pull: inferred format", "engine", engineType, "format", requiredFormat, "variant", variantName)
-			}
-
-			// If resolved variant has its own source, use it directly
-			if resolvedVariant != nil && resolvedVariant.Source != nil {
-				slog.Info("model pull: using variant source", "variant", resolvedVariant.Name, "repo", resolvedVariant.Source.Repo)
-				destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
-				sources := []model.Source{{Type: resolvedVariant.Source.Type, Repo: resolvedVariant.Source.Repo}}
-				if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-					return fmt.Errorf("download model %s: %w", name, err)
-				}
-				return registerPulledModel(ctx, destPath, dataDir, db)
-			}
-
-			// Fallback: filter global sources by format
-			destPath := filepath.Join(dataDir, "models", ma.Metadata.Name)
-			var sources []model.Source
-			for _, s := range ma.Storage.Sources {
-				if s.Type == "local_path" {
-					continue
-				}
-				if requiredFormat != "" && s.Format != "" && s.Format != requiredFormat {
-					continue
-				}
-				sources = append(sources, model.Source{Type: s.Type, Repo: s.Repo})
-			}
-			if len(sources) == 0 {
-				return fmt.Errorf("no download source for model %q with format %q", name, requiredFormat)
-			}
-			if err := model.DownloadFromSource(ctx, sources, destPath); err != nil {
-				return fmt.Errorf("download model %s: %w", name, err)
-			}
-			return registerPulledModel(ctx, destPath, dataDir, db)
+			return pullModelCore(ctx, name)
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")
@@ -2691,11 +3012,15 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			return json.Marshal(result)
 		},
-		PullEngine: func(ctx context.Context, name string) error {
-			if name == "" {
-				name = cat.DefaultEngine()
-			}
+		PullEngine: func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error {
 			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
+			if name == "" {
+				if ea := defaultEngineAsset(cat, hwInfo); ea != nil {
+					name = ea.Metadata.Name
+				} else {
+					name = cat.DefaultEngine()
+				}
+			}
 
 			ea := cat.FindEngineByName(name, hwInfo)
 			if ea == nil {
@@ -2704,25 +3029,71 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 			// Native binary path: prefer if platform is supported
 			platform := goruntime.GOOS + "/" + goruntime.GOARCH
+			preferredRuntime := preferredEngineRuntimeType(ea, platform)
+			if preferredRuntime == "native" && ea.Source != nil && ea.Source.Supports(platform) {
+				distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
+				distDir := filepath.Join(dataDir, "dist", distPlatform)
+				mgr := engine.NewBinaryManager(distDir)
+				if err := mgr.Download(ctx, toEngineBinarySource(ea.Source), onProgress); err != nil {
+					return err
+				}
+				// Auto-scan to register in DB
+				_, _ = scanEnginesCore(ctx, "native", false)
+				return nil
+			}
+			// Container image path
+			if ea.Image.Name != "" && imageSupportsPlatform(ea, platform) {
+				fullRef := ea.Image.Name + ":" + ea.Image.Tag
+				runner := &execRunner{}
+				inContainerd := engine.ImageExistsInContainerd(ctx, fullRef, runner)
+				inDocker := engine.ImageExistsInDocker(ctx, fullRef, runner)
+				if inContainerd || inDocker {
+					slog.Info("engine image already available locally", "image", fullRef, "containerd", inContainerd, "docker", inDocker)
+					if rt.Name() == "k3s" && !inContainerd && inDocker {
+						if os.Getuid() != 0 {
+							_, _ = scanEnginesCore(ctx, "container", false)
+							return fmt.Errorf("engine image %s exists in Docker but not in K3S containerd; import requires root (sudo docker save %s | sudo k3s ctr -n k8s.io images import -)", fullRef, fullRef)
+						}
+						if err := engine.ImportDockerToContainerd(ctx, fullRef, runner); err != nil {
+							return fmt.Errorf("import existing engine image %s into containerd: %w", fullRef, err)
+						}
+						inContainerd = true
+					}
+					_, _ = scanEnginesCore(ctx, "container", false)
+					if onProgress != nil {
+						msg := "engine image already available locally"
+						if rt.Name() == "k3s" && inContainerd && inDocker {
+							msg = "engine image already available locally (docker + containerd)"
+						} else if rt.Name() == "k3s" && inContainerd {
+							msg = "engine image already available in K3S containerd"
+						}
+						onProgress(engine.ProgressEvent{Phase: "already_available", Message: msg})
+					}
+					return nil
+				}
+				if err := engine.Pull(ctx, engine.PullOptions{
+					Image:      ea.Image.Name,
+					Tag:        ea.Image.Tag,
+					Registries: ea.Image.Registries,
+					SizeHintMB: ea.Image.SizeApproxMB,
+					OnProgress: onProgress,
+					Runner:     &execRunner{},
+				}); err != nil {
+					return err
+				}
+				// Auto-scan to register in DB
+				_, _ = scanEnginesCore(ctx, "container", false)
+				return nil
+			}
 			if ea.Source != nil && ea.Source.Supports(platform) {
 				distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 				distDir := filepath.Join(dataDir, "dist", distPlatform)
 				mgr := engine.NewBinaryManager(distDir)
-				return mgr.Download(ctx, toEngineBinarySource(ea.Source))
-			}
-			// Container image path
-			if ea.Image.Name != "" {
-				// Skip network pull if the image is already available locally
-				if engine.ImageExists(ctx, ea.Image.Name, ea.Image.Tag, &execRunner{}) {
-					slog.Info("engine image already available locally", "image", ea.Image.Name+":"+ea.Image.Tag)
-					return nil
+				if err := mgr.Download(ctx, toEngineBinarySource(ea.Source), onProgress); err != nil {
+					return err
 				}
-				return engine.Pull(ctx, engine.PullOptions{
-					Image:      ea.Image.Name,
-					Tag:        ea.Image.Tag,
-					Registries: ea.Image.Registries,
-					Runner:     &execRunner{},
-				})
+				_, _ = scanEnginesCore(ctx, "native", false)
+				return nil
 			}
 			return fmt.Errorf("engine %q has no download source for platform %s/%s", name, goruntime.GOOS, goruntime.GOARCH)
 		},
@@ -2738,20 +3109,105 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			_, _ = scanEnginesCore(ctx, "auto", false)
 			return nil
 		},
-		RemoveEngine: func(ctx context.Context, name string) error {
-			// Gap 3: Save rollback snapshot before deletion
-			if e, getErr := db.GetEngine(ctx, name); getErr == nil {
+		RemoveEngine: func(ctx context.Context, name string, deleteFiles bool) error {
+			// Save rollback snapshot before deletion
+			e, getErr := db.GetEngine(ctx, name)
+			if getErr == nil {
 				if snap, snapErr := json.Marshal(e); snapErr == nil {
 					_ = db.SaveSnapshot(ctx, &state.RollbackSnapshot{
 						ToolName: "engine.remove", ResourceType: "engine", ResourceName: name, Snapshot: string(snap),
 					})
 				}
 			}
+
+			// Optionally clean up actual files/images
+			if deleteFiles && e != nil {
+				runner := &execRunner{}
+				if e.RuntimeType == "native" && e.BinaryPath != "" {
+					if rmErr := os.Remove(e.BinaryPath); rmErr != nil && !os.IsNotExist(rmErr) {
+						slog.Warn("failed to remove engine binary", "path", e.BinaryPath, "error", rmErr)
+					} else {
+						slog.Info("removed engine binary", "path", e.BinaryPath)
+					}
+				} else if e.Image != "" {
+					ref := e.Image
+					if e.Tag != "" {
+						ref += ":" + e.Tag
+					}
+					// Try docker rmi (best effort)
+					if _, err := runner.Run(ctx, "docker", "rmi", ref); err != nil {
+						slog.Debug("docker rmi failed (may not be in docker)", "image", ref, "error", err)
+					} else {
+						slog.Info("removed docker image", "image", ref)
+					}
+					// Try crictl/k3s rmi (best effort)
+					if _, err := runner.Run(ctx, "crictl", "rmi", ref); err == nil {
+						slog.Info("removed containerd image via crictl", "image", ref)
+					} else if _, err := runner.Run(ctx, "k3s", "crictl", "rmi", ref); err == nil {
+						slog.Info("removed containerd image via k3s crictl", "image", ref)
+					}
+				}
+			}
+
 			return db.DeleteEngine(ctx, name)
+		},
+		EnginePlan: func(ctx context.Context) (json.RawMessage, error) {
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
+
+			// Get all installed engines from DB
+			allInstalled, _ := db.ListEngines(ctx)
+
+			type engineEntry struct {
+				Name                  string   `json:"name"`
+				Type                  string   `json:"type"`
+				RuntimeType           string   `json:"runtime_type"` // recommended runtime on this host
+				SizeMB                int      `json:"size_mb,omitempty"`
+				Installed             bool     `json:"installed"`
+				InstalledRuntimeTypes []string `json:"installed_runtime_types,omitempty"`
+			}
+
+			var compatible []engineEntry
+
+			for i := range cat.EngineAssets {
+				ea := &cat.EngineAssets[i]
+				if !engineCompatibleWithHost(ea, hwInfo) {
+					continue
+				}
+				rtType := preferredEngineRuntimeType(ea, hwInfo.Platform)
+				installedRuntimeTypes := installedRuntimeTypesForEngine(allInstalled, ea.Metadata.Name, ea.Metadata.Type)
+				installed := stringInSliceFold(installedRuntimeTypes, rtType)
+				sizeMB := ea.Image.SizeApproxMB
+				if rtType == "native" {
+					// Native sources don't track size in catalog; use 0
+					sizeMB = 0
+				}
+
+				entry := engineEntry{
+					Name:                  ea.Metadata.Name,
+					Type:                  ea.Metadata.Type,
+					RuntimeType:           rtType,
+					SizeMB:                sizeMB,
+					Installed:             installed,
+					InstalledRuntimeTypes: installedRuntimeTypes,
+				}
+				compatible = append(compatible, entry)
+			}
+
+			result := map[string]any{
+				"hardware": map[string]any{
+					"gpu_arch":  hwInfo.GPUArch,
+					"gpu_model": hwInfo.GPUModel,
+					"vram_mib":  hwInfo.GPUVRAMMiB,
+					"cpu_arch":  hwInfo.CPUArch,
+				},
+				"compatible_engines": compatible,
+			}
+			return json.Marshal(result)
 		},
 
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			allowAutoPull := deployAutoPullAllowed(ctx)
 			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
@@ -2790,9 +3246,18 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						"original", modelPath, "resolved", alt)
 					modelPath = alt
 				} else {
-					slog.Warn("model path has no model files and no alternative found; deploy may fail",
-						"path", modelPath,
-						"hint", "ensure model files exist or set AIMA_DATA_DIR to a shared directory")
+					if !allowAutoPull {
+						return nil, fmt.Errorf("model %s not found locally and auto-pull is disabled", modelName)
+					}
+					slog.Info("model not found locally, auto-pulling", "model", modelName)
+					if pullErr := pullModelCore(ctx, modelName); pullErr != nil {
+						return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
+					}
+					// Re-resolve model path after download
+					modelPath = filepath.Join(dataDir, "models", modelName)
+					if alt := findModelDir(modelName, dataDir); alt != "" {
+						modelPath = alt
+					}
 				}
 			}
 			// Native binary engines require a single model file path; container engines
@@ -2865,12 +3330,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			// Auto-import from Docker or pre-pull from registries if needed.
 			// Note: containerd operations require root; skip gracefully if not root.
 			if activeRt.Name() == "k3s" && req.Image != "" {
-				if !engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{}) {
-					if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
-						if os.Getuid() != 0 {
-							slog.Warn("engine in Docker but not detected in containerd; import requires root",
-								"image", req.Image,
-								"fix", fmt.Sprintf("sudo docker save %s | sudo k3s ctr -n k8s.io images import -", req.Image))
+				inContainerd := engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{})
+				if !inContainerd {
+					inDocker := engine.ImageExistsInDocker(ctx, req.Image, &execRunner{})
+					if inDocker {
+						if requiresRootImportForK3S(inContainerd, inDocker, os.Getuid() == 0) {
+							return nil, fmt.Errorf("engine image %s is only available in Docker; K3S deployment requires importing it into containerd as root (sudo docker save %s | sudo k3s ctr -n k8s.io images import -)", req.Image, req.Image)
 						} else {
 							slog.Info("auto-importing image from Docker to containerd", "image", req.Image)
 							if importErr := engine.ImportDockerToContainerd(ctx, req.Image, &execRunner{}); importErr != nil {
@@ -2878,12 +3343,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 							}
 						}
 					} else if len(resolved.EngineRegistries) > 0 {
-						slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
-						imgParts := strings.SplitN(req.Image, ":", 2)
-						imgName, imgTag := imgParts[0], "latest"
-						if len(imgParts) == 2 {
-							imgTag = imgParts[1]
+						if !allowAutoPull {
+							return nil, fmt.Errorf("engine image %s not found in K3S containerd and auto-pull is disabled", req.Image)
 						}
+						slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
+						imgName, imgTag := splitImageRef(req.Image)
 						if pullErr := engine.Pull(ctx, engine.PullOptions{
 							Image:      imgName,
 							Tag:        imgTag,
@@ -2892,6 +3356,34 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						}); pullErr != nil {
 							slog.Warn("pre-pull failed, K3S will try registries.yaml", "image", req.Image, "error", pullErr)
 						}
+					}
+				}
+			}
+			// Pre-flight: ensure image is available in Docker for Docker deployments.
+			if activeRt.Name() == "docker" && req.Image != "" {
+				fullRef := req.Image
+				if !strings.Contains(fullRef, ":") {
+					fullRef += ":latest"
+				}
+				if !engine.ImageExistsInDocker(ctx, fullRef, &execRunner{}) {
+					if len(resolved.EngineRegistries) > 0 {
+						if !allowAutoPull {
+							return nil, fmt.Errorf("engine image %s not found in Docker and auto-pull is disabled", req.Image)
+						}
+						slog.Info("auto-pulling engine image for Docker deploy", "image", req.Image)
+						imgName, imgTag := splitImageRef(req.Image)
+						if pullErr := engine.Pull(ctx, engine.PullOptions{
+							Image:      imgName,
+							Tag:        imgTag,
+							Registries: resolved.EngineRegistries,
+							Runner:     &execRunner{},
+						}); pullErr != nil {
+							return nil, fmt.Errorf("auto-pull engine image %s: %w", req.Image, pullErr)
+						}
+					} else {
+						slog.Warn("engine image not found locally and no registries configured",
+							"image", req.Image,
+							"hint", "run 'aima engine pull' first or ensure registries are configured in engine YAML")
 					}
 				}
 			}
@@ -3168,6 +3660,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			}
 			return json.Marshal(statuses)
 		},
+		DeployRun: deployRunCore,
 		DeployLogs: func(ctx context.Context, name string, tailLines int) (string, error) {
 			logs, err := rt.Logs(ctx, name, tailLines)
 			if err != nil && nativeRt != nil && nativeRt != rt {
@@ -4203,6 +4696,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(status)
 		},
 	}
+	return deps
 }
 
 func postProcessBenchmarkSave(ctx context.Context, db *state.DB, kStore *knowledge.Store, benchmarkID, configID, hardware, engine, model string, throughputTPS float64) {

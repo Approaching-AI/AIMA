@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jguan/aima/internal/engine"
 )
 
 // ToolDeps collects all dependencies that tool handlers need.
@@ -26,13 +28,15 @@ type ToolDeps struct {
 	ScanEngines   func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
 	ListEngines   func(ctx context.Context) (json.RawMessage, error)
 	GetEngineInfo func(ctx context.Context, name string) (json.RawMessage, error)
-	PullEngine    func(ctx context.Context, name string) error
+	PullEngine    func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
 	ImportEngine  func(ctx context.Context, path string) error
-	RemoveEngine  func(ctx context.Context, name string) error
+	RemoveEngine  func(ctx context.Context, name string, deleteFiles bool) error
+	EnginePlan    func(ctx context.Context) (json.RawMessage, error)
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployDryRun func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
+	DeployRun    func(ctx context.Context, model, engineType, slot string, noPull bool, onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
@@ -641,7 +645,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.pull
 	s.RegisterTool(&Tool{
 		Name:        "engine.pull",
-		Description: "Download an inference engine image or binary from its configured source. If name is omitted, pulls the default engine for this hardware.",
+		Description: "Download an inference engine image or binary from its configured source. Downloads a container image or native binary depending on this device's platform. If name is omitted, pulls the default engine for this hardware. Automatically registers the engine after pulling.",
 		InputSchema: schema(`"name":{"type":"string","description":"Engine type to pull, e.g. 'llamacpp', 'vllm', 'sglang'. Omit to pull the default engine for this hardware."}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.PullEngine == nil {
@@ -656,8 +660,9 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				}
 			}
 			name := p.Name
-			// Empty name is handled by the PullEngine implementation (uses catalog.DefaultEngine)
-			if err := deps.PullEngine(ctx, name); err != nil {
+			// Empty name is handled by the PullEngine implementation (uses catalog.DefaultEngine).
+			// Pass nil onProgress: MCP JSON-RPC has no streaming capability.
+			if err := deps.PullEngine(ctx, name, nil); err != nil {
 				return nil, fmt.Errorf("pull engine %s: %w", name, err)
 			}
 			return TextResult(fmt.Sprintf("engine %s pulled successfully", name)), nil
@@ -692,14 +697,18 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// engine.remove
 	s.RegisterTool(&Tool{
 		Name:        "engine.remove",
-		Description: "Remove an engine record from the local database. This is a destructive operation (a rollback snapshot is created automatically). Blocked for agent-initiated calls.",
-		InputSchema: schema(`"name":{"type":"string","description":"Engine name or ID to remove. Call engine.list to see registered engines."}`, "name"),
+		Description: "Remove an engine record from the local database. Optionally deletes the actual container image or native binary. A rollback snapshot is created automatically. Blocked for agent-initiated calls.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"Engine name or ID to remove. Call engine.list to see registered engines."},`+
+				`"delete_files":{"type":"boolean","description":"Also delete the actual container image (docker rmi) or native binary file. Default false."}`,
+			"name"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RemoveEngine == nil {
 				return ErrorResult("engine.remove not implemented"), nil
 			}
 			var p struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				DeleteFiles bool   `json:"delete_files"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -707,10 +716,31 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Name == "" {
 				return ErrorResult("name is required"), nil
 			}
-			if err := deps.RemoveEngine(ctx, p.Name); err != nil {
+			if err := deps.RemoveEngine(ctx, p.Name, p.DeleteFiles); err != nil {
 				return nil, fmt.Errorf("remove engine %s: %w", p.Name, err)
 			}
-			return TextResult(fmt.Sprintf("engine %s removed", p.Name)), nil
+			msg := fmt.Sprintf("engine %s removed", p.Name)
+			if p.DeleteFiles {
+				msg += " (files cleaned up)"
+			}
+			return TextResult(msg), nil
+		},
+	})
+
+	// engine.plan
+	s.RegisterTool(&Tool{
+		Name:        "engine.plan",
+		Description: "Show all engines compatible with the current hardware, their install status, and a recommendation. Use before engine.pull to help the user choose.",
+		InputSchema: schema(""),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.EnginePlan == nil {
+				return ErrorResult("engine.plan not implemented"), nil
+			}
+			data, err := deps.EnginePlan(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("engine plan: %w", err)
+			}
+			return TextResult(string(data)), nil
 		},
 	})
 
@@ -751,6 +781,41 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
 				return nil, fmt.Errorf("deploy apply %s: %w", p.Model, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// deploy.run
+	s.RegisterTool(&Tool{
+		Name:        "deploy.run",
+		Description: "One-step: resolve config, pull engine and model if needed, deploy, and wait for the service to be ready. Combines deploy.dry_run + engine.pull + model.pull + deploy.apply + deploy.status polling. Returns when the service is ready or after timeout.",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model to deploy, e.g. 'qwen3-8b'."},`+
+				`"engine":{"type":"string","description":"Engine type override. Omit to auto-select."},`+
+				`"slot":{"type":"string","description":"Partition slot name. Omit for default."},`+
+				`"no_pull":{"type":"boolean","description":"Skip auto-downloading missing engine/model. Default false."}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DeployRun == nil {
+				return ErrorResult("deploy.run not implemented"), nil
+			}
+			var p struct {
+				Model  string `json:"model"`
+				Engine string `json:"engine"`
+				Slot   string `json:"slot"`
+				NoPull bool   `json:"no_pull"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Model == "" {
+				return ErrorResult("model is required"), nil
+			}
+			// MCP has no streaming; pass nil for progress callbacks.
+			data, err := deps.DeployRun(ctx, p.Model, p.Engine, p.Slot, p.NoPull, nil, nil)
+			if err != nil {
+				return nil, fmt.Errorf("deploy run %s: %w", p.Model, err)
 			}
 			return TextResult(string(data)), nil
 		},

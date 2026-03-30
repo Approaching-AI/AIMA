@@ -24,6 +24,7 @@ import (
 	"github.com/jguan/aima/catalog"
 	"github.com/jguan/aima/internal/agent"
 	benchpkg "github.com/jguan/aima/internal/benchmark"
+	"github.com/jguan/aima/internal/buildinfo"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/fleet"
@@ -4221,7 +4222,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			export := map[string]any{
 				"schema_version": 1,
 				"exported_at":    time.Now().UTC().Format(time.RFC3339),
-				"aima_version":   cli.Version,
+				"aima_version":   buildinfo.Version,
 				"filter":         map[string]string{"hardware": p.Hardware, "model": p.Model, "engine": p.Engine},
 				"data": map[string]any{
 					"configurations":    configs,
@@ -4576,7 +4577,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					status["hostname"] = b
 				}
 			}
-			if b, e := json.Marshal(cli.Version); e == nil {
+			if b, e := json.Marshal(buildinfo.Version); e == nil {
 				status["version"] = b
 			}
 			if b, e := json.Marshal(supportView.Status(ctx)); e == nil {

@@ -2,6 +2,7 @@
 build/
 /aima
 /aima.exe
+output/
 
 # Claude Code local config (keep skills tracked)
 .claude/*

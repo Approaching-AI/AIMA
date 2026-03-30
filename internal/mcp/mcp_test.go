@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jguan/aima/internal/buildinfo"
 )
 
 func TestHandleMessage_Initialize(t *testing.T) {
@@ -39,6 +41,9 @@ func TestHandleMessage_Initialize(t *testing.T) {
 	}
 	if serverInfo["name"] != "aima" {
 		t.Errorf("serverInfo.name = %v, want aima", serverInfo["name"])
+	}
+	if serverInfo["version"] != buildinfo.Version {
+		t.Errorf("serverInfo.version = %v, want %s", serverInfo["version"], buildinfo.Version)
 	}
 }
 

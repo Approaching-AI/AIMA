@@ -18,13 +18,32 @@
 
 ### Download
 
-Grab a pre-built binary from the [Releases](https://github.com/jguan/aima/releases) page, or build from source:
+Grab a pre-built binary from the [Releases](https://github.com/Approaching-AI/AIMA/releases) page, or build from source:
 
 ```bash
-git clone https://github.com/jguan/aima.git
+git clone https://github.com/Approaching-AI/AIMA.git
 cd aima
 make build
 ```
+
+For published product releases, the binary installer can be one line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Approaching-AI/AIMA/master/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Approaching-AI/AIMA/master/install.ps1 | iex
+```
+
+Notes:
+- The installer resolves the latest installable `vX.Y.Z` product release instead of GitHub's `latest` release, because bundle tags such as `bundle/stack/2026-02-26` are not product binaries.
+- If tags are ahead of published binaries, the installer warns and stays on the latest installable release until the new assets are uploaded.
+- Override the source repo for forks with `AIMA_REPO=<owner>/<repo>`.
+- Pin a release with `AIMA_VERSION=v0.2.0`.
+- Windows installer currently targets `windows/amd64` and installs to `%LOCALAPPDATA%\\Programs\\AIMA`.
 
 ### Server Setup (Linux)
 
@@ -173,6 +192,26 @@ make all
 #   build/aima-linux-arm64  (linux/arm64)
 #   build/aima-linux-amd64  (linux/amd64)
 ```
+
+### Package GitHub release assets
+
+```bash
+make release-assets
+# Output:
+#   build/release/<version>/aima-darwin-arm64
+#   build/release/<version>/aima-linux-amd64
+#   build/release/<version>/aima-linux-arm64
+#   build/release/<version>/aima-windows-amd64.exe
+#   build/release/<version>/checksums.txt
+```
+
+To upload those assets to the matching GitHub release with `gh`:
+
+```bash
+make publish-release-assets
+```
+
+Annotated SemVer tag pushes such as `v0.2.1` also trigger `.github/workflows/release.yml`, which builds the same assets and uploads them automatically.
 
 ### Run tests
 

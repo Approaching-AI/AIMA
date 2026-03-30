@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate product tag
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "unexpected release tag: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Validate tag commit is on master
+        run: |
+          git fetch origin master --depth=1
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
+            echo "release tag ${GITHUB_REF_NAME} must point to a commit on master" >&2
+            exit 1
+          fi
+
+      - name: Build release assets
+        run: make release-assets
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/publish-release-assets.sh "${GITHUB_REF_NAME}"

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"sync"
+
+	"github.com/jguan/aima/internal/buildinfo"
 )
 
 // JSON-RPC 2.0 types
@@ -232,7 +234,7 @@ func (s *Server) handleInitialize(id json.RawMessage) ([]byte, error) {
 		},
 		"serverInfo": map[string]any{
 			"name":    "aima",
-			"version": "0.1.0",
+			"version": buildinfo.Version,
 		},
 	}
 	return marshalResponse(jsonrpcResponse{

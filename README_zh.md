@@ -18,13 +18,32 @@
 
 ### 下载
 
-从 [Releases](https://github.com/jguan/aima/releases) 页面下载预编译二进制，或从源码构建：
+从 [Releases](https://github.com/Approaching-AI/AIMA/releases) 页面下载预编译二进制，或从源码构建：
 
 ```bash
-git clone https://github.com/jguan/aima.git
+git clone https://github.com/Approaching-AI/AIMA.git
 cd aima
 make build
 ```
+
+对于已经发布好的产品版本，可以收敛成一行安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Approaching-AI/AIMA/master/install.sh | sh
+```
+
+Windows PowerShell 可用：
+
+```powershell
+irm https://raw.githubusercontent.com/Approaching-AI/AIMA/master/install.ps1 | iex
+```
+
+说明：
+- 安装器会解析最新“可安装”的 `vX.Y.Z` 产品 release，而不是 GitHub 的 `latest` release，因为像 `bundle/stack/2026-02-26` 这种 bundle tag 不是主二进制发布。
+- 如果最新 tag 还没有上传主二进制资产，安装器会给出告警，并退回到最新可安装 release。
+- Fork 仓库可通过 `AIMA_REPO=<owner>/<repo>` 覆盖下载源。
+- 指定版本可用 `AIMA_VERSION=v0.2.0`。
+- Windows 安装器当前面向 `windows/amd64`，默认安装到 `%LOCALAPPDATA%\\Programs\\AIMA`。
 
 ### 服务器部署（Linux）
 
@@ -173,6 +192,26 @@ make all
 #   build/aima-linux-arm64  (linux/arm64)
 #   build/aima-linux-amd64  (linux/amd64)
 ```
+
+### 打包 GitHub Release 资产
+
+```bash
+make release-assets
+# 输出:
+#   build/release/<version>/aima-darwin-arm64
+#   build/release/<version>/aima-linux-amd64
+#   build/release/<version>/aima-linux-arm64
+#   build/release/<version>/aima-windows-amd64.exe
+#   build/release/<version>/checksums.txt
+```
+
+如果本地装了 `gh`，可继续上传到对应的 GitHub release：
+
+```bash
+make publish-release-assets
+```
+
+现在推送 `v0.2.1` 这类带注释的 SemVer tag 时，也会自动触发 `.github/workflows/release.yml`，构建并上传同一套资产。
 
 ### 运行测试
 

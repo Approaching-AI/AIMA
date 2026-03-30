@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jguan/aima/internal/mcp"
+)
 
 func TestIsLoopbackListenAddr(t *testing.T) {
 	tests := []struct {
@@ -88,6 +92,33 @@ func TestValidateServeSecurity(t *testing.T) {
 			err := validateServeSecurity(tt.addr, tt.mcpAddr, tt.mcpEnabled, tt.apiKey, tt.allowInsecure)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validateServeSecurity() error = %v, wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveMCPProfile(t *testing.T) {
+	tests := []struct {
+		name       string
+		mcpEnabled bool
+		profile    string
+		want       mcp.Profile
+		wantErr    bool
+	}{
+		{name: "empty profile", mcpEnabled: false, profile: "", want: mcp.ProfileFull},
+		{name: "valid profile", mcpEnabled: true, profile: "operator", want: mcp.ProfileOperator},
+		{name: "requires mcp", mcpEnabled: false, profile: "operator", wantErr: true},
+		{name: "invalid profile", mcpEnabled: true, profile: "bad", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveMCPProfile(tt.mcpEnabled, tt.profile)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolveMCPProfile() error = %v, wantErr=%v", err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Fatalf("resolveMCPProfile() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -190,13 +190,13 @@ var profileIncludes = map[Profile][]string{
 	},
 	ProfilePatrol: {
 		"hardware.metrics",
-		"deploy.list", "deploy.status", "deploy.logs", "deploy.apply", "deploy.dry_run",
+		"deploy.list", "deploy.status", "deploy.logs", "deploy.apply", "deploy.approve", "deploy.dry_run",
 		"knowledge.resolve",
 		"benchmark.run",
 		"agent.patrol_status", "agent.alerts", "agent.patrol_config", "agent.patrol_actions",
 	},
 	ProfileExplorer: {
-		"deploy.apply", "deploy.dry_run", "deploy.status", "deploy.list", "deploy.logs",
+		"deploy.apply", "deploy.approve", "deploy.dry_run", "deploy.status", "deploy.list", "deploy.logs",
 		"benchmark.", "explore.", "tuning.",
 		"knowledge.resolve", "knowledge.search_configs", "knowledge.promote",
 		"knowledge.save", "knowledge.validate",

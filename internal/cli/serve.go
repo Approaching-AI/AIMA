@@ -55,6 +55,10 @@ func newServeCmd(app *App) *cobra.Command {
 			if err := validateServeSecurity(addr, mcpAddr, mcpMod, apiKey, allowInsecure); err != nil {
 				return err
 			}
+			profile, err := resolveMCPProfile(mcpMod, mcpProfile)
+			if err != nil {
+				return err
+			}
 
 			if !allowInsecure && apiKey == "" && (!isLoopbackListenAddr(addr) || (mcpMod && !isLoopbackListenAddr(mcpAddr))) {
 				slog.Warn("starting without API key on non-loopback address; this is insecure")
@@ -126,13 +130,9 @@ func newServeCmd(app *App) *cobra.Command {
 
 			// Start MCP server if requested (on a separate port)
 			if mcpMod {
-				if mcpProfile != "" {
-					p := mcp.Profile(mcpProfile)
-					if !mcp.IsValidProfile(p) {
-						return fmt.Errorf("unknown MCP profile %q; valid profiles: operator, patrol, explorer", mcpProfile)
-					}
-					app.MCP.SetProfile(p)
-					slog.Info("MCP tool profile active", "profile", mcpProfile)
+				if profile != mcp.ProfileFull {
+					app.MCP.SetProfile(profile)
+					slog.Info("MCP tool profile active", "profile", string(profile))
 				}
 				go func() {
 					slog.Info("starting MCP server (HTTP)", "addr", mcpAddr)
@@ -184,6 +184,20 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
 
 	return cmd
+}
+
+func resolveMCPProfile(mcpEnabled bool, profile string) (mcp.Profile, error) {
+	if profile == "" {
+		return mcp.ProfileFull, nil
+	}
+	if !mcpEnabled {
+		return mcp.ProfileFull, fmt.Errorf("--mcp-profile requires --mcp")
+	}
+	p := mcp.Profile(profile)
+	if !mcp.IsValidProfile(p) {
+		return mcp.ProfileFull, fmt.Errorf("unknown MCP profile %q; valid profiles: operator, patrol, explorer", profile)
+	}
+	return p, nil
 }
 
 func validateServeSecurity(addr, mcpAddr string, mcpEnabled bool, apiKey string, allowInsecure bool) error {

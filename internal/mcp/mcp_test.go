@@ -685,6 +685,7 @@ func TestProfileMatches(t *testing.T) {
 		{ProfileOperator, "model.list", true},
 		{ProfileOperator, "engine.pull", true},
 		{ProfileOperator, "deploy.apply", true},
+		{ProfileOperator, "deploy.approve", true},
 		{ProfileOperator, "deploy.dry_run", true},
 		{ProfileOperator, "system.status", true},
 		{ProfileOperator, "system.config", true},
@@ -735,6 +736,7 @@ func TestProfileMatches(t *testing.T) {
 		{ProfilePatrol, "deploy.status", true},
 		{ProfilePatrol, "deploy.logs", true},
 		{ProfilePatrol, "deploy.apply", true},
+		{ProfilePatrol, "deploy.approve", true},
 		{ProfilePatrol, "deploy.dry_run", true},
 		{ProfilePatrol, "knowledge.resolve", true},
 		{ProfilePatrol, "benchmark.run", true},
@@ -756,6 +758,7 @@ func TestProfileMatches(t *testing.T) {
 		{ProfileExplorer, "tuning.start", true},
 		{ProfileExplorer, "tuning.results", true},
 		{ProfileExplorer, "deploy.apply", true},
+		{ProfileExplorer, "deploy.approve", true},
 		{ProfileExplorer, "hardware.detect", true},
 		{ProfileExplorer, "knowledge.resolve", true},
 		{ProfileExplorer, "knowledge.search_configs", true},
@@ -921,6 +924,15 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 	json.Unmarshal(resp, &r)
 	if r.Error != nil {
 		t.Fatalf("unexpected error calling hidden tool: %+v", r.Error)
+	}
+}
+
+func TestProfilesExposeDeployApprovalWithDeployApply(t *testing.T) {
+	profiles := []Profile{ProfileOperator, ProfilePatrol, ProfileExplorer}
+	for _, profile := range profiles {
+		if ProfileMatches(profile, "deploy.apply") && !ProfileMatches(profile, "deploy.approve") {
+			t.Fatalf("%q exposes deploy.apply without deploy.approve", profile)
+		}
 	}
 }
 

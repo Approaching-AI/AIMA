@@ -926,6 +926,15 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 	}
 
 	switch probe.Kind {
+	case "engine_profile":
+		var ep EngineProfile
+		if err := yaml.Unmarshal(data, &ep); err != nil {
+			return fmt.Errorf("parse engine profile %s: %w", path, err)
+		}
+		if cat.EngineProfiles == nil {
+			cat.EngineProfiles = make(map[string]*EngineProfile)
+		}
+		cat.EngineProfiles[ep.Metadata.Name] = &ep
 	case "hardware_profile":
 		var hp HardwareProfile
 		if err := yaml.Unmarshal(data, &hp); err != nil {
@@ -991,6 +1000,9 @@ func (cat *Catalog) ParseAssetPublic(data []byte, path string) error {
 // Returns "" if no assets were parsed or multiple kinds were parsed.
 func (cat *Catalog) ParsedKind() string {
 	var kinds []string
+	if len(cat.EngineProfiles) > 0 {
+		kinds = append(kinds, "engine_profile")
+	}
 	if len(cat.HardwareProfiles) > 0 {
 		kinds = append(kinds, "hardware_profile")
 	}
@@ -1092,7 +1104,7 @@ type overlayProbe struct {
 // keyed by the asset's metadata.name. Used to detect overlay staleness.
 func ComputeDigests(fsys fs.FS) map[string]string {
 	digests := make(map[string]string)
-	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios"}
+	dirs := []string{"hardware", "engines", "engines/profiles", "models", "partitions", "stack", "scenarios"}
 	for _, dir := range dirs {
 		entries, err := fs.ReadDir(fsys, dir)
 		if err != nil {
@@ -1205,6 +1217,9 @@ func MergeCatalogWithDigests(base, overlay *Catalog, factoryDigests map[string]s
 // CollectNames returns a set of all metadata.name values in the catalog.
 func CollectNames(cat *Catalog) map[string]bool {
 	names := make(map[string]bool)
+	for name := range cat.EngineProfiles {
+		names[name] = true
+	}
 	for _, v := range cat.HardwareProfiles {
 		names[v.Metadata.Name] = true
 	}
@@ -1231,7 +1246,7 @@ func extractOverlayDigests(fsys fs.FS) map[string]string {
 		return nil
 	}
 	digests := make(map[string]string)
-	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios"}
+	dirs := []string{"hardware", "engines", "engines/profiles", "models", "partitions", "stack", "scenarios"}
 	for _, dir := range dirs {
 		entries, err := fs.ReadDir(fsys, dir)
 		if err != nil {
@@ -1289,6 +1304,8 @@ func mergeSlice[T any](base, overlay []T, key func(T) string) []T {
 // KindToDir maps YAML kind values to catalog subdirectory names.
 func KindToDir(kind string) string {
 	switch kind {
+	case "engine_profile":
+		return "engines/profiles"
 	case "engine_asset":
 		return "engines"
 	case "model_asset":

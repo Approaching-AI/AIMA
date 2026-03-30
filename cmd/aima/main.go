@@ -2210,7 +2210,7 @@ func listAllRuntimes(ctx context.Context, rts ...runtime.Runtime) []*runtime.Dep
 }
 
 func catalogSize(cat *knowledge.Catalog) int {
-	return len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
+	return len(cat.EngineProfiles) + len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
 }
 
 const catalogDigestConfigKey = "catalog.digest.sha256"

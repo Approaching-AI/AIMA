@@ -172,19 +172,13 @@ body {
   z-index: 100;
 }
 .topbar-logo {
-  font-family: var(--font-sans);
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.4px;
-  color: var(--text);
-  letter-spacing: -0.3px;
   display: flex;
   align-items: center;
-  gap: 7px;
 }
-.topbar-logo span {
-  color: var(--accent);
-  font-size: 18px;
+.topbar-logo-img {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
 }
 .topbar-right {
   display: flex;
@@ -1107,8 +1101,8 @@ body {
     padding: 10px 12px;
     min-height: 48px;
   }
-  .topbar-logo {
-    font-size: 16px;
+  .topbar-logo-img {
+    height: 18px;
   }
   .status-text {
     font-size: 12px;
@@ -1227,7 +1221,7 @@ body {
 
   <!-- Top Bar -->
   <div class="topbar">
-    <div class="topbar-logo"><span>&#x25C8;</span> AIMA</div>
+    <div class="topbar-logo"><img :src="theme === 'dark' ? 'logo-dark.png' : 'logo-light.png'" alt="AIMA" class="topbar-logo-img"></div>
     <div class="topbar-right">
       <span class="status-text">
         <span class="status-dot" :class="systemOnline ? 'online' : 'offline'"></span>
@@ -1367,7 +1361,7 @@ body {
     <!-- Center: Agent Chat -->
     <div class="center">
       <div class="agent-header">
-        <img class="agent-avatar" src="avatar.svg" alt="AIMA">
+        <img class="agent-avatar" :src="theme === 'dark' ? 'logo-dark.png' : 'logo-light.png'" alt="AIMA">
         <div>
           <div class="agent-name">AIMA Agent</div>
           <div class="agent-mode">

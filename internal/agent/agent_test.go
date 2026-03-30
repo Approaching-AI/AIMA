@@ -736,6 +736,89 @@ func TestPatrolSelfHealDisabled(t *testing.T) {
 	}
 }
 
+func TestPatrolGPUIdleRequiresConfiguredDuration(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":{"temperature_celsius":55,"utilization_percent":5,"memory_used_mib":4096,"memory_total_mib":8192}}`},
+			"deploy.list":    {Content: `[]`},
+		},
+	}
+
+	config := DefaultPatrolConfig()
+	config.GPUIdlePct = 10
+	config.GPUIdleMinutes = 15
+	p := NewPatrol(config, tools, nil)
+
+	alerts := p.RunOnce(context.Background())
+	for _, alert := range alerts {
+		if alert.Type == "gpu_idle" {
+			t.Fatal("expected no gpu_idle alert before configured idle duration elapsed")
+		}
+	}
+
+	p.mu.Lock()
+	p.gpuIdleSince = time.Now().Add(-16 * time.Minute)
+	p.mu.Unlock()
+
+	alerts = p.RunOnce(context.Background())
+	var hasIdle bool
+	for _, alert := range alerts {
+		if alert.Type == "gpu_idle" {
+			hasIdle = true
+			break
+		}
+	}
+	if !hasIdle {
+		t.Fatal("expected gpu_idle alert after configured idle duration elapsed")
+	}
+}
+
+func TestPatrolMetricsGapResetsIdleObservation(t *testing.T) {
+	call := 0
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			switch name {
+			case "device.metrics":
+				call++
+				if call == 1 {
+					return nil, fmt.Errorf("metrics unavailable")
+				}
+				return &ToolResult{Content: `{"gpu":{"temperature_celsius":55,"utilization_percent":5,"memory_used_mib":4096,"memory_total_mib":8192}}`}, nil
+			case "deploy.list":
+				return &ToolResult{Content: `[]`}, nil
+			default:
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+		},
+	}
+
+	config := DefaultPatrolConfig()
+	config.GPUIdlePct = 10
+	config.GPUIdleMinutes = 15
+	p := NewPatrol(config, tools, nil)
+
+	p.mu.Lock()
+	p.gpuIdleSince = time.Now().Add(-16 * time.Minute)
+	p.mu.Unlock()
+
+	alerts := p.RunOnce(context.Background())
+	if len(alerts) != 0 {
+		t.Fatalf("expected no alerts during metrics gap, got %d", len(alerts))
+	}
+	if !p.gpuIdleSince.IsZero() {
+		t.Fatal("expected metrics gap to clear idle observation state")
+	}
+
+	alerts = p.RunOnce(context.Background())
+	for _, alert := range alerts {
+		if alert.Type == "gpu_idle" {
+			t.Fatal("expected first low-utilization sample after metrics gap not to trigger gpu_idle")
+		}
+	}
+}
+
 func TestPatrolStatusCounters(t *testing.T) {
 	tools := &mockTools{
 		tools: []ToolDefinition{},
@@ -754,6 +837,50 @@ func TestPatrolStatusCounters(t *testing.T) {
 	}
 	if status.LastRun.IsZero() {
 		t.Error("expected LastRun to be set after RunOnce")
+	}
+}
+
+func TestPatrolStartHonorsRuntimeIntervalChanges(t *testing.T) {
+	runCh := make(chan struct{}, 4)
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			switch name {
+			case "device.metrics":
+				select {
+				case runCh <- struct{}{}:
+				default:
+				}
+				return &ToolResult{Content: `{"gpu":null}`}, nil
+			case "deploy.list":
+				return &ToolResult{Content: `[]`}, nil
+			default:
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+		},
+	}
+
+	config := DefaultPatrolConfig()
+	config.Interval = 0
+	p := NewPatrol(config, tools, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.Start(ctx)
+	defer p.Stop()
+
+	select {
+	case <-runCh:
+		t.Fatal("patrol should remain disabled while interval is 0")
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	p.SetInterval(10 * time.Millisecond)
+
+	select {
+	case <-runCh:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("patrol did not resume after interval was updated at runtime")
 	}
 }
 

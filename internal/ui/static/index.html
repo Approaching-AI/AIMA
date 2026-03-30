@@ -1067,6 +1067,94 @@ body {
 .modal-feedback.success { color: var(--success); background: rgba(48, 209, 88, 0.1); }
 .modal-feedback.error { color: var(--error); background: rgba(255, 69, 58, 0.1); }
 
+/* Settings tabs */
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 0;
+}
+.settings-tab {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+  border-bottom: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-smooth), border-color var(--duration-fast) var(--ease-smooth);
+}
+.settings-tab:hover { color: var(--text-dim); }
+.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Toggle switch */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; }
+.toggle-row label { margin-bottom: 0; }
+.toggle-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border-medium);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-smooth);
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  bottom: 2px;
+  background: white;
+  border-radius: 50%;
+  transition: transform var(--duration-fast) var(--ease-smooth);
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+/* Number input for settings */
+.modal input[type="number"] {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-smooth), background var(--duration-fast) var(--ease-smooth);
+}
+.modal input[type="number"]:focus { border-color: var(--accent); background: var(--msg-tool-hover); }
+
+/* Textarea for settings */
+.modal textarea {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color var(--duration-fast) var(--ease-smooth), background var(--duration-fast) var(--ease-smooth);
+}
+.modal textarea:focus { border-color: var(--accent); background: var(--msg-tool-hover); }
+
 /* ===== Mobile ===== */
 .mobile-tabs {
   display: none;
@@ -2381,35 +2469,116 @@ body {
           <div class="modal-feedback" :class="settingsFeedback.type" x-text="settingsFeedback.text"></div>
         </template>
 
-        <!-- Section: AIMA Access -->
-        <div class="modal-section">
-          <div class="modal-section-title" x-text="t('access_auth')"></div>
-          <div class="modal-field">
-            <label x-text="t('api_key')"></label>
-            <input type="password" x-model="settingsForm.apiKey" :placeholder="t('api_key_hint')">
-            <div class="modal-hint" x-text="t('api_key_local')"></div>
+        <!-- Tab bar -->
+        <div class="settings-tabs">
+          <button class="settings-tab" :class="{ active: settingsTab === 'general' }" @click="settingsTab = 'general'" x-text="t('tab_general')"></button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'monitoring' }" @click="settingsTab = 'monitoring'" x-text="t('tab_monitoring')"></button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'agent' }" @click="settingsTab = 'agent'" x-text="t('tab_agent')"></button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'connectivity' }" @click="settingsTab = 'connectivity'" x-text="t('tab_connectivity')"></button>
+        </div>
+
+        <!-- Tab: General -->
+        <div x-show="settingsTab === 'general'">
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('access_auth')"></div>
+            <div class="modal-field">
+              <label x-text="t('api_key')"></label>
+              <input type="password" x-model="settingsForm.apiKey" :placeholder="t('api_key_hint')">
+              <div class="modal-hint" x-text="t('api_key_local')"></div>
+            </div>
           </div>
         </div>
 
-        <!-- Section: LLM Backend -->
-        <div class="modal-section">
-          <div class="modal-section-title" x-text="t('llm_backend')"></div>
-          <div class="modal-field">
-            <label x-text="t('llm_endpoint')"></label>
-            <input type="url" x-model="settingsForm.llmEndpoint" placeholder="http://localhost:6188/v1">
+        <!-- Tab: Monitoring & Patrol -->
+        <div x-show="settingsTab === 'monitoring'">
+          <div class="modal-section">
+            <div class="modal-field">
+              <label x-text="t('patrol_interval')"></label>
+              <input type="text" x-model="settingsForm.patrolInterval" placeholder="5m">
+              <div class="modal-hint" x-text="t('patrol_interval_hint')"></div>
+            </div>
+            <div class="modal-field toggle-row">
+              <label x-text="t('self_healing')"></label>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="settingsForm.selfHeal">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="modal-field">
+              <label x-text="t('gpu_temp_threshold')"></label>
+              <input type="number" x-model.number="settingsForm.gpuTempWarn" min="50" max="120" placeholder="85">
+              <div class="modal-hint" x-text="t('gpu_temp_hint')"></div>
+            </div>
+            <div class="modal-field">
+              <label x-text="t('gpu_idle_pct')"></label>
+              <input type="number" x-model.number="settingsForm.gpuIdlePct" min="0" max="100" placeholder="10">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('gpu_idle_minutes')"></label>
+              <input type="number" x-model.number="settingsForm.gpuIdleMinutes" min="1" max="1440" placeholder="15">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('vram_opportunity')"></label>
+              <input type="number" x-model.number="settingsForm.vramOpportunityPct" min="0" max="100" placeholder="50">
+              <div class="modal-hint" x-text="t('vram_opportunity_hint')"></div>
+            </div>
           </div>
-          <div class="modal-field">
-            <label x-text="t('llm_model')"></label>
-            <input type="text" x-model="settingsForm.llmModel" placeholder="qwen3-8b">
-          </div>
-          <div class="modal-field">
-            <label x-text="t('llm_api_key')"></label>
-            <input type="password" x-model="settingsForm.llmApiKey" :placeholder="t('llm_api_key_hint')">
-          </div>
-          <div class="modal-field">
-            <label x-text="t('llm_user_agent')"></label>
-            <input type="text" x-model="settingsForm.llmUserAgent" placeholder="claude-code/2.1.5">
+        </div>
+
+        <!-- Tab: AI Agent (LLM) -->
+        <div x-show="settingsTab === 'agent'">
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('llm_backend')"></div>
+            <div class="modal-field">
+              <label x-text="t('llm_endpoint')"></label>
+              <input type="url" x-model="settingsForm.llmEndpoint" placeholder="http://localhost:6188/v1">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('llm_model')"></label>
+              <input type="text" x-model="settingsForm.llmModel" placeholder="qwen3-8b">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('llm_api_key')"></label>
+              <input type="password" x-model="settingsForm.llmApiKey" :placeholder="t('llm_api_key_hint')">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('llm_user_agent')"></label>
+              <input type="text" x-model="settingsForm.llmUserAgent" placeholder="claude-code/2.1.5">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('llm_extra_params')"></label>
+              <textarea x-model="settingsForm.llmExtraParams" :placeholder="t('llm_extra_params_hint')" rows="2"></textarea>
+            </div>
             <div class="modal-hint" x-text="t('llm_config_hint')"></div>
+          </div>
+        </div>
+
+        <!-- Tab: Connectivity -->
+        <div x-show="settingsTab === 'connectivity'">
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('central_server')"></div>
+            <div class="modal-field">
+              <label x-text="t('central_endpoint')"></label>
+              <input type="url" x-model="settingsForm.centralEndpoint" placeholder="https://central.example.com">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('central_api_key')"></label>
+              <input type="password" x-model="settingsForm.centralApiKey" :placeholder="t('central_api_key_hint')">
+            </div>
+          </div>
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('support_service')"></div>
+            <div class="modal-field toggle-row">
+              <label x-text="t('support_enabled')"></label>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="settingsForm.supportEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="modal-field">
+              <label x-text="t('support_endpoint_label')"></label>
+              <input type="url" x-model="settingsForm.supportEndpoint" placeholder="https://support.example.com">
+            </div>
           </div>
         </div>
 
@@ -2509,6 +2678,28 @@ var I18N = {
     support_new_task: 'New Task',
     support_messages: 'Messages',
     support_open_workspace: 'Open AIMA-Service',
+    tab_general: 'General',
+    tab_monitoring: 'Monitoring',
+    tab_agent: 'AI Agent',
+    tab_connectivity: 'Connectivity',
+    patrol_interval: 'Patrol Interval',
+    patrol_interval_hint: 'e.g. 5m, 30s, 1h. Set to 0s to disable.',
+    self_healing: 'Self-Healing',
+    gpu_temp_threshold: 'GPU Temp Threshold (\u00B0C)',
+    gpu_temp_hint: 'Alert when GPU temperature exceeds this value.',
+    gpu_idle_pct: 'GPU Idle Threshold (%)',
+    gpu_idle_minutes: 'GPU Idle Duration (min)',
+    vram_opportunity: 'VRAM Opportunity (%)',
+    vram_opportunity_hint: 'Alert when free VRAM exceeds this percentage.',
+    llm_extra_params: 'Extra Parameters',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: 'Central Knowledge Server',
+    central_endpoint: 'Server Endpoint',
+    central_api_key: 'API Key',
+    central_api_key_hint: 'API key for central server',
+    support_service: 'Support Service',
+    support_enabled: 'Enable Support',
+    support_endpoint_label: 'Service Endpoint',
   },
   zh: {
     system_online: '\u7CFB\u7EDF\u5728\u7EBF',
@@ -2588,6 +2779,31 @@ var I18N = {
     support_new_task: '\u65B0\u4EFB\u52A1',
     support_messages: '\u6D88\u606F',
     support_open_workspace: '\u6253\u5F00\u7075\u673A\u4E91',
+    tab_general: '\u5E38\u89C4',
+    tab_monitoring: '\u76D1\u63A7',
+    tab_agent: 'AI Agent',
+    tab_connectivity: '\u8FDE\u63A5',
+    patrol_interval: '\u5DE1\u903B\u95F4\u9694',
+    patrol_interval_hint: '\u5982 5m\u30011h\u300130s\u3002\u8BBE\u4E3A 0s \u53EF\u7981\u7528\u3002',
+    self_healing: '\u81EA\u6108',
+    gpu_temp_threshold: 'GPU \u6E29\u5EA6\u9608\u503C (\u00B0C)',
+    gpu_temp_hint: 'GPU \u6E29\u5EA6\u8D85\u8FC7\u6B64\u503C\u65F6\u544A\u8B66\u3002',
+    gpu_idle_pct: 'GPU \u7A7A\u95F2\u9608\u503C (%)',
+    gpu_idle_minutes: 'GPU \u7A7A\u95F2\u65F6\u957F (\u5206\u949F)',
+    vram_opportunity: 'VRAM \u53EF\u7528\u673A\u4F1A (%)',
+    vram_opportunity_hint: 'VRAM \u7A7A\u95F2\u8D85\u8FC7\u6B64\u6BD4\u4F8B\u65F6\u63D0\u793A\u3002',
+    llm_extra_params: '\u989D\u5916\u53C2\u6570',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: '\u4E2D\u592E\u77E5\u8BC6\u670D\u52A1\u5668',
+    central_endpoint: '\u670D\u52A1\u5668\u5730\u5740',
+    central_api_key: 'API Key',
+    central_api_key_hint: '\u4E2D\u592E\u670D\u52A1\u5668 API Key',
+    support_service: '\u652F\u6301\u670D\u52A1',
+    support_enabled: '\u542F\u7528\u652F\u6301',
+    support_endpoint_label: '\u670D\u52A1\u5730\u5740',
+    cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u53EF\u7528 MCP \u5DE5\u5177',
+    cli_help_usage: '\u7528\u6CD5: /cli <\u5DE5\u5177\u540D> [\u53C2\u6570]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_unknown_tool: '\u672A\u77E5\u5DE5\u5177: ',
   },
   ja: {
     system_online: '\u30B7\u30B9\u30C6\u30E0\u30AA\u30F3\u30E9\u30A4\u30F3',
@@ -2638,6 +2854,32 @@ var I18N = {
     settings_saved: '\u8A2D\u5B9A\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002',
     settings_error: '\u8A2D\u5B9A\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002',
     settings_cleared: '\u8A2D\u5B9A\u3092\u30AF\u30EA\u30A2\u3057\u307E\u3057\u305F\u3002',
+    support_open_workspace: 'Open AIMA-Service',
+    tab_general: '\u4E00\u822C',
+    tab_monitoring: '\u30E2\u30CB\u30BF\u30EA\u30F3\u30B0',
+    tab_agent: 'AI Agent',
+    tab_connectivity: '\u63A5\u7D9A',
+    patrol_interval: '\u30D1\u30C8\u30ED\u30FC\u30EB\u9593\u9694',
+    patrol_interval_hint: '\u4F8B: 5m, 1h, 30s\u30020s\u3067\u7121\u52B9\u5316\u3002',
+    self_healing: '\u81EA\u5DF1\u4FEE\u5FA9',
+    gpu_temp_threshold: 'GPU\u6E29\u5EA6\u95BE\u5024 (\u00B0C)',
+    gpu_temp_hint: 'GPU\u6E29\u5EA6\u304C\u3053\u306E\u5024\u3092\u8D85\u3048\u308B\u3068\u8B66\u544A\u3002',
+    gpu_idle_pct: 'GPU\u30A2\u30A4\u30C9\u30EB\u95BE\u5024 (%)',
+    gpu_idle_minutes: 'GPU\u30A2\u30A4\u30C9\u30EB\u6642\u9593 (\u5206)',
+    vram_opportunity: 'VRAM\u7A7A\u304D\u6A5F\u4F1A (%)',
+    vram_opportunity_hint: 'VRAM\u7A7A\u304D\u304C\u3053\u306E\u5272\u5408\u3092\u8D85\u3048\u308B\u3068\u901A\u77E5\u3002',
+    llm_extra_params: '\u8FFD\u52A0\u30D1\u30E9\u30E1\u30FC\u30BF',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: '\u4E2D\u592E\u30CA\u30EC\u30C3\u30B8\u30B5\u30FC\u30D0\u30FC',
+    central_endpoint: '\u30B5\u30FC\u30D0\u30FC\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8',
+    central_api_key: 'API Key',
+    central_api_key_hint: '\u4E2D\u592E\u30B5\u30FC\u30D0\u30FC\u306EAPI Key',
+    support_service: '\u30B5\u30DD\u30FC\u30C8\u30B5\u30FC\u30D3\u30B9',
+    support_enabled: '\u30B5\u30DD\u30FC\u30C8\u6709\u52B9\u5316',
+    support_endpoint_label: '\u30B5\u30FC\u30D3\u30B9\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8',
+    cli_help_header: 'CLI\u30E2\u30FC\u30C9 \u2014 \u5229\u7528\u53EF\u80FD\u306AMCP\u30C4\u30FC\u30EB',
+    cli_help_usage: '\u4F7F\u3044\u65B9: /cli <\u30C4\u30FC\u30EB\u540D> [\u30D1\u30E9\u30E1\u30FC\u30BF]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_unknown_tool: '\u4E0D\u660E\u306A\u30C4\u30FC\u30EB: ',
   },
   ko: {
     system_online: '\uC2DC\uC2A4\uD15C \uC628\uB77C\uC778',
@@ -2688,6 +2930,32 @@ var I18N = {
     settings_saved: '\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
     settings_error: '\uC124\uC815 \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.',
     settings_cleared: '\uC124\uC815\uC774 \uCD08\uAE30\uD654\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
+    support_open_workspace: 'Open AIMA-Service',
+    tab_general: '\uC77C\uBC18',
+    tab_monitoring: '\uBAA8\uB2C8\uD130\uB9C1',
+    tab_agent: 'AI Agent',
+    tab_connectivity: '\uC5F0\uACB0',
+    patrol_interval: '\uC21C\uCC30 \uAC04\uACA9',
+    patrol_interval_hint: '\uC608: 5m, 1h, 30s. 0s\uB85C \uBE44\uD65C\uC131\uD654.',
+    self_healing: '\uC790\uAC00 \uBCF5\uAD6C',
+    gpu_temp_threshold: 'GPU \uC628\uB3C4 \uC784\uACC4\uAC12 (\u00B0C)',
+    gpu_temp_hint: 'GPU \uC628\uB3C4\uAC00 \uC774 \uAC12\uC744 \uCD08\uACFC\uD558\uBA74 \uACBD\uACE0.',
+    gpu_idle_pct: 'GPU \uC720\uD734 \uC784\uACC4\uAC12 (%)',
+    gpu_idle_minutes: 'GPU \uC720\uD734 \uC2DC\uAC04 (\uBD84)',
+    vram_opportunity: 'VRAM \uC5EC\uC720 \uAE30\uD68C (%)',
+    vram_opportunity_hint: 'VRAM \uC5EC\uC720\uAC00 \uC774 \uBE44\uC728\uC744 \uCD08\uACFC\uD558\uBA74 \uC54C\uB9BC.',
+    llm_extra_params: '\uCD94\uAC00 \uB9E4\uAC1C\uBCC0\uC218',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: '\uC911\uC559 \uC9C0\uC2DD \uC11C\uBC84',
+    central_endpoint: '\uC11C\uBC84 \uC5D4\uB4DC\uD3EC\uC778\uD2B8',
+    central_api_key: 'API Key',
+    central_api_key_hint: '\uC911\uC559 \uC11C\uBC84 API Key',
+    support_service: '\uC9C0\uC6D0 \uC11C\uBE44\uC2A4',
+    support_enabled: '\uC9C0\uC6D0 \uD65C\uC131\uD654',
+    support_endpoint_label: '\uC11C\uBE44\uC2A4 \uC5D4\uB4DC\uD3EC\uC778\uD2B8',
+    cli_help_header: 'CLI \uBAA8\uB4DC \u2014 \uC0AC\uC6A9 \uAC00\uB2A5\uD55C MCP \uB3C4\uAD6C',
+    cli_help_usage: '\uC0AC\uC6A9\uBC95: /cli <\uB3C4\uAD6C\uBA85> [\uB9E4\uAC1C\uBCC0\uC218]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_unknown_tool: '\uC54C \uC218 \uC5C6\uB294 \uB3C4\uAD6C: ',
   },
   es: {
     system_online: 'Sistema en l\u00EDnea',
@@ -2738,6 +3006,29 @@ var I18N = {
     settings_saved: 'Configuraci\u00F3n guardada correctamente.',
     settings_error: 'Error al guardar la configuraci\u00F3n.',
     settings_cleared: 'Configuraci\u00F3n eliminada.',
+    support_open_workspace: 'Abrir AIMA-Service',
+    tab_general: 'General',
+    tab_monitoring: 'Monitoreo',
+    tab_agent: 'AI Agent',
+    tab_connectivity: 'Conectividad',
+    patrol_interval: 'Intervalo de patrulla',
+    patrol_interval_hint: 'Ej: 5m, 1h, 30s. 0s para desactivar.',
+    self_healing: 'Auto-reparaci\u00F3n',
+    gpu_temp_threshold: 'Umbral temp. GPU (\u00B0C)',
+    gpu_temp_hint: 'Alerta cuando la temperatura GPU supera este valor.',
+    gpu_idle_pct: 'Umbral GPU inactiva (%)',
+    gpu_idle_minutes: 'Tiempo GPU inactiva (min)',
+    vram_opportunity: 'Oportunidad VRAM (%)',
+    vram_opportunity_hint: 'Alerta cuando VRAM libre supera este porcentaje.',
+    llm_extra_params: 'Par\u00E1metros extra',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: 'Servidor central',
+    central_endpoint: 'Endpoint del servidor',
+    central_api_key: 'API Key',
+    central_api_key_hint: 'API Key del servidor central',
+    support_service: 'Servicio de soporte',
+    support_enabled: 'Activar soporte',
+    support_endpoint_label: 'Endpoint del servicio',
   },
   fr: {
     system_online: 'Syst\u00E8me en ligne',
@@ -2788,6 +3079,32 @@ var I18N = {
     settings_saved: 'Param\u00E8tres enregistr\u00E9s avec succ\u00E8s.',
     settings_error: 'Erreur lors de l\'enregistrement des param\u00E8tres.',
     settings_cleared: 'Param\u00E8tres effac\u00E9s.',
+    support_open_workspace: 'Ouvrir AIMA-Service',
+    tab_general: 'G\u00E9n\u00E9ral',
+    tab_monitoring: 'Surveillance',
+    tab_agent: 'AI Agent',
+    tab_connectivity: 'Connectivit\u00E9',
+    patrol_interval: 'Intervalle de patrouille',
+    patrol_interval_hint: 'Ex : 5m, 1h, 30s. 0s pour d\u00E9sactiver.',
+    self_healing: 'Auto-r\u00E9paration',
+    gpu_temp_threshold: 'Seuil temp. GPU (\u00B0C)',
+    gpu_temp_hint: 'Alerte quand la temp\u00E9rature GPU d\u00E9passe cette valeur.',
+    gpu_idle_pct: 'Seuil GPU inactive (%)',
+    gpu_idle_minutes: 'Dur\u00E9e GPU inactive (min)',
+    vram_opportunity: 'Opportunit\u00E9 VRAM (%)',
+    vram_opportunity_hint: 'Alerte quand VRAM libre d\u00E9passe ce pourcentage.',
+    llm_extra_params: 'Param\u00E8tres suppl.',
+    llm_extra_params_hint: 'JSON : {"temperature":0.7,"max_tokens":4096}',
+    central_server: 'Serveur central',
+    central_endpoint: 'Point d\'acc\u00E8s du serveur',
+    central_api_key: 'Cl\u00E9 API',
+    central_api_key_hint: 'Cl\u00E9 API du serveur central',
+    support_service: 'Service de support',
+    support_enabled: 'Activer le support',
+    support_endpoint_label: 'Point d\'acc\u00E8s du service',
+    cli_help_header: 'Mode CLI \u2014 Outils MCP disponibles',
+    cli_help_usage: 'Utilisation : /cli <outil> [param\u00E8tres]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_unknown_tool: 'Outil inconnu : ',
   },
   de: {
     system_online: 'System online',
@@ -2838,6 +3155,32 @@ var I18N = {
     settings_saved: 'Einstellungen erfolgreich gespeichert.',
     settings_error: 'Fehler beim Speichern der Einstellungen.',
     settings_cleared: 'Einstellungen gel\u00F6scht.',
+    support_open_workspace: 'AIMA-Service \u00F6ffnen',
+    tab_general: 'Allgemein',
+    tab_monitoring: '\u00DCberwachung',
+    tab_agent: 'AI Agent',
+    tab_connectivity: 'Konnektivit\u00E4t',
+    patrol_interval: 'Patrouille-Intervall',
+    patrol_interval_hint: 'z.B. 5m, 1h, 30s. 0s zum Deaktivieren.',
+    self_healing: 'Selbstheilung',
+    gpu_temp_threshold: 'GPU-Temp.-Schwelle (\u00B0C)',
+    gpu_temp_hint: 'Warnung wenn GPU-Temperatur diesen Wert \u00FCberschreitet.',
+    gpu_idle_pct: 'GPU-Leerlauf-Schwelle (%)',
+    gpu_idle_minutes: 'GPU-Leerlauf-Dauer (Min.)',
+    vram_opportunity: 'VRAM-Gelegenheit (%)',
+    vram_opportunity_hint: 'Hinweis wenn freier VRAM diesen Prozentsatz \u00FCberschreitet.',
+    llm_extra_params: 'Zusatzparameter',
+    llm_extra_params_hint: 'JSON: {"temperature":0.7,"max_tokens":4096}',
+    central_server: 'Zentraler Wissensserver',
+    central_endpoint: 'Server-Endpunkt',
+    central_api_key: 'API Key',
+    central_api_key_hint: 'API Key f\u00FCr Zentralserver',
+    support_service: 'Support-Dienst',
+    support_enabled: 'Support aktivieren',
+    support_endpoint_label: 'Dienst-Endpunkt',
+    cli_help_header: 'CLI-Modus \u2014 Verf\u00FCgbare MCP-Tools',
+    cli_help_usage: 'Verwendung: /cli <Tool> [Parameter]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
+    cli_unknown_tool: 'Unbekanntes Tool: ',
   }
 };
 
@@ -2874,7 +3217,17 @@ function aimaApp() {
     mobileTab: 'chat',
 
     // Settings modal form
-    settingsForm: { apiKey: '', llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '' },
+    settingsTab: 'monitoring',
+    settingsForm: {
+      apiKey: '',
+      // Monitoring tab
+      patrolInterval: '5m', selfHeal: true, gpuTempWarn: 85,
+      gpuIdlePct: 10, gpuIdleMinutes: 15, vramOpportunityPct: 50,
+      // Agent tab
+      llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '', llmExtraParams: '',
+      // Connectivity tab
+      centralEndpoint: '', centralApiKey: '', supportEnabled: false, supportEndpoint: ''
+    },
     settingsSaving: false,
     settingsFeedback: null,
 
@@ -4451,12 +4804,53 @@ function aimaApp() {
 
     async openSettings() {
       this.settingsFeedback = null;
+      // General tab
       this.settingsForm.apiKey = this.apiKey;
+      // Agent tab
       this.settingsForm.llmEndpoint = this.agentInfo.llmEndpoint || '';
       this.settingsForm.llmModel = this.agentInfo.llmModel || '';
       this.settingsForm.llmApiKey = '';
       this.settingsForm.llmUserAgent = this.agentInfo.llmUserAgent || '';
+      // Load extra params
+      try {
+        var ep = await this.callTool('system.config', { key: 'llm.extra_params' });
+        this.settingsForm.llmExtraParams = (ep && ep.value && ep.value !== '***') ? ep.value : '';
+      } catch(e) { this.settingsForm.llmExtraParams = ''; }
+      // Monitoring tab — load from patrol config
+      try {
+        var pc = await this.callTool('agent.patrol_config', { action: 'get' });
+        if (pc) {
+          this.settingsForm.patrolInterval = (pc.Interval === 0 || pc.Interval) ? this.formatGoDuration(pc.Interval) : '5m';
+          this.settingsForm.selfHeal = pc.SelfHealEnabled !== false;
+          this.settingsForm.gpuTempWarn = typeof pc.GPUTempWarnC === 'number' ? pc.GPUTempWarnC : 85;
+          this.settingsForm.gpuIdlePct = typeof pc.GPUIdlePct === 'number' ? pc.GPUIdlePct : 10;
+          this.settingsForm.gpuIdleMinutes = typeof pc.GPUIdleMinutes === 'number' ? pc.GPUIdleMinutes : 15;
+          this.settingsForm.vramOpportunityPct = typeof pc.VRAMOpportunityPct === 'number' ? pc.VRAMOpportunityPct : 50;
+        }
+      } catch(e) {}
+      // Connectivity tab
+      try {
+        var ce = await this.callTool('system.config', { key: 'central.endpoint' });
+        this.settingsForm.centralEndpoint = (ce && ce.value && ce.value !== '***') ? ce.value : '';
+      } catch(e) { this.settingsForm.centralEndpoint = ''; }
+      this.settingsForm.centralApiKey = '';
+      try {
+        var se = await this.callTool('system.config', { key: 'support.enabled' });
+        this.settingsForm.supportEnabled = se && (se.value === 'true' || se.value === '1');
+      } catch(e) { this.settingsForm.supportEnabled = false; }
+      try {
+        var sep = await this.callTool('system.config', { key: 'support.endpoint' });
+        this.settingsForm.supportEndpoint = (sep && sep.value && sep.value !== '***') ? sep.value : '';
+      } catch(e) { this.settingsForm.supportEndpoint = ''; }
       this.showSettings = true;
+    },
+
+    formatGoDuration(ns) {
+      if (typeof ns === 'string') return ns;
+      var sec = Math.floor(ns / 1e9);
+      if (sec >= 3600 && sec % 3600 === 0) return (sec / 3600) + 'h';
+      if (sec >= 60 && sec % 60 === 0) return (sec / 60) + 'm';
+      return sec + 's';
     },
 
     async saveSettings() {
@@ -4464,7 +4858,7 @@ function aimaApp() {
       this.settingsFeedback = null;
       var errors = [];
 
-      // Save AIMA API key to localStorage
+      // General tab: API key to localStorage
       this.apiKey = this.settingsForm.apiKey;
       if (this.apiKey) {
         localStorage.setItem('aima_api_key', this.apiKey);
@@ -4472,19 +4866,47 @@ function aimaApp() {
         localStorage.removeItem('aima_api_key');
       }
 
-      // Save LLM config to server via system.config set
-      // Always send these (empty string = reset to default)
+      // Monitoring tab: patrol config
+      var patrolKeys = [
+        { key: 'interval', value: this.settingsForm.patrolInterval },
+        { key: 'gpu_temp_warn', value: String(this.settingsForm.gpuTempWarn) },
+        { key: 'gpu_idle_pct', value: String(this.settingsForm.gpuIdlePct) },
+        { key: 'gpu_idle_minutes', value: String(this.settingsForm.gpuIdleMinutes) },
+        { key: 'vram_opportunity_pct', value: String(this.settingsForm.vramOpportunityPct) },
+        { key: 'self_heal', value: this.settingsForm.selfHeal ? 'true' : 'false' }
+      ];
+      for (var pk of patrolKeys) {
+        try {
+          var pr = await this.callTool('agent.patrol_config', { action: 'set', key: pk.key, value: pk.value });
+          if (pr && pr._err) errors.push(pk.key + ': ' + pr._err);
+        } catch(e) { errors.push(pk.key + ': ' + e.message); }
+      }
+
+      // Agent tab: LLM config
       var r = await this.callTool('system.config', { key: 'llm.endpoint', value: this.settingsForm.llmEndpoint });
       if (r._err) errors.push('llm.endpoint: ' + r._err);
       var r2 = await this.callTool('system.config', { key: 'llm.model', value: this.settingsForm.llmModel });
       if (r2._err) errors.push('llm.model: ' + r2._err);
-      // Only send api_key if non-empty (empty = "don't change", form starts blank for security)
       if (this.settingsForm.llmApiKey) {
         var r3 = await this.callTool('system.config', { key: 'llm.api_key', value: this.settingsForm.llmApiKey });
         if (r3._err) errors.push('llm.api_key: ' + r3._err);
       }
       var r4 = await this.callTool('system.config', { key: 'llm.user_agent', value: this.settingsForm.llmUserAgent });
       if (r4._err) errors.push('llm.user_agent: ' + r4._err);
+      var r5 = await this.callTool('system.config', { key: 'llm.extra_params', value: this.settingsForm.llmExtraParams });
+      if (r5._err) errors.push('llm.extra_params: ' + r5._err);
+
+      // Connectivity tab
+      var r6 = await this.callTool('system.config', { key: 'central.endpoint', value: this.settingsForm.centralEndpoint });
+      if (r6._err) errors.push('central.endpoint: ' + r6._err);
+      if (this.settingsForm.centralApiKey) {
+        var r7 = await this.callTool('system.config', { key: 'central.api_key', value: this.settingsForm.centralApiKey });
+        if (r7._err) errors.push('central.api_key: ' + r7._err);
+      }
+      var r8 = await this.callTool('system.config', { key: 'support.enabled', value: this.settingsForm.supportEnabled ? 'true' : 'false' });
+      if (r8._err) errors.push('support.enabled: ' + r8._err);
+      var r9 = await this.callTool('system.config', { key: 'support.endpoint', value: this.settingsForm.supportEndpoint });
+      if (r9._err) errors.push('support.endpoint: ' + r9._err);
 
       this.settingsSaving = false;
 
@@ -4492,9 +4914,7 @@ function aimaApp() {
         this.settingsFeedback = { type: 'error', text: this.t('settings_error') + ' ' + errors.join('; ') };
       } else {
         this.settingsFeedback = { type: 'success', text: this.t('settings_saved') };
-        // Refresh agent info
         await this.pollAgentInfo();
-        // Auto-close after brief delay
         setTimeout(() => { this.showSettings = false; this.settingsFeedback = null; }, 1200);
       }
     },
@@ -4502,13 +4922,31 @@ function aimaApp() {
     async clearSettings() {
       this.apiKey = '';
       localStorage.removeItem('aima_api_key');
-      this.settingsForm = { apiKey: '', llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '' };
+      this.settingsForm = {
+        apiKey: '', patrolInterval: '5m', selfHeal: true, gpuTempWarn: 85,
+        gpuIdlePct: 10, gpuIdleMinutes: 15, vramOpportunityPct: 50,
+        llmEndpoint: '', llmModel: '', llmApiKey: '', llmUserAgent: '', llmExtraParams: '',
+        centralEndpoint: '', centralApiKey: '', supportEnabled: false, supportEndpoint: ''
+      };
 
-      // Clear server-side config
+      // Clear server-side LLM config
       await this.callTool('system.config', { key: 'llm.endpoint', value: '' });
       await this.callTool('system.config', { key: 'llm.model', value: '' });
       await this.callTool('system.config', { key: 'llm.api_key', value: '' });
       await this.callTool('system.config', { key: 'llm.user_agent', value: '' });
+      await this.callTool('system.config', { key: 'llm.extra_params', value: '' });
+      await this.callTool('system.config', { key: 'central.endpoint', value: '' });
+      await this.callTool('system.config', { key: 'central.api_key', value: '' });
+      await this.callTool('system.config', { key: 'support.enabled', value: '' });
+      await this.callTool('system.config', { key: 'support.endpoint', value: '' });
+
+      // Reset patrol to defaults
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'interval', value: '5m' });
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'self_heal', value: 'true' });
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_temp_warn', value: '85' });
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_idle_pct', value: '10' });
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_idle_minutes', value: '15' });
+      await this.callTool('agent.patrol_config', { action: 'set', key: 'vram_opportunity_pct', value: '50' });
 
       this.agentInfo.llmEndpoint = '';
       this.agentInfo.llmModel = '';

@@ -2056,10 +2056,10 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 
 	s.RegisterTool(&Tool{
 		Name:        "agent.patrol_config",
-		Description: "Get or set patrol configuration. Set interval to 0 to disable patrol. Parameters: action ('get' or 'set'), key (e.g. 'interval'), value.",
+		Description: "Get or set patrol configuration. Set interval to '0s' to disable patrol. Keys: interval (duration, e.g. '5m'), gpu_temp_warn (int, Celsius), gpu_idle_pct (int, %), gpu_idle_minutes (int), vram_opportunity_pct (int, %), self_heal ('true'/'false').",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["get","set"],"description":"'get' to read config, 'set' to update"},`+
-				`"key":{"type":"string","description":"Config key: 'interval', 'self_heal'"},`+
+			`"action":{"type":"string","enum":["get","set"],"description":"'get' to read all config, 'set' to update a key"},`+
+				`"key":{"type":"string","enum":["interval","gpu_temp_warn","gpu_idle_pct","gpu_idle_minutes","vram_opportunity_pct","self_heal"],"description":"Config key to set"},`+
 				`"value":{"type":"string","description":"New value (only for 'set')"}`,
 			"action"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {

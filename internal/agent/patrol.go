@@ -36,13 +36,13 @@ func DefaultPatrolConfig() PatrolConfig {
 
 // Alert is a structured patrol alert.
 type Alert struct {
-	ID         string    `json:"id"`
-	Severity   string    `json:"severity"` // "info", "warning", "critical"
-	Type       string    `json:"type"`     // "gpu_temp", "gpu_idle", "deploy_crash", "vram_opportunity", "power_throttle"
-	Message    string    `json:"message"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string     `json:"id"`
+	Severity   string     `json:"severity"` // "info", "warning", "critical"
+	Type       string     `json:"type"`     // "gpu_temp", "gpu_idle", "deploy_crash", "vram_opportunity", "power_throttle"
+	Message    string     `json:"message"`
+	CreatedAt  time.Time  `json:"created_at"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
-	Resolved   bool      `json:"resolved"`
+	Resolved   bool       `json:"resolved"`
 }
 
 // PatrolStatus describes the patrol loop state.
@@ -62,7 +62,7 @@ type AlertPersister func(ctx context.Context, id, severity, typ, message string)
 // PatrolAction records an automated response to an alert.
 type PatrolAction struct {
 	AlertID   string    `json:"alert_id"`
-	Type      string    `json:"type"`    // "heal", "notify"
+	Type      string    `json:"type"` // "heal", "notify"
 	Detail    string    `json:"detail"`
 	Success   bool      `json:"success"`
 	Timestamp time.Time `json:"timestamp"`
@@ -83,25 +83,28 @@ func WithActionCallback(fn func(ctx context.Context, action PatrolAction)) Patro
 
 // Patrol runs periodic device inspections.
 type Patrol struct {
-	config   PatrolConfig
-	tools    ToolExecutor
-	persist  AlertPersister
-	healer   *Healer
-	onAction func(ctx context.Context, action PatrolAction)
-	mu       sync.RWMutex
-	alerts   []Alert
-	actions  []PatrolAction
-	lastRun  time.Time
-	running  bool
-	cancel   context.CancelFunc
+	config       PatrolConfig
+	tools        ToolExecutor
+	persist      AlertPersister
+	healer       *Healer
+	onAction     func(ctx context.Context, action PatrolAction)
+	mu           sync.RWMutex
+	alerts       []Alert
+	actions      []PatrolAction
+	lastRun      time.Time
+	running      bool
+	cancel       context.CancelFunc
+	gpuIdleSince time.Time
+	configWake   chan struct{}
 }
 
 // NewPatrol creates a patrol loop. persist may be nil (alerts only kept in memory).
 func NewPatrol(config PatrolConfig, tools ToolExecutor, persist AlertPersister, opts ...PatrolOption) *Patrol {
 	p := &Patrol{
-		config:  config,
-		tools:   tools,
-		persist: persist,
+		config:     config,
+		tools:      tools,
+		persist:    persist,
+		configWake: make(chan struct{}, 1),
 	}
 	for _, o := range opts {
 		o(p)
@@ -120,21 +123,7 @@ func (p *Patrol) Start(ctx context.Context) {
 	ctx, p.cancel = context.WithCancel(ctx)
 	p.mu.Unlock()
 
-	go func() {
-		ticker := time.NewTicker(p.config.Interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				alerts := p.RunOnce(ctx)
-				if len(alerts) > 0 {
-					slog.Info("patrol cycle generated alerts", "count", len(alerts))
-				}
-			}
-		}
-	}()
+	go p.loop(ctx)
 }
 
 // Stop cancels the patrol loop.
@@ -144,6 +133,7 @@ func (p *Patrol) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.cancel = nil
 	p.running = false
 }
 
@@ -165,7 +155,7 @@ func (p *Patrol) Status() PatrolStatus {
 		HealCount:   healCount,
 		Interval:    p.config.Interval.String(),
 	}
-	if p.running && !p.lastRun.IsZero() {
+	if p.running && p.config.Interval > 0 && !p.lastRun.IsZero() {
 		s.NextRun = p.lastRun.Add(p.config.Interval)
 	}
 	return s
@@ -186,10 +176,12 @@ func (p *Patrol) ActiveAlerts() []Alert {
 
 // RunOnce performs a single patrol cycle.
 func (p *Patrol) RunOnce(ctx context.Context) []Alert {
+	now := time.Now()
+	config := p.Config()
 	var newAlerts []Alert
 
 	// 1. Device metrics check
-	metricsAlerts := p.checkMetrics(ctx)
+	metricsAlerts := p.checkMetrics(ctx, config, now)
 	newAlerts = append(newAlerts, metricsAlerts...)
 
 	// 2. Deployment health check
@@ -199,7 +191,7 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 	// 3. Persist and track
 	p.mu.Lock()
 	p.alerts = append(p.alerts, newAlerts...)
-	p.lastRun = time.Now()
+	p.lastRun = now
 	p.mu.Unlock()
 
 	if p.persist != nil {
@@ -211,16 +203,17 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 	}
 
 	// Automated response to alerts
-	if p.config.SelfHealEnabled {
+	if config.SelfHealEnabled {
 		p.reactToAlerts(ctx, newAlerts)
 	}
 
 	return newAlerts
 }
 
-func (p *Patrol) checkMetrics(ctx context.Context) []Alert {
+func (p *Patrol) checkMetrics(ctx context.Context, config PatrolConfig, now time.Time) []Alert {
 	result, err := p.tools.ExecuteTool(ctx, "device.metrics", nil)
 	if err != nil {
+		p.resetGPUIdleObservation()
 		slog.Debug("patrol: device.metrics unavailable", "error", err)
 		return nil
 	}
@@ -235,6 +228,7 @@ func (p *Patrol) checkMetrics(ctx context.Context) []Alert {
 		} `json:"gpu"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &metrics); err != nil || metrics.GPU == nil {
+		p.resetGPUIdleObservation()
 		return nil
 	}
 
@@ -242,21 +236,22 @@ func (p *Patrol) checkMetrics(ctx context.Context) []Alert {
 	gpu := metrics.GPU
 
 	// GPU temperature
-	if gpu.TemperatureCelsius > float64(p.config.GPUTempWarnC) {
+	if gpu.TemperatureCelsius > float64(config.GPUTempWarnC) {
 		alerts = append(alerts, makeAlert("warning", "gpu_temp",
-			fmt.Sprintf("GPU temperature %.0f°C exceeds threshold %d°C", gpu.TemperatureCelsius, p.config.GPUTempWarnC)))
+			fmt.Sprintf("GPU temperature %.0f°C exceeds threshold %d°C", gpu.TemperatureCelsius, config.GPUTempWarnC)))
 	}
 
-	// GPU idle
-	if gpu.UtilizationPercent < p.config.GPUIdlePct {
+	// GPU idle requires the GPU to stay below the threshold for the configured duration.
+	if idleFor, idleAlert := p.observeGPUIdle(config, gpu.UtilizationPercent, now); idleAlert {
 		alerts = append(alerts, makeAlert("info", "gpu_idle",
-			fmt.Sprintf("GPU utilization %d%% is below idle threshold %d%%", gpu.UtilizationPercent, p.config.GPUIdlePct)))
+			fmt.Sprintf("GPU utilization %d%% has stayed below idle threshold %d%% for %s",
+				gpu.UtilizationPercent, config.GPUIdlePct, idleFor.Round(time.Second))))
 	}
 
 	// VRAM opportunity
 	if gpu.MemoryTotalMiB > 0 {
 		freePct := 100 * (gpu.MemoryTotalMiB - gpu.MemoryUsedMiB) / gpu.MemoryTotalMiB
-		if freePct > p.config.VRAMOpportunityPct {
+		if freePct > config.VRAMOpportunityPct {
 			alerts = append(alerts, makeAlert("info", "vram_opportunity",
 				fmt.Sprintf("%d%% VRAM free (%d/%d MiB) — could run another model",
 					freePct, gpu.MemoryTotalMiB-gpu.MemoryUsedMiB, gpu.MemoryTotalMiB)))
@@ -313,8 +308,116 @@ func (p *Patrol) Config() PatrolConfig {
 // SetInterval updates the patrol interval.
 func (p *Patrol) SetInterval(d time.Duration) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.config.Interval = d
+	running := p.running
+	p.mu.Unlock()
+	if running {
+		p.signalConfigChange()
+	}
+}
+
+// SetGPUTempWarn updates the GPU temperature warning threshold (Celsius).
+func (p *Patrol) SetGPUTempWarn(c int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.GPUTempWarnC = c
+}
+
+// SetGPUIdle updates GPU idle detection thresholds.
+func (p *Patrol) SetGPUIdle(pct, minutes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.GPUIdlePct = pct
+	p.config.GPUIdleMinutes = minutes
+	p.gpuIdleSince = time.Time{}
+}
+
+// SetVRAMOpportunity updates the VRAM free opportunity threshold percentage.
+func (p *Patrol) SetVRAMOpportunity(pct int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.VRAMOpportunityPct = pct
+}
+
+// SetSelfHeal enables or disables automated self-healing.
+func (p *Patrol) SetSelfHeal(enabled bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.SelfHealEnabled = enabled
+}
+
+func (p *Patrol) loop(ctx context.Context) {
+	for {
+		interval := p.Config().Interval
+		if interval <= 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-p.configWake:
+				continue
+			}
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return
+		case <-p.configWake:
+			stopTimer(timer)
+			continue
+		case <-timer.C:
+			alerts := p.RunOnce(ctx)
+			if len(alerts) > 0 {
+				slog.Info("patrol cycle generated alerts", "count", len(alerts))
+			}
+		}
+	}
+}
+
+func (p *Patrol) signalConfigChange() {
+	select {
+	case p.configWake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Patrol) observeGPUIdle(config PatrolConfig, utilization int, now time.Time) (time.Duration, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if utilization >= config.GPUIdlePct {
+		p.gpuIdleSince = time.Time{}
+		return 0, false
+	}
+	if p.gpuIdleSince.IsZero() {
+		p.gpuIdleSince = now
+	}
+
+	idleFor := now.Sub(p.gpuIdleSince)
+	required := time.Duration(config.GPUIdleMinutes) * time.Minute
+	if required <= 0 {
+		return idleFor, true
+	}
+	return idleFor, idleFor >= required
+}
+
+func (p *Patrol) resetGPUIdleObservation() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gpuIdleSince = time.Time{}
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 // RecentActions returns the most recent N patrol actions.

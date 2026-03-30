@@ -17,6 +17,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -578,6 +579,11 @@ func run() error {
 	// 9f. Wrap SetConfig for API key hot-reload (needs proxyServer + fleetClient in scope)
 	baseSetConfig := deps.SetConfig
 	deps.SetConfig = func(ctx context.Context, key, value string) error {
+		if key == "llm.extra_params" {
+			if _, err := parseExtraParamsStrict(value); err != nil {
+				return err
+			}
+		}
 		if err := baseSetConfig(ctx, key, value); err != nil {
 			return err
 		}
@@ -646,7 +652,50 @@ func run() error {
 			if err != nil {
 				return nil, fmt.Errorf("invalid duration: %w", err)
 			}
+			if d < 0 {
+				return nil, fmt.Errorf("interval must be >= 0")
+			}
 			patrol.SetInterval(d)
+		case "gpu_temp_warn":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			if v < 0 {
+				return nil, fmt.Errorf("gpu_temp_warn must be >= 0")
+			}
+			patrol.SetGPUTempWarn(v)
+		case "gpu_idle_pct":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			if v < 0 || v > 100 {
+				return nil, fmt.Errorf("gpu_idle_pct must be between 0 and 100")
+			}
+			patrol.SetGPUIdle(v, patrol.Config().GPUIdleMinutes)
+		case "gpu_idle_minutes":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			if v < 0 {
+				return nil, fmt.Errorf("gpu_idle_minutes must be >= 0")
+			}
+			patrol.SetGPUIdle(patrol.Config().GPUIdlePct, v)
+		case "vram_opportunity_pct":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			if v < 0 || v > 100 {
+				return nil, fmt.Errorf("vram_opportunity_pct must be between 0 and 100")
+			}
+			patrol.SetVRAMOpportunity(v)
+		case "self_heal":
+			patrol.SetSelfHeal(p.Value == "true" || p.Value == "1")
+		default:
+			return nil, fmt.Errorf("unknown patrol config key: %s", p.Key)
 		}
 		return json.Marshal(map[string]string{"status": "updated"})
 	}
@@ -2114,12 +2163,26 @@ func discoverDefaultLLMModel(ctx context.Context, settings llmSettings) (string,
 
 // parseExtraParams parses a JSON string into a map for LLM extra parameters.
 func parseExtraParams(s string) map[string]any {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
+	m, err := parseExtraParamsStrict(s)
+	if err != nil {
 		slog.Warn("invalid llm.extra_params JSON, ignoring", "error", err)
 		return nil
 	}
 	return m
+}
+
+func parseExtraParamsStrict(s string) (map[string]any, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, fmt.Errorf("llm.extra_params must be a JSON object: %w", err)
+	}
+	if m == nil {
+		return nil, fmt.Errorf("llm.extra_params must be a JSON object")
+	}
+	return m, nil
 }
 
 // discoverFleetLLM discovers LLM endpoints from fleet devices via mDNS.

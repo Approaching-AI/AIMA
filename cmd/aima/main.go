@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2299,6 +2300,155 @@ func splitImageRef(ref string) (name, tag string) {
 	return ref[:absColon], ref[absColon+1:]
 }
 
+type deployOptions struct {
+	allowAutoPull bool
+}
+
+type deployOptionsKey struct{}
+
+func withDeployAutoPull(ctx context.Context, allow bool) context.Context {
+	return context.WithValue(ctx, deployOptionsKey{}, deployOptions{allowAutoPull: allow})
+}
+
+func deployAutoPullAllowed(ctx context.Context) bool {
+	opts, ok := ctx.Value(deployOptionsKey{}).(deployOptions)
+	if !ok {
+		return true
+	}
+	return opts.allowAutoPull
+}
+
+func stringInSliceFold(values []string, want string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func imageSupportsPlatform(ea *knowledge.EngineAsset, platform string) bool {
+	if ea == nil || ea.Image.Name == "" {
+		return false
+	}
+	if platform == "" {
+		return true
+	}
+	return len(ea.Image.Platforms) == 0 || stringInSliceFold(ea.Image.Platforms, platform)
+}
+
+func engineMatchesHardware(ea *knowledge.EngineAsset, hw knowledge.HardwareInfo) bool {
+	if ea == nil {
+		return false
+	}
+	arch := strings.TrimSpace(ea.Hardware.GPUArch)
+	return arch == "" || arch == "*" || strings.EqualFold(arch, hw.GPUArch)
+}
+
+func engineSupportsPlatform(ea *knowledge.EngineAsset, platform string) bool {
+	if ea == nil || platform == "" {
+		return ea != nil
+	}
+	if ea.Source != nil && ea.Source.Supports(platform) {
+		return true
+	}
+	return imageSupportsPlatform(ea, platform)
+}
+
+func engineCompatibleWithHost(ea *knowledge.EngineAsset, hw knowledge.HardwareInfo) bool {
+	return engineMatchesHardware(ea, hw) && engineSupportsPlatform(ea, hw.Platform)
+}
+
+func preferredEngineRuntimeType(ea *knowledge.EngineAsset, platform string) string {
+	if ea == nil {
+		return "container"
+	}
+
+	recommendation := ea.Runtime.Default
+	if platform != "" {
+		if rec, ok := ea.Runtime.PlatformRecommendations[platform]; ok && rec != "" {
+			recommendation = rec
+		}
+	}
+
+	switch recommendation {
+	case "native":
+		if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+			return "native"
+		}
+		if imageSupportsPlatform(ea, platform) {
+			return "container"
+		}
+	case "container":
+		if imageSupportsPlatform(ea, platform) {
+			return "container"
+		}
+		if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+			return "native"
+		}
+	}
+
+	if ea.Source != nil && (platform == "" || ea.Source.Supports(platform)) {
+		return "native"
+	}
+	if imageSupportsPlatform(ea, platform) {
+		return "container"
+	}
+	return "container"
+}
+
+func requiresRootImportForK3S(inContainerd, inDocker, isRoot bool) bool {
+	return inDocker && !inContainerd && !isRoot
+}
+
+func installedRuntimeTypesForEngine(installed []*state.Engine, engineName, engineType string) []string {
+	keys := map[string]bool{
+		strings.ToLower(engineName): true,
+		strings.ToLower(engineType): true,
+	}
+	set := make(map[string]bool)
+	for _, e := range installed {
+		if e == nil {
+			continue
+		}
+		if keys[strings.ToLower(e.ID)] || keys[strings.ToLower(e.Type)] {
+			if e.RuntimeType != "" {
+				set[e.RuntimeType] = true
+			}
+		}
+	}
+	runtimeTypes := make([]string, 0, len(set))
+	for rt := range set {
+		runtimeTypes = append(runtimeTypes, rt)
+	}
+	sort.Strings(runtimeTypes)
+	return runtimeTypes
+}
+
+func defaultEngineAsset(cat *knowledge.Catalog, hw knowledge.HardwareInfo) *knowledge.EngineAsset {
+	if cat == nil {
+		return nil
+	}
+	if name := cat.DefaultEngine(); name != "" {
+		if ea := cat.FindEngineByName(name, hw); engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	for i := range cat.EngineAssets {
+		ea := &cat.EngineAssets[i]
+		if ea.Metadata.Default && engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	for i := range cat.EngineAssets {
+		ea := &cat.EngineAssets[i]
+		if engineCompatibleWithHost(ea, hw) {
+			return ea
+		}
+	}
+	return nil
+}
+
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).
 // Missing data results in zero values, which downstream functions treat as "unknown" and skip.
 func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName string) knowledge.HardwareInfo {
@@ -2681,7 +2831,11 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		// Step 4: Deploy
 		notify("deploying", model)
-		deployData, err := deps.DeployApply(ctx, engineType, model, slot, nil)
+		deployCtx := ctx
+		if noPull {
+			deployCtx = withDeployAutoPull(ctx, false)
+		}
+		deployData, err := deps.DeployApply(deployCtx, engineType, model, slot, nil)
 		if err != nil {
 			return nil, fmt.Errorf("deploy: %w", err)
 		}
@@ -2934,15 +3088,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		PullEngine: func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error {
 			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			if name == "" {
-				// Pick the best engine for current hardware instead of global default
-				for i := range cat.EngineAssets {
-					ea := &cat.EngineAssets[i]
-					if ea.Hardware.GPUArch == "" || strings.EqualFold(ea.Hardware.GPUArch, hwInfo.GPUArch) {
-						name = ea.Metadata.Name
-						break
-					}
-				}
-				if name == "" {
+				if ea := defaultEngineAsset(cat, hwInfo); ea != nil {
+					name = ea.Metadata.Name
+				} else {
 					name = cat.DefaultEngine()
 				}
 			}
@@ -2954,7 +3102,8 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 			// Native binary path: prefer if platform is supported
 			platform := goruntime.GOOS + "/" + goruntime.GOARCH
-			if ea.Source != nil && ea.Source.Supports(platform) {
+			preferredRuntime := preferredEngineRuntimeType(ea, platform)
+			if preferredRuntime == "native" && ea.Source != nil && ea.Source.Supports(platform) {
 				distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 				distDir := filepath.Join(dataDir, "dist", distPlatform)
 				mgr := engine.NewBinaryManager(distDir)
@@ -2966,12 +3115,32 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				return nil
 			}
 			// Container image path
-			if ea.Image.Name != "" {
-				// Skip network pull if the image is already available locally
-				if engine.ImageExists(ctx, ea.Image.Name, ea.Image.Tag, &execRunner{}) {
-					slog.Info("engine image already available locally", "image", ea.Image.Name+":"+ea.Image.Tag)
+			if ea.Image.Name != "" && imageSupportsPlatform(ea, platform) {
+				fullRef := ea.Image.Name + ":" + ea.Image.Tag
+				runner := &execRunner{}
+				inContainerd := engine.ImageExistsInContainerd(ctx, fullRef, runner)
+				inDocker := engine.ImageExistsInDocker(ctx, fullRef, runner)
+				if inContainerd || inDocker {
+					slog.Info("engine image already available locally", "image", fullRef, "containerd", inContainerd, "docker", inDocker)
+					if rt.Name() == "k3s" && !inContainerd && inDocker {
+						if os.Getuid() != 0 {
+							_, _ = scanEnginesCore(ctx, "container", false)
+							return fmt.Errorf("engine image %s exists in Docker but not in K3S containerd; import requires root (sudo docker save %s | sudo k3s ctr -n k8s.io images import -)", fullRef, fullRef)
+						}
+						if err := engine.ImportDockerToContainerd(ctx, fullRef, runner); err != nil {
+							return fmt.Errorf("import existing engine image %s into containerd: %w", fullRef, err)
+						}
+						inContainerd = true
+					}
+					_, _ = scanEnginesCore(ctx, "container", false)
 					if onProgress != nil {
-						onProgress(engine.ProgressEvent{Phase: "already_available", Message: "engine image already available locally"})
+						msg := "engine image already available locally"
+						if rt.Name() == "k3s" && inContainerd && inDocker {
+							msg = "engine image already available locally (docker + containerd)"
+						} else if rt.Name() == "k3s" && inContainerd {
+							msg = "engine image already available in K3S containerd"
+						}
+						onProgress(engine.ProgressEvent{Phase: "already_available", Message: msg})
 					}
 					return nil
 				}
@@ -2987,6 +3156,16 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 				// Auto-scan to register in DB
 				_, _ = scanEnginesCore(ctx, "container", false)
+				return nil
+			}
+			if ea.Source != nil && ea.Source.Supports(platform) {
+				distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
+				distDir := filepath.Join(dataDir, "dist", distPlatform)
+				mgr := engine.NewBinaryManager(distDir)
+				if err := mgr.Download(ctx, toEngineBinarySource(ea.Source), onProgress); err != nil {
+					return err
+				}
+				_, _ = scanEnginesCore(ctx, "native", false)
 				return nil
 			}
 			return fmt.Errorf("engine %q has no download source for platform %s/%s", name, goruntime.GOOS, goruntime.GOARCH)
@@ -3050,45 +3229,39 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 			// Get all installed engines from DB
 			allInstalled, _ := db.ListEngines(ctx)
-			installedByType := make(map[string]bool)
-			for _, e := range allInstalled {
-				installedByType[strings.ToLower(e.Type)] = true
-			}
 
 			type engineEntry struct {
-				Name        string `json:"name"`
-				Type        string `json:"type"`
-				RuntimeType string `json:"runtime_type"` // "container" or "native"
-				SizeMB      int    `json:"size_mb,omitempty"`
-				Installed   bool   `json:"installed"`
+				Name                  string   `json:"name"`
+				Type                  string   `json:"type"`
+				RuntimeType           string   `json:"runtime_type"` // recommended runtime on this host
+				SizeMB                int      `json:"size_mb,omitempty"`
+				Installed             bool     `json:"installed"`
+				InstalledRuntimeTypes []string `json:"installed_runtime_types,omitempty"`
 			}
 
 			var compatible []engineEntry
 
 			for i := range cat.EngineAssets {
 				ea := &cat.EngineAssets[i]
-				// Filter by GPU arch compatibility
-				if ea.Hardware.GPUArch != "" && !strings.EqualFold(ea.Hardware.GPUArch, hwInfo.GPUArch) {
+				if !engineCompatibleWithHost(ea, hwInfo) {
 					continue
 				}
-				// Filter: "any" arch engines are always compatible
-				typeLower := strings.ToLower(ea.Metadata.Type)
-				installed := installedByType[strings.ToLower(ea.Metadata.Name)] || installedByType[typeLower]
-
-				rtType := "container"
+				rtType := preferredEngineRuntimeType(ea, hwInfo.Platform)
+				installedRuntimeTypes := installedRuntimeTypesForEngine(allInstalled, ea.Metadata.Name, ea.Metadata.Type)
+				installed := stringInSliceFold(installedRuntimeTypes, rtType)
 				sizeMB := ea.Image.SizeApproxMB
-				if ea.Source != nil {
-					rtType = "native"
+				if rtType == "native" {
 					// Native sources don't track size in catalog; use 0
 					sizeMB = 0
 				}
 
 				entry := engineEntry{
-					Name:        ea.Metadata.Name,
-					Type:        ea.Metadata.Type,
-					RuntimeType: rtType,
-					SizeMB:      sizeMB,
-					Installed:   installed,
+					Name:                  ea.Metadata.Name,
+					Type:                  ea.Metadata.Type,
+					RuntimeType:           rtType,
+					SizeMB:                sizeMB,
+					Installed:             installed,
+					InstalledRuntimeTypes: installedRuntimeTypes,
 				}
 				compatible = append(compatible, entry)
 			}
@@ -3107,6 +3280,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 		// Deployment (runtime abstraction: K3S or native)
 		DeployApply: func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			allowAutoPull := deployAutoPullAllowed(ctx)
 			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, configOverrides, dataDir)
 			if err != nil {
@@ -3145,6 +3319,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						"original", modelPath, "resolved", alt)
 					modelPath = alt
 				} else {
+					if !allowAutoPull {
+						return nil, fmt.Errorf("model %s not found locally and auto-pull is disabled", modelName)
+					}
 					slog.Info("model not found locally, auto-pulling", "model", modelName)
 					if pullErr := pullModelCore(ctx, modelName); pullErr != nil {
 						return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
@@ -3226,12 +3403,12 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			// Auto-import from Docker or pre-pull from registries if needed.
 			// Note: containerd operations require root; skip gracefully if not root.
 			if activeRt.Name() == "k3s" && req.Image != "" {
-				if !engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{}) {
-					if engine.ImageExistsInDocker(ctx, req.Image, &execRunner{}) {
-						if os.Getuid() != 0 {
-							slog.Warn("engine in Docker but not detected in containerd; import requires root",
-								"image", req.Image,
-								"fix", fmt.Sprintf("sudo docker save %s | sudo k3s ctr -n k8s.io images import -", req.Image))
+				inContainerd := engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{})
+				if !inContainerd {
+					inDocker := engine.ImageExistsInDocker(ctx, req.Image, &execRunner{})
+					if inDocker {
+						if requiresRootImportForK3S(inContainerd, inDocker, os.Getuid() == 0) {
+							return nil, fmt.Errorf("engine image %s is only available in Docker; K3S deployment requires importing it into containerd as root (sudo docker save %s | sudo k3s ctr -n k8s.io images import -)", req.Image, req.Image)
 						} else {
 							slog.Info("auto-importing image from Docker to containerd", "image", req.Image)
 							if importErr := engine.ImportDockerToContainerd(ctx, req.Image, &execRunner{}); importErr != nil {
@@ -3239,6 +3416,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 							}
 						}
 					} else if len(resolved.EngineRegistries) > 0 {
+						if !allowAutoPull {
+							return nil, fmt.Errorf("engine image %s not found in K3S containerd and auto-pull is disabled", req.Image)
+						}
 						slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
 						imgName, imgTag := splitImageRef(req.Image)
 						if pullErr := engine.Pull(ctx, engine.PullOptions{
@@ -3260,6 +3440,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				}
 				if !engine.ImageExistsInDocker(ctx, fullRef, &execRunner{}) {
 					if len(resolved.EngineRegistries) > 0 {
+						if !allowAutoPull {
+							return nil, fmt.Errorf("engine image %s not found in Docker and auto-pull is disabled", req.Image)
+						}
 						slog.Info("auto-pulling engine image for Docker deploy", "image", req.Image)
 						imgName, imgTag := splitImageRef(req.Image)
 						if pullErr := engine.Pull(ctx, engine.PullOptions{

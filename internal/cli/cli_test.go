@@ -75,7 +75,7 @@ func TestNewRootCmd(t *testing.T) {
 
 	// Verify all expected subcommands are registered
 	expected := []string{
-		"init", "hal",
+		"run", "init", "hal",
 		"deploy", "undeploy", "status",
 		"model", "engine", "knowledge", "catalog",
 		"ask", "agent", "config", "serve", "discover",
@@ -151,7 +151,7 @@ func TestEngineSubcommands(t *testing.T) {
 		t.Fatal("engine command not found")
 	}
 
-	expected := []string{"scan", "list", "pull", "import", "remove"}
+	expected := []string{"scan", "list", "pull", "import", "remove", "plan"}
 	subs := make(map[string]bool)
 	for _, c := range engineCmd.Commands() {
 		subs[c.Name()] = true

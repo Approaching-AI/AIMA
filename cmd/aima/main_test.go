@@ -43,6 +43,121 @@ func TestValidateOverlayAssetName(t *testing.T) {
 	}
 }
 
+func TestDefaultEngineAssetPrefersCatalogDefault(t *testing.T) {
+	hw := knowledge.HardwareInfo{
+		GPUArch:  "Ada",
+		Platform: "linux/amd64",
+	}
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{
+			{
+				Metadata: knowledge.EngineMetadata{Name: "qwen-tts-fastapi-cuda", Type: "qwen-tts-fastapi-cuda"},
+				Image:    knowledge.EngineImage{Name: "qwen3-tts-cuda-x86", Tag: "latest", Platforms: []string{"linux/amd64"}},
+				Hardware: knowledge.EngineHardware{GPUArch: "Ada"},
+			},
+			{
+				Metadata: knowledge.EngineMetadata{Name: "llamacpp-universal", Type: "llamacpp", Default: true},
+				Image:    knowledge.EngineImage{Name: "ghcr.io/ggml-org/llama.cpp", Tag: "server", Platforms: []string{"linux/amd64"}},
+				Hardware: knowledge.EngineHardware{GPUArch: "*"},
+			},
+		},
+	}
+
+	got := defaultEngineAsset(cat, hw)
+	if got == nil {
+		t.Fatal("defaultEngineAsset returned nil")
+	}
+	if got.Metadata.Name != "llamacpp-universal" {
+		t.Fatalf("defaultEngineAsset = %q, want llamacpp-universal", got.Metadata.Name)
+	}
+}
+
+func TestEngineCompatibilityHelpers(t *testing.T) {
+	hw := knowledge.HardwareInfo{
+		GPUArch:  "Ada",
+		Platform: "linux/amd64",
+	}
+	wildcard := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "llamacpp-universal", Type: "llamacpp", Default: true},
+		Image:    knowledge.EngineImage{Name: "ghcr.io/ggml-org/llama.cpp", Tag: "server", Platforms: []string{"linux/amd64"}},
+		Hardware: knowledge.EngineHardware{GPUArch: "*"},
+	}
+	unsupportedPlatform := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "darwin-native", Type: "llamacpp"},
+		Image:    knowledge.EngineImage{Name: "ghcr.io/ggml-org/llama.cpp", Tag: "server", Platforms: []string{"darwin/arm64"}},
+		Hardware: knowledge.EngineHardware{GPUArch: "*"},
+	}
+	nativeFallback := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "hybrid-engine", Type: "llamacpp"},
+		Image:    knowledge.EngineImage{Name: "ghcr.io/ggml-org/llama.cpp", Tag: "server", Platforms: []string{"linux/amd64"}},
+		Hardware: knowledge.EngineHardware{GPUArch: "*"},
+		Source:   &knowledge.EngineSource{Platforms: []string{"darwin/arm64"}},
+	}
+
+	if !engineCompatibleWithHost(wildcard, hw) {
+		t.Fatal("wildcard engine should be compatible with Ada/linux-amd64")
+	}
+	if engineCompatibleWithHost(unsupportedPlatform, hw) {
+		t.Fatal("engine with unsupported platform should be excluded")
+	}
+	if got := preferredEngineRuntimeType(nativeFallback, hw.Platform); got != "container" {
+		t.Fatalf("preferredEngineRuntimeType = %q, want container", got)
+	}
+
+	recommendedContainer := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "llamacpp-universal", Type: "llamacpp", Default: true},
+		Image:    knowledge.EngineImage{Name: "ghcr.io/ggml-org/llama.cpp", Tag: "server", Platforms: []string{"linux/amd64"}},
+		Hardware: knowledge.EngineHardware{GPUArch: "*"},
+		Runtime: knowledge.EngineRuntime{
+			Default: "auto",
+			PlatformRecommendations: map[string]string{
+				"linux/amd64": "container",
+			},
+		},
+		Source: &knowledge.EngineSource{Platforms: []string{"linux/amd64"}},
+	}
+	if got := preferredEngineRuntimeType(recommendedContainer, hw.Platform); got != "container" {
+		t.Fatalf("preferredEngineRuntimeType with container recommendation = %q, want container", got)
+	}
+}
+
+func TestRequiresRootImportForK3S(t *testing.T) {
+	if !requiresRootImportForK3S(false, true, false) {
+		t.Fatal("Docker-only image on non-root K3S host should require root import")
+	}
+	if requiresRootImportForK3S(false, true, true) {
+		t.Fatal("root should be able to import Docker-only image into containerd")
+	}
+	if requiresRootImportForK3S(true, true, false) {
+		t.Fatal("image already in containerd should not require root import")
+	}
+}
+
+func TestInstalledRuntimeTypesForEngine(t *testing.T) {
+	installed := []*state.Engine{
+		{ID: "llamacpp-universal", Type: "llamacpp", RuntimeType: "native"},
+		{ID: "other-engine", Type: "other", RuntimeType: "container"},
+		{ID: "llamacpp-container", Type: "llamacpp", RuntimeType: "container"},
+	}
+
+	got := installedRuntimeTypesForEngine(installed, "llamacpp-universal", "llamacpp")
+	if len(got) != 2 || got[0] != "container" || got[1] != "native" {
+		t.Fatalf("installedRuntimeTypesForEngine = %v, want [container native]", got)
+	}
+}
+
+func TestDeployAutoPullAllowed(t *testing.T) {
+	if !deployAutoPullAllowed(context.Background()) {
+		t.Fatal("default deploy auto-pull should be enabled")
+	}
+	if deployAutoPullAllowed(withDeployAutoPull(context.Background(), false)) {
+		t.Fatal("deploy auto-pull override=false was not honored")
+	}
+	if !deployAutoPullAllowed(withDeployAutoPull(context.Background(), true)) {
+		t.Fatal("deploy auto-pull override=true was not honored")
+	}
+}
+
 func TestIsBlockedAgentTool(t *testing.T) {
 	tests := []struct {
 		name      string

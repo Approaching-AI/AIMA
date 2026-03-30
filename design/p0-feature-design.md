@@ -732,7 +732,7 @@ func (p *Patrol) reactToAlerts(ctx context.Context, alerts []Alert) {
         case alert.Type == "gpu_temp" && alert.Severity == "warning":
             p.handleOverheat(ctx, alert)
         // gpu_idle 和 vram_opportunity 是 info 级别, 只记录不自动行动
-        // 这些信息供 Agent (L3a/L3b) 在主动模式下决策参考
+        // 这些信息供 Agent (L3a) 在主动模式下决策参考
         }
     }
 }

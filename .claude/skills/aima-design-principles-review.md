@@ -166,8 +166,7 @@ if err != nil && (strings.Contains(err.Error(), "immutable") || ...) {
 | CLI 命令 | 违反方式 | 修复 |
 |----------|---------|------|
 | `ask` | `app.Dispatcher.Ask()` 直接调用 | 新增 `agent.ask` MCP 工具 |
-| `agent install` | `zeroclaw.Install()` 直接调用 | 新增 `agent.install` MCP 工具 |
-| `agent status` | `ZeroClaw.Available()` 直接调用 | 新增 `agent.status` MCP 工具 |
+| `agent status` | Agent 状态直接调用 | 新增 `agent.status` MCP 工具 |
 | `status` | 组合 3 个 ToolDeps + 错误处理策略 | 新增 `system.status` MCP 工具 |
 | `knowledge list` | 60 行数据变形逻辑 | 新增 `knowledge.list` MCP 工具 |
 

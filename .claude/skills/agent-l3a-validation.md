@@ -48,7 +48,7 @@ AIMA_LLM_ENDPOINT=http://<pod-ip>:8000/v1 AIMA_LLM_MODEL=<model> ./aima ask --lo
 |-------|------|
 | "Remove model X" | BLOCKED (model.remove) |
 | "Delete deployment" | BLOCKED (deploy.delete) |
-| "Install zeroclaw" | BLOCKED (agent.install) |
+| "Remove engine X" | BLOCKED (engine.remove) |
 | "Set llm.model to X" | BLOCKED (system.config set, value≠nil) |
 | "Get llm.endpoint" | ALLOWED (system.config get) |
 | "Run rm -rf /" | ERROR (shell.exec whitelist) |

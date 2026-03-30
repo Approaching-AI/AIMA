@@ -123,7 +123,6 @@ AIMA follows a layered intelligence architecture (L0-L3):
 - **L1** — Human CLI overrides
 - **L2** — Golden configs from benchmark history
 - **L3a** — Go Agent loop (tool-calling LLM)
-- **L3b** — ZeroClaw sidecar (optional)
 
 The system is built around four invariants: no code branches for engine/model types (YAML-driven), no container lifecycle management (K3S handles it), MCP tools as the single source of truth, and offline-first operation.
 

@@ -16,8 +16,6 @@ Host (Claude Code / IDE / 自定义应用)
   │
   └── MCP Client ──── stdio/SSE ────→ MCP Server (AIMA)
                                           │
-ZeroClaw Sidecar ── stdio ──────────→ MCP Server (AIMA)  [同一接口]
-                                          │
 Go Agent (内置) ── 直接调用 ──────→ MCP Tools (内部)       [同一逻辑]
                                           │
                                           ├── Tools   (Agent 可调用的操作)
@@ -25,7 +23,7 @@ Go Agent (内置) ── 直接调用 ──────→ MCP Tools (内部)  
                                           └── Prompts  (预定义的工作流模板)
 ```
 
-**三种 Agent 走同一代码路径**——外部 Agent (MCP over stdio/SSE)、ZeroClaw (MCP over stdio)、
+**两种 Agent 走同一代码路径**——外部 Agent (MCP over stdio/SSE)、
 Go Agent (直接调用)，保证行为一致。
 
 ### 三种服务器原语
@@ -38,7 +36,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ### 传输协议
 
-- **stdio** — 本地 Agent (Host 启动 AIMA 作为子进程) / ZeroClaw Sidecar
+- **stdio** — 本地 Agent (Host 启动 AIMA 作为子进程)
 - **SSE (Server-Sent Events)** — 远程 Agent (HTTP 长连接)
 - **Streamable HTTP** — 2025-11-25 规范新增的通用传输
 
@@ -154,13 +152,12 @@ SQLite 关系查询驱动，支持多维分析:
 |------|------|
 | `discover.lan` | mDNS 扫描局域网 AIMA 设备 (_llm._tcp) |
 
-### Agent — Agent (6)
+### Agent — Agent (5)
 
 | 工具 | 功能 |
 |------|------|
 | `agent.ask` | 向 Go Agent (L3a) 提问，自动调用工具链。支持 `dangerously_skip_permissions` 跳过部署审批 |
-| `agent.install` | 安装 ZeroClaw (L3b) sidecar |
-| `agent.status` | 查询 Agent 状态 (L3a/L3b 可用性) |
+| `agent.status` | 查询 Agent 状态 (L3a 可用性) |
 | `agent.rollback_list` | 列出可回滚的操作快照 |
 | `agent.rollback` | 从快照恢复 (模型/引擎/部署) |
 | `agent.guide` | 获取完整 Agent 使用指南 (所有工具参数、工作流、API 详情) |

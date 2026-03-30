@@ -56,7 +56,7 @@ func testApp(t *testing.T) *App {
 				return json.RawMessage(`[]`), nil
 			},
 			AgentStatus: func(ctx context.Context) (json.RawMessage, error) {
-				return json.RawMessage(`{"zeroclaw_available":false,"zeroclaw_healthy":false}`), nil
+				return json.RawMessage(`{"agent_available":false,"active_exploration_runs":0}`), nil
 			},
 			SupportAskForHelp: func(ctx context.Context, description, endpoint, inviteCode, workerCode, recoveryCode, referralCode string) (json.RawMessage, error) {
 				return json.RawMessage(`{"enabled":true,"device_id":"dev-test","created":false}`), nil
@@ -232,7 +232,7 @@ func TestAgentSubcommands(t *testing.T) {
 		t.Fatal("agent command not found")
 	}
 
-	expected := []string{"install", "status"}
+	expected := []string{"status", "rollback-list", "rollback"}
 	subs := make(map[string]bool)
 	for _, c := range agentCmd.Commands() {
 		subs[c.Name()] = true

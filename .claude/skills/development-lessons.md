@@ -69,7 +69,7 @@ Every CLI command = parse flags → call MCP tool → format output. CLI never c
 **Fleet CLI trap**: CLI process is independent from `aima serve` — `fleet.Registry` is empty in CLI process. Must call localhost REST API, not in-process state.
 
 ### Agent safety guardrails
-- **Destructive tools blocklist**: model.remove, engine.remove, deploy.delete, agent.install
+- **Destructive tools blocklist**: model.remove, engine.remove, deploy.delete
 - **Parameter-level blocking**: `system.config` allows `value == nil` (read) but blocks `value != nil` (write)
 - **Shell whitelist**: shell.exec only allows nvidia-smi, df, free, uname, cat /proc/cpuinfo, kubectl get/describe/logs/top/version
 - **Fleet remote blocking**: fleet.exec_tool blocks same 7 destructive tools on remote execution

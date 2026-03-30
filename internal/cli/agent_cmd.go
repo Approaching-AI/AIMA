@@ -14,28 +14,12 @@ func newAgentCmd(app *App) *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		newAgentInstallCmd(app),
 		newAgentStatusCmd(app),
 		newAgentRollbackListCmd(app),
 		newAgentRollbackCmd(app),
 	)
 
 	return cmd
-}
-
-func newAgentInstallCmd(app *App) *cobra.Command {
-	return &cobra.Command{
-		Use:   "install",
-		Short: "Install the ZeroClaw sidecar",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := app.ToolDeps.AgentInstall(cmd.Context())
-			if err != nil {
-				return fmt.Errorf("install agent: %w", err)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
-			return nil
-		},
-	}
 }
 
 func newAgentStatusCmd(app *App) *cobra.Command {

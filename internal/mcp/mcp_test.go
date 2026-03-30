@@ -428,7 +428,7 @@ func TestRegisterAllTools(t *testing.T) {
 		"knowledge.generate_pod", "knowledge.list_profiles", "knowledge.list_engines", "knowledge.list_models",
 		"knowledge.list",
 		"system.status", "system.config",
-		"agent.ask", "agent.install", "agent.status",
+		"agent.ask", "agent.status",
 		"shell.exec",
 	}
 	for _, name := range expectedTools {

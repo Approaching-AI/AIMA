@@ -13,7 +13,7 @@ L1: 用户 CLI 参数 (--config, --engine, --slot)
      ↓
 L2: SQLite 动态知识 (benchmark, knowledge notes, configurations)
      ↓
-L3a/L3b: Agent 决策
+L3a: Agent 决策
 ```
 
 ### Key Insight: `fs.FS` Interface

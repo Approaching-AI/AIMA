@@ -136,7 +136,6 @@ internal/
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
   mcp/                        # MCP server + 61 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
-  zeroclaw/                   # ZeroClaw lifecycle manager (optional L3b sidecar)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
 catalog/                      # Knowledge assets (go:embed, compiled in)
@@ -212,11 +211,8 @@ if engineType == "vllm" {
 Every feature must handle absence of its dependencies:
 
 ```go
-// L3b unavailable -> fall back to L3a -> fall back to L2 -> fall back to L0
+// L3a unavailable -> fall back to L2 -> fall back to L0
 func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
-    if d.zeroclaw.Available() && d.isComplex(query) {
-        return d.zeroclaw.Ask(ctx, query)
-    }
     if d.goAgent.Available() {
         return d.goAgent.Ask(ctx, query)
     }
@@ -256,7 +252,7 @@ func (d *Dispatcher) Ask(ctx context.Context, query string) (string, error) {
 | Configuration | A tested Hardware x Engine x Model x Config instance with derivation chain |
 | BenchmarkResult | Multi-dimensional performance data for a Configuration under specific load |
 | PerfVector | 6-dimensional normalized performance vector for similarity search |
-| L0/L1/L2/L3a/L3b | Progressive intelligence levels: defaults -> human CLI -> knowledge -> Go Agent -> ZeroClaw |
+| L0/L1/L2/L3a | Progressive intelligence levels: defaults -> human CLI -> knowledge -> Go Agent |
 | ConfigResolver | Merges L0-L3 configs, higher layer overrides lower |
 | Store | Knowledge query engine wrapping *sql.DB (Search/Compare/Gaps/Similar/Lineage/Aggregate) |
 | MCP Tool | JSON-RPC function exposed to Agents (deploy.apply, model.scan, etc) |

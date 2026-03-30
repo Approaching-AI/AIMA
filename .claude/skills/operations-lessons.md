@@ -209,7 +209,7 @@ Error message: `"cannot connect to local aima serve (is 'aima serve --mdns --dis
 
 ### Fleet security: remote tool execution blocking
 `fleet.exec_tool` can remotely invoke any MCP tool, potentially bypassing local guardrails.
-**Must** add dangerous tools to `fleetBlockedTools`: model.remove, engine.remove, deploy.delete, agent.install, stack.init, agent.rollback, shell.exec.
+**Must** add dangerous tools to `fleetBlockedTools`: model.remove, engine.remove, deploy.delete, stack.init, agent.rollback, shell.exec.
 
 ## 7. API Key & Security
 

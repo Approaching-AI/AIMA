@@ -318,8 +318,7 @@ deploy.apply("qwen3-0.6b")
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `agent.ask` | `query`, `local?`, `deep?`, `dangerously_skip_permissions?`, `session?` | response | Route query to L3a/L3b agent |
-| `agent.install` | (none) | status | Install ZeroClaw sidecar (L3b) |
+| `agent.ask` | `query`, `local?`, `dangerously_skip_permissions?`, `session?` | response | Route query to Go Agent (L3a) |
 | `agent.status` | (none) | availability | Check agent layer availability |
 | `agent.guide` | (none) | full reference | Get complete agent usage guide |
 
@@ -330,7 +329,6 @@ deploy.apply("qwen3-0.6b")
 | L1 | Human CLI | User-provided config overrides |
 | L2 | Knowledge | Deterministic YAML resolution |
 | L3a | Go Agent | LLM-powered multi-turn tool use |
-| L3b | ZeroClaw | Persistent memory, deep reasoning |
 
 ### rollback — Safety
 

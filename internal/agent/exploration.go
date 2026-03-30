@@ -1,24 +1,17 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	state "github.com/jguan/aima/internal"
 )
-
-type explorationZeroClaw interface {
-	Available() bool
-	Plan(ctx context.Context, request json.RawMessage) (json.RawMessage, error)
-}
 
 type ExplorationTarget struct {
 	Hardware string `json:"hardware,omitempty"`
@@ -44,26 +37,6 @@ type ExplorationPlan struct {
 	SearchSpace      map[string][]any            `json:"search_space,omitempty"`
 	Constraints      ExplorationConstraints      `json:"constraints,omitempty"`
 	BenchmarkProfile ExplorationBenchmarkProfile `json:"benchmark_profile,omitempty"`
-}
-
-type explorationPlannerRequest struct {
-	Kind             string                      `json:"kind"`
-	Goal             string                      `json:"goal"`
-	SourceRef        string                      `json:"source_ref,omitempty"`
-	Target           ExplorationTarget           `json:"target"`
-	SearchSpace      map[string][]any            `json:"search_space,omitempty"`
-	Constraints      ExplorationConstraints      `json:"constraints,omitempty"`
-	BenchmarkProfile ExplorationBenchmarkProfile `json:"benchmark_profile,omitempty"`
-	OpenQuestion     *plannerOpenQuestion        `json:"open_question,omitempty"`
-}
-
-type plannerOpenQuestion struct {
-	ID          string `json:"id"`
-	SourceAsset string `json:"source_asset,omitempty"`
-	Question    string `json:"question"`
-	TestCommand string `json:"test_command,omitempty"`
-	Expected    string `json:"expected,omitempty"`
-	Status      string `json:"status,omitempty"`
 }
 
 type benchmarkStepResult struct {
@@ -94,22 +67,20 @@ type ExplorationStatus struct {
 }
 
 type ExplorationManager struct {
-	db       *state.DB
-	tuner    *Tuner
-	tools    ToolExecutor
-	zeroclaw explorationZeroClaw
+	db    *state.DB
+	tuner *Tuner
+	tools ToolExecutor
 
 	mu         sync.Mutex
 	activeRuns map[string]context.CancelFunc
 	tuneRunID  string
 }
 
-func NewExplorationManager(db *state.DB, tuner *Tuner, tools ToolExecutor, zeroclaw explorationZeroClaw) *ExplorationManager {
+func NewExplorationManager(db *state.DB, tuner *Tuner, tools ToolExecutor) *ExplorationManager {
 	return &ExplorationManager{
 		db:         db,
 		tuner:      tuner,
 		tools:      tools,
-		zeroclaw:   zeroclaw,
 		activeRuns: make(map[string]context.CancelFunc),
 	}
 }
@@ -524,8 +495,10 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 	if req.Kind != "tune" && req.Kind != "validate" && req.Kind != "open_question" {
 		return nil, fmt.Errorf("exploration kind %q not implemented", req.Kind)
 	}
-	if req.Planner == "" {
+	if req.Planner == "" || req.Planner == "none" {
 		req.Planner = "none"
+	} else {
+		return nil, fmt.Errorf("planner %q not supported; use planner=none", req.Planner)
 	}
 	if req.Kind == "open_question" && req.SourceRef == "" {
 		return nil, fmt.Errorf("source_ref is required for open_question exploration")
@@ -570,16 +543,6 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 		Constraints:      req.Constraints,
 		BenchmarkProfile: req.Benchmark,
 	}
-	if req.Planner == "zeroclaw" {
-		if m.zeroclaw == nil || !m.zeroclaw.Available() {
-			return nil, fmt.Errorf("zeroclaw planner requested but unavailable")
-		}
-		planned, err := m.planWithZeroClaw(ctx, req, openQuestion)
-		if err != nil {
-			return nil, err
-		}
-		plan = planned
-	}
 	if plan.Target.Model == "" {
 		return nil, fmt.Errorf("target.model is required")
 	}
@@ -604,134 +567,6 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 		ApprovalMode: req.ApprovalMode,
 		PlanJSON:     string(planJSON),
 	}, nil
-}
-
-func (m *ExplorationManager) planWithZeroClaw(ctx context.Context, req ExplorationStart, openQuestion *state.OpenQuestion) (ExplorationPlan, error) {
-	var plannerQuestion *plannerOpenQuestion
-	if openQuestion != nil {
-		plannerQuestion = &plannerOpenQuestion{
-			ID:          openQuestion.ID,
-			SourceAsset: openQuestion.SourceAsset,
-			Question:    openQuestion.Question,
-			TestCommand: openQuestion.TestCommand,
-			Expected:    openQuestion.Expected,
-			Status:      openQuestion.Status,
-		}
-	}
-	request := explorationPlannerRequest{
-		Kind:             req.Kind,
-		Goal:             req.Goal,
-		SourceRef:        req.SourceRef,
-		Target:           req.Target,
-		SearchSpace:      req.SearchSpace,
-		Constraints:      req.Constraints,
-		BenchmarkProfile: req.Benchmark,
-		OpenQuestion:     plannerQuestion,
-	}
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return ExplorationPlan{}, fmt.Errorf("marshal planner request: %w", err)
-	}
-	response, err := m.zeroclaw.Plan(ctx, payload)
-	if err != nil {
-		return ExplorationPlan{}, fmt.Errorf("plan with zeroclaw: %w", err)
-	}
-	plan, err := decodeExplorationPlan(response)
-	if err != nil {
-		return ExplorationPlan{}, fmt.Errorf("decode zeroclaw plan: %w", err)
-	}
-	plan = mergePlannedExploration(req, plan)
-	if plan.Kind == "" {
-		plan.Kind = req.Kind
-	}
-	if plan.Kind != req.Kind {
-		return ExplorationPlan{}, fmt.Errorf("zeroclaw planner returned kind %q for requested kind %q", plan.Kind, req.Kind)
-	}
-	return plan, nil
-}
-
-func mergePlannedExploration(req ExplorationStart, plan ExplorationPlan) ExplorationPlan {
-	if plan.Kind == "" {
-		plan.Kind = req.Kind
-	}
-	if plan.Goal == "" {
-		plan.Goal = req.Goal
-	}
-	if plan.SourceRef == "" {
-		plan.SourceRef = req.SourceRef
-	}
-	if plan.Target.Model == "" {
-		plan.Target.Model = req.Target.Model
-	}
-	if plan.Target.Engine == "" {
-		plan.Target.Engine = req.Target.Engine
-	}
-	if plan.Target.Hardware == "" {
-		plan.Target.Hardware = req.Target.Hardware
-	}
-	if len(plan.SearchSpace) == 0 {
-		plan.SearchSpace = req.SearchSpace
-	}
-	if plan.Constraints.MaxCandidates == 0 {
-		plan.Constraints = req.Constraints
-	}
-	if plan.BenchmarkProfile.Endpoint == "" {
-		plan.BenchmarkProfile.Endpoint = req.Benchmark.Endpoint
-	}
-	if plan.BenchmarkProfile.Concurrency == 0 {
-		plan.BenchmarkProfile.Concurrency = req.Benchmark.Concurrency
-	}
-	if plan.BenchmarkProfile.Rounds == 0 {
-		plan.BenchmarkProfile.Rounds = req.Benchmark.Rounds
-	}
-	return plan
-}
-
-func decodeExplorationPlan(raw json.RawMessage) (ExplorationPlan, error) {
-	candidates := []json.RawMessage{bytes.TrimSpace(raw)}
-	if extracted := extractJSONObject(string(raw)); extracted != "" && extracted != string(raw) {
-		candidates = append(candidates, json.RawMessage(extracted))
-	}
-
-	for _, candidate := range candidates {
-		if len(candidate) == 0 {
-			continue
-		}
-		var wrapper struct {
-			Plan json.RawMessage `json:"plan"`
-		}
-		if err := json.Unmarshal(candidate, &wrapper); err == nil && len(wrapper.Plan) > 0 {
-			var plan ExplorationPlan
-			if err := json.Unmarshal(wrapper.Plan, &plan); err == nil {
-				return plan, nil
-			}
-		}
-
-		var plan ExplorationPlan
-		if err := json.Unmarshal(candidate, &plan); err == nil {
-			return plan, nil
-		}
-	}
-
-	return ExplorationPlan{}, fmt.Errorf("no valid exploration plan JSON in zeroclaw response")
-}
-
-func extractJSONObject(text string) string {
-	trimmed := strings.TrimSpace(text)
-	if strings.HasPrefix(trimmed, "```") {
-		trimmed = strings.TrimPrefix(trimmed, "```json")
-		trimmed = strings.TrimPrefix(trimmed, "```JSON")
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		if idx := strings.LastIndex(trimmed, "```"); idx >= 0 {
-			trimmed = trimmed[:idx]
-		}
-	}
-	start := strings.IndexByte(trimmed, '{')
-	end := strings.LastIndexByte(trimmed, '}')
-	if start < 0 || end <= start {
-		return ""
-	}
-	return strings.TrimSpace(trimmed[start : end+1])
 }
 
 func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*benchmarkStepResult, error) {

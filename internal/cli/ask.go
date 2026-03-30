@@ -9,22 +9,20 @@ import (
 
 func newAskCmd(app *App) *cobra.Command {
 	var (
-		forceLocal bool
-		forceDeep  bool
-		skipPerms  bool
-		sessionID  string
+		skipPerms bool
+		sessionID string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "ask <query>",
 		Short: "Ask the AI agent a question",
-		Long:  "Route a query through the dispatcher: auto-selects L3a (Go Agent) or L3b (ZeroClaw) based on complexity.",
+		Long:  "Route a query through the Go Agent (L3a) for multi-turn tool-calling conversations.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			query := strings.Join(args, " ")
 
-			data, sid, err := app.ToolDeps.DispatchAsk(ctx, query, forceLocal, forceDeep, skipPerms, sessionID)
+			data, sid, err := app.ToolDeps.DispatchAsk(ctx, query, skipPerms, sessionID)
 			if err != nil {
 				return fmt.Errorf("ask: %w", err)
 			}
@@ -37,8 +35,6 @@ func newAskCmd(app *App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&forceLocal, "local", false, "Force use of Go Agent (L3a)")
-	cmd.Flags().BoolVar(&forceDeep, "deep", false, "Force use of ZeroClaw (L3b)")
 	cmd.Flags().BoolVar(&skipPerms, "dangerously-skip-permissions", false, "Skip deploy approval gate (use with caution)")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Continue a conversation by session ID")
 

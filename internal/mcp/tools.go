@@ -78,9 +78,8 @@ type ToolDeps struct {
 	DeployApprove func(ctx context.Context, id int64) (json.RawMessage, error)
 
 	// Agent
-	DispatchAsk       func(ctx context.Context, query string, forceLocal, forceDeep, skipPerms bool, sessionID string) (json.RawMessage, string, error)
-	AgentInstall      func(ctx context.Context) (json.RawMessage, error)
-	AgentStatus       func(ctx context.Context) (json.RawMessage, error)
+	DispatchAsk  func(ctx context.Context, query string, skipPerms bool, sessionID string) (json.RawMessage, string, error)
+	AgentStatus  func(ctx context.Context) (json.RawMessage, error)
 	AgentGuide        func(ctx context.Context) (json.RawMessage, error)
 	RollbackList      func(ctx context.Context) (json.RawMessage, error)
 	RollbackRestore   func(ctx context.Context, id int64) (json.RawMessage, error)
@@ -1592,24 +1591,20 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	// agent.ask
 	s.RegisterTool(&Tool{
 		Name:        "agent.ask",
-		Description: "Route a natural language query through the agent dispatcher. Auto-selects L3a (Go Agent) or L3b (ZeroClaw) based on query complexity. Returns the agent's response and a session_id for multi-turn conversations. Blocked for agent-initiated calls (prevents recursive invocation).",
+		Description: "Route a natural language query through the Go Agent (L3a). Returns the agent's response and a session_id for multi-turn conversations. Blocked for agent-initiated calls (prevents recursive invocation).",
 		InputSchema: schema(
 			`"query":{"type":"string","description":"The question to ask"},`+
-				`"force_local":{"type":"boolean","description":"Force use of Go Agent (L3a)"},`+
-				`"force_deep":{"type":"boolean","description":"Force use of ZeroClaw (L3b)"},`+
 				`"dangerously_skip_permissions":{"type":"boolean","description":"Skip deploy approval gate (use with caution)"},`+
-				`"session_id":{"type":"string","description":"Session ID to continue a conversation (works with both L3a and L3b)"}`,
+				`"session_id":{"type":"string","description":"Session ID to continue a conversation"}`,
 			"query"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DispatchAsk == nil {
 				return ErrorResult("agent.ask not implemented"), nil
 			}
 			var p struct {
-				Query      string `json:"query"`
-				ForceLocal bool   `json:"force_local"`
-				ForceDeep  bool   `json:"force_deep"`
-				SkipPerms  bool   `json:"dangerously_skip_permissions"`
-				SessionID  string `json:"session_id"`
+				Query     string `json:"query"`
+				SkipPerms bool   `json:"dangerously_skip_permissions"`
+				SessionID string `json:"session_id"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -1617,7 +1612,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			if p.Query == "" {
 				return ErrorResult("query is required"), nil
 			}
-			data, sid, err := deps.DispatchAsk(ctx, p.Query, p.ForceLocal, p.ForceDeep, p.SkipPerms, p.SessionID)
+			data, sid, err := deps.DispatchAsk(ctx, p.Query, p.SkipPerms, p.SessionID)
 			if err != nil {
 				return nil, fmt.Errorf("agent ask: %w", err)
 			}
@@ -1634,27 +1629,10 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// agent.install
-	s.RegisterTool(&Tool{
-		Name:        "agent.install",
-		Description: "Download and install the ZeroClaw sidecar binary (L3b agent with persistent memory and deep reasoning). Blocked for agent-initiated calls.",
-		InputSchema: noParamsSchema(),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.AgentInstall == nil {
-				return ErrorResult("agent.install not implemented"), nil
-			}
-			data, err := deps.AgentInstall(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("install agent: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
-
 	// agent.status
 	s.RegisterTool(&Tool{
 		Name:        "agent.status",
-		Description: "Check agent subsystem availability: whether L3a (Go Agent) and L3b (ZeroClaw) are configured and healthy. Use to diagnose agent-related issues.",
+		Description: "Check agent subsystem availability: whether L3a (Go Agent) is configured and healthy. Use to diagnose agent-related issues.",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.AgentStatus == nil {
@@ -1965,12 +1943,12 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 
 	s.RegisterTool(&Tool{
 		Name:        "explore.start",
-		Description: "Start a persisted exploration run. Supports tuning, validation, and open-question validation runs, with optional ZeroClaw planning.",
+		Description: "Start a persisted exploration run. Supports tuning, validation, and open-question validation runs.",
 		InputSchema: schema(
 			`"kind":{"type":"string","enum":["tune","validate","open_question"],"description":"Exploration kind."},`+
 				`"goal":{"type":"string","description":"Human-readable objective for the run."},`+
-				`"requested_by":{"type":"string","description":"Who requested the run, e.g. user or zeroclaw."},`+
-				`"planner":{"type":"string","description":"Planner identity.","enum":["none","zeroclaw"]},`+
+				`"requested_by":{"type":"string","description":"Who requested the run."},`+
+				`"planner":{"type":"string","description":"Planner identity.","enum":["none"]},`+
 				`"executor":{"type":"string","description":"Executor identity. Currently only local_go is supported."},`+
 				`"approval_mode":{"type":"string","description":"Approval mode metadata for the run."},`+
 				`"source_ref":{"type":"string","description":"Optional source reference such as gap_id, open_question_id, or alert_id."},`+
@@ -2218,7 +2196,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 				`"model":{"type":"string","description":"Model used for automated validation runs"},` +
 				`"engine":{"type":"string","description":"Engine used for automated validation runs"},` +
 				`"endpoint":{"type":"string","description":"Inference endpoint override for automated validation runs"},` +
-				`"planner":{"type":"string","description":"Planner to use when launching a run","enum":["","none","zeroclaw"]},` +
+				`"planner":{"type":"string","description":"Planner to use when launching a run","enum":["","none"]},` +
 				`"requested_by":{"type":"string","description":"Who requested the run"},` +
 				`"concurrency":{"type":"integer","description":"Benchmark concurrency for automated validation runs"},` +
 				`"rounds":{"type":"integer","description":"Benchmark rounds for automated validation runs"}`,

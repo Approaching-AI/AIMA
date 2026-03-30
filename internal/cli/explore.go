@@ -86,7 +86,7 @@ func newExploreCmd(app *App) *cobra.Command {
 	startCmd.Flags().String("engine", "", "Target engine")
 	startCmd.Flags().String("hardware", "", "Target hardware")
 	startCmd.Flags().String("endpoint", "", "Inference endpoint override")
-	startCmd.Flags().String("planner", "", "Planner identity (none or zeroclaw)")
+	startCmd.Flags().String("planner", "", "Planner identity")
 	startCmd.Flags().String("source-ref", "", "Source reference such as open question ID")
 	startCmd.Flags().String("requested-by", "", "Requester identity")
 	startCmd.Flags().Int("max-candidates", 20, "Maximum candidate configs")

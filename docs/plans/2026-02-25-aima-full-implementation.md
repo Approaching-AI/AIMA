@@ -32,7 +32,7 @@ Phase 2: Integration Modules (3 parallel agents)
     │
     ├─── Team F: internal/model/ + internal/engine/ (lifecycle management)
     ├─── Team G: internal/mcp/ (MCP server + 26 tool implementations)
-    └─── Team H: internal/agent/ + internal/zeroclaw/ (Agent system)
+    └─── Team H: internal/agent/ (Agent system)
     │
 Phase 3: CLI + Entry Point + Integration (2 parallel agents)
     │
@@ -261,24 +261,20 @@ type ToolFunc func(ctx context.Context, params json.RawMessage) (any, error)
 6. Test deploy.apply tool generates pod + calls k3s.Apply
 7. Test error handling (invalid params, tool not found)
 
-### Team H: internal/agent/ + internal/zeroclaw/
+### Team H: internal/agent/
 
 **agent/ files:** `agent.go`, `agent_test.go`, `dispatcher.go`, `dispatcher_test.go`
-**zeroclaw/ files:** `manager.go`, `manager_test.go`
 
 **Go Agent:** Simple tool-calling loop (max 30 rounds).
-**Dispatcher:** Route to L3a/L3b based on complexity heuristics.
-**ZeroClaw Manager:** Start/stop/health check of sidecar process.
+**Dispatcher:** Route to L3a with fallback to L2.
 
 **TDD sequence:**
 1. Test Go Agent constructs correct LLM API request with tools
 2. Test Go Agent executes tool_call and feeds result back
 3. Test Go Agent stops after text response (no more tool calls)
 4. Test Go Agent respects 30-round limit
-5. Test Dispatcher routes simple queries to L3a
-6. Test Dispatcher routes complex queries to L3b
-7. Test ZeroClaw Manager start/stop lifecycle
-8. Test ZeroClaw Manager health check
+5. Test Dispatcher routes queries to L3a
+6. Test Dispatcher falls back to L2 when LLM unavailable
 
 ---
 

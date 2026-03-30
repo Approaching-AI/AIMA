@@ -1441,7 +1441,7 @@ body {
           <span class="agent-info-label" x-text="t('mode')"></span>
           <span class="agent-info-value">
             <span class="status-dot" :class="agentAvailable ? 'online' : agentInfo.llmEndpoint ? 'online' : 'offline'" style="width:6px;height:6px;vertical-align:middle"></span>
-            <span x-text="agentInfo.zeroclawHealthy ? 'L3b ZeroClaw' : (agentInfo.llmEndpoint ? 'L3a Agent' : t('direct_mode'))"></span>
+            <span x-text="agentInfo.llmEndpoint ? 'L3a Agent' : t('direct_mode')"></span>
           </span>
         </div>
         <div class="agent-info-row">
@@ -1455,13 +1455,6 @@ body {
         <div class="agent-info-row">
           <span class="agent-info-label" x-text="t('session')"></span>
           <span class="agent-info-value" x-text="sessionId ? sessionId.substring(0, 8) + '...' : t('none')"></span>
-        </div>
-        <div class="agent-info-row">
-          <span class="agent-info-label">ZeroClaw</span>
-          <span class="agent-info-value">
-            <span class="status-dot" :class="agentInfo.zeroclawHealthy ? 'online' : agentInfo.zeroclawAvailable ? 'offline' : 'offline'" style="width:6px;height:6px;vertical-align:middle"></span>
-            <span x-text="agentInfo.zeroclawHealthy ? t('healthy') : agentInfo.zeroclawAvailable ? t('unhealthy') : t('unavailable')"></span>
-          </span>
         </div>
         <div style="margin-top:8px;text-align:right">
           <span class="agent-info-value clickable" @click="openSettings()" x-text="t('configure')"></span>
@@ -1551,7 +1544,7 @@ body {
           <div class="panel-title">&#x25CE; <span x-text="t('agent_status')"></span></div>
           <div class="agent-info-row">
             <span class="agent-info-label" x-text="t('mode')"></span>
-            <span class="agent-info-value" x-text="agentInfo.zeroclawHealthy ? 'L3b' : (agentInfo.llmEndpoint ? 'L3a' : t('direct_mode'))"></span>
+            <span class="agent-info-value" x-text="agentInfo.llmEndpoint ? 'L3a' : t('direct_mode')"></span>
           </div>
           <div class="agent-info-row">
             <span class="agent-info-label" x-text="t('llm_model')"></span>
@@ -2076,8 +2069,7 @@ function aimaApp() {
       llmEndpoint: '',
       llmModel: '',
       llmUserAgent: '',
-      zeroclawAvailable: false,
-      zeroclawHealthy: false
+      agentAvailableFromStatus: false
     },
 
     // Dashboard data
@@ -2444,8 +2436,7 @@ function aimaApp() {
       // Fetch agent.status
       const statusData = await this.callTool('agent.status');
       if (!statusData._err) {
-        this.agentInfo.zeroclawAvailable = statusData.zeroclaw_available === true;
-        this.agentInfo.zeroclawHealthy = statusData.zeroclaw_healthy === true;
+        this.agentInfo.agentAvailableFromStatus = statusData.agent_available === true;
       }
 
       // Fetch LLM config from system.config
@@ -2459,7 +2450,7 @@ function aimaApp() {
       if (ua && ua !== '***') this.agentInfo.llmUserAgent = ua;
 
       // Update agentAvailable based on combined info
-      this.agentAvailable = this.agentInfo.zeroclawAvailable === true ||
+      this.agentAvailable = this.agentInfo.agentAvailableFromStatus === true ||
         this._agentConfirmed === true ||
         (this.agentInfo.llmEndpoint !== '' && this.agentInfo.llmModel !== '');
     },

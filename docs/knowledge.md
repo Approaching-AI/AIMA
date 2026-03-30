@@ -180,7 +180,7 @@ slots:
 
 ### 5. Stack Component
 
-描述基础设施依赖（K3S、HAMi、ZeroClaw）的安装配置。
+描述基础设施依赖（K3S、HAMi）的安装配置。
 
 详见 [stack.md](stack.md)。
 
@@ -240,7 +240,7 @@ verified:
 
 ---
 
-## L0 → L3b 知识解析
+## L0 → L3a 知识解析
 
 ConfigResolver 按优先级合并多层知识:
 
@@ -252,9 +252,7 @@ L1: 用户 CLI --config / --engine / --slot     (人类显式指定)
 L2: knowledge_note.recommendation.config      (Agent/社区知识)
     + partition_strategy.slots                (资源划分策略)
  ↓ merge
-L3a: Go Agent 实时决策 (无状态工具循环)        (简单动态优化)
- ↓ merge
-L3b: ZeroClaw 实时决策 (持久记忆+跨会话)       (复杂动态优化)
+L3a: Go Agent 实时决策 (工具调用循环)           (动态优化)
 ```
 
 ### 硬件感知 Variant 选择
@@ -377,7 +375,7 @@ SELECT * FROM lineage ORDER BY level;
 ## 知识生命周期
 
 ```
-Agent 探索 (L3a/L3b)
+Agent 探索 (L3a)
   → 产出 Configuration + BenchmarkResult + Knowledge Note
   → 保存到本地 SQLite
          │

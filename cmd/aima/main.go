@@ -36,7 +36,6 @@ import (
 	"github.com/jguan/aima/internal/stack"
 	"github.com/jguan/aima/internal/support"
 	"github.com/jguan/aima/internal/ui"
-	"github.com/jguan/aima/internal/zeroclaw"
 
 	state "github.com/jguan/aima/internal"
 	"gopkg.in/yaml.v3"
@@ -157,15 +156,6 @@ func run() error {
 	// 6. Create infrastructure components
 	k3sClient := newK3SClient(dataDir)
 	proxyServer := proxy.NewServer()
-	zeroClawBinaryPath := "zeroclaw"
-	if installedPath, err := zeroclaw.InstalledBinaryPath(filepath.Join(dataDir, "bin")); err == nil {
-		zeroClawBinaryPath = installedPath
-	}
-	zeroClawMgr := zeroclaw.NewManager(
-		zeroclaw.WithBinaryPath(zeroClawBinaryPath),
-		zeroclaw.WithDataDir(dataDir),
-	)
-
 	// 7. Build all available runtimes, select default (K3S > Docker > Native)
 	nativeRt := buildNativeRuntime(dataDir, cat.EngineAssets)
 	var dockerRt, k3sRt runtime.Runtime
@@ -194,35 +184,16 @@ func run() error {
 	automationTools := &automationToolAdapter{base: toolAdapter}
 	var explorationMgr *agent.ExplorationManager
 	llmClient := buildLLMClient(ctx, db)
-	if zeroClawMgr.Available() {
-		if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
-			slog.Warn("sync zeroclaw config failed", "error", err)
-		}
-		if isServeInvocation() {
-			startErr := zeroClawMgr.Start(ctx)
-			if startErr != nil {
-				slog.Warn("zeroclaw sidecar start failed; falling back to one-shot mode", "error", startErr)
-			} else {
-				defer func() {
-					stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					if err := zeroClawMgr.Stop(stopCtx); err != nil {
-						slog.Warn("stop zeroclaw sidecar", "error", err)
-					}
-				}()
-			}
-		}
-	}
 	sessionStore := agent.NewSessionStore()
 	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
-	dispatcher := agent.NewDispatcher(goAgent, zeroClawMgr)
+	dispatcher := agent.NewDispatcher(goAgent)
 
-	// 9b. Wire agent-related ToolDeps (dispatcher/zeroclaw created after buildToolDeps)
-	deps.DispatchAsk = func(ctx context.Context, query string, forceLocal, forceDeep, skipPerms bool, sessionID string) (json.RawMessage, string, error) {
+	// 9b. Wire agent-related ToolDeps (dispatcher created after buildToolDeps)
+	deps.DispatchAsk = func(ctx context.Context, query string, skipPerms bool, sessionID string) (json.RawMessage, string, error) {
 		if skipPerms {
 			ctx = context.WithValue(ctx, ctxKeySkipPerms, true)
 		}
-		result, sid, toolCalls, err := dispatcher.Ask(ctx, query, agent.DispatchOption{ForceLocal: forceLocal, ForceDeep: forceDeep, SessionID: sessionID})
+		result, sid, toolCalls, err := dispatcher.Ask(ctx, query, agent.DispatchOption{SessionID: sessionID})
 		if err != nil {
 			return nil, "", err
 		}
@@ -232,24 +203,13 @@ func run() error {
 	deps.DeployApprove = func(ctx context.Context, id int64) (json.RawMessage, error) {
 		return toolAdapter.executeApproval(ctx, id)
 	}
-	deps.AgentInstall = func(ctx context.Context) (json.RawMessage, error) {
-		binPath, err := zeroclaw.Install(ctx, filepath.Join(dataDir, "bin"))
-		if err != nil {
-			return nil, err
-		}
-		if err := syncZeroClawConfig(ctx, db, dataDir, binPath); err != nil {
-			slog.Warn("sync zeroclaw config failed after install", "error", err)
-		}
-		return json.Marshal(map[string]string{"path": binPath})
-	}
 	deps.AgentStatus = func(ctx context.Context) (json.RawMessage, error) {
 		activeRuns := 0
 		if explorationMgr != nil {
 			activeRuns = explorationMgr.ActiveCount()
 		}
 		return json.Marshal(map[string]any{
-			"zeroclaw_available":      zeroClawMgr.Available(),
-			"zeroclaw_healthy":        zeroClawMgr.Health(),
+			"agent_available":         llmClient != nil,
 			"active_exploration_runs": activeRuns,
 		})
 	}
@@ -613,27 +573,12 @@ func run() error {
 		case "llm.endpoint":
 			llmClient.SetEndpoint(value)
 			slog.Info("LLM endpoint hot-swapped via system.config", "endpoint", value)
-			if zeroClawMgr.Available() {
-				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
-					slog.Warn("sync zeroclaw config failed", "error", err)
-				}
-			}
 		case "llm.model":
 			llmClient.SetModel(value)
 			slog.Info("LLM model hot-swapped via system.config", "model", value)
-			if zeroClawMgr.Available() {
-				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
-					slog.Warn("sync zeroclaw config failed", "error", err)
-				}
-			}
 		case "llm.api_key":
 			llmClient.SetAPIKey(value)
 			slog.Info("LLM API key hot-swapped via system.config")
-			if zeroClawMgr.Available() {
-				if err := syncZeroClawConfig(ctx, db, dataDir, zeroClawBinaryPath); err != nil {
-					slog.Warn("sync zeroclaw config failed", "error", err)
-				}
-			}
 		case "llm.user_agent":
 			llmClient.SetUserAgent(value)
 			slog.Info("LLM User-Agent hot-swapped via system.config", "user_agent", value)
@@ -647,7 +592,7 @@ func run() error {
 	// 9g. Patrol, tuner, healer (A2, A3, A4)
 	healer := agent.NewHealer(automationTools)
 	tuner := agent.NewTuner(automationTools)
-	explorationMgr = agent.NewExplorationManager(db, tuner, automationTools, zeroClawMgr)
+	explorationMgr = agent.NewExplorationManager(db, tuner, automationTools)
 	patrol = agent.NewPatrol(agent.DefaultPatrolConfig(), toolAdapter, db.InsertPatrolAlert,
 		agent.WithHealer(healer),
 		agent.WithActionCallback(func(ctx context.Context, a agent.PatrolAction) {
@@ -1406,7 +1351,6 @@ var fleetBlockedTools = map[string]string{
 	"engine.remove":  "destructive: deletes engine image",
 	"deploy.delete":  "destructive: stops running deployment",
 	"explore.start":  "orchestration: run-scoped approval not implemented remotely",
-	"agent.install":  "infrastructure: installs agent binary",
 	"stack.init":     "infrastructure: modifies system services",
 	"agent.rollback": "destructive: rolls back state",
 	"shell.exec":     "arbitrary command execution",
@@ -1429,7 +1373,6 @@ var blockedAgentTools = map[string]string{
 	"shell.exec":     "arbitrary command execution",
 	"stack.init":     "infrastructure mutation",
 	"agent.ask":      "recursive agent invocation",
-	"agent.install":  "agent binary installation",
 	"agent.rollback": "state rollback mutation",
 }
 
@@ -1987,27 +1930,6 @@ func loadLLMSettings(ctx context.Context, db *state.DB) llmSettings {
 		settings.ExtraParams = parseExtraParams(v)
 	}
 	return settings
-}
-
-func syncZeroClawConfig(ctx context.Context, db *state.DB, dataDir, binaryPath string) error {
-	settings := loadLLMSettings(ctx, db)
-	cfg := zeroclaw.ManagedConfig{
-		Provider: "openai",
-		APIURL:   settings.Endpoint,
-		Model:    settings.Model,
-		APIKey:   settings.APIKey,
-	}
-	if cfg.APIKey == "" && isLocalLLMEndpoint(settings.Endpoint) {
-		cfg.APIKey = "aima-local"
-	}
-	if cfg.Model == "" && isLocalLLMEndpoint(settings.Endpoint) {
-		if discovered, err := discoverDefaultLLMModel(ctx, settings); err == nil {
-			cfg.Model = discovered
-		} else {
-			slog.Debug("zeroclaw model discovery skipped", "endpoint", settings.Endpoint, "error", err)
-		}
-	}
-	return zeroclaw.EnsureManagedConfig(ctx, binaryPath, dataDir, cfg)
 }
 
 func seedCatalogOpenQuestions(ctx context.Context, db *state.DB, cat *knowledge.Catalog) error {

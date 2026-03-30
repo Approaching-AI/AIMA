@@ -1526,6 +1526,13 @@ body {
   color: var(--text-dim);
   line-height: 1.5;
 }
+.support-summary-link {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
 .support-summary-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2046,6 +2053,7 @@ body {
                   <div class="label" x-text="t('support_device_id')"></div>
                   <div class="value" x-text="supportState.deviceId || 'linking…'"></div>
                   <div class="meta" x-text="supportBindSummaryText()"></div>
+                  <div class="support-summary-link" x-show="supportBindingURL()" x-text="supportBindingURL()"></div>
                   <div class="support-summary-actions">
                     <button type="button" class="support-summary-btn" @click="openSupportBinding()" :disabled="!supportCanBind()" x-text="supportBindActionLabel()"></button>
                   </div>
@@ -2298,6 +2306,7 @@ body {
                   <div class="label" x-text="t('support_device_id')"></div>
                   <div class="value" x-text="supportState.deviceId || 'linking…'"></div>
                   <div class="meta" x-text="supportBindSummaryText()"></div>
+                  <div class="support-summary-link" x-show="supportBindingURL()" x-text="supportBindingURL()"></div>
                   <div class="support-summary-actions">
                     <button type="button" class="support-summary-btn" @click="openSupportBinding()" :disabled="!supportCanBind()" x-text="supportBindActionLabel()"></button>
                   </div>
@@ -2499,6 +2508,7 @@ var I18N = {
     support_referrals: 'Referrals',
     support_new_task: 'New Task',
     support_messages: 'Messages',
+    support_open_workspace: 'Open AIMA-Service',
   },
   zh: {
     system_online: '\u7CFB\u7EDF\u5728\u7EBF',
@@ -2577,6 +2587,7 @@ var I18N = {
     support_referrals: '\u9080\u8BF7\u6570',
     support_new_task: '\u65B0\u4EFB\u52A1',
     support_messages: '\u6D88\u606F',
+    support_open_workspace: '\u6253\u5F00\u7075\u673A\u4E91',
   },
   ja: {
     system_online: '\u30B7\u30B9\u30C6\u30E0\u30AA\u30F3\u30E9\u30A4\u30F3',
@@ -3152,7 +3163,6 @@ function aimaApp() {
         if (msgs.length > 0) this._supportSeen.msgSeq = msgs[msgs.length - 1].seq || 0;
         return;
       }
-      this.syncSupportMessages();
       this.syncSupportPageUpdates();
     },
 
@@ -3490,7 +3500,7 @@ function aimaApp() {
     },
 
     supportBindActionLabel() {
-      if (this.supportState.isBound) return this.t('support_bound');
+      if (this.supportState.isBound) return this.t('support_open_workspace');
       const block = this.supportTaskMenuBlock();
       return this.supportManifestText(block && block.context && block.context.bind_option_label, this.t('support_bind'));
     },
@@ -3498,7 +3508,7 @@ function aimaApp() {
     supportBindSummaryText() {
       if (!this.supportState.deviceId && !this.supportConnected) return this.t('support_connecting');
       if (this.supportState.isBound) return this.t('support_bound');
-      return this.supportTaskCompletionText('bind_console_prompt', this.t('support_unbound'));
+      return this.t('support_unbound');
     },
 
     supportBudgetTasksLabel() {
@@ -3551,7 +3561,7 @@ function aimaApp() {
     },
 
     supportCanBind() {
-      return !!(this.supportPublicBaseURL() && this.supportState.deviceId && !this.supportState.isBound);
+      return !!this.supportBindingURL();
     },
 
     supportPublicBaseURL() {
@@ -3566,9 +3576,15 @@ function aimaApp() {
         .replace(/\/platform$/, '');
     },
 
+    supportBindingURL() {
+      const base = this.supportPublicBaseURL();
+      return base ? base + '/link' : '';
+    },
+
     openSupportBinding() {
-      if (!this.supportCanBind()) return;
-      window.open(this.supportPublicBaseURL() + '/link', '_blank', 'noopener');
+      const url = this.supportBindingURL();
+      if (!url) return;
+      window.open(url, '_blank', 'noopener');
     },
 
     async copySupportShareText() {

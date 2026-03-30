@@ -292,6 +292,82 @@ func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	}
 }
 
+func TestScenarioNewFields(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+
+	// Find aibook-coldstart which has memory_budget, startup_order, alternative_configs
+	var aibook *DeploymentScenario
+	for i := range cat.DeploymentScenarios {
+		if cat.DeploymentScenarios[i].Metadata.Name == "aibook-coldstart" {
+			aibook = &cat.DeploymentScenarios[i]
+			break
+		}
+	}
+	if aibook == nil {
+		t.Fatal("aibook-coldstart scenario not found in catalog")
+	}
+
+	// memory_budget should be populated (map[string]any from YAML)
+	if aibook.MemoryBudget == nil {
+		t.Error("expected memory_budget to be parsed, got nil")
+	} else {
+		if _, ok := aibook.MemoryBudget["total_unified_mib"]; !ok {
+			t.Error("memory_budget missing total_unified_mib key")
+		}
+	}
+
+	// startup_order should have 4 steps
+	if len(aibook.StartupOrder) != 4 {
+		t.Errorf("expected 4 startup_order steps, got %d", len(aibook.StartupOrder))
+	} else {
+		if aibook.StartupOrder[0].Model != "qwen3-8b" {
+			t.Errorf("expected first startup step model to be qwen3-8b, got %s", aibook.StartupOrder[0].Model)
+		}
+		if aibook.StartupOrder[0].WaitFor != "health_check" {
+			t.Errorf("expected first startup step wait_for=health_check, got %s", aibook.StartupOrder[0].WaitFor)
+		}
+		if aibook.StartupOrder[0].TimeoutS != 180 {
+			t.Errorf("expected first startup step timeout_s=180, got %d", aibook.StartupOrder[0].TimeoutS)
+		}
+	}
+
+	// alternative_configs should have 2 entries
+	if len(aibook.AlternativeConfigs) != 2 {
+		t.Errorf("expected 2 alternative_configs, got %d", len(aibook.AlternativeConfigs))
+	} else {
+		if aibook.AlternativeConfigs[0].Name != "aibook-30b-solo" {
+			t.Errorf("expected first alternative name=aibook-30b-solo, got %s", aibook.AlternativeConfigs[0].Name)
+		}
+		if len(aibook.AlternativeConfigs[0].Replace) == 0 {
+			t.Error("expected aibook-30b-solo to have at least one replacement deployment")
+		}
+	}
+
+	// openclaw-multi should NOT have these fields (they're optional)
+	var openclaw *DeploymentScenario
+	for i := range cat.DeploymentScenarios {
+		if cat.DeploymentScenarios[i].Metadata.Name == "openclaw-multi" {
+			openclaw = &cat.DeploymentScenarios[i]
+			break
+		}
+	}
+	if openclaw == nil {
+		t.Fatal("openclaw-multi scenario not found")
+	}
+	if openclaw.MemoryBudget != nil {
+		t.Error("openclaw-multi should not have memory_budget")
+	}
+	if len(openclaw.StartupOrder) != 0 {
+		t.Error("openclaw-multi should not have startup_order")
+	}
+	if len(openclaw.AlternativeConfigs) != 0 {
+		t.Error("openclaw-multi should not have alternative_configs")
+	}
+}
+
 func TestLoadCatalogInvalidYAML(t *testing.T) {
 	fs := fstest.MapFS{
 		"hardware/bad.yaml": &fstest.MapFile{Data: []byte("not: valid: yaml: [")},

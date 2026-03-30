@@ -158,6 +158,7 @@ type ToolDeps struct {
 
 	// Scenario
 	ScenarioList  func(ctx context.Context) (json.RawMessage, error)
+	ScenarioShow  func(ctx context.Context, name string) (json.RawMessage, error)
 	ScenarioApply func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error)
 }
 
@@ -2527,6 +2528,34 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 			data, err := deps.ScenarioList(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("scenario list: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// scenario.show
+	s.RegisterTool(&Tool{
+		Name:        "scenario.show",
+		Description: "Show full details of a deployment scenario including deployments, memory budget, startup order, alternative configs, integrations, verification results, and open questions.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"Scenario name, e.g. 'openclaw-multi'. Call scenario.list to see available scenarios."}`,
+			"name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.ScenarioShow == nil {
+				return ErrorResult("scenario.show not available"), nil
+			}
+			var p struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			data, err := deps.ScenarioShow(ctx, p.Name)
+			if err != nil {
+				return nil, fmt.Errorf("scenario show: %w", err)
 			}
 			return TextResult(string(data)), nil
 		},

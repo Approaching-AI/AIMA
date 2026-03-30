@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -352,21 +353,69 @@ func run() error {
 
 	deps.ScenarioList = func(ctx context.Context) (json.RawMessage, error) {
 		type entry struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Target      string `json:"target"`
-			Deployments int    `json:"deployments"`
+			Name            string   `json:"name"`
+			Description     string   `json:"description"`
+			Target          string   `json:"target"`
+			Deployments     int      `json:"deployments"`
+			Modalities      []string `json:"modalities"`
+			HasAlternatives bool     `json:"has_alternatives"`
+			Verified        bool     `json:"verified"`
+			VerifiedDate    string   `json:"verified_date,omitempty"`
 		}
 		var list []entry
 		for _, ds := range cat.DeploymentScenarios {
-			list = append(list, entry{
-				Name:        ds.Metadata.Name,
-				Description: ds.Metadata.Description,
-				Target:      ds.Target.HardwareProfile,
-				Deployments: len(ds.Deployments),
-			})
+			// Collect unique modalities across all deployments
+			seen := make(map[string]bool)
+			var mods []string
+			for _, d := range ds.Deployments {
+				for _, m := range d.Modalities {
+					if !seen[m] {
+						seen[m] = true
+						mods = append(mods, m)
+					}
+				}
+			}
+			e := entry{
+				Name:            ds.Metadata.Name,
+				Description:     ds.Metadata.Description,
+				Target:          ds.Target.HardwareProfile,
+				Deployments:     len(ds.Deployments),
+				Modalities:      mods,
+				HasAlternatives: len(ds.AlternativeConfigs) > 0,
+			}
+			if ds.Verified != nil {
+				e.Verified = true
+				e.VerifiedDate = ds.Verified.Date
+			}
+			list = append(list, e)
 		}
 		return json.Marshal(list)
+	}
+
+	deps.ScenarioShow = func(ctx context.Context, name string) (json.RawMessage, error) {
+		for i := range cat.DeploymentScenarios {
+			if cat.DeploymentScenarios[i].Metadata.Name == name {
+				ds := &cat.DeploymentScenarios[i]
+				return json.Marshal(map[string]any{
+					"name":                ds.Metadata.Name,
+					"description":         ds.Metadata.Description,
+					"target":              ds.Target,
+					"deployments":         ds.Deployments,
+					"post_deploy":         ds.PostDeploy,
+					"integrations":        ds.Integrations,
+					"verified":            ds.Verified,
+					"open_questions":      ds.OpenQuestions,
+					"memory_budget":       ds.MemoryBudget,
+					"startup_order":       ds.StartupOrder,
+					"alternative_configs": ds.AlternativeConfigs,
+				})
+			}
+		}
+		names := make([]string, 0, len(cat.DeploymentScenarios))
+		for _, ds := range cat.DeploymentScenarios {
+			names = append(names, ds.Metadata.Name)
+		}
+		return nil, fmt.Errorf("scenario %q not found (available: %v)", name, names)
 	}
 
 	deps.ScenarioApply = func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error) {
@@ -394,7 +443,58 @@ func run() error {
 		}
 		var results []deployResult
 
-		for i, d := range scenario.Deployments {
+		// Hardware match guard: warn (don't block) if current device doesn't match scenario target.
+		// Skipped for dry-run (allow previewing any scenario) and when detection is unavailable (offline-first).
+		var hwWarning string
+		if !dryRun && scenario.Target.HardwareProfile != "" {
+			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
+			if hwInfo.HardwareProfile != "" && hwInfo.HardwareProfile != scenario.Target.HardwareProfile {
+				hwWarning = fmt.Sprintf("hardware mismatch: scenario targets %q but current device is %q",
+					scenario.Target.HardwareProfile, hwInfo.HardwareProfile)
+				slog.Warn(hwWarning)
+			}
+		}
+
+		// Build ordered deployment list: use startup_order if available, otherwise YAML array order.
+		type orderedDeploy struct {
+			deployment knowledge.ScenarioDeployment
+			waitFor    string // "health_check", "port_open", or "" (default 2s sleep)
+			timeoutS   int
+		}
+		var ordered []orderedDeploy
+		if len(scenario.StartupOrder) > 0 {
+			// Index deployments by model name for lookup
+			byModel := make(map[string]knowledge.ScenarioDeployment, len(scenario.Deployments))
+			for _, d := range scenario.Deployments {
+				byModel[d.Model] = d
+			}
+			// Sort steps (already sorted in YAML typically, but enforce)
+			steps := make([]knowledge.ScenarioStartupStep, len(scenario.StartupOrder))
+			copy(steps, scenario.StartupOrder)
+			sort.Slice(steps, func(i, j int) bool { return steps[i].Step < steps[j].Step })
+			for _, step := range steps {
+				d, ok := byModel[step.Model]
+				if !ok {
+					results = append(results, deployResult{Model: step.Model, Status: "error", Error: fmt.Sprintf("startup_order references unknown model %q", step.Model)})
+					continue
+				}
+				ordered = append(ordered, orderedDeploy{deployment: d, waitFor: step.WaitFor, timeoutS: step.TimeoutS})
+				delete(byModel, step.Model)
+			}
+			// Append any deployments not referenced in startup_order
+			for _, d := range scenario.Deployments {
+				if _, remaining := byModel[d.Model]; remaining {
+					ordered = append(ordered, orderedDeploy{deployment: d})
+				}
+			}
+		} else {
+			for _, d := range scenario.Deployments {
+				ordered = append(ordered, orderedDeploy{deployment: d})
+			}
+		}
+
+		for i, od := range ordered {
+			d := od.deployment
 			if dryRun {
 				if deps.DeployDryRun == nil {
 					results = append(results, deployResult{Model: d.Model, Engine: d.Engine, Status: "error", Error: "deploy.dry_run not available"})
@@ -432,29 +532,58 @@ func run() error {
 			}
 			results = append(results, deployResult{Model: d.Model, Engine: d.Engine, Status: "ok", Data: data})
 
-			// Brief pause between deployments for resource settling
-			if i < len(scenario.Deployments)-1 {
-				time.Sleep(2 * time.Second)
+			deploymentQuery := knowledge.SanitizePodName(d.Model + "-" + d.Engine)
+			var deployStatusTarget struct {
+				Name string `json:"name"`
 			}
-		}
+			if json.Unmarshal(data, &deployStatusTarget) == nil && deployStatusTarget.Name != "" {
+				deploymentQuery = deployStatusTarget.Name
+			}
 
-		// Post-deploy actions
-		// TODO: replace with generic MCP tool dispatch when a second action type is added.
-		if !dryRun {
-			for _, action := range scenario.PostDeploy {
-				if action.Action == "openclaw_sync" && deps.OpenClawSync != nil {
-					if data, err := deps.OpenClawSync(ctx, false); err == nil {
-						results = append(results, deployResult{Model: "openclaw_sync", Status: "ok", Data: data})
-					}
+			// Wait strategy between deployments (not after the last one)
+			if i < len(ordered)-1 {
+				if err := scenarioWaitForReady(ctx, deploymentQuery, od.waitFor, od.timeoutS, deps.DeployStatus); err != nil {
+					slog.Warn("startup wait did not complete", "model", d.Model, "wait_for", od.waitFor, "err", err)
+					results = append(results, deployResult{Model: d.Model + "_wait", Status: "warning", Error: err.Error()})
 				}
 			}
 		}
 
-		return json.Marshal(map[string]any{
+		// Post-deploy actions: table-driven dispatch (no if-else per action type).
+		// Register new actions here — one map entry per action, zero branches.
+		if !dryRun {
+			postDeployActions := map[string]func(context.Context) (json.RawMessage, error){
+				"openclaw_sync": func(ctx context.Context) (json.RawMessage, error) {
+					if deps.OpenClawSync == nil {
+						return nil, fmt.Errorf("openclaw_sync not available")
+					}
+					return deps.OpenClawSync(ctx, false)
+				},
+			}
+			for _, action := range scenario.PostDeploy {
+				fn, ok := postDeployActions[action.Action]
+				if !ok {
+					results = append(results, deployResult{Model: action.Action, Status: "error", Error: fmt.Sprintf("unknown post-deploy action: %s", action.Action)})
+					continue
+				}
+				data, err := fn(ctx)
+				if err != nil {
+					results = append(results, deployResult{Model: action.Action, Status: "error", Error: err.Error()})
+				} else {
+					results = append(results, deployResult{Model: action.Action, Status: "ok", Data: data})
+				}
+			}
+		}
+
+		resp := map[string]any{
 			"scenario":    name,
 			"dry_run":     dryRun,
 			"deployments": results,
-		})
+		}
+		if hwWarning != "" {
+			resp["hardware_warning"] = hwWarning
+		}
+		return json.Marshal(resp)
 	}
 
 	var (
@@ -2526,6 +2655,90 @@ func defaultEngineAsset(cat *knowledge.Catalog, hw knowledge.HardwareInfo) *know
 		}
 	}
 	return nil
+}
+
+// scenarioWaitForReady waits for a deployed model to become ready before proceeding.
+// waitFor: "health_check" polls deploy.status, "port_open" probes the returned address, "" defaults to 2s sleep.
+// On timeout, returns an error (caller treats as warning, continues deployment).
+func scenarioWaitForReady(ctx context.Context, query, waitFor string, timeoutS int, deployStatus func(context.Context, string) (json.RawMessage, error)) error {
+	if waitFor == "" || timeoutS <= 0 {
+		time.Sleep(2 * time.Second)
+		return nil
+	}
+	if deployStatus == nil {
+		return fmt.Errorf("deploy.status not available for wait_for=%q", waitFor)
+	}
+
+	switch waitFor {
+	case "health_check", "port_open":
+	default:
+		return fmt.Errorf("unknown wait_for %q", waitFor)
+	}
+
+	checkReady := func() (bool, error) {
+		data, err := deployStatus(ctx, query)
+		if err != nil {
+			return false, nil
+		}
+		var s struct {
+			Phase          string `json:"phase"`
+			Ready          bool   `json:"ready"`
+			Address        string `json:"address"`
+			Message        string `json:"message,omitempty"`
+			StartupMessage string `json:"startup_message,omitempty"`
+		}
+		if err := json.Unmarshal(data, &s); err != nil {
+			return false, nil
+		}
+		if s.Phase == "failed" {
+			msg := s.Message
+			if msg == "" {
+				msg = s.StartupMessage
+			}
+			if msg == "" {
+				msg = "deployment reported failed phase"
+			}
+			return false, fmt.Errorf("deployment %s failed: %s", query, msg)
+		}
+		switch waitFor {
+		case "health_check":
+			return s.Ready, nil
+		case "port_open":
+			if s.Address == "" {
+				return false, nil
+			}
+			conn, err := net.DialTimeout("tcp", s.Address, time.Second)
+			if err != nil {
+				return false, nil
+			}
+			conn.Close()
+			return true, nil
+		default:
+			return false, nil
+		}
+	}
+
+	if ready, err := checkReady(); ready || err != nil {
+		return err
+	}
+
+	timer := time.NewTimer(time.Duration(timeoutS) * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("timeout after %ds waiting for %s (%s)", timeoutS, query, waitFor)
+		case <-ticker.C:
+			if ready, err := checkReady(); ready || err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // Populates both static fields (from hal.Detect) and dynamic fields (from hal.CollectMetrics).

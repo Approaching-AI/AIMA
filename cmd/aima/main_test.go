@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -268,6 +269,52 @@ func TestDeploymentMatchesQuery(t *testing.T) {
 	}
 	if deploymentMatchesQuery(ds, "other-model") {
 		t.Fatal("unexpected match for unrelated deployment query")
+	}
+}
+
+func TestScenarioWaitForReadyHealthCheckReady(t *testing.T) {
+	err := scenarioWaitForReady(context.Background(), "demo-deploy", "health_check", 1,
+		func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"running","ready":true}`), nil
+		})
+	if err != nil {
+		t.Fatalf("scenarioWaitForReady(health_check ready) error = %v", err)
+	}
+}
+
+func TestScenarioWaitForReadyPortOpen(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	err = scenarioWaitForReady(context.Background(), "demo-deploy", "port_open", 1,
+		func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"starting","address":"` + ln.Addr().String() + `"}`), nil
+		})
+	if err != nil {
+		t.Fatalf("scenarioWaitForReady(port_open) error = %v", err)
+	}
+}
+
+func TestScenarioWaitForReadyFailedDeployment(t *testing.T) {
+	err := scenarioWaitForReady(context.Background(), "demo-deploy", "health_check", 1,
+		func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"failed","message":"OOMKilled"}`), nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "OOMKilled") {
+		t.Fatalf("scenarioWaitForReady(failed) error = %v, want OOMKilled", err)
+	}
+}
+
+func TestScenarioWaitForReadyUnknownMode(t *testing.T) {
+	err := scenarioWaitForReady(context.Background(), "demo-deploy", "bogus", 1,
+		func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"running","ready":true}`), nil
+		})
+	if err == nil || !strings.Contains(err.Error(), `unknown wait_for "bogus"`) {
+		t.Fatalf("scenarioWaitForReady(unknown) error = %v", err)
 	}
 }
 

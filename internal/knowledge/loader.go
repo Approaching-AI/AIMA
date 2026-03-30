@@ -519,14 +519,17 @@ type SlotRAM struct {
 // --- Deployment Scenario ---
 
 type DeploymentScenario struct {
-	Kind          string                `yaml:"kind"`
-	Metadata      ScenarioMetadata      `yaml:"metadata"`
-	Target        ScenarioTarget        `yaml:"target"`
-	Deployments   []ScenarioDeployment  `yaml:"deployments"`
-	PostDeploy    []ScenarioAction      `yaml:"post_deploy,omitempty"`
-	Integrations  map[string]any        `yaml:"integrations,omitempty"`
-	Verified      *ScenarioVerification `yaml:"verified,omitempty"`
-	OpenQuestions []StackQuestion       `yaml:"open_questions,omitempty"`
+	Kind               string                `yaml:"kind"`
+	Metadata           ScenarioMetadata      `yaml:"metadata"`
+	Target             ScenarioTarget        `yaml:"target"`
+	Deployments        []ScenarioDeployment  `yaml:"deployments"`
+	PostDeploy         []ScenarioAction      `yaml:"post_deploy,omitempty"`
+	Integrations       map[string]any        `yaml:"integrations,omitempty"`
+	Verified           *ScenarioVerification `yaml:"verified,omitempty"`
+	OpenQuestions      []StackQuestion       `yaml:"open_questions,omitempty"`
+	MemoryBudget       map[string]any        `yaml:"memory_budget,omitempty"`
+	StartupOrder       []ScenarioStartupStep `yaml:"startup_order,omitempty"`
+	AlternativeConfigs []ScenarioAlternative `yaml:"alternative_configs,omitempty"`
 }
 
 type ScenarioMetadata struct {
@@ -559,6 +562,20 @@ type ScenarioVerification struct {
 	Hardware string            `yaml:"hardware"`
 	Results  map[string]string `yaml:"results,omitempty"`
 	Notes    string            `yaml:"notes,omitempty"`
+}
+
+type ScenarioStartupStep struct {
+	Step     int    `yaml:"step"`
+	Model    string `yaml:"model"`
+	WaitFor  string `yaml:"wait_for"`
+	TimeoutS int    `yaml:"timeout_s"`
+	Notes    string `yaml:"notes,omitempty"`
+}
+
+type ScenarioAlternative struct {
+	Name        string               `yaml:"name"`
+	Description string               `yaml:"description"`
+	Replace     []ScenarioDeployment `yaml:"replace"`
 }
 
 // LoadCatalog loads and parses all YAML knowledge assets from an fs.FS.

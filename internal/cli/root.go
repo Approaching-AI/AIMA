@@ -34,21 +34,6 @@ func NewRootCmd(app *App) *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	// When invoked without a subcommand (e.g. double-click), delegate to "serve".
-	// Uses ExecuteContext so Cobra's full lifecycle (PersistentPreRunE, flag
-	// defaults, etc.) is honoured — don't call serveCmd.RunE directly.
-	root.RunE = func(cmd *cobra.Command, args []string) error {
-		if !app.OpenBrowser {
-			return cmd.Help()
-		}
-		serveCmd, _, _ := root.Find([]string{"serve"})
-		if serveCmd == nil {
-			return cmd.Help()
-		}
-		serveCmd.SetContext(cmd.Context())
-		return serveCmd.ExecuteContext(cmd.Context())
-	}
-
 	root.AddCommand(
 		newRunCmd(app),
 		newInitCmd(app),

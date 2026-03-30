@@ -1420,6 +1420,14 @@ body {
 .support-msg .msg-type.command { color: var(--warning); background: rgba(255, 159, 10, 0.15); }
 .support-msg .msg-type.error { color: var(--error); background: rgba(255, 69, 58, 0.15); }
 .support-msg .msg-type.complete { color: var(--success); background: rgba(48, 209, 88, 0.15); }
+.support-feedback {
+  font-size: 13px;
+  color: var(--error);
+  background: rgba(255, 69, 58, 0.1);
+  border: 1px solid rgba(255, 69, 58, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
 
 .support-input-row {
   display: flex;
@@ -1717,6 +1725,7 @@ body {
 
       <!-- Support View -->
       <div x-show="currentView === 'support'" class="support-page" x-cloak>
+        <div class="support-feedback" x-show="supportPageError" x-text="supportPageError"></div>
 
         <!-- Not connected + not connecting + no prompt -->
         <div x-show="!supportConnected && !supportPageConnecting && !supportPagePrompt" class="support-hero">
@@ -1765,7 +1774,7 @@ body {
             <template x-for="m in (supportState.messages || [])" :key="m.seq">
               <div class="support-msg">
                 <span class="msg-type" :class="m.type || 'info'" x-text="m.type || 'info'"></span>
-                <span x-text="m.content"></span>
+                <span x-text="m.message || m.content || ''"></span>
               </div>
             </template>
           </div>
@@ -1943,6 +1952,7 @@ body {
     </template>
     <template x-if="mobileTab === 'support'">
       <div class="support-page" style="padding:12px">
+        <div class="support-feedback" x-show="supportPageError" x-text="supportPageError"></div>
         <!-- Not connected -->
         <div x-show="!supportConnected && !supportPageConnecting && !supportPagePrompt" class="support-hero">
           <div class="support-hero-icon">&#x260E;</div>
@@ -1971,7 +1981,7 @@ body {
           </div>
           <div class="support-msg-list" style="min-height:80px">
             <template x-if="!supportState.messages || supportState.messages.length === 0"><div class="support-msg-empty" x-text="t('support_waiting')"></div></template>
-            <template x-for="m in (supportState.messages || [])" :key="m.seq"><div class="support-msg"><span class="msg-type" :class="m.type || 'info'" x-text="m.type || 'info'"></span><span x-text="m.content"></span></div></template>
+            <template x-for="m in (supportState.messages || [])" :key="m.seq"><div class="support-msg"><span class="msg-type" :class="m.type || 'info'" x-text="m.type || 'info'"></span><span x-text="m.message || m.content || ''"></span></div></template>
           </div>
           <div class="support-input-row">
             <input x-model="supportPageDesc" :placeholder="t('support_enter_desc')" @keydown.enter="submitSupportTask()">
@@ -2514,6 +2524,7 @@ function aimaApp() {
     supportPagePrompt: null,
     supportPageDesc: '',
     supportPageCode: '',
+    supportPageError: '',
 
     supportState: {
       enabled: false,
@@ -3087,6 +3098,7 @@ function aimaApp() {
     async connectSupport() {
       this.supportPageConnecting = true;
       this.supportPagePrompt = null;
+      this.supportPageError = '';
       const params = {};
       if (this.supportPageDesc.trim()) params.description = this.supportPageDesc.trim();
 
@@ -3103,17 +3115,20 @@ function aimaApp() {
           return;
         }
         this.supportPageConnecting = false;
+        this.supportPageError = data._err;
         return;
       }
 
       this.supportPageConnecting = false;
+      this.supportPageError = '';
       this.supportPageDesc = '';
-      // supportConnected will be synced by handleSupportStatus on next poll
+      await this.pollSystemStatus();
     },
 
     async submitSupportCode() {
       if (!this.supportPageCode.trim()) return;
       this.supportPageConnecting = true;
+      this.supportPageError = '';
       const params = {};
       if (this.supportPageDesc.trim()) params.description = this.supportPageDesc.trim();
       if (this.supportPagePrompt === 'recovery') {
@@ -3126,30 +3141,45 @@ function aimaApp() {
       this.supportPageConnecting = false;
 
       if (data._err) {
-        // Stay on prompt screen
+        this.supportPageError = data._err;
         return;
       }
+      this.supportPageError = '';
       this.supportPagePrompt = null;
       this.supportPageCode = '';
       this.supportPageDesc = '';
+      await this.pollSystemStatus();
     },
 
     async disconnectSupport() {
-      await this.callTool('system.config', { key: 'support.enabled', value: 'false' });
+      this.supportPageError = '';
+      const data = await this.callTool('system.config', { key: 'support.enabled', value: 'false' });
+      if (data._err) {
+        this.supportPageError = data._err;
+        return;
+      }
       this.supportConnected = false;
       this.supportPagePrompt = null;
       this.supportPageDesc = '';
       this.supportPageCode = '';
+      this.supportState.activeTask = null;
+      this.supportState.messages = [];
+      await this.pollSystemStatus();
     },
 
     async submitSupportTask() {
       if (!this.supportPageDesc.trim()) return;
       this.supportPageConnecting = true;
+      this.supportPageError = '';
       const data = await this.callTool('support.askforhelp', { description: this.supportPageDesc.trim() });
       this.supportPageConnecting = false;
-      if (!data._err) {
-        this.supportPageDesc = '';
+      if (data._err) {
+        this.supportPageError = data._err;
+        return;
       }
+      this.supportPageError = '';
+      this.supportPageDesc = '';
+      await this.pollSystemStatus();
     },
 
     async _sendAgentStream(text, params) {

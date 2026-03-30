@@ -77,6 +77,13 @@ func isServeInvocation() bool {
 	return false
 }
 
+func defaultRootArgs(args []string) []string {
+	if len(args) <= 1 {
+		return []string{"serve"}
+	}
+	return nil
+}
+
 func run() error {
 	ctx := context.Background()
 
@@ -1219,10 +1226,13 @@ func run() error {
 		FleetRegistry: fleetRegistry,
 		FleetClient:   fleetClient,
 		Support:       supportSvc,
-		OpenBrowser:   len(os.Args) <= 1,
+		OpenBrowser:   defaultRootArgs(os.Args) != nil,
 	}
 
 	rootCmd := cli.NewRootCmd(app)
+	if args := defaultRootArgs(os.Args); args != nil {
+		rootCmd.SetArgs(args)
+	}
 	return rootCmd.ExecuteContext(ctx)
 }
 

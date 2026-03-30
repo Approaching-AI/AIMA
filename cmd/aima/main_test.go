@@ -44,6 +44,27 @@ func TestValidateOverlayAssetName(t *testing.T) {
 	}
 }
 
+func TestDefaultRootArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "no args defaults to serve", args: []string{"aima"}, want: []string{"serve"}},
+		{name: "subcommand preserves args", args: []string{"aima", "serve"}, want: nil},
+		{name: "flag only preserves args", args: []string{"aima", "--help"}, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := defaultRootArgs(tt.args)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("defaultRootArgs(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultEngineAssetPrefersCatalogDefault(t *testing.T) {
 	hw := knowledge.HardwareInfo{
 		GPUArch:  "Ada",

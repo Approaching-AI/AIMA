@@ -17,6 +17,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -647,6 +648,34 @@ func run() error {
 				return nil, fmt.Errorf("invalid duration: %w", err)
 			}
 			patrol.SetInterval(d)
+		case "gpu_temp_warn":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			patrol.SetGPUTempWarn(v)
+		case "gpu_idle_pct":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			patrol.SetGPUIdle(v, patrol.Config().GPUIdleMinutes)
+		case "gpu_idle_minutes":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			patrol.SetGPUIdle(patrol.Config().GPUIdlePct, v)
+		case "vram_opportunity_pct":
+			v, err := strconv.Atoi(p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid integer: %w", err)
+			}
+			patrol.SetVRAMOpportunity(v)
+		case "self_heal":
+			patrol.SetSelfHeal(p.Value == "true" || p.Value == "1")
+		default:
+			return nil, fmt.Errorf("unknown patrol config key: %s", p.Key)
 		}
 		return json.Marshal(map[string]string{"status": "updated"})
 	}

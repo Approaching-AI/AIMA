@@ -317,6 +317,35 @@ func (p *Patrol) SetInterval(d time.Duration) {
 	p.config.Interval = d
 }
 
+// SetGPUTempWarn updates the GPU temperature warning threshold (Celsius).
+func (p *Patrol) SetGPUTempWarn(c int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.GPUTempWarnC = c
+}
+
+// SetGPUIdle updates GPU idle detection thresholds.
+func (p *Patrol) SetGPUIdle(pct, minutes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.GPUIdlePct = pct
+	p.config.GPUIdleMinutes = minutes
+}
+
+// SetVRAMOpportunity updates the VRAM free opportunity threshold percentage.
+func (p *Patrol) SetVRAMOpportunity(pct int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.VRAMOpportunityPct = pct
+}
+
+// SetSelfHeal enables or disables automated self-healing.
+func (p *Patrol) SetSelfHeal(enabled bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.SelfHealEnabled = enabled
+}
+
 // RecentActions returns the most recent N patrol actions.
 func (p *Patrol) RecentActions(limit int) []PatrolAction {
 	p.mu.RLock()

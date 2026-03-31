@@ -255,6 +255,52 @@ func TestChatCompletions_RoutesToCorrectBackend(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_AppliesRequestRewriter(t *testing.T) {
+	var receivedBody map[string]any
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(data, &receivedBody); err != nil {
+			t.Fatalf("Unmarshal backend body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-1","choices":[{"message":{"content":"ok"}}]}`)
+	})
+	defer backend.Close()
+
+	s := NewServer(WithRequestRewriter(func(path, contentType, model, engineType string, body []byte) []byte {
+		if path != "/v1/chat/completions" || model != "qwen3.5-9b" || engineType != "vllm-nightly" {
+			return body
+		}
+		return []byte(`{"model":"qwen3.5-9b","messages":[],"chat_template_kwargs":{"enable_thinking":false}}`)
+	}))
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("qwen3.5-9b", &Backend{
+		ModelName:  "qwen3.5-9b",
+		EngineType: "vllm-nightly",
+		Address:    addr,
+		Ready:      true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3.5-9b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	kwargs, ok := receivedBody["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatal("chat_template_kwargs not injected")
+	}
+	if kwargs["enable_thinking"] != false {
+		t.Fatalf("enable_thinking = %v, want false", kwargs["enable_thinking"])
+	}
+}
+
 func TestChatCompletions_UnknownModelReturns404(t *testing.T) {
 	s := NewServer()
 	s.RegisterBackend("qwen3-8b", &Backend{
@@ -768,41 +814,4 @@ func TestBackendWithBasePath(t *testing.T) {
 	if receivedPath != "/v1/chat/completions" {
 		t.Errorf("backend received path %q, want '/v1/chat/completions'", receivedPath)
 	}
-}
-
-func TestInjectDisableThinking(t *testing.T) {
-	t.Run("injects when absent", func(t *testing.T) {
-		body := []byte(`{"model":"qwen3.5-9b","messages":[]}`)
-		out := injectDisableThinking(body)
-		var req map[string]any
-		if err := json.Unmarshal(out, &req); err != nil {
-			t.Fatalf("Unmarshal: %v", err)
-		}
-		kwargs, ok := req["chat_template_kwargs"].(map[string]any)
-		if !ok {
-			t.Fatal("chat_template_kwargs not injected")
-		}
-		if kwargs["enable_thinking"] != false {
-			t.Fatalf("enable_thinking = %v, want false", kwargs["enable_thinking"])
-		}
-	})
-
-	t.Run("preserves existing", func(t *testing.T) {
-		body := []byte(`{"model":"m","chat_template_kwargs":{"enable_thinking":true}}`)
-		out := injectDisableThinking(body)
-		var req map[string]any
-		json.Unmarshal(out, &req)
-		kwargs := req["chat_template_kwargs"].(map[string]any)
-		if kwargs["enable_thinking"] != true {
-			t.Fatalf("should preserve existing chat_template_kwargs")
-		}
-	})
-
-	t.Run("invalid json returns original", func(t *testing.T) {
-		body := []byte(`not json`)
-		out := injectDisableThinking(body)
-		if string(out) != "not json" {
-			t.Fatalf("should return original body for invalid JSON")
-		}
-	})
 }

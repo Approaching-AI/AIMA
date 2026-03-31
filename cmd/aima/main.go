@@ -581,6 +581,7 @@ func run() error {
 		MCPCommand: mcpCommand,
 	}
 	openclawRoutes := openclaw.RegisterRoutes(openclawDeps)
+	proxyServer.SetRequestRewriter(openclaw.RequestBodyRewriter(openclawDeps.Catalog))
 	refreshOpenClawBackends := func(ctx context.Context) {
 		// Ensure proxy has up-to-date backends (CLI mode has no sync loop).
 		if deps.DeployList != nil {
@@ -2192,6 +2193,24 @@ func (a catalogAdapter) ModelFamily(name string) string {
 		}
 	}
 	return ""
+}
+
+func (a catalogAdapter) OpenClawRequestPatches(name string) []openclaw.RequestPatch {
+	for _, m := range a.cat.ModelAssets {
+		if m.Metadata.Name != name || m.OpenClaw == nil {
+			continue
+		}
+		out := make([]openclaw.RequestPatch, 0, len(m.OpenClaw.RequestPatches))
+		for _, patch := range m.OpenClaw.RequestPatches {
+			out = append(out, openclaw.RequestPatch{
+				Path:           patch.Path,
+				EnginePrefixes: append([]string(nil), patch.EnginePrefixes...),
+				Body:           patch.Body,
+			})
+		}
+		return out
+	}
+	return nil
 }
 
 // detectHWProfile returns the hardware profile name (e.g. "nvidia-rtx4090-x86") or "" if detection fails.

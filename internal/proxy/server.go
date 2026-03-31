@@ -42,13 +42,14 @@ func cloneBackend(b *Backend) *Backend {
 
 // Server is the HTTP inference proxy.
 type Server struct {
-	addr        string
-	apiKey      string
-	routes      map[string]*Backend
-	mu          sync.RWMutex
-	server      *http.Server
-	extraRoutes func(*http.ServeMux)
-	onReady     func(addr string)
+	addr            string
+	apiKey          string
+	routes          map[string]*Backend
+	mu              sync.RWMutex
+	server          *http.Server
+	extraRoutes     func(*http.ServeMux)
+	requestRewriter func(path, contentType, model, engineType string, body []byte) []byte
+	onReady         func(addr string)
 }
 
 // Option configures Server.
@@ -64,6 +65,10 @@ func WithAPIKey(key string) Option {
 
 func WithExtraRoutes(fn func(*http.ServeMux)) Option {
 	return func(s *Server) { s.extraRoutes = fn }
+}
+
+func WithRequestRewriter(fn func(path, contentType, model, engineType string, body []byte) []byte) Option {
+	return func(s *Server) { s.requestRewriter = fn }
 }
 
 // SetAddr configures the listen address. Must be called before Start.
@@ -92,6 +97,14 @@ func (s *Server) SetExtraRoutes(fn func(*http.ServeMux)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.extraRoutes = fn
+}
+
+// SetRequestRewriter installs a request body rewrite hook for inference requests.
+// The hook may return the original body unchanged.
+func (s *Server) SetRequestRewriter(fn func(path, contentType, model, engineType string, body []byte) []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestRewriter = fn
 }
 
 // SetOnReady registers a callback invoked once the server is listening.
@@ -377,10 +390,11 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject chat_template_kwargs to disable thinking mode for thinking-capable models.
-	// Safe for non-thinking models (vLLM ignores unknown template variables).
-	if r.URL.Path == "/v1/chat/completions" && r.Header.Get("Content-Type") == "application/json" {
-		body = injectDisableThinking(body)
+	s.mu.RLock()
+	requestRewriter := s.requestRewriter
+	s.mu.RUnlock()
+	if requestRewriter != nil {
+		body = requestRewriter(r.URL.Path, r.Header.Get("Content-Type"), model, backend.EngineType, body)
 	}
 
 	// Determine the target path: basePath + suffix from original request
@@ -512,25 +526,6 @@ func (s *Server) availableModels() string {
 		return "(none)"
 	}
 	return strings.Join(models, ", ")
-}
-
-// injectDisableThinking adds chat_template_kwargs to disable thinking mode for
-// thinking-capable models (e.g., Qwen3.5). Non-thinking models ignore the field.
-// Only injects when chat_template_kwargs is not already present in the request.
-func injectDisableThinking(body []byte) []byte {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return body
-	}
-	if _, ok := req["chat_template_kwargs"]; ok {
-		return body
-	}
-	req["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
-	out, err := json.Marshal(req)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 // corsMiddleware adds CORS headers, restricted to loopback origins to prevent CSRF.

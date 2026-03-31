@@ -137,7 +137,11 @@ func mergeImageGeneration(cfg map[string]any, managed, next *ManagedState, resul
 		}
 		return
 	}
-	if !canManageImageGeneration(cfg, managed) {
+	legacyOwned := managed != nil && managed.ImageGenerationProvider == legacyImageGenProviderID
+	if !legacyOwned {
+		legacyOwned = legacyImageGenerationOwned(cfg, result)
+	}
+	if !canManageImageGeneration(cfg, managed, result) {
 		return
 	}
 
@@ -148,14 +152,17 @@ func mergeImageGeneration(cfg map[string]any, managed, next *ManagedState, resul
 	next.ImageGenerationModels = imageGenIDs(result.ImageGenModels)
 
 	// Clean up legacy "openai" provider if it was used for image gen.
-	if managed != nil && managed.ImageGenerationProvider == legacyImageGenProviderID {
+	if legacyOwned {
 		removeProviderIfPresent(cfg, legacyImageGenProviderID)
 		removeAgentDefaultModelIfManaged(cfg, "imageGenerationModel", legacyImageGenProviderID)
 	}
 }
 
-func canManageImageGeneration(cfg map[string]any, managed *ManagedState) bool {
+func canManageImageGeneration(cfg map[string]any, managed *ManagedState, result *SyncResult) bool {
 	if managedOwnsImageGeneration(managed) {
+		return true
+	}
+	if legacyImageGenerationOwned(cfg, result) {
 		return true
 	}
 	if hasAgentDefaultModel(cfg, "imageGenerationModel") {
@@ -165,6 +172,22 @@ func canManageImageGeneration(cfg map[string]any, managed *ManagedState) bool {
 		return true
 	}
 	return managedOwnsMediaProvider(managed)
+}
+
+func legacyImageGenerationOwned(cfg map[string]any, result *SyncResult) bool {
+	if result == nil || len(result.ImageGenModels) == 0 {
+		return false
+	}
+	provider := lookupMap(cfg, "models", "providers", legacyImageGenProviderID)
+	if !providerManagedByAIMA(provider, result.ProxyAddr) {
+		return false
+	}
+	expected := uniqueSorted(imageGenIDs(result.ImageGenModels))
+	if !stringSlicesEqual(uniqueSorted(providerModels(provider)), expected) {
+		return false
+	}
+	configured := configuredAgentDefaultModelsForProviders(cfg, "imageGenerationModel", []string{legacyImageGenProviderID}, result.ProxyAddr)
+	return stringSlicesEqual(uniqueSorted(configured), expected)
 }
 
 func removeImageGeneration(cfg map[string]any, managed *ManagedState) {
@@ -297,6 +320,7 @@ func mergeMediaModels(cfg map[string]any, key string, desired []string, owned ma
 		section = copyMap(existing[key])
 	}
 	preserved := keepUnmanagedMediaModels(section, owned, proxyAddr, allowLegacy)
+	preserved = dropDesiredMediaDuplicates(preserved, desired, proxyAddr)
 	if len(desired) == 0 && len(preserved) == 0 {
 		removeMediaSection(cfg, key)
 		return nil
@@ -320,6 +344,31 @@ func mergeMediaModels(cfg map[string]any, key string, desired []string, owned ma
 	section["models"] = models
 	media[key] = section
 	return desired
+}
+
+func dropDesiredMediaDuplicates(models []any, desired []string, proxyAddr string) []any {
+	if len(models) == 0 || len(desired) == 0 {
+		return models
+	}
+	desiredSet := managedSet(desired)
+	if len(desiredSet) == 0 {
+		return models
+	}
+	out := make([]any, 0, len(models))
+	for _, raw := range models {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			out = append(out, raw)
+			continue
+		}
+		if normalizeURL(asString(entry["baseUrl"])) == normalizeURL(proxyAddr) {
+			if _, ok := desiredSet[asString(entry["model"])]; ok {
+				continue
+			}
+		}
+		out = append(out, raw)
+	}
+	return out
 }
 
 func mergeLocalMediaProvider(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {

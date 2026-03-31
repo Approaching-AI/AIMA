@@ -57,6 +57,21 @@ func (m *mockCatalog) ModelFamily(name string) string {
 	}
 }
 
+func (m *mockCatalog) OpenClawRequestPatches(name string) []RequestPatch {
+	if name != "qwen3.5-9b" {
+		return nil
+	}
+	return []RequestPatch{{
+		Path:           "/v1/chat/completions",
+		EnginePrefixes: []string{"vllm"},
+		Body: map[string]any{
+			"chat_template_kwargs": map[string]any{
+				"enable_thinking": false,
+			},
+		},
+	}}
+}
+
 func TestSyncDryRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "openclaw.json")
 	deps := &Deps{
@@ -343,6 +358,112 @@ func TestMergeAIMAConfigImageGenUsesAIMAProvider(t *testing.T) {
 	}
 	if got := imageGen["primary"]; got != "aima-imagegen/z-image" {
 		t.Fatalf("imageGenerationModel.primary = %v, want aima-imagegen/z-image", got)
+	}
+}
+
+func TestSyncMigratesLegacyImageGenProvider(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := writeLegacyClaimableConfig(t, tmpDir, "http://127.0.0.1:6188/v1")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"z-image": {ModelName: "z-image", Address: "127.0.0.1:8188", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	if provider := lookupMap(cfg, "models", "providers", "openai"); provider != nil {
+		t.Fatalf("legacy openai provider should be migrated away: %v", provider)
+	}
+	provider := lookupMap(cfg, "models", "providers", "aima-imagegen")
+	if provider == nil {
+		t.Fatal("aima-imagegen provider missing after sync")
+	}
+	defaults := lookupMap(cfg, "agents", "defaults")
+	if defaults == nil {
+		t.Fatal("agents.defaults missing after sync")
+	}
+	imageGen, ok := defaults["imageGenerationModel"].(map[string]any)
+	if !ok {
+		t.Fatalf("imageGenerationModel = %T, want map", defaults["imageGenerationModel"])
+	}
+	if got := imageGen["primary"]; got != "aima-imagegen/z-image" {
+		t.Fatalf("imageGenerationModel.primary = %v, want aima-imagegen/z-image", got)
+	}
+
+	managed, err := ReadManagedState(configPath)
+	if err != nil {
+		t.Fatalf("ReadManagedState failed: %v", err)
+	}
+	if managed.ImageGenerationProvider != "aima-imagegen" {
+		t.Fatalf("managed image generation provider = %q, want aima-imagegen", managed.ImageGenerationProvider)
+	}
+}
+
+func TestSyncMigratesLegacyImageGenProviderWithMedia(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := writeLegacyClaimableConfig(t, tmpDir, "http://127.0.0.1:6188/v1")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"z-image":        {ModelName: "z-image", Address: "127.0.0.1:8188", Ready: true},
+			"qwen3-asr-1.7b": {ModelName: "qwen3-asr-1.7b", Address: "127.0.0.1:8003", Ready: true},
+			"glm-4.1v-9b":    {ModelName: "glm-4.1v-9b", Address: "127.0.0.1:8004", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	if provider := lookupMap(cfg, "models", "providers", "openai"); provider != nil {
+		t.Fatalf("legacy openai provider should be migrated away: %v", provider)
+	}
+	if provider := lookupMap(cfg, "models", "providers", "aima-imagegen"); provider == nil {
+		t.Fatal("aima-imagegen provider missing after sync")
+	}
+	audio := mediaModels(lookupMap(cfg, "tools", "media", "audio"), "http://127.0.0.1:6188/v1")
+	if len(audio) != 1 || audio[0] != "qwen3-asr-1.7b" {
+		t.Fatalf("audio models = %v, want [qwen3-asr-1.7b]", audio)
+	}
+	vision := mediaModels(lookupMap(cfg, "tools", "media", "image"), "http://127.0.0.1:6188/v1")
+	if len(vision) != 1 || vision[0] != "glm-4.1v-9b" {
+		t.Fatalf("vision models = %v, want [glm-4.1v-9b]", vision)
+	}
+
+	managed, err := ReadManagedState(configPath)
+	if err != nil {
+		t.Fatalf("ReadManagedState failed: %v", err)
+	}
+	if managed.ImageGenerationProvider != "aima-imagegen" {
+		t.Fatalf("managed image generation provider = %q, want aima-imagegen", managed.ImageGenerationProvider)
+	}
+	if len(managed.AudioModels) != 1 || managed.AudioModels[0] != "qwen3-asr-1.7b" {
+		t.Fatalf("managed audio models = %v, want [qwen3-asr-1.7b]", managed.AudioModels)
+	}
+	if len(managed.VisionModels) != 1 || managed.VisionModels[0] != "glm-4.1v-9b" {
+		t.Fatalf("managed vision models = %v, want [glm-4.1v-9b]", managed.VisionModels)
 	}
 }
 

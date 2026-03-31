@@ -219,6 +219,46 @@ func TestHandleASRMooERTextResponse(t *testing.T) {
 	}
 }
 
+func TestRequestBodyRewriterAppliesCatalogPatch(t *testing.T) {
+	rewriter := RequestBodyRewriter(&mockCatalog{})
+	body := []byte(`{"model":"qwen3.5-9b","messages":[]}`)
+	out := rewriter("/v1/chat/completions", "application/json; charset=utf-8", "qwen3.5-9b", "vllm-nightly", body)
+	var req map[string]any
+	if err := json.Unmarshal(out, &req); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	kwargs, ok := req["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatal("chat_template_kwargs not injected")
+	}
+	if kwargs["enable_thinking"] != false {
+		t.Fatalf("enable_thinking = %v, want false", kwargs["enable_thinking"])
+	}
+}
+
+func TestRequestBodyRewriterPreservesExplicitValues(t *testing.T) {
+	rewriter := RequestBodyRewriter(&mockCatalog{})
+	body := []byte(`{"model":"qwen3.5-9b","messages":[],"chat_template_kwargs":{"enable_thinking":true}}`)
+	out := rewriter("/v1/chat/completions", "application/json", "qwen3.5-9b", "vllm-nightly", body)
+	var req map[string]any
+	if err := json.Unmarshal(out, &req); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	kwargs := req["chat_template_kwargs"].(map[string]any)
+	if kwargs["enable_thinking"] != true {
+		t.Fatalf("enable_thinking = %v, want true", kwargs["enable_thinking"])
+	}
+}
+
+func TestRequestBodyRewriterSkipsNonMatchingEngine(t *testing.T) {
+	rewriter := RequestBodyRewriter(&mockCatalog{})
+	body := []byte(`{"model":"qwen3.5-9b","messages":[]}`)
+	out := rewriter("/v1/chat/completions", "application/json", "qwen3.5-9b", "sglang", body)
+	if string(out) != string(body) {
+		t.Fatalf("rewriter should leave non-matching engine untouched: %s", string(out))
+	}
+}
+
 func TestStripASRPrefix(t *testing.T) {
 	tests := []struct {
 		name string

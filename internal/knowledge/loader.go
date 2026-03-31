@@ -305,6 +305,7 @@ type PowerConstraints struct {
 type ModelAsset struct {
 	Kind     string         `yaml:"kind"`
 	Metadata ModelMetadata  `yaml:"metadata"`
+	OpenClaw *OpenClawHints `yaml:"openclaw,omitempty"`
 	Storage  ModelStorage   `yaml:"storage"`
 	Variants []ModelVariant `yaml:"variants"`
 }
@@ -314,6 +315,16 @@ type ModelMetadata struct {
 	Type           string `yaml:"type"`
 	Family         string `yaml:"family"`
 	ParameterCount string `yaml:"parameter_count"`
+}
+
+type OpenClawHints struct {
+	RequestPatches []OpenClawRequestPatch `yaml:"request_patches,omitempty"`
+}
+
+type OpenClawRequestPatch struct {
+	Path           string         `yaml:"path"`
+	EnginePrefixes []string       `yaml:"engine_prefixes,omitempty"`
+	Body           map[string]any `yaml:"body,omitempty"`
 }
 
 type ModelStorage struct {

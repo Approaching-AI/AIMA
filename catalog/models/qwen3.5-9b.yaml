@@ -4,6 +4,13 @@ metadata:
   type: vlm
   family: qwen
   parameter_count: "9B"
+openclaw:
+  request_patches:
+    - path: /v1/chat/completions
+      engine_prefixes: [vllm]
+      body:
+        chat_template_kwargs:
+          enable_thinking: false
 storage:
   formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -216,6 +217,100 @@ func stripASRPrefix(text string) string {
 		return strings.TrimSpace(text[idx+len(marker):])
 	}
 	return text
+}
+
+func RequestBodyRewriter(cat CatalogReader) func(path, contentType, model, engineType string, body []byte) []byte {
+	if cat == nil {
+		return nil
+	}
+	return func(path, contentType, model, engineType string, body []byte) []byte {
+		if !isJSONContentType(contentType) {
+			return body
+		}
+		for _, patch := range cat.OpenClawRequestPatches(model) {
+			if !matchesRequestPatch(patch, path, engineType) {
+				continue
+			}
+			body = mergeRequestPatchBody(body, patch.Body)
+		}
+		return body
+	}
+}
+
+func matchesRequestPatch(patch RequestPatch, path, engineType string) bool {
+	if patch.Path != "" && patch.Path != path {
+		return false
+	}
+	if len(patch.EnginePrefixes) == 0 {
+		return true
+	}
+	engineType = strings.ToLower(strings.TrimSpace(engineType))
+	for _, prefix := range patch.EnginePrefixes {
+		if strings.HasPrefix(engineType, strings.ToLower(strings.TrimSpace(prefix))) {
+			return true
+		}
+	}
+	return false
+}
+
+func isJSONContentType(contentType string) bool {
+	if strings.TrimSpace(contentType) == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json"
+}
+
+func mergeRequestPatchBody(body []byte, patch map[string]any) []byte {
+	if len(patch) == 0 {
+		return body
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+	mergeJSONDefaults(req, patch)
+	out, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func mergeJSONDefaults(dst, defaults map[string]any) {
+	for key, value := range defaults {
+		defMap, defIsMap := value.(map[string]any)
+		if existing, ok := dst[key]; ok {
+			existingMap, existingIsMap := existing.(map[string]any)
+			if defIsMap && existingIsMap {
+				mergeJSONDefaults(existingMap, defMap)
+			}
+			continue
+		}
+		dst[key] = cloneJSONValue(value)
+	}
+}
+
+func cloneJSONValue(value any) any {
+	switch raw := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(raw))
+		for key, item := range raw {
+			out[key] = cloneJSONValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(raw))
+		for i, item := range raw {
+			out[i] = cloneJSONValue(item)
+		}
+		return out
+	default:
+		return raw
+	}
 }
 
 // handleImageGen proxies image generation requests to the backend serving the requested model.

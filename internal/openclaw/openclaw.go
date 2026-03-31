@@ -31,11 +31,18 @@ type Backend struct {
 	Remote     bool
 }
 
+type RequestPatch struct {
+	Path           string
+	EnginePrefixes []string
+	Body           map[string]any
+}
+
 // CatalogReader provides model metadata lookup from the knowledge catalog.
 type CatalogReader interface {
 	ModelType(name string) string
 	ModelContextWindow(name string) int
 	ModelFamily(name string) string
+	OpenClawRequestPatches(name string) []RequestPatch
 }
 
 // DefaultConfigPath returns the default OpenClaw config path (~/.openclaw/openclaw.json).

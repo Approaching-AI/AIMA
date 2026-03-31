@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,34 @@ func TestRegisterRoutes_OnboardingManifestProviderError(t *testing.T) {
 	}
 	if got := body["error"]; got != "manifest unavailable" {
 		t.Fatalf("error = %q, want manifest unavailable", got)
+	}
+}
+
+func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		"agent-onboarding-btn",
+		"showOnboardingDrawer",
+		"openOnboardingDrawer()",
+		"/ui/api/onboarding-manifest",
+		"onboarding-drawer",
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing %q", token)
+		}
 	}
 }
 

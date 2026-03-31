@@ -20,6 +20,8 @@ hardware:
   vram_min_mib: 16384
 startup:
   command: ["python3", "server.py"]
+  env:
+    MODEL_PATH: "{{.ModelPath}}"
   default_args:
     port: 8188
   health_check:

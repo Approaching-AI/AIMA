@@ -122,7 +122,7 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 	// Read existing config (may not exist yet)
 	existing, err := ReadConfig(deps.ConfigPath)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, os.ErrNotExist) && !os.IsNotExist(err) {
 			return result, fmt.Errorf("openclaw sync: %w", err)
 		}
 		existing = make(map[string]any)

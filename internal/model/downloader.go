@@ -541,11 +541,13 @@ func PathLooksUsable(modelPath, format string) bool {
 	case "mnn":
 		return dirHasAnyExt(modelPath, ".mnn")
 	case "safetensors":
-		return dirHasCompleteSafetensorsModel(modelPath)
+		return dirHasCompleteSafetensorsModel(modelPath) || dirHasCompleteDiffusersModel(modelPath)
 	case "":
-		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin", ".onnx", ".mnn") || dirHasCompleteSafetensorsModel(modelPath)
+		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin", ".onnx", ".mnn") ||
+			dirHasCompleteSafetensorsModel(modelPath) ||
+			dirHasCompleteDiffusersModel(modelPath)
 	default:
-		return dirHasCompleteSafetensorsModel(modelPath)
+		return dirHasCompleteSafetensorsModel(modelPath) || dirHasCompleteDiffusersModel(modelPath)
 	}
 }
 
@@ -751,6 +753,191 @@ func dirHasCompleteSafetensorsModel(dir string) bool {
 		}
 	}
 	return true
+}
+
+func dirHasCompleteDiffusersModel(dir string) bool {
+	index, ok := readDiffusersPipelineIndex(dir)
+	if !ok {
+		return false
+	}
+	components := diffusersRequiredComponents(index)
+	if len(components) == 0 {
+		return false
+	}
+
+	seenWeights := false
+	indexOK := true
+	walkModelFilesRecursive(dir, func(currentDir, name string) {
+		if strings.HasSuffix(strings.ToLower(name), ".safetensors") && dirHasReadableFile(currentDir, name) {
+			seenWeights = true
+		}
+		if strings.HasSuffix(strings.ToLower(name), ".safetensors.index.json") && !diffusersShardIndexComplete(currentDir, name) {
+			indexOK = false
+		}
+	})
+	if !seenWeights || !indexOK {
+		return false
+	}
+	for componentName, className := range components {
+		if !diffusersComponentLooksUsable(filepath.Join(dir, componentName), className) {
+			return false
+		}
+	}
+	return true
+}
+
+func dirHasDiffusersPipelineIndex(dir string) bool {
+	_, ok := readDiffusersPipelineIndex(dir)
+	return ok
+}
+
+func readDiffusersPipelineIndex(dir string) (map[string]any, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, "model_index.json"))
+	if err != nil {
+		return nil, false
+	}
+	var index map[string]any
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, false
+	}
+	className, _ := index["_class_name"].(string)
+	if !strings.Contains(className, "Pipeline") {
+		return nil, false
+	}
+	return index, true
+}
+
+func diffusersRequiredComponents(index map[string]any) map[string]string {
+	components := make(map[string]string)
+	for key, raw := range index {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		className, required := diffusersComponentClass(raw)
+		if !required {
+			continue
+		}
+		components[key] = className
+	}
+	return components
+}
+
+func diffusersComponentClass(raw any) (string, bool) {
+	switch value := raw.(type) {
+	case nil:
+		return "", false
+	case string:
+		return value, value != ""
+	case []any:
+		required := false
+		className := ""
+		for _, item := range value {
+			switch typed := item.(type) {
+			case nil:
+				continue
+			case string:
+				if typed == "" {
+					continue
+				}
+				required = true
+				className = typed
+			default:
+				required = true
+			}
+		}
+		return className, required
+	default:
+		return "", true
+	}
+}
+
+func diffusersComponentLooksUsable(path, className string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return dirHasReadableFile(filepath.Dir(path), filepath.Base(path))
+	}
+
+	lowerClass := strings.ToLower(className)
+	switch {
+	case strings.Contains(lowerClass, "tokenizer"):
+		return dirHasUsableTokenizerAssets(path)
+	case strings.Contains(lowerClass, "scheduler"):
+		return dirHasAnyReadableFile(path, "scheduler_config.json", "config.json")
+	case strings.Contains(lowerClass, "processor"),
+		strings.Contains(lowerClass, "extractor"),
+		strings.Contains(lowerClass, "imageprocessor"):
+		return dirHasAnyReadableFile(path, "preprocessor_config.json", "processor_config.json", "config.json")
+	default:
+		return dirHasAnyReadableFile(path, "config.json") && dirHasCompleteDiffusersWeights(path)
+	}
+}
+
+func dirHasCompleteDiffusersWeights(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	seenWeights := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".safetensors") && dirHasReadableFile(dir, name) {
+			seenWeights = true
+		}
+		if strings.HasSuffix(lower, ".safetensors.index.json") && !diffusersShardIndexComplete(dir, name) {
+			return false
+		}
+	}
+	return seenWeights
+}
+
+func diffusersShardIndexComplete(dir, name string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return false
+	}
+	var index struct {
+		WeightMap map[string]string `json:"weight_map"`
+	}
+	if err := json.Unmarshal(data, &index); err != nil || len(index.WeightMap) == 0 {
+		return false
+	}
+	required := make(map[string]struct{})
+	for _, shard := range index.WeightMap {
+		required[shard] = struct{}{}
+	}
+	for shard := range required {
+		if !dirHasReadableFile(dir, shard) {
+			return false
+		}
+	}
+	return true
+}
+
+func walkModelFilesRecursive(dir string, visit func(currentDir, name string)) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == ".cache" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		fullPath := filepath.Join(dir, name)
+		if entry.IsDir() {
+			walkModelFilesRecursive(fullPath, visit)
+			continue
+		}
+		visit(dir, name)
+	}
 }
 
 func dirHasReadableFile(dir, name string) bool {

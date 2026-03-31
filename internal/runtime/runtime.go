@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
@@ -49,16 +50,17 @@ type DeployRequest struct {
 
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
-	Name      string            `json:"name"`
-	Phase     string            `json:"phase"` // running / starting / stopped / failed
-	Ready     bool              `json:"ready"`
-	Address   string            `json:"address"` // host:port
-	Labels    map[string]string `json:"labels"`
-	StartTime string            `json:"start_time"`
-	Message   string            `json:"message,omitempty"`
-	Runtime   string            `json:"runtime"` // "k3s", "docker", or "native"
-	Restarts  int               `json:"restarts,omitempty"`
-	ExitCode  *int              `json:"exit_code,omitempty"`
+	Name          string            `json:"name"`
+	Phase         string            `json:"phase"` // running / starting / stopped / failed
+	Ready         bool              `json:"ready"`
+	Address       string            `json:"address"` // host:port
+	Labels        map[string]string `json:"labels"`
+	StartTime     string            `json:"start_time"`
+	StartedAtUnix int64             `json:"started_at_unix,omitempty"`
+	Message       string            `json:"message,omitempty"`
+	Runtime       string            `json:"runtime"` // "k3s", "docker", or "native"
+	Restarts      int               `json:"restarts,omitempty"`
+	ExitCode      *int              `json:"exit_code,omitempty"`
 
 	StartupPhase    string `json:"startup_phase,omitempty"`    // scheduling/pulling_image/initializing/loading_weights/cuda_graphs/ready
 	StartupProgress int    `json:"startup_progress,omitempty"` // 0-100
@@ -159,4 +161,46 @@ func primaryPortForRequest(req *DeployRequest) int {
 		return req.Port
 	}
 	return 8000
+}
+
+func setDeploymentStartFromTime(ds *DeploymentStatus, ts time.Time) {
+	if ds == nil || ts.IsZero() {
+		return
+	}
+	ds.StartTime = ts.UTC().Format(time.RFC3339)
+	ds.StartedAtUnix = ts.Unix()
+}
+
+func setDeploymentStartFromString(ds *DeploymentStatus, value string) {
+	if ds == nil {
+		return
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	ds.StartTime = value
+	if ts, ok := parseDeploymentStartTime(value); ok {
+		ds.StartTime = ts.UTC().Format(time.RFC3339)
+		ds.StartedAtUnix = ts.Unix()
+	}
+}
+
+func parseDeploymentStartTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05 -0700",
+	}
+	for _, layout := range layouts {
+		if ts, err := time.Parse(layout, value); err == nil {
+			return ts, true
+		}
+	}
+	return time.Time{}, false
 }

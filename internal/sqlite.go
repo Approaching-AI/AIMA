@@ -295,6 +295,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err := d.migrateV9(ctx); err != nil {
 		return fmt.Errorf("migrate v9: %w", err)
 	}
+	// v10: deleted deployment tombstones for cross-process redeploy consistency
+	if err := d.migrateV10(ctx); err != nil {
+		return fmt.Errorf("migrate v10: %w", err)
+	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}
@@ -922,6 +926,30 @@ func (d *DB) migrateV9(ctx context.Context) error {
 	}
 
 	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 9"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV10(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 10 {
+		return nil
+	}
+
+	ddl := `
+CREATE TABLE IF NOT EXISTS deleted_deployments (
+    key TEXT PRIMARY KEY,
+    deleted_at DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deleted_deployments_deleted_at
+    ON deleted_deployments (deleted_at);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate v10 schema: %w", err)
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 10"); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
@@ -1688,6 +1716,56 @@ func (d *DB) SetConfig(ctx context.Context, key, value string) error {
 		key, value)
 	if err != nil {
 		return fmt.Errorf("set config %q: %w", key, err)
+	}
+	return nil
+}
+
+func (d *DB) MarkDeletedDeployments(ctx context.Context, deletedAt time.Time, keys ...string) error {
+	stmt, err := d.db.PrepareContext(ctx,
+		`INSERT INTO deleted_deployments (key, deleted_at) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET deleted_at = excluded.deleted_at`)
+	if err != nil {
+		return fmt.Errorf("prepare deleted deployment mark: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, key, deletedAt.UTC()); err != nil {
+			return fmt.Errorf("mark deleted deployment %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func (d *DB) ListDeletedDeploymentsSince(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT key, deleted_at FROM deleted_deployments WHERE deleted_at >= ?`, since.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("list deleted deployments since %s: %w", since.UTC().Format(time.RFC3339), err)
+	}
+	defer rows.Close()
+
+	marks := make(map[string]time.Time)
+	for rows.Next() {
+		var key string
+		var deletedAt time.Time
+		if err := rows.Scan(&key, &deletedAt); err != nil {
+			return nil, fmt.Errorf("scan deleted deployment mark: %w", err)
+		}
+		marks[key] = deletedAt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deleted deployment marks: %w", err)
+	}
+	return marks, nil
+}
+
+func (d *DB) PruneDeletedDeploymentsBefore(ctx context.Context, before time.Time) error {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM deleted_deployments WHERE deleted_at < ?`, before.UTC()); err != nil {
+		return fmt.Errorf("prune deleted deployments before %s: %w", before.UTC().Format(time.RFC3339), err)
 	}
 	return nil
 }

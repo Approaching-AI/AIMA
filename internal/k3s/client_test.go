@@ -9,8 +9,9 @@ import (
 
 // mockRunner implements CommandRunner for testing
 type mockRunner struct {
-	output []byte
-	err    error
+	output  []byte
+	err     error
+	runFunc func(context.Context, string, ...string) ([]byte, error)
 	// capture last invocation
 	lastCmd  string
 	lastArgs []string
@@ -19,6 +20,9 @@ type mockRunner struct {
 func (m *mockRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	m.lastCmd = name
 	m.lastArgs = args
+	if m.runFunc != nil {
+		return m.runFunc(ctx, name, args...)
+	}
 	return m.output, m.err
 }
 
@@ -107,14 +111,22 @@ func TestApply_WithKubeconfig(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	tests := []struct {
-		name      string
-		podName   string
-		runnerErr error
-		wantErr   bool
+		name    string
+		podName string
+		runner  *mockRunner
+		wantErr bool
 	}{
 		{
 			name:    "delete existing pod",
 			podName: "aima-vllm-qwen3",
+			runner: &mockRunner{
+				runFunc: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+					if len(args) >= 2 && args[0] == "delete" && args[1] == "pod" {
+						return []byte("pod deleted"), nil
+					}
+					return nil, fmt.Errorf("Error from server (NotFound): pods \"aima-vllm-qwen3\" not found")
+				},
+			},
 			wantErr: false,
 		},
 		{
@@ -123,16 +135,19 @@ func TestDelete(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:      "kubectl error",
-			podName:   "aima-vllm-qwen3",
-			runnerErr: fmt.Errorf("pod not found"),
-			wantErr:   true,
+			name:    "kubectl error",
+			podName: "aima-vllm-qwen3",
+			runner:  &mockRunner{err: fmt.Errorf("pod not found")},
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &mockRunner{err: tt.runnerErr}
+			r := tt.runner
+			if r == nil {
+				r = &mockRunner{}
+			}
 			c := NewClient(WithRunner(r))
 			err := c.Delete(context.Background(), tt.podName)
 			if (err != nil) != tt.wantErr {
@@ -141,6 +156,55 @@ func TestDelete(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteWaitsForPodRemoval(t *testing.T) {
+	getCalls := 0
+	r := &mockRunner{
+		runFunc: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && args[0] == "delete" && args[1] == "pod" {
+				return []byte("pod deleted"), nil
+			}
+			if len(args) >= 3 && args[0] == "get" && args[1] == "pod" {
+				getCalls++
+				if getCalls == 1 {
+					return []byte(terminatingPodJSON), nil
+				}
+				return nil, fmt.Errorf("Error from server (NotFound): pods \"aima-vllm-qwen3\" not found")
+			}
+			return nil, fmt.Errorf("unexpected args: %v", args)
+		},
+	}
+
+	c := NewClient(WithRunner(r))
+	if err := c.Delete(context.Background(), "aima-vllm-qwen3"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if getCalls < 2 {
+		t.Fatalf("Delete() get pod calls = %d, want at least 2", getCalls)
+	}
+}
+
+const terminatingPodJSON = `{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "aima-vllm-qwen3",
+    "deletionTimestamp": "2026-03-31T08:30:00Z",
+    "labels": {
+      "aima.dev/engine": "vllm",
+      "aima.dev/model": "qwen3-8b"
+    }
+  },
+  "status": {
+    "phase": "Running",
+    "podIP": "10.42.0.5",
+    "containerStatuses": [
+      {
+        "ready": true
+      }
+    ]
+  }
+}`
 
 // Sample kubectl get pod -o json output for a running pod
 const runningPodJSON = `{
@@ -542,5 +606,18 @@ func TestParsePodJSON_WaitingReason(t *testing.T) {
 	}
 	if pod.Ready {
 		t.Error("expected Ready=false for CrashLoopBackOff pod")
+	}
+}
+
+func TestParsePodJSON_DeletionTimestamp(t *testing.T) {
+	pod, err := parsePodJSON([]byte(terminatingPodJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod.DeletionTimestamp == "" {
+		t.Fatal("expected deletion timestamp to be parsed")
+	}
+	if !pod.Ready {
+		t.Fatal("expected raw pod readiness to reflect container status before runtime mapping")
 	}
 }

@@ -108,15 +108,22 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, "--publish", portStr+":"+portStr)
 	}
 
+	modelHostPath := req.ModelPath
+	containerModelPath := "/models"
+	if isContainerModelFilePath(modelHostPath) {
+		containerModelPath = "/models/" + filepath.Base(modelHostPath)
+		modelHostPath = filepath.Dir(modelHostPath)
+	}
+
 	// Environment variables: merge Container.Env (base) + req.Env (override)
 	env := make(map[string]string)
 	if req.Container != nil {
 		for k, v := range req.Container.Env {
-			env[k] = v
+			env[k] = expandRuntimeTemplate(v, containerModelPath, req.Name)
 		}
 	}
 	for k, v := range req.Env {
-		env[k] = v
+		env[k] = expandRuntimeTemplate(v, containerModelPath, req.Name)
 	}
 	for k, v := range env {
 		args = append(args, "--env", k+"="+v)
@@ -149,13 +156,6 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		for _, gid := range sec.SupplementalGroups {
 			args = append(args, "--group-add", strconv.Itoa(gid))
 		}
-	}
-
-	modelHostPath := req.ModelPath
-	containerModelPath := "/models"
-	if isContainerModelFilePath(modelHostPath) {
-		containerModelPath = "/models/" + filepath.Base(modelHostPath)
-		modelHostPath = filepath.Dir(modelHostPath)
 	}
 
 	// Model volume
@@ -221,6 +221,12 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	}
 
 	return args
+}
+
+func expandRuntimeTemplate(value, modelPath, modelName string) string {
+	value = strings.ReplaceAll(value, "{{.ModelPath}}", modelPath)
+	value = strings.ReplaceAll(value, "{{.ModelName}}", modelName)
+	return value
 }
 
 func (r *DockerRuntime) Delete(ctx context.Context, name string) error {
@@ -298,14 +304,14 @@ func (r *DockerRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
 		}
 
 		ds := &DeploymentStatus{
-			Name:      ps.Names,
-			Phase:     phase,
-			Ready:     ready,
-			Address:   addr,
-			Labels:    labels,
-			StartTime: ps.CreatedAt,
-			Runtime:   "docker",
+			Name:    ps.Names,
+			Phase:   phase,
+			Ready:   ready,
+			Address: addr,
+			Labels:  labels,
+			Runtime: "docker",
 		}
+		setDeploymentStartFromString(ds, ps.CreatedAt)
 
 		if !ready {
 			if errMsg := r.enrichDockerProgress(ctx, ds); errMsg != "" {
@@ -391,14 +397,14 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	name := strings.TrimPrefix(di.Name, "/")
 
 	ds := &DeploymentStatus{
-		Name:      name,
-		Phase:     phase,
-		Ready:     ready,
-		Address:   addr,
-		Labels:    labels,
-		StartTime: di.State.StartedAt,
-		Runtime:   "docker",
+		Name:    name,
+		Phase:   phase,
+		Ready:   ready,
+		Address: addr,
+		Labels:  labels,
+		Runtime: "docker",
 	}
+	setDeploymentStartFromString(ds, di.State.StartedAt)
 
 	if di.State.Status == "exited" && di.State.ExitCode != 0 {
 		ec := di.State.ExitCode

@@ -26,6 +26,7 @@ startup:
   default_args:
     gpu_memory_utilization: 0.10
     max_model_len: 8192
+    mm_encoder_attn_backend: TORCH_SDPA
   health_check:
     timeout_s: 600
 amplifier:

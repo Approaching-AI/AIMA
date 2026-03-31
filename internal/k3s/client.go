@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CommandRunner abstracts command execution for testing.
@@ -31,18 +32,19 @@ type PodCondition struct {
 
 // PodStatus represents the status of a K3S pod.
 type PodStatus struct {
-	Name          string            `json:"name"`
-	Phase         string            `json:"phase"`
-	Ready         bool              `json:"ready"`
-	IP            string            `json:"ip"`
-	Labels        map[string]string `json:"labels"`
-	StartTime     string            `json:"start_time"`
-	Message       string            `json:"message,omitempty"`
-	ContainerPort int               `json:"container_port,omitempty"`
-	RestartCount     int    `json:"restart_count,omitempty"`
-	ExitCode         *int  `json:"exit_code,omitempty"`         // from Terminated state
-	ContainerStarted string `json:"container_started,omitempty"` // when the current container instance started
-	Conditions       []PodCondition `json:"conditions,omitempty"`
+	Name              string            `json:"name"`
+	Phase             string            `json:"phase"`
+	Ready             bool              `json:"ready"`
+	IP                string            `json:"ip"`
+	Labels            map[string]string `json:"labels"`
+	StartTime         string            `json:"start_time"`
+	DeletionTimestamp string            `json:"deletion_timestamp,omitempty"`
+	Message           string            `json:"message,omitempty"`
+	ContainerPort     int               `json:"container_port,omitempty"`
+	RestartCount      int               `json:"restart_count,omitempty"`
+	ExitCode          *int              `json:"exit_code,omitempty"`         // from Terminated state
+	ContainerStarted  string            `json:"container_started,omitempty"` // when the current container instance started
+	Conditions        []PodCondition    `json:"conditions,omitempty"`
 }
 
 // LogOptions configures log retrieval.
@@ -154,7 +156,35 @@ func (c *Client) Delete(ctx context.Context, podName string) error {
 	if err != nil {
 		return fmt.Errorf("delete pod %s: %w", podName, err)
 	}
-	return nil
+
+	waitCtx := ctx
+	cancel := func() {}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		waitCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			if waitCtx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("delete pod %s: timed out waiting for removal", podName)
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+			_, err := c.GetPod(waitCtx, podName)
+			if err == nil {
+				continue
+			}
+			if isNotFoundError(err) {
+				return nil
+			}
+			return fmt.Errorf("delete pod %s: confirm removal: %w", podName, err)
+		}
+	}
 }
 
 // GetPod returns pod status information.
@@ -234,8 +264,9 @@ func (c *Client) runWithStdin(ctx context.Context, stdin []byte, args ...string)
 // kubePod is the minimal subset of Kubernetes Pod JSON we need to parse.
 type kubePod struct {
 	Metadata struct {
-		Name   string            `json:"name"`
-		Labels map[string]string `json:"labels"`
+		Name              string            `json:"name"`
+		Labels            map[string]string `json:"labels"`
+		DeletionTimestamp string            `json:"deletionTimestamp"`
 	} `json:"metadata"`
 	Spec struct {
 		Containers []struct {
@@ -245,11 +276,11 @@ type kubePod struct {
 		} `json:"containers"`
 	} `json:"spec"`
 	Status struct {
-		Phase             string `json:"phase"`
-		PodIP             string `json:"podIP"`
-		StartTime         string `json:"startTime"`
-		Message           string `json:"message"`
-		Conditions        []struct {
+		Phase      string `json:"phase"`
+		PodIP      string `json:"podIP"`
+		StartTime  string `json:"startTime"`
+		Message    string `json:"message"`
+		Conditions []struct {
 			Type   string `json:"type"`
 			Status string `json:"status"`
 		} `json:"conditions"`
@@ -336,19 +367,28 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 	}
 
 	return &PodStatus{
-		Name:             kp.Metadata.Name,
-		Phase:            kp.Status.Phase,
-		Ready:            ready,
-		IP:               kp.Status.PodIP,
-		Labels:           kp.Metadata.Labels,
-		StartTime:        kp.Status.StartTime,
-		Message:          msg,
-		ContainerPort:    containerPort,
-		RestartCount:     restartCount,
-		ExitCode:         exitCode,
-		ContainerStarted: containerStarted,
-		Conditions:       conditions,
+		Name:              kp.Metadata.Name,
+		Phase:             kp.Status.Phase,
+		Ready:             ready,
+		IP:                kp.Status.PodIP,
+		Labels:            kp.Metadata.Labels,
+		StartTime:         kp.Status.StartTime,
+		DeletionTimestamp: kp.Metadata.DeletionTimestamp,
+		Message:           msg,
+		ContainerPort:     containerPort,
+		RestartCount:      restartCount,
+		ExitCode:          exitCode,
+		ContainerStarted:  containerStarted,
+		Conditions:        conditions,
 	}, nil
+}
+
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "notfound") || strings.Contains(msg, "not found")
 }
 
 // ListPodsByLabel lists pods matching a label selector in a given namespace.

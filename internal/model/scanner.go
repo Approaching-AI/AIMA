@@ -19,9 +19,9 @@ import (
 
 // ScannerConfig is the top-level YAML structure.
 type ScannerConfig struct {
-	Kind     string              `yaml:"kind"`
-	Metadata map[string]any      `yaml:"metadata"`
-	Config   Config              `yaml:"config"`
+	Kind     string         `yaml:"kind"`
+	Metadata map[string]any `yaml:"metadata"`
+	Config   Config         `yaml:"config"`
 }
 
 // Config contains scanner settings.
@@ -35,26 +35,30 @@ type Config struct {
 
 // ConfigParentPattern defines parent model detection.
 type ConfigParentPattern struct {
-	IndicatorFiles       []string `yaml:"indicator_files"`
-	IndicatorField       string   `yaml:"indicator_field"`
-	IndicatorValueContains string  `yaml:"indicator_value_contains"`
+	IndicatorFiles         []string `yaml:"indicator_files"`
+	IndicatorField         string   `yaml:"indicator_field"`
+	IndicatorValueContains string   `yaml:"indicator_value_contains"`
 }
 
 // ConfigPattern defines model detection from YAML.
 type ConfigPattern struct {
-	Name         string            `yaml:"name"`
-	ConfigFiles  []string          `yaml:"config_files"`
-	WeightExts   []string          `yaml:"weight_exts"`
-	Format       string            `yaml:"format"`
-	TypeHint     string            `yaml:"type_hint"`
-	TaskMappings map[string]string `yaml:"task_mappings"` // config "task" substring → model type
-	SkipMinSize  bool              `yaml:"skip_min_size"` // true = exempt from min size filter
+	Name                   string            `yaml:"name"`
+	ConfigFiles            []string          `yaml:"config_files"`
+	WeightExts             []string          `yaml:"weight_exts"`
+	Format                 string            `yaml:"format"`
+	TypeHint               string            `yaml:"type_hint"`
+	ModelClassHint         string            `yaml:"model_class_hint"`
+	IndicatorField         string            `yaml:"indicator_field"`
+	IndicatorValueContains string            `yaml:"indicator_value_contains"`
+	TaskMappings           map[string]string `yaml:"task_mappings"`     // config "task" substring → model type
+	RecursiveWeights       bool              `yaml:"recursive_weights"` // true = search nested component dirs
+	SkipMinSize            bool              `yaml:"skip_min_size"`     // true = exempt from min size filter
 }
 
 // ParentPattern is internal representation.
 type ParentPattern struct {
-	IndicatorFiles       []string
-	IndicatorField       string
+	IndicatorFiles         []string
+	IndicatorField         string
 	IndicatorValueContains string
 }
 
@@ -124,13 +128,17 @@ func NewScanConfig() *ScanConfig {
 			continue
 		}
 		sc.ModelPatterns = append(sc.ModelPatterns, ModelPattern{
-			name:         p.Name,
-			configFiles:  p.ConfigFiles,
-			weightExts:   p.WeightExts,
-			format:       p.Format,
-			typeHint:     p.TypeHint,
-			taskMappings: p.TaskMappings,
-			skipMinSize:  p.SkipMinSize,
+			name:                   p.Name,
+			configFiles:            p.ConfigFiles,
+			weightExts:             p.WeightExts,
+			format:                 p.Format,
+			typeHint:               p.TypeHint,
+			modelClassHint:         p.ModelClassHint,
+			indicatorField:         p.IndicatorField,
+			indicatorValueContains: p.IndicatorValueContains,
+			taskMappings:           p.TaskMappings,
+			recursiveWeights:       p.RecursiveWeights,
+			skipMinSize:            p.SkipMinSize,
 		})
 	}
 
@@ -167,6 +175,17 @@ func (sc *ScanConfig) applyDefaults() {
 
 func (sc *ScanConfig) applyDefaultPatterns() {
 	sc.ModelPatterns = []ModelPattern{
+		{
+			name:                   "diffusers_pipeline",
+			configFiles:            []string{"model_index.json"},
+			weightExts:             []string{".safetensors"},
+			format:                 "safetensors",
+			typeHint:               "image_gen",
+			modelClassHint:         "diffusion",
+			indicatorField:         "_class_name",
+			indicatorValueContains: "Pipeline",
+			recursiveWeights:       true,
+		},
 		{
 			name:        "huggingface_safetensors",
 			configFiles: []string{"config.json"},
@@ -237,13 +256,17 @@ func (sc *ScanConfig) applyDefaultPatterns() {
 
 // ModelPattern defines how to detect a model format (internal).
 type ModelPattern struct {
-	name         string            // Pattern name for debugging
-	configFiles  []string          // Possible config filenames (empty = no config needed)
-	weightExts   []string          // Possible weight file extensions
-	format       string            // Output format name
-	typeHint     string            // Type hint when detectArch fails
-	taskMappings map[string]string // config "task" field substring → model type
-	skipMinSize  bool              // true = exempt from min size filter
+	name                   string            // Pattern name for debugging
+	configFiles            []string          // Possible config filenames (empty = no config needed)
+	weightExts             []string          // Possible weight file extensions
+	format                 string            // Output format name
+	typeHint               string            // Type hint when detectArch fails
+	modelClassHint         string            // Model class hint when config metadata is sparse
+	indicatorField         string            // Optional config field gate
+	indicatorValueContains string            // Optional substring match for indicatorField
+	taskMappings           map[string]string // config "task" field substring → model type
+	recursiveWeights       bool              // true = search nested component dirs
+	skipMinSize            bool              // true = exempt from min size filter
 }
 
 // ModelInfo represents a discovered local model.
@@ -258,11 +281,11 @@ type ModelInfo struct {
 	DetectedParams string `json:"detected_params"` // Legacy: e.g., "8B"
 
 	// Enhanced metadata fields
-	ModelClass     string `json:"model_class"`     // dense | moe | hybrid | unknown
-	TotalParams    int64  `json:"total_params"`    // Exact parameter count (0 = unknown)
-	ActiveParams   int64  `json:"active_params"`   // For MOE: active parameters per token
-	Quantization   string `json:"quantization"`     // int8 | int4 | fp8 | fp16 | bf16 | nf4 | fp32 | unknown
-	QuantSrc       string `json:"quant_src"`        // config | filename | header | unknown
+	ModelClass   string `json:"model_class"`   // dense | moe | hybrid | unknown
+	TotalParams  int64  `json:"total_params"`  // Exact parameter count (0 = unknown)
+	ActiveParams int64  `json:"active_params"` // For MOE: active parameters per token
+	Quantization string `json:"quantization"`  // int8 | int4 | fp8 | fp16 | bf16 | nf4 | fp32 | unknown
+	QuantSrc     string `json:"quant_src"`     // config | filename | header | unknown
 }
 
 // ScanOptions configures which directories to scan.
@@ -524,19 +547,25 @@ func detectByPattern(dir string, entries []os.DirEntry, p ModelPattern, minSize 
 	if !hasConfigFile(entries, p.configFiles) {
 		return nil
 	}
+	config := loadPatternConfig(dir, entries, p.configFiles)
+	if !patternMatchesIndicator(config, p) {
+		return nil
+	}
 
 	// For GGUF format, detect all .gguf files in the directory
 	if p.format == "gguf" {
 		return detectGGUFModels(dir, entries, p, minSize)
 	}
 
-	// For other formats, find the first weight file (existing behavior)
 	weightPath := findWeightFile(dir, entries, p.weightExts)
+	if p.recursiveWeights {
+		weightPath = findWeightFileRecursive(dir, p.weightExts)
+	}
 	if weightPath == "" {
 		return nil
 	}
 
-	return buildModelInfo(dir, entries, p, weightPath, "", minSize)
+	return buildModelInfo(dir, entries, p, config, weightPath, "", minSize)
 }
 
 // detectGGUFModels detects all GGUF models in a directory.
@@ -562,13 +591,13 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize
 		// Use the file path as the model path (unique per GGUF file)
 		// This allows multiple GGUF files in the same directory to be detected
 		model := &ModelInfo{
-			ID:             fmt.Sprintf("%x", sha256.Sum256([]byte(weightPath))),
-			Name:           strings.TrimSuffix(filepath.Base(weightPath), ".gguf"),
-			Type:           p.typeHint,
-			Path:           weightPath, // Use file path for uniqueness
-			Format:         p.format,
-			SizeBytes:      info.Size(),
-			ModelClass:     "unknown",
+			ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(weightPath))),
+			Name:       strings.TrimSuffix(filepath.Base(weightPath), ".gguf"),
+			Type:       p.typeHint,
+			Path:       weightPath, // Use file path for uniqueness
+			Format:     p.format,
+			SizeBytes:  info.Size(),
+			ModelClass: "unknown",
 		}
 
 		// Parse GGUF header metadata for arch, params, class
@@ -608,20 +637,7 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize
 
 // buildModelInfo builds a ModelInfo from a single weight file.
 // For formats with config files (safetensors, pytorch, etc.).
-func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPath string, overrideName string, minSize int64) []*ModelInfo {
-	var config map[string]any
-	configPath := findConfigFile(dir, entries, p.configFiles)
-	if configPath != "" {
-		data, err := os.ReadFile(configPath)
-		if err == nil {
-			if strings.HasSuffix(configPath, ".yaml") || strings.HasSuffix(configPath, ".yml") {
-				yaml.Unmarshal(data, &config)
-			} else {
-				json.Unmarshal(data, &config)
-			}
-		}
-	}
-
+func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, config map[string]any, weightPath string, overrideName string, minSize int64) []*ModelInfo {
 	modelType, _ := config["model_type"].(string)
 	arch := detectArch(modelType)
 	mType := p.typeHint
@@ -641,7 +657,7 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPat
 		}
 	}
 
-	sizeBytes := calculateModelSize(dir, entries, p.weightExts)
+	sizeBytes := calculateModelSize(dir, entries, p.weightExts, p.recursiveWeights)
 
 	// Filter out incomplete models (below minimum size).
 	// Patterns with skip_min_size (e.g. ONNX edge models) are exempt.
@@ -659,6 +675,9 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, weightPat
 	modelClass := detectModelClass(archConfig)
 	if modelClass == "unknown" {
 		modelClass = detectModelClass(config)
+	}
+	if modelClass == "unknown" && p.modelClassHint != "" {
+		modelClass = p.modelClassHint
 	}
 	totalParams := int64(0)
 	activeParams := int64(0)
@@ -770,6 +789,45 @@ func findConfigFile(dir string, entries []os.DirEntry, files []string) string {
 	return ""
 }
 
+func loadPatternConfig(dir string, entries []os.DirEntry, files []string) map[string]any {
+	configPath := findConfigFile(dir, entries, files)
+	if configPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+	var config map[string]any
+	if strings.HasSuffix(configPath, ".yaml") || strings.HasSuffix(configPath, ".yml") {
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return nil
+		}
+		return config
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil
+	}
+	return config
+}
+
+func patternMatchesIndicator(config map[string]any, p ModelPattern) bool {
+	if p.indicatorField == "" {
+		return true
+	}
+	if len(config) == 0 {
+		return false
+	}
+	value, _ := config[p.indicatorField].(string)
+	if value == "" {
+		return false
+	}
+	if p.indicatorValueContains == "" {
+		return true
+	}
+	return strings.Contains(value, p.indicatorValueContains)
+}
+
 func findWeightFile(dir string, entries []os.DirEntry, exts []string) string {
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -783,6 +841,17 @@ func findWeightFile(dir string, entries []os.DirEntry, exts []string) string {
 		}
 	}
 	return ""
+}
+
+func findWeightFileRecursive(dir string, exts []string) string {
+	found := ""
+	walkModelFilesRecursive(dir, func(currentDir, name string) {
+		if found != "" || !weightFileMatches(name, exts) {
+			return
+		}
+		found = filepath.Join(currentDir, name)
+	})
+	return found
 }
 
 // findAllWeightFiles returns all weight files matching the given extensions.
@@ -803,26 +872,47 @@ func findAllWeightFiles(dir string, entries []os.DirEntry, exts []string) []stri
 	return files
 }
 
-func calculateModelSize(dir string, entries []os.DirEntry, exts []string) int64 {
+func calculateModelSize(dir string, entries []os.DirEntry, exts []string, recursive bool) int64 {
+	if recursive {
+		var total int64
+		walkModelFilesRecursive(dir, func(currentDir, name string) {
+			if !weightFileMatches(name, exts) {
+				return
+			}
+			info, err := os.Stat(filepath.Join(currentDir, name))
+			if err == nil {
+				total += info.Size()
+			}
+		})
+		return total
+	}
+
 	var total int64
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		for _, ext := range exts {
-			if strings.HasSuffix(strings.ToLower(name), ext) {
-				// Use os.Stat to follow symlinks (HF Hub cache uses symlinks to blobs)
-				fullPath := filepath.Join(dir, name)
-				info, err := os.Stat(fullPath)
-				if err == nil {
-					total += info.Size()
-				}
-				break
+		if weightFileMatches(name, exts) {
+			// Use os.Stat to follow symlinks (HF Hub cache uses symlinks to blobs)
+			fullPath := filepath.Join(dir, name)
+			info, err := os.Stat(fullPath)
+			if err == nil {
+				total += info.Size()
 			}
 		}
 	}
 	return total
+}
+
+func weightFileMatches(name string, exts []string) bool {
+	lower := strings.ToLower(name)
+	for _, ext := range exts {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func detectArch(modelType string) string {
@@ -1220,7 +1310,7 @@ func quantFromFilename(filename, format string) string {
 		{"q5_1", "int5"},
 		{"q6_k", "int6"},
 		{"q8_0", "int8"},
-		{"bf16", "bf16"},  // Match before f16 to avoid false positives
+		{"bf16", "bf16"}, // Match before f16 to avoid false positives
 		{"f16", "fp16"},
 		{"f32", "fp32"},
 	}

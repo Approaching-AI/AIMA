@@ -189,6 +189,27 @@ func TestBuildRunArgs_ExtraVolumes(t *testing.T) {
 	assertContains(t, argStr, "--volume /opt/data:/data:ro", "extra volume readonly")
 }
 
+func TestBuildRunArgs_ExpandsEnvTemplates(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "z-image",
+		Engine:    "z-image-diffusers",
+		Image:     "qujing-z-image:latest",
+		Command:   []string{"python3", "server.py"},
+		ModelPath: "/data/models/z-image",
+		Env: map[string]string{
+			"MODEL_PATH": "{{.ModelPath}}",
+			"MODEL_NAME": "{{.ModelName}}",
+		},
+	}
+
+	args := r.buildRunArgs("z-image-z-image-diffusers", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--env MODEL_PATH=/models", "model path env should expand to mounted path")
+	assertContains(t, argStr, "--env MODEL_NAME=z-image", "model name env should expand")
+}
+
 func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

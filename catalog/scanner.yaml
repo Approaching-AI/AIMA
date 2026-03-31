@@ -50,6 +50,17 @@ config:
   # File patterns for model detection
   # Each pattern has: config files, weight extensions, format, type hint
   model_patterns:
+    # Diffusers pipelines: root metadata in model_index.json, weights in component subdirs
+    - name: diffusers_pipeline
+      config_files: ["model_index.json"]
+      weight_exts: [".safetensors"]
+      format: "safetensors"
+      type_hint: "image_gen"
+      model_class_hint: "diffusion"
+      indicator_field: "_class_name"
+      indicator_value_contains: "Pipeline"
+      recursive_weights: true
+
     # HuggingFace safetensors
     - name: huggingface_safetensors
       config_files: ["config.json"]

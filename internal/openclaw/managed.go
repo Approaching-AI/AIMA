@@ -58,6 +58,9 @@ func WriteManagedState(configPath string, state *ManagedState) error {
 		return fmt.Errorf("marshal openclaw managed state: %w", err)
 	}
 	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create openclaw managed state dir: %w", err)
+	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("write openclaw managed state: %w", err)
 	}

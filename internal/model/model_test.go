@@ -616,6 +616,33 @@ func TestPathLooksUsableSafetensorsRejectsBrokenShardSymlink(t *testing.T) {
 	}
 }
 
+func TestPathLooksUsableAcceptsCompleteDiffusersPipeline(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "z-image")
+	writeDiffusersFixture(t, dir, true)
+	if !PathLooksUsable(dir, "safetensors") {
+		t.Fatal("expected complete diffusers pipeline directory to be reusable")
+	}
+}
+
+func TestPathLooksUsableRejectsIncompleteDiffusersPipeline(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "z-image")
+	writeDiffusersFixture(t, dir, false)
+	if PathLooksUsable(dir, "safetensors") {
+		t.Fatal("expected incomplete diffusers pipeline directory to be rejected")
+	}
+}
+
+func TestPathLooksUsableRejectsDiffusersPipelineMissingTokenizerAssets(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "z-image")
+	writeDiffusersFixture(t, dir, true)
+	if err := os.Remove(filepath.Join(dir, "tokenizer", "tokenizer.json")); err != nil {
+		t.Fatalf("remove tokenizer: %v", err)
+	}
+	if PathLooksUsable(dir, "safetensors") {
+		t.Fatal("expected diffusers pipeline without tokenizer assets to be rejected")
+	}
+}
+
 func TestPathLooksUsableONNXDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "model_quant.onnx"), []byte("onnx"), 0o644); err != nil {
@@ -738,6 +765,50 @@ func TestImportHuggingFaceModel(t *testing.T) {
 	}
 }
 
+func TestImportDiffusersPipeline(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+	modelDir := filepath.Join(srcDir, "z-image")
+	writeDiffusersFixture(t, modelDir, true)
+
+	info, err := Import(context.Background(), modelDir, destDir)
+	if err != nil {
+		t.Fatalf("import diffusers pipeline: %v", err)
+	}
+	if info.Name != "z-image" {
+		t.Errorf("expected name z-image, got %s", info.Name)
+	}
+	if info.Type != "image_gen" {
+		t.Errorf("expected type image_gen, got %s", info.Type)
+	}
+	if info.Format != "safetensors" {
+		t.Errorf("expected format safetensors, got %s", info.Format)
+	}
+}
+
+func TestScanDiffusersPipelineFromYAMLPattern(t *testing.T) {
+	dir := t.TempDir()
+	modelDir := filepath.Join(dir, "z-image")
+	writeDiffusersFixture(t, modelDir, true)
+
+	models, err := Scan(context.Background(), ScanOptions{Paths: []string{dir}, MinModelSizeBytes: 1})
+	if err != nil {
+		t.Fatalf("scan diffusers pipeline: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if models[0].Path != modelDir {
+		t.Fatalf("expected path %s, got %s", modelDir, models[0].Path)
+	}
+	if models[0].Type != "image_gen" {
+		t.Errorf("expected type image_gen, got %s", models[0].Type)
+	}
+	if models[0].ModelClass != "diffusion" {
+		t.Errorf("expected model class diffusion, got %s", models[0].ModelClass)
+	}
+}
+
 func TestImportInvalidPath(t *testing.T) {
 	_, err := Import(context.Background(), "/nonexistent/path", t.TempDir())
 	if err == nil {
@@ -772,6 +843,49 @@ func TestImportAlreadyInScanDir(t *testing.T) {
 	}
 	if info.Format != "safetensors" {
 		t.Errorf("expected format safetensors, got %s", info.Format)
+	}
+}
+
+func writeDiffusersFixture(t *testing.T, dir string, complete bool) {
+	t.Helper()
+	mustMkdirAll := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	mustWrite := func(path string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	mustMkdirAll(filepath.Join(dir, "text_encoder"))
+	mustMkdirAll(filepath.Join(dir, "transformer"))
+	mustMkdirAll(filepath.Join(dir, "vae"))
+	mustMkdirAll(filepath.Join(dir, "tokenizer"))
+
+	mustWrite(filepath.Join(dir, "model_index.json"), []byte(`{
+  "_class_name":"ZImagePipeline",
+  "tokenizer":["transformers","AutoTokenizer"],
+  "text_encoder":["transformers","CLIPTextModel"],
+  "transformer":["diffusers","Transformer2DModel"],
+  "vae":["diffusers","AutoencoderKL"]
+}`))
+	mustWrite(filepath.Join(dir, "tokenizer", "tokenizer.json"), []byte(`{"version":"1.0"}`))
+	mustWrite(filepath.Join(dir, "text_encoder", "config.json"), []byte(`{"model_type":"qwen2"}`))
+	mustWrite(filepath.Join(dir, "transformer", "config.json"), []byte(`{"model_type":"transformer"}`))
+	mustWrite(filepath.Join(dir, "vae", "config.json"), []byte(`{"model_type":"autoencoder"}`))
+	mustWrite(filepath.Join(dir, "text_encoder", "model.safetensors.index.json"), []byte(`{"weight_map":{"encoder":"model-00001-of-00002.safetensors","decoder":"model-00002-of-00002.safetensors"}}`))
+	mustWrite(filepath.Join(dir, "transformer", "diffusion_pytorch_model.safetensors.index.json"), []byte(`{"weight_map":{"block.0":"diffusion_pytorch_model-00001-of-00002.safetensors","block.1":"diffusion_pytorch_model-00002-of-00002.safetensors"}}`))
+	mustWrite(filepath.Join(dir, "text_encoder", "model-00001-of-00002.safetensors"), []byte("encoder"))
+	mustWrite(filepath.Join(dir, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors"), []byte("block0"))
+	mustWrite(filepath.Join(dir, "vae", "diffusion_pytorch_model.safetensors"), []byte("vae"))
+
+	if complete {
+		mustWrite(filepath.Join(dir, "text_encoder", "model-00002-of-00002.safetensors"), []byte("decoder"))
+		mustWrite(filepath.Join(dir, "transformer", "diffusion_pytorch_model-00002-of-00002.safetensors"), []byte("block1"))
 	}
 }
 

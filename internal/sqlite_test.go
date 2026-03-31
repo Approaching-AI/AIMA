@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func mustOpen(t *testing.T) *DB {
@@ -62,6 +63,38 @@ func TestSchemaIncludesModelVariantGPUCountMin(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected model_variants.gpu_count_min column")
+	}
+}
+
+func TestDeletedDeploymentTombstones(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	deleteAt := time.Now().UTC().Truncate(time.Second)
+	if err := db.MarkDeletedDeployments(ctx, deleteAt, "qwen3-8b-vllm", "qwen3-8b"); err != nil {
+		t.Fatalf("MarkDeletedDeployments: %v", err)
+	}
+
+	marks, err := db.ListDeletedDeploymentsSince(ctx, deleteAt.Add(-1*time.Second))
+	if err != nil {
+		t.Fatalf("ListDeletedDeploymentsSince: %v", err)
+	}
+	if len(marks) != 2 {
+		t.Fatalf("len(marks) = %d, want 2", len(marks))
+	}
+	if got := marks["qwen3-8b-vllm"]; !got.Equal(deleteAt) {
+		t.Fatalf("marks[qwen3-8b-vllm] = %v, want %v", got, deleteAt)
+	}
+
+	if err := db.PruneDeletedDeploymentsBefore(ctx, deleteAt.Add(1*time.Second)); err != nil {
+		t.Fatalf("PruneDeletedDeploymentsBefore: %v", err)
+	}
+	marks, err = db.ListDeletedDeploymentsSince(ctx, deleteAt.Add(-1*time.Second))
+	if err != nil {
+		t.Fatalf("ListDeletedDeploymentsSince(after prune): %v", err)
+	}
+	if len(marks) != 0 {
+		t.Fatalf("len(marks after prune) = %d, want 0", len(marks))
 	}
 }
 

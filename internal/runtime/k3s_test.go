@@ -38,6 +38,12 @@ func TestPodToStatus(t *testing.T) {
 			wantPhase: "stopped",
 			wantReady: false,
 		},
+		{
+			name:      "terminating pod is not reusable",
+			pod:       &k3s.PodStatus{Name: "test", Phase: "Running", Ready: true, DeletionTimestamp: "2026-03-31T08:30:00Z"},
+			wantPhase: "stopped",
+			wantReady: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -38,7 +38,7 @@ func Import(ctx context.Context, srcPath, destDir string) (*ModelInfo, error) {
 
 	// Validate it looks like a model
 	if !isModelDirectory(srcAbs) {
-		return nil, fmt.Errorf("import model from %s: no model files found (need config.json+safetensors or .gguf)", srcPath)
+		return nil, fmt.Errorf("import model from %s: no model files found (need config.json+safetensors, a complete diffusers pipeline, or .gguf)", srcPath)
 	}
 
 	modelDir := srcAbs
@@ -69,15 +69,13 @@ func Import(ctx context.Context, srcPath, destDir string) (*ModelInfo, error) {
 }
 
 func isModelDirectory(dir string) bool {
-	// Check for HuggingFace format
 	if hasFile(dir, "config.json") && hasFileWithExtension(dir, ".safetensors") {
 		return true
 	}
-	// Check for GGUF format
-	if hasFileWithExtension(dir, ".gguf") {
+	if dirHasCompleteDiffusersModel(dir) {
 		return true
 	}
-	return false
+	return hasFileWithExtension(dir, ".gguf")
 }
 
 func isSubpath(child, parent string) bool {

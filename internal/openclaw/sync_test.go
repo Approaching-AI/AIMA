@@ -194,6 +194,35 @@ func TestSyncWritesConfig(t *testing.T) {
 	}
 }
 
+func TestSyncCreatesMissingConfigDirectory(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "nested", "openclaw", "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"qwen3-8b": {ModelName: "qwen3-8b", EngineType: "vllm", Address: "http://127.0.0.1:8000", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	result, err := Sync(context.Background(), deps, false)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if !result.Written {
+		t.Fatal("expected Written=true for missing config directory")
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("expected config to be written: %v", err)
+	}
+	if _, err := os.Stat(ManagedStatePath(configPath)); err != nil {
+		t.Fatalf("expected managed state to be written: %v", err)
+	}
+}
+
 func TestSyncWritesTTSProviderSchema(t *testing.T) {
 	t.Parallel()
 

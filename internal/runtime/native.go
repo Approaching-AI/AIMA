@@ -643,14 +643,14 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	}
 
 	ds := &DeploymentStatus{
-		Name:      proc.name,
-		Phase:     phase,
-		Ready:     ready,
-		Address:   fmt.Sprintf("127.0.0.1:%d", proc.port),
-		Labels:    proc.labels,
-		StartTime: proc.startTime.Format(time.RFC3339),
-		Runtime:   "native",
+		Name:    proc.name,
+		Phase:   phase,
+		Ready:   ready,
+		Address: fmt.Sprintf("127.0.0.1:%d", proc.port),
+		Labels:  proc.labels,
+		Runtime: "native",
 	}
+	setDeploymentStartFromTime(ds, proc.startTime)
 
 	// Enrich with log-based progress for non-ready deployments
 	if !ready && proc.logPath != "" {
@@ -712,14 +712,14 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	}
 
 	ds := &DeploymentStatus{
-		Name:      meta.Name,
-		Phase:     phase,
-		Ready:     ready,
-		Address:   fmt.Sprintf("127.0.0.1:%d", meta.Port),
-		Labels:    meta.Labels,
-		StartTime: meta.StartTime.Format(time.RFC3339),
-		Runtime:   "native",
+		Name:    meta.Name,
+		Phase:   phase,
+		Ready:   ready,
+		Address: fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Labels:  meta.Labels,
+		Runtime: "native",
 	}
+	setDeploymentStartFromTime(ds, meta.StartTime)
 
 	// Enrich with log-based progress for non-ready deployments
 	if !ready && meta.LogPath != "" {

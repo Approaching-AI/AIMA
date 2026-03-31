@@ -332,7 +332,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	}
 
 	// Merge env: hardware container env (base) + engine env (override on conflict).
-	mergedEnv := mergeEnv(resolved.Container, resolved.Env)
+	mergedEnv := expandEnvTemplates(mergeEnv(resolved.Container, resolved.Env), containerModelPath, resolved.ModelName)
 
 	// When GPU partitioning (HAMi) is active, remove env vars that would
 	// bypass the device plugin's GPU allocation (declared in hardware YAML
@@ -421,6 +421,19 @@ func mergeEnv(container *ContainerAccess, engineEnv map[string]string) map[strin
 		merged[k] = v
 	}
 	return merged
+}
+
+func expandEnvTemplates(env map[string]string, modelPath, modelName string) map[string]string {
+	if len(env) == 0 {
+		return env
+	}
+	expanded := make(map[string]string, len(env))
+	for k, v := range env {
+		v = strings.ReplaceAll(v, "{{.ModelPath}}", modelPath)
+		v = strings.ReplaceAll(v, "{{.ModelName}}", modelName)
+		expanded[k] = v
+	}
+	return expanded
 }
 
 // SanitizePodName is the exported version for use by other packages.

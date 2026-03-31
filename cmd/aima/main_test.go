@@ -12,6 +12,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jguan/aima/catalog"
 	state "github.com/jguan/aima/internal"
@@ -629,6 +630,67 @@ func TestFindExistingDeploymentFallsBackToLabelMatch(t *testing.T) {
 	got := findExistingDeployment(context.Background(), "qwen3-30b-a3b", rt)
 	if got == nil || got.Name != "qwen3-30b-a3b-vllm" {
 		t.Fatalf("findExistingDeployment(label match) = %#v", got)
+	}
+}
+
+func TestFindDeploymentStatusSuppressesRecentlyDeletedDeployment(t *testing.T) {
+	deleteAt := time.Now()
+	snapshot := deletedDeploymentSnapshot{
+		normalizeDeletedDeploymentKey("qwen3-30b-a3b-vllm"): deleteAt,
+		normalizeDeletedDeploymentKey("qwen3-30b-a3b"):      deleteAt,
+	}
+
+	rt := &fakeRuntime{
+		name: "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{
+			"qwen3-30b-a3b-vllm": {
+				Name:          "qwen3-30b-a3b-vllm",
+				Phase:         "running",
+				Ready:         true,
+				StartTime:     time.Now().Add(-1 * time.Minute).Format(time.RFC3339),
+				StartedAtUnix: time.Now().Add(-1 * time.Minute).Unix(),
+				Labels: map[string]string{
+					"aima.dev/model":  "qwen3-30b-a3b",
+					"aima.dev/engine": "vllm",
+				},
+			},
+		},
+	}
+
+	got, err := findDeploymentStatus(context.Background(), "qwen3-30b-a3b-vllm", snapshot.suppress, rt)
+	if err == nil || got != nil {
+		t.Fatalf("findDeploymentStatus(recently deleted) = %#v, %v; want not found", got, err)
+	}
+}
+
+func TestFindDeploymentStatusAllowsReplacementStartedAfterDelete(t *testing.T) {
+	deleteAt := time.Now().Add(-2 * time.Second)
+	snapshot := deletedDeploymentSnapshot{
+		normalizeDeletedDeploymentKey("qwen3-30b-a3b-vllm"): deleteAt,
+		normalizeDeletedDeploymentKey("qwen3-30b-a3b"):      deleteAt,
+	}
+
+	replacementStart := deleteAt.Add(1 * time.Second)
+	rt := &fakeRuntime{
+		name: "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{
+			"qwen3-30b-a3b-vllm": {
+				Name:          "qwen3-30b-a3b-vllm",
+				Phase:         "running",
+				Ready:         true,
+				StartTime:     replacementStart.Format(time.RFC3339),
+				StartedAtUnix: replacementStart.Unix(),
+				Labels: map[string]string{
+					"aima.dev/model":  "qwen3-30b-a3b",
+					"aima.dev/engine": "vllm",
+				},
+			},
+		},
+	}
+
+	got, err := findDeploymentStatus(context.Background(), "qwen3-30b-a3b-vllm", snapshot.suppress, rt)
+	if err != nil || got == nil {
+		t.Fatalf("findDeploymentStatus(replacement) = %#v, %v; want replacement visible", got, err)
 	}
 }
 

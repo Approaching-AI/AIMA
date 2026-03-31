@@ -65,9 +65,9 @@ startup_order:
     notes: "ASR uses a custom audio-enabled vLLM image and should block the scenario if readiness fails."
   - step: 4
     model: z-image
-    wait_for: port_open
-    timeout_s: 180
-    notes: "Image generation has the heaviest cold path after the LLM; wait for the HTTP port before sync."
+    wait_for: health_check
+    timeout_s: 240
+    notes: "Image generation must pass its /health probe before sync; a transient port bind is not sufficient."
 
 post_deploy:
   - action: openclaw_sync

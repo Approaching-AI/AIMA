@@ -2893,7 +2893,7 @@ body {
               <div class="onboarding-command-list">
                 <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).commands) || [])" :key="item.id || item.command || idx">
                   <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
-                    <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                    <strong x-text="onboardingText(item.command, '')"></strong>
                     <span x-text="onboardingText(item.description, item.command || '')"></span>
                   </button>
                 </template>
@@ -2907,9 +2907,9 @@ body {
                 <div class="support-starter-label" x-text="onboardingText(group.title, '')"></div>
                 <p class="support-note" x-show="onboardingText(group.description, '')" x-text="onboardingText(group.description, '')"></p>
                 <div class="onboarding-command-list">
-                  <template x-for="(item, itemIdx) in (group.commands || [])" :key="item.id || item.command || itemIdx">
+                  <template x-for="(item, itemIdx) in (group.items || [])" :key="item.id || item.command || itemIdx">
                     <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
-                      <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                      <strong x-text="onboardingText(item.command, '')"></strong>
                       <span x-text="onboardingText(item.description, item.command || '')"></span>
                     </button>
                   </template>

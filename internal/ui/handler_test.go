@@ -141,6 +141,8 @@ func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) 
 		"defaultOnboardingManifest()",
 		"resolvedOnboardingManifest()",
 		"onboarding-command-btn",
+		"in (group.items || [])",
+		`x-text="onboardingText(item.command, '')"`,
 		"e.key === 'Escape'",
 	} {
 		if !strings.Contains(body, token) {

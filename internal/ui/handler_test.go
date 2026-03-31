@@ -33,3 +33,49 @@ func TestRegisterRoutes_SupportManifest(t *testing.T) {
 		t.Fatalf("body = %q", got)
 	}
 }
+
+func TestRegisterRoutes_FaviconAssets(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	t.Run("ui favicon svg", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/ui/favicon.svg", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "image/svg+xml" {
+			t.Fatalf("content-type = %q, want image/svg+xml", got)
+		}
+	})
+
+	t.Run("root favicon redirect", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
+		}
+		if got := rec.Header().Get("Location"); got != "/ui/favicon.ico" {
+			t.Fatalf("location = %q, want /ui/favicon.ico", got)
+		}
+	})
+
+	t.Run("apple touch icon png", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/ui/apple-touch-icon.png", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "image/png" {
+			t.Fatalf("content-type = %q, want image/png", got)
+		}
+	})
+}

@@ -19,7 +19,7 @@ LDFLAGS := -s -w \
 
 BUILDDIR := build
 
-.PHONY: build all clean version-audit bundle-tag release-assets publish-release-assets
+.PHONY: build all clean version-audit bundle-tag release-assets publish-release-assets icon-assets windows-syso
 
 ## build: Build for the current platform
 build:
@@ -34,7 +34,15 @@ all:
 
 ## release-assets: Build cross-platform binaries plus checksums for a GitHub release
 release-assets:
-	./scripts/package-release.sh
+	bash ./scripts/package-release.sh
+
+## icon-assets: Regenerate favicon, desktop icons, and macOS icns from the square app icon SVG
+icon-assets:
+	bash ./scripts/build-platform-icons.sh
+
+## windows-syso: Regenerate the Windows icon resource object used by Explorer for aima.exe
+windows-syso:
+	bash ./scripts/build-windows-syso.sh
 
 ## publish-release-assets: Upload the packaged release assets with gh CLI
 publish-release-assets:

@@ -26,6 +26,11 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 		fileServer.ServeHTTP(w, r)
 	})
 	return func(mux *http.ServeMux) {
+		redirectStatic := func(path string) {
+			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/ui"+path, http.StatusFound)
+			})
+		}
 		if deps != nil && deps.SupportManifest != nil {
 			mux.HandleFunc("GET /ui/api/support-manifest", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -39,6 +44,9 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 				_, _ = w.Write(data)
 			})
 		}
+		redirectStatic("/favicon.svg")
+		redirectStatic("/favicon.ico")
+		redirectStatic("/apple-touch-icon.png")
 		mux.Handle("GET /ui/", http.StripPrefix("/ui/", noCacheFS))
 		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/ui/", http.StatusFound)

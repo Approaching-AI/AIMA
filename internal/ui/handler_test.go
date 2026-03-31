@@ -125,6 +125,30 @@ func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		"insertOnboardingCommand(command)",
+		"defaultOnboardingManifest()",
+		"resolvedOnboardingManifest()",
+		"onboarding-command-btn",
+		"e.key === 'Escape'",
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing %q", token)
+		}
+	}
+}
+
 func TestRegisterRoutes_FaviconAssets(t *testing.T) {
 	t.Parallel()
 

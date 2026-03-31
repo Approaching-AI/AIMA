@@ -719,6 +719,60 @@ body {
   font-size: 13px;
   color: var(--error);
 }
+.onboarding-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-steps {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: var(--panel-border);
+  background: var(--bg-panel);
+}
+.onboarding-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-command-btn {
+  width: 100%;
+  border: var(--panel-border);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease-smooth),
+    background var(--duration-fast) var(--ease-smooth);
+}
+.onboarding-command-btn:hover {
+  border-color: rgba(10, 132, 255, 0.35);
+  background: var(--input-bg);
+}
+.onboarding-command-btn strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.onboarding-command-btn span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
 
 /* Chat messages - refined typography */
 .chat-messages {
@@ -2815,14 +2869,63 @@ body {
         </div>
 
         <div class="onboarding-tabs">
-          <button type="button" :class="{ active: onboardingTab === 'quick_start' }" @click="onboardingTab = 'quick_start'" x-text="t('onboarding_tab_quick_start')"></button>
-          <button type="button" :class="{ active: onboardingTab === 'full_commands' }" @click="onboardingTab = 'full_commands'" x-text="t('onboarding_tab_full_commands')"></button>
-          <button type="button" :class="{ active: onboardingTab === 'troubleshooting' }" @click="onboardingTab = 'troubleshooting'" x-text="t('onboarding_tab_troubleshooting')"></button>
+          <button type="button" :class="{ active: onboardingTab === 'quick_start' }" @click="onboardingTab = 'quick_start'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).quick_start), t('onboarding_tab_quick_start'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'full_commands' }" @click="onboardingTab = 'full_commands'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).full_commands), t('onboarding_tab_full_commands'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'troubleshooting' }" @click="onboardingTab = 'troubleshooting'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).troubleshooting), t('onboarding_tab_troubleshooting'))"></button>
         </div>
 
         <div class="onboarding-drawer-body">
           <div class="onboarding-loading" x-show="onboardingLoading" x-text="t('loading')"></div>
           <div class="onboarding-error" x-show="onboardingError" x-text="onboardingError"></div>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'quick_start'">
+            <p class="support-note" x-text="onboardingText(((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).intro), '')"></p>
+            <ol class="onboarding-steps">
+              <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).steps) || [])" :key="item.id || item.command || idx">
+                <li class="onboarding-step">
+                  <strong x-text="onboardingText(item.title, '')"></strong>
+                  <span class="support-note" x-text="onboardingText(item.body, '')"></span>
+                </li>
+              </template>
+            </ol>
+            <div class="support-starter-section" x-show="(((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).commands) || []).length > 0">
+              <div class="support-starter-label" x-text="t('onboarding_common_commands')"></div>
+              <div class="onboarding-command-list">
+                <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).commands) || [])" :key="item.id || item.command || idx">
+                  <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
+                    <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                    <span x-text="onboardingText(item.description, item.command || '')"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'full_commands'">
+            <template x-for="(group, groupIdx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).full_commands) || {}).groups) || [])" :key="group.id || onboardingText(group.title, '') || groupIdx">
+              <div class="support-starter-section">
+                <div class="support-starter-label" x-text="onboardingText(group.title, '')"></div>
+                <p class="support-note" x-show="onboardingText(group.description, '')" x-text="onboardingText(group.description, '')"></p>
+                <div class="onboarding-command-list">
+                  <template x-for="(item, itemIdx) in (group.commands || [])" :key="item.id || item.command || itemIdx">
+                    <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
+                      <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                      <span x-text="onboardingText(item.description, item.command || '')"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </section>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'troubleshooting'">
+            <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).troubleshooting) || {}).items) || [])" :key="item.id || onboardingText(item.title, '') || idx">
+              <div class="onboarding-step">
+                <strong x-text="onboardingText(item.title, '')"></strong>
+                <span class="support-note" x-text="onboardingText(item.body, '')"></span>
+              </div>
+            </template>
+          </section>
         </div>
       </aside>
     </div>
@@ -2949,6 +3052,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
   },
   zh: {
@@ -3063,6 +3167,7 @@ var I18N = {
     onboarding_tab_quick_start: '\u5FEB\u901F\u5F00\u59CB',
     onboarding_tab_full_commands: '\u5B8C\u6574\u547D\u4EE4',
     onboarding_tab_troubleshooting: '\u9047\u5230\u95EE\u9898',
+    onboarding_common_commands: '\u5E38\u7528\u547D\u4EE4',
     loading: '\u52A0\u8F7D\u4E2D...',
     cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u53EF\u7528 MCP \u5DE5\u5177',
     cli_help_usage: '\u7528\u6CD5: /cli <\u5DE5\u5177\u540D> [\u53C2\u6570]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
@@ -3787,6 +3892,98 @@ function aimaApp() {
       } finally {
         this.onboardingLoading = false;
       }
+    },
+
+    onboardingLocaleKey() {
+      return this.lang === 'zh' ? 'zh' : 'en';
+    },
+
+    onboardingText(value, fallback) {
+      if (!value) return fallback || '';
+      if (typeof value === 'string') return value || fallback || '';
+      const locale = this.onboardingLocaleKey();
+      return value[locale] || value.en || value.zh || fallback || '';
+    },
+
+    defaultOnboardingManifest() {
+      return {
+        version: 'fallback',
+        default_locale: 'en',
+        locales: {
+          zh: {
+            title: '新手指南',
+            tabs: {
+              quick_start: '快速开始',
+              full_commands: '完整命令',
+              troubleshooting: '遇到问题'
+            },
+            quick_start: {
+              intro: '内置说明暂时不可用，先用这些命令确认系统状态。',
+              steps: [
+                { title: '确认系统在线', body: '先看顶部状态和 Agent 状态。' },
+                { title: '确认本机资源', body: '查看模型、引擎和部署。' },
+                { title: '开始提问', body: '输入命令或直接提问。' }
+              ],
+              commands: [
+                { id: 'status', command: 'status', label: '查看系统状态', description: '检查当前系统概况。' },
+                { id: 'hardware', command: 'hardware', label: '查看硬件', description: '查看硬件检测结果。' },
+                { id: 'models', command: 'models', label: '查看模型', description: '列出已识别模型。' },
+                { id: 'engines', command: 'engines', label: '查看引擎', description: '列出可用引擎。' },
+                { id: 'deployments', command: 'deployments', label: '查看部署', description: '列出当前部署。' }
+              ]
+            },
+            full_commands: { groups: [] },
+            troubleshooting: {
+              items: [
+                { title: 'Agent 不可用', body: '先用 status、hardware、models 等直接命令。' }
+              ]
+            }
+          },
+          en: {
+            title: 'Getting Started',
+            tabs: {
+              quick_start: 'Quick Start',
+              full_commands: 'Commands',
+              troubleshooting: 'Troubleshooting'
+            },
+            quick_start: {
+              intro: 'The embedded guide is unavailable, so start with these commands.',
+              steps: [
+                { title: 'Check system health', body: 'Start with the top status and Agent state.' },
+                { title: 'Inspect local resources', body: 'Review models, engines, and deployments.' },
+                { title: 'Ask or run a command', body: 'Enter a command or ask AIMA directly.' }
+              ],
+              commands: [
+                { id: 'status', command: 'status', label: 'System status', description: 'Inspect the overall system state.' },
+                { id: 'hardware', command: 'hardware', label: 'Hardware', description: 'Show hardware detection details.' },
+                { id: 'models', command: 'models', label: 'Models', description: 'List known models.' },
+                { id: 'engines', command: 'engines', label: 'Engines', description: 'List available engines.' },
+                { id: 'deployments', command: 'deployments', label: 'Deployments', description: 'List active deployments.' }
+              ]
+            },
+            full_commands: { groups: [] },
+            troubleshooting: {
+              items: [
+                { title: 'Agent unavailable', body: 'Start with direct commands like status, hardware, and models.' }
+              ]
+            }
+          }
+        }
+      };
+    },
+
+    resolvedOnboardingManifest() {
+      return this.onboardingManifest || this.defaultOnboardingManifest();
+    },
+
+    insertOnboardingCommand(command) {
+      if (!command) return;
+      this.currentView = 'chat';
+      this.input = command;
+      this.closeOnboardingDrawer();
+      this.$nextTick(() => {
+        if (this.$refs.chatInput) this.$refs.chatInput.focus();
+      });
     },
 
     openOnboardingDrawer() {
@@ -5430,6 +5627,11 @@ function aimaApp() {
 
     // Global keyboard shortcut
     handleGlobalKey(e) {
+      if (e.key === 'Escape' && this.showOnboardingDrawer) {
+        e.preventDefault();
+        this.closeOnboardingDrawer();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         if (this.$refs.chatInput) this.$refs.chatInput.focus();

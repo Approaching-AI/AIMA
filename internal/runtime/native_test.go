@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -465,6 +466,56 @@ func TestProcessMatchesMetaRejectsCommandMismatch(t *testing.T) {
 	}
 }
 
+func TestProcessMatchesMetaAllowsInterpreterWrappedScript(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only /proc cmdline test")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+
+	script := filepath.Join(t.TempDir(), "wrapped.py")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n"), 0o755); err != nil {
+		t.Fatalf("write wrapped script: %v", err)
+	}
+
+	cmd := exec.Command(script, "--port", "32102")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start wrapped script: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+
+	meta := &deploymentMeta{
+		PID:     cmd.Process.Pid,
+		Command: []string{script, "--port", "32102"},
+	}
+	if !processMatchesMeta(meta) {
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "cmdline"))
+		t.Fatalf("processMatchesMeta should allow interpreter prefix, cmdline=%q", string(cmdline))
+	}
+}
+
+func TestCommandLineMatchesAllowsInterpreterPrefix(t *testing.T) {
+	actual := "/usr/bin/python3 /usr/local/bin/vllm serve /models/qwen3-8b --port 32102 --swap-space 0"
+	expected := []string{"/usr/local/bin/vllm", "serve", "/models/qwen3-8b", "--port", "32102"}
+	if !commandLineMatches(actual, expected) {
+		t.Fatalf("commandLineMatches should allow interpreter prefix, actual=%q", actual)
+	}
+}
+
+func TestCommandLineMatchesRejectsUnknownLauncherPrefix(t *testing.T) {
+	actual := "sudo /usr/local/bin/vllm serve /models/qwen3-8b --port 32102"
+	expected := []string{"/usr/local/bin/vllm", "serve", "/models/qwen3-8b", "--port", "32102"}
+	if commandLineMatches(actual, expected) {
+		t.Fatalf("commandLineMatches should reject unexpected launcher prefix, actual=%q", actual)
+	}
+}
+
 func TestProcToStatusUsesStartupErrorAsFailure(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "deploy.log")
 	if err := os.WriteFile(logPath, []byte("couldn't bind HTTP server socket: Address already in use\n"), 0o644); err != nil {
@@ -496,6 +547,132 @@ func TestProcToStatusUsesStartupErrorAsFailure(t *testing.T) {
 	}
 	if status.Message != "Port is already in use" {
 		t.Fatalf("message = %q, want %q", status.Message, "Port is already in use")
+	}
+}
+
+func TestStatusPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	logPath := filepath.Join(t.TempDir(), "deploy.log")
+	if err := os.WriteFile(logPath, []byte("INFO still spinning\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	rt.processes["stuck-run"] = &nativeProcess{
+		name:      "stuck-run",
+		port:      32102,
+		logPath:   logPath,
+		labels:    map[string]string{"aima.dev/engine": "vllm"},
+		startTime: time.Now(),
+	}
+
+	meta := &deploymentMeta{
+		Name:      "stuck-run",
+		PID:       999999,
+		Port:      32102,
+		Engine:    "vllm",
+		Labels:    map[string]string{"aima.dev/engine": "vllm"},
+		LogPath:   logPath,
+		Command:   []string{"/usr/local/bin/vllm", "serve", "/models"},
+		StartTime: time.Now(),
+	}
+	if err := rt.saveMeta(meta); err != nil {
+		t.Fatalf("saveMeta: %v", err)
+	}
+
+	status, err := rt.Status(context.Background(), "stuck-run")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Phase != "failed" {
+		t.Fatalf("phase = %q, want failed", status.Phase)
+	}
+	if status.Message == "" {
+		t.Fatal("expected persisted failure message to be preserved")
+	}
+}
+
+func TestListPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	logPath := filepath.Join(t.TempDir(), "deploy.log")
+	if err := os.WriteFile(logPath, []byte("INFO still spinning\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	rt.processes["stuck-list"] = &nativeProcess{
+		name:      "stuck-list",
+		port:      32103,
+		logPath:   logPath,
+		labels:    map[string]string{"aima.dev/engine": "vllm"},
+		startTime: time.Now(),
+	}
+
+	meta := &deploymentMeta{
+		Name:      "stuck-list",
+		PID:       999998,
+		Port:      32103,
+		Engine:    "vllm",
+		Labels:    map[string]string{"aima.dev/engine": "vllm"},
+		LogPath:   logPath,
+		Command:   []string{"/usr/local/bin/vllm", "serve", "/models"},
+		StartTime: time.Now(),
+	}
+	if err := rt.saveMeta(meta); err != nil {
+		t.Fatalf("saveMeta: %v", err)
+	}
+
+	statuses, err := rt.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("len(statuses) = %d, want 1", len(statuses))
+	}
+	if statuses[0].Phase != "failed" {
+		t.Fatalf("phase = %q, want failed", statuses[0].Phase)
+	}
+}
+
+func TestStatusDoesNotOverrideLiveProcessWithStalePortReuseFailure(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	rt.processes["warming-up"] = &nativeProcess{
+		name:      "warming-up",
+		port:      port,
+		labels:    map[string]string{"aima.dev/engine": "vllm"},
+		startTime: time.Now(),
+	}
+
+	meta := &deploymentMeta{
+		Name:      "warming-up",
+		PID:       999997,
+		Port:      port,
+		Engine:    "vllm",
+		Labels:    map[string]string{"aima.dev/engine": "vllm"},
+		Command:   []string{"/usr/local/bin/vllm", "serve", "/models"},
+		StartTime: time.Now(),
+	}
+	if err := rt.saveMeta(meta); err != nil {
+		t.Fatalf("saveMeta: %v", err)
+	}
+
+	status, err := rt.Status(context.Background(), "warming-up")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Phase != "running" {
+		t.Fatalf("phase = %q, want running", status.Phase)
+	}
+	if status.Message == "deployment metadata is stale; port is in use by another process" {
+		t.Fatal("stale port reuse failure should not override a live in-memory process")
 	}
 }
 

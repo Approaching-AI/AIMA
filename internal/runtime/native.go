@@ -380,7 +380,7 @@ func (r *NativeRuntime) Status(_ context.Context, name string) (*DeploymentStatu
 	r.mu.RUnlock()
 
 	if ok && proc != nil {
-		return r.procToStatus(proc), nil
+		return r.procStatusWithPersistedOverride(name, proc), nil
 	}
 
 	// Try persisted metadata
@@ -400,7 +400,7 @@ func (r *NativeRuntime) List(_ context.Context) ([]*DeploymentStatus, error) {
 			continue // placeholder from in-progress deploy
 		}
 		seen[name] = true
-		statuses = append(statuses, r.procToStatus(proc))
+		statuses = append(statuses, r.procStatusWithPersistedOverride(name, proc))
 	}
 	r.mu.RUnlock()
 
@@ -413,6 +413,44 @@ func (r *NativeRuntime) List(_ context.Context) ([]*DeploymentStatus, error) {
 	}
 
 	return statuses, nil
+}
+
+func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativeProcess) *DeploymentStatus {
+	status := r.procToStatus(proc)
+	meta, err := r.loadMeta(name)
+	if err != nil {
+		return status
+	}
+
+	persisted := r.metaToStatus(meta)
+	proc.mu.Lock()
+	exited := proc.exited
+	proc.mu.Unlock()
+	switch {
+	case persisted.Phase == "failed" && status.Phase != "failed" && !(isStalePortReuseFailure(persisted.Message) && !exited):
+		return persisted
+	case persisted.Ready && !status.Ready:
+		return persisted
+	}
+
+	if status.StartupMessage == "" {
+		status.StartupMessage = persisted.StartupMessage
+	}
+	if status.StartupPhase == "" || persisted.StartupProgress > status.StartupProgress {
+		status.StartupPhase = persisted.StartupPhase
+		status.StartupProgress = persisted.StartupProgress
+	}
+	if status.ErrorLines == "" {
+		status.ErrorLines = persisted.ErrorLines
+	}
+	if status.Message == "" && !(status.Phase != "failed" && isStalePortReuseFailure(persisted.Message)) {
+		status.Message = persisted.Message
+	}
+	return status
+}
+
+func isStalePortReuseFailure(msg string) bool {
+	return msg == "deployment metadata is stale; port is in use by another process"
 }
 
 func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (string, error) {
@@ -781,11 +819,12 @@ func commandPrefixMatches(actual, expected []string) bool {
 	if len(actual) < len(expected) || len(expected) == 0 {
 		return false
 	}
-	if !sameCommandElement(actual[0], expected[0]) {
+	offset, ok := commandStartOffset(actual, expected[0], len(expected))
+	if !ok {
 		return false
 	}
 	for i := 1; i < len(expected); i++ {
-		if actual[i] != expected[i] {
+		if actual[offset+i] != expected[i] {
 			return false
 		}
 	}
@@ -796,12 +835,52 @@ func sameCommandElement(actual, expected string) bool {
 	return actual == expected || filepath.Base(actual) == filepath.Base(expected)
 }
 
+func commandStartOffset(actual []string, expected0 string, expectedLen int) (int, bool) {
+	if len(actual) < expectedLen || expectedLen == 0 {
+		return 0, false
+	}
+	maxOffset := len(actual) - expectedLen
+	if maxOffset > 2 {
+		maxOffset = 2
+	}
+	for offset := 0; offset <= maxOffset; offset++ {
+		if offset > 0 && !safeLauncherPrefix(actual[:offset]) {
+			continue
+		}
+		if sameCommandElement(actual[offset], expected0) {
+			return offset, true
+		}
+	}
+	return 0, false
+}
+
+func safeLauncherPrefix(prefix []string) bool {
+	for _, arg := range prefix {
+		if arg == "" {
+			return false
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(arg))
+		switch {
+		case base == "env", base == "bash", base == "sh", base == "zsh":
+			continue
+		case strings.HasPrefix(base, "python"):
+			continue
+		default:
+			return false
+		}
+	}
+	return len(prefix) > 0
+}
+
 func commandLineMatches(actualLine string, expected []string) bool {
 	if actualLine == "" || len(expected) == 0 {
 		return false
 	}
 	fields := strings.Fields(actualLine)
-	if len(fields) == 0 || !sameCommandElement(fields[0], expected[0]) {
+	if _, ok := commandStartOffset(fields, expected[0], len(expected)); !ok {
 		return false
 	}
 	for _, arg := range expected[1:] {

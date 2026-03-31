@@ -53,6 +53,10 @@ startup:
     errors:
       - pattern: "OutOfMemoryError|out of memory"
         message: "GPU memory insufficient"
+      - pattern: "KeyError:\\s*'.*g_idx'"
+        message: "Model weights are incompatible with GPTQ runtime or incomplete"
+      - pattern: "EngineCore failed to start|Engine core initialization failed"
+        message: "Engine core initialization failed"
       - pattern: "CreatePlatform failed"
         message: "MUSA platform init failed — check GPU device access"
       - pattern: "MUSA initialization error"

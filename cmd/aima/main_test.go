@@ -302,6 +302,23 @@ func TestSummarizeDeploymentFailure(t *testing.T) {
 			want: "ValueError: Free memory on device is too low",
 		},
 		{
+			name:    "stale metadata message yields traceback detail",
+			message: "deployment metadata is stale; port is in use by another process",
+			errorLines: strings.Join([]string{
+				"INFO booting",
+				"RuntimeError: Engine core initialization failed. See root cause above.",
+			}, "\n"),
+			want: "RuntimeError: Engine core initialization failed. See root cause above.",
+		},
+		{
+			name:    "ignore cpuinfo noise line",
+			message: "process exited before readiness",
+			errorLines: strings.Join([]string{
+				"Error in cpuinfo: prctl(PR_SVE_GET_VL) failed",
+			}, "\n"),
+			want: "process exited before readiness",
+		},
+		{
 			name:       "fallback to unknown",
 			errorLines: "\n\n",
 			want:       "unknown startup failure",
@@ -314,6 +331,51 @@ func TestSummarizeDeploymentFailure(t *testing.T) {
 				t.Fatalf("summarizeDeploymentFailure() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSummarizeErrorLinesPrefersRootCause(t *testing.T) {
+	logs := strings.Join([]string{
+		"torch.OutOfMemoryError: MUSA out of memory. Tried to allocate 896.00 MiB.",
+		"RuntimeError: Engine core initialization failed. See root cause above.",
+	}, "\n")
+
+	if got := summarizeErrorLines(logs); got != "torch.OutOfMemoryError: MUSA out of memory. Tried to allocate 896.00 MiB." {
+		t.Fatalf("summarizeErrorLines() = %q", got)
+	}
+}
+
+func TestRefineDeploymentFailureUsesLogs(t *testing.T) {
+	initial := deploymentFailureDetails{
+		Message: "process exited before readiness",
+	}
+
+	got := refineDeploymentFailure(context.Background(), "qwen3-8b-vllm", initial, nil, func(context.Context, string, int) (string, error) {
+		return strings.Join([]string{
+			"KeyError: 'layers.18.mlp.down_proj.g_idx'",
+			"RuntimeError: Engine core initialization failed. See root cause above.",
+		}, "\n"), nil
+	})
+
+	if got != "KeyError: 'layers.18.mlp.down_proj.g_idx'" {
+		t.Fatalf("refineDeploymentFailure() = %q", got)
+	}
+}
+
+func TestRefineDeploymentFailureUsesRefreshedStatus(t *testing.T) {
+	initial := deploymentFailureDetails{
+		Message: "RuntimeError: Engine core initialization failed. See root cause above.",
+	}
+
+	got := refineDeploymentFailure(context.Background(), "qwen3-30b-a3b-vllm", initial, func(context.Context, string) (json.RawMessage, error) {
+		return json.Marshal(map[string]string{
+			"message":     "deployment metadata is stale; port is in use by another process",
+			"error_lines": "torch.OutOfMemoryError: MUSA out of memory. Tried to allocate 896.00 MiB.",
+		})
+	}, nil)
+
+	if got != "torch.OutOfMemoryError: MUSA out of memory. Tried to allocate 896.00 MiB." {
+		t.Fatalf("refineDeploymentFailure() = %q", got)
 	}
 }
 

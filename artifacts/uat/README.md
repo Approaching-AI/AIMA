@@ -20,7 +20,10 @@
 - 功能优先于 UI；先看真实部署是否成立，再看 UI 是否忠实表达当前状态。
 - Round-4 已完成一次阻塞点修复后的 closeout re-verify：
 - 结论基于最新构建的统一重分发、统一 `run/status` 回归，以及本机失败态 + `gb10` ready 态的真实 UI 检查。
-- 之后又完成了定点修复和本地 final closeout re-retest；当前 active bug 已清零。
+- 之后完成了定点修复和本地 final closeout re-retest。
+- 但 2026-03-31 对已推送 `origin/develop` `160b8aa` 的真实矩阵重跑后，Round-4 一度重新打开 active 问题。
+- 同日追加修复并完成真机复测后，当前已无 active product bug。
+- 当前剩余 2 个现场 blocker（`amd395` 端口冲突、`aibook` GPTQ 资产不一致）。
 
 ## Round-3 记录原则
 
@@ -37,4 +40,6 @@
 - 收口回归：`sessions/2026-03-30-round4-closeout-reverify.md`
 - 后续定点复测：`sessions/2026-03-30-round4-devmac-detach-reretest.md`
 - 最终本地收口：`sessions/2026-03-30-round4-final-closeout-local-reretest.md`
+- 已推送构建的真实矩阵重跑：`sessions/2026-03-31-round4-real-matrix-rerun-160b8aa.md`
+- 追加代码修复后的真机复测：`sessions/2026-03-31-round4-postfix-real-reretest.md`
 - 问题汇总：`issues/BUG-ROUND4-DEPLOY-RUN-UI-20260330.md`

@@ -2869,29 +2869,29 @@ body {
         </div>
 
         <div class="onboarding-tabs">
-          <button type="button" :class="{ active: onboardingTab === 'quick_start' }" @click="onboardingTab = 'quick_start'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).quick_start), t('onboarding_tab_quick_start'))"></button>
-          <button type="button" :class="{ active: onboardingTab === 'full_commands' }" @click="onboardingTab = 'full_commands'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).full_commands), t('onboarding_tab_full_commands'))"></button>
-          <button type="button" :class="{ active: onboardingTab === 'troubleshooting' }" @click="onboardingTab = 'troubleshooting'" x-text="onboardingText((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).tabs || {}).troubleshooting), t('onboarding_tab_troubleshooting'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'quick_start' }" @click="onboardingTab = 'quick_start'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).quick_start), t('onboarding_tab_quick_start'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'full_commands' }" @click="onboardingTab = 'full_commands'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).full_commands), t('onboarding_tab_full_commands'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'troubleshooting' }" @click="onboardingTab = 'troubleshooting'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).troubleshooting), t('onboarding_tab_troubleshooting'))"></button>
         </div>
 
         <div class="onboarding-drawer-body">
           <div class="onboarding-loading" x-show="onboardingLoading" x-text="t('loading')"></div>
           <div class="onboarding-error" x-show="onboardingError" x-text="onboardingError"></div>
 
-          <section class="onboarding-section" x-show="onboardingTab === 'quick_start'">
-            <p class="support-note" x-text="onboardingText(((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).intro), '')"></p>
+          <section class="onboarding-section" x-show="onboardingTab === 'quick_start' && onboardingLocaleData()">
+            <p class="support-note" x-text="onboardingText(((((onboardingLocaleData() || {}).quick_start) || {}).intro), '')"></p>
             <ol class="onboarding-steps">
-              <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).steps) || [])" :key="item.id || item.command || idx">
+              <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).quick_start) || {}).steps) || [])" :key="item.id || item.command || idx">
                 <li class="onboarding-step">
                   <strong x-text="onboardingText(item.title, '')"></strong>
                   <span class="support-note" x-text="onboardingText(item.body, '')"></span>
                 </li>
               </template>
             </ol>
-            <div class="support-starter-section" x-show="(((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).commands) || []).length > 0">
+            <div class="support-starter-section" x-show="(((((onboardingLocaleData() || {}).quick_start) || {}).commands) || []).length > 0">
               <div class="support-starter-label" x-text="t('onboarding_common_commands')"></div>
               <div class="onboarding-command-list">
-                <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).quick_start) || {}).commands) || [])" :key="item.id || item.command || idx">
+                <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).quick_start) || {}).commands) || [])" :key="item.id || item.command || idx">
                   <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
                     <strong x-text="onboardingText(item.command, '')"></strong>
                     <span x-text="onboardingText(item.description, item.command || '')"></span>
@@ -2901,8 +2901,8 @@ body {
             </div>
           </section>
 
-          <section class="onboarding-section" x-show="onboardingTab === 'full_commands'">
-            <template x-for="(group, groupIdx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).full_commands) || {}).groups) || [])" :key="group.id || onboardingText(group.title, '') || groupIdx">
+          <section class="onboarding-section" x-show="onboardingTab === 'full_commands' && onboardingLocaleData()">
+            <template x-for="(group, groupIdx) in (((((onboardingLocaleData() || {}).full_commands) || {}).groups) || [])" :key="group.id || onboardingText(group.title, '') || groupIdx">
               <div class="support-starter-section">
                 <div class="support-starter-label" x-text="onboardingText(group.title, '')"></div>
                 <p class="support-note" x-show="onboardingText(group.description, '')" x-text="onboardingText(group.description, '')"></p>
@@ -2918,8 +2918,8 @@ body {
             </template>
           </section>
 
-          <section class="onboarding-section" x-show="onboardingTab === 'troubleshooting'">
-            <template x-for="(item, idx) in (((((resolvedOnboardingManifest().locales[onboardingLocaleKey()] || {}).troubleshooting) || {}).items) || [])" :key="item.id || onboardingText(item.title, '') || idx">
+          <section class="onboarding-section" x-show="onboardingTab === 'troubleshooting' && onboardingLocaleData()">
+            <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).troubleshooting) || {}).items) || [])" :key="item.id || onboardingText(item.title, '') || idx">
               <div class="onboarding-step">
                 <strong x-text="onboardingText(item.title, '')"></strong>
                 <span class="support-note" x-text="onboardingText(item.body, '')"></span>
@@ -3257,6 +3257,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
     cli_help_header: 'CLI\u30E2\u30FC\u30C9 \u2014 \u5229\u7528\u53EF\u80FD\u306AMCP\u30C4\u30FC\u30EB',
     cli_help_usage: '\u4F7F\u3044\u65B9: /cli <\u30C4\u30FC\u30EB\u540D> [\u30D1\u30E9\u30E1\u30FC\u30BF]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
@@ -3346,6 +3347,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
     cli_help_header: 'CLI \uBAA8\uB4DC \u2014 \uC0AC\uC6A9 \uAC00\uB2A5\uD55C MCP \uB3C4\uAD6C',
     cli_help_usage: '\uC0AC\uC6A9\uBC95: /cli <\uB3C4\uAD6C\uBA85> [\uB9E4\uAC1C\uBCC0\uC218]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
@@ -3435,6 +3437,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
   },
   fr: {
@@ -3521,6 +3524,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
     cli_help_header: 'Mode CLI \u2014 Outils MCP disponibles',
     cli_help_usage: 'Utilisation : /cli <outil> [param\u00E8tres]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
@@ -3610,6 +3614,7 @@ var I18N = {
     onboarding_tab_quick_start: 'Quick start',
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
     loading: 'Loading...',
     cli_help_header: 'CLI-Modus \u2014 Verf\u00FCgbare MCP-Tools',
     cli_help_usage: 'Verwendung: /cli <Tool> [Parameter]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
@@ -3703,6 +3708,7 @@ function aimaApp() {
     onboardingTab: 'quick_start',
     onboardingManifest: null,
     onboardingLoading: false,
+    onboardingLoadFailed: false,
     onboardingError: '',
     openclaw: {
       connected: false,
@@ -3875,6 +3881,7 @@ function aimaApp() {
 
       this.onboardingLoading = true;
       this.onboardingError = '';
+      this.onboardingLoadFailed = false;
       try {
         const headers = {};
         if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
@@ -3885,9 +3892,11 @@ function aimaApp() {
           throw new Error('invalid onboarding manifest');
         }
         this.onboardingManifest = data;
+        this.onboardingLoadFailed = false;
         return data;
       } catch (e) {
         this.onboardingError = (e && e.message) ? e.message : 'onboarding manifest unavailable';
+        this.onboardingLoadFailed = true;
         return null;
       } finally {
         this.onboardingLoading = false;
@@ -3973,12 +3982,22 @@ function aimaApp() {
     },
 
     resolvedOnboardingManifest() {
-      return this.onboardingManifest || this.defaultOnboardingManifest();
+      if (this.onboardingManifest) return this.onboardingManifest;
+      if (this.onboardingLoadFailed) return this.defaultOnboardingManifest();
+      return null;
+    },
+
+    onboardingLocaleData() {
+      const manifest = this.resolvedOnboardingManifest();
+      if (!manifest || !manifest.locales || typeof manifest.locales !== 'object') return null;
+      const locale = this.onboardingLocaleKey();
+      return manifest.locales[locale] || manifest.locales.en || manifest.locales.zh || null;
     },
 
     insertOnboardingCommand(command) {
       if (!command) return;
       this.currentView = 'chat';
+      this.mobileTab = 'chat';
       this.input = command;
       this.closeOnboardingDrawer();
       this.$nextTick(() => {

@@ -143,6 +143,9 @@ func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) 
 		"onboarding-command-btn",
 		"in (group.items || [])",
 		`x-text="onboardingText(item.command, '')"`,
+		"onboardingLoadFailed: false",
+		"if (this.onboardingLoadFailed) return this.defaultOnboardingManifest();",
+		"this.mobileTab = 'chat';",
 		"e.key === 'Escape'",
 	} {
 		if !strings.Contains(body, token) {

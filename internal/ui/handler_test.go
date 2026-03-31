@@ -113,11 +113,12 @@ func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
 	body := rec.Body.String()
 	for _, token := range []string{
 		`<template x-if="showOnboardingDrawer">`,
-		`<aside class="onboarding-drawer"`,
-		`class="agent-onboarding-btn" @click="openOnboardingDrawer()"`,
+		`<aside class="onboarding-drawer" x-ref="onboardingDrawer"`,
+		`class="agent-onboarding-btn" x-ref="onboardingTrigger" @click="openOnboardingDrawer()"`,
 		`async loadOnboardingManifest(force)`,
 		`const resp = await fetch('/ui/api/onboarding-manifest', { headers });`,
 		`throw new Error('invalid onboarding manifest');`,
+		`@keydown.tab.prevent="cycleOnboardingFocus($event)"`,
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)
@@ -144,9 +145,18 @@ func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) 
 		"in (group.items || [])",
 		`x-text="onboardingText(item.command, '')"`,
 		"onboardingLoadFailed: false",
+		"_onboardingReturnFocus: null",
+		"onboardingFocusableElements()",
+		"focusOnboardingDrawer()",
+		"cycleOnboardingFocus(e)",
+		"restoreOnboardingFocus()",
 		"if (this.onboardingLoadFailed) return this.defaultOnboardingManifest();",
+		"this._onboardingReturnFocus = document.activeElement",
 		"this.mobileTab = 'chat';",
-		"e.key === 'Escape'",
+		"restoreTarget && restoreTarget.isConnected",
+		"if (this.showOnboardingDrawer)",
+		"key === 'escape'",
+		"key === 'k'",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)

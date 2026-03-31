@@ -2248,7 +2248,7 @@ body {
           </div>
         </div>
         <div class="agent-header-actions">
-          <button class="agent-onboarding-btn" @click="openOnboardingDrawer()" :title="t('onboarding_title')">
+          <button class="agent-onboarding-btn" x-ref="onboardingTrigger" @click="openOnboardingDrawer()" :title="t('onboarding_title')">
             <span x-text="t('onboarding_title')"></span>
           </button>
           <button class="agent-support-btn"
@@ -2859,13 +2859,13 @@ body {
   <template x-if="showOnboardingDrawer">
     <div>
       <div class="onboarding-overlay" @click="closeOnboardingDrawer()"></div>
-      <aside class="onboarding-drawer" role="dialog" aria-modal="true" :aria-label="t('onboarding_title')">
+      <aside class="onboarding-drawer" x-ref="onboardingDrawer" role="dialog" aria-modal="true" :aria-label="t('onboarding_title')" tabindex="-1" @keydown.tab.prevent="cycleOnboardingFocus($event)">
         <div class="onboarding-drawer-header">
           <div>
-            <h3 class="onboarding-drawer-title" x-text="t('onboarding_title')"></h3>
+            <h3 class="onboarding-drawer-title" x-text="onboardingText(((onboardingLocaleData() || {}).title), t('onboarding_title'))"></h3>
             <p class="onboarding-drawer-subtitle" x-text="t('onboarding_subtitle')"></p>
           </div>
-          <button class="onboarding-close-btn" @click="closeOnboardingDrawer()" :title="t('cancel')">&times;</button>
+          <button class="onboarding-close-btn" x-ref="onboardingCloseBtn" @click="closeOnboardingDrawer()" :title="t('cancel')">&times;</button>
         </div>
 
         <div class="onboarding-tabs">
@@ -3710,6 +3710,7 @@ function aimaApp() {
     onboardingLoading: false,
     onboardingLoadFailed: false,
     onboardingError: '',
+    _onboardingReturnFocus: null,
     openclaw: {
       connected: false,
       gatewayLive: false,
@@ -3904,6 +3905,14 @@ function aimaApp() {
     },
 
     onboardingLocaleKey() {
+      const manifest = this.resolvedOnboardingManifest();
+      if (manifest && manifest.locales && typeof manifest.locales === 'object') {
+        if (manifest.locales[this.lang]) return this.lang;
+        if (manifest.default_locale && manifest.locales[manifest.default_locale]) return manifest.default_locale;
+        if (manifest.locales.en) return 'en';
+        const localeKeys = Object.keys(manifest.locales);
+        if (localeKeys.length) return localeKeys[0];
+      }
       return this.lang === 'zh' ? 'zh' : 'en';
     },
 
@@ -3994,6 +4003,51 @@ function aimaApp() {
       return manifest.locales[locale] || manifest.locales.en || manifest.locales.zh || null;
     },
 
+    onboardingFocusableElements() {
+      if (!this.$refs.onboardingDrawer) return [];
+      return Array.from(this.$refs.onboardingDrawer.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => el && typeof el.focus === 'function' && !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true' && el.offsetParent !== null);
+    },
+
+    focusOnboardingDrawer() {
+      this.$nextTick(() => {
+        const focusables = this.onboardingFocusableElements();
+        const target = this.$refs.onboardingCloseBtn || focusables[0] || this.$refs.onboardingDrawer;
+        if (target && typeof target.focus === 'function') target.focus();
+      });
+    },
+
+    cycleOnboardingFocus(e) {
+      const focusables = this.onboardingFocusableElements();
+      if (!focusables.length) {
+        if (this.$refs.onboardingDrawer) this.$refs.onboardingDrawer.focus();
+        return;
+      }
+      const current = document.activeElement;
+      let idx = focusables.indexOf(current);
+      if (idx === -1) {
+        idx = e.shiftKey ? 0 : -1;
+      }
+      const nextIdx = e.shiftKey
+        ? (idx <= 0 ? focusables.length - 1 : idx - 1)
+        : (idx >= focusables.length - 1 ? 0 : idx + 1);
+      focusables[nextIdx].focus();
+    },
+
+    restoreOnboardingFocus() {
+      const restoreTarget = this._onboardingReturnFocus;
+      this._onboardingReturnFocus = null;
+      this.$nextTick(() => {
+        if (restoreTarget && restoreTarget.isConnected && typeof restoreTarget.focus === 'function') {
+          restoreTarget.focus();
+          return;
+        }
+        if (this.$refs.onboardingTrigger && typeof this.$refs.onboardingTrigger.focus === 'function') {
+          this.$refs.onboardingTrigger.focus();
+        }
+      });
+    },
+
     insertOnboardingCommand(command) {
       if (!command) return;
       this.currentView = 'chat';
@@ -4006,13 +4060,19 @@ function aimaApp() {
     },
 
     openOnboardingDrawer() {
+      this._onboardingReturnFocus = document.activeElement && typeof document.activeElement.focus === 'function'
+        ? document.activeElement
+        : null;
       this.showOnboardingDrawer = true;
       this.onboardingTab = 'quick_start';
       this.loadOnboardingManifest();
+      this.focusOnboardingDrawer();
     },
 
     closeOnboardingDrawer() {
+      if (!this.showOnboardingDrawer) return;
       this.showOnboardingDrawer = false;
+      this.restoreOnboardingFocus();
     },
 
     // Helper to get a single config value (returns string or null)
@@ -5646,12 +5706,17 @@ function aimaApp() {
 
     // Global keyboard shortcut
     handleGlobalKey(e) {
-      if (e.key === 'Escape' && this.showOnboardingDrawer) {
-        e.preventDefault();
-        this.closeOnboardingDrawer();
+      const key = String(e.key || '').toLowerCase();
+      if (this.showOnboardingDrawer) {
+        if (key === 'escape') {
+          e.preventDefault();
+          this.closeOnboardingDrawer();
+        } else if ((e.ctrlKey || e.metaKey) && key === 'k') {
+          e.preventDefault();
+        }
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      if ((e.ctrlKey || e.metaKey) && key === 'k') {
         e.preventDefault();
         if (this.$refs.chatInput) this.$refs.chatInput.focus();
       }

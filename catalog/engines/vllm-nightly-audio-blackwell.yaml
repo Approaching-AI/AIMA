@@ -19,6 +19,8 @@ patterns:
   - "^vllm-nightly-audio$"
   - "vllm-nightly-audio"
 startup:
+  command: ["qwen-asr-serve", "{{.ModelPath}}"]
+  compatibility_probe: qwen_asr_autoconfig
   env:
     VLLM_ATTENTION_BACKEND: TRITON_ATTN
   default_args:

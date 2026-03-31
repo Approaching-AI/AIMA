@@ -1,0 +1,74 @@
+kind: deployment_scenario
+metadata:
+  name: openclaw-multi-aibook
+  description: "AIBook OpenClaw speech stack: GPU ASR + local TTS on 32GB unified memory"
+
+target:
+  hardware_profile: moore-threads-m1000-soc-arm64
+  partition_strategy: ""  # no partition — both services are CPU-only native processes
+
+deployments:
+  - model: mooer-asr-1.5b
+    engine: mooer-asr-musa
+    slot: ""
+    role: primary
+    modalities: [asr]
+    config:
+      port: 32107
+      only_ast: false
+      mode: zh2en
+      model_path: /opt/mt-ai/mooer/ASR_AST_MTL
+    notes: "MUSA GPU ASR. Factory image already contains the MoOER weights and bundled runtime."
+
+  - model: litetts-mnn
+    engine: litetts
+    slot: ""
+    role: auxiliary
+    modalities: [tts]
+    config:
+      port: 32110
+      grpc_port_v1beta1: 32108
+      grpc_port: 32109
+      model_path: /opt/mt-ai/tts/litetts_serving_models/v0.4d_mnn
+    notes: "CPU-only ARM64 TTS. Factory image already contains LiteTTS MNN assets and required env vars live in engine YAML."
+
+memory_budget:
+  total_unified_mib: 32768
+  gpu_allocated_mib: 15360
+  cpu_reserved_mib: 4096
+  headroom_mib: 13312
+  notes: "MoOER ASR uses ~15GB unified GPU memory on AIBook. TTS remains CPU-only because the current catalog has no MUSA TTS variant."
+
+startup_order:
+  - step: 1
+    model: mooer-asr-1.5b
+    wait_for: health_check
+    timeout_s: 120
+    notes: "Start the GPU ASR first and wait for the service to finish MUSA warmup."
+  - step: 2
+    model: litetts-mnn
+    wait_for: port_open
+    timeout_s: 60
+    notes: "LiteTTS exposes HTTP + gRPC; waiting for the HTTP port is enough for OpenClaw speech routing."
+
+post_deploy:
+  - action: openclaw_sync
+    description: "Sync deployed AIMA providers into ~/.openclaw/openclaw.json"
+
+integrations:
+  openclaw:
+    enabled: true
+    auto_sync: true
+    proxy_port: 6188
+    routes:
+      - path: /v1/audio/transcriptions
+        models: [mooer-asr-1.5b]
+        note: "ASR transcription"
+      - path: /v1/audio/speech
+        models: [litetts-mnn]
+        note: "TTS synthesis"
+
+open_questions:
+  - question: "OpenClaw 在 AIBook 上挂 GPU ASR + 本地 TTS 时，是否仍能稳定消费 AIMA 管理的 providers？"
+    hypothesis: "可以。MoOER 提供更符合“尽量走 GPU”的 ASR 路径，而 LiteTTS 继续作为当前唯一可纳管的本地 TTS。"
+    test_method: "真机执行 openclaw.status / openclaw.sync，并通过 /v1/audio/transcriptions 与 /v1/audio/speech 端到端验证。"

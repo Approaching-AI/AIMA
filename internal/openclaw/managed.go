@@ -14,6 +14,7 @@ const managedStateVersion = 1
 type ManagedState struct {
 	Version                 int      `json:"version"`
 	LLMProvider             string   `json:"llm_provider,omitempty"`
+	MediaProvider           string   `json:"media_provider,omitempty"`
 	AudioModels             []string `json:"audio_models,omitempty"`
 	VisionModels            []string `json:"vision_models,omitempty"`
 	TTSModel                string   `json:"tts_model,omitempty"`
@@ -68,6 +69,7 @@ func (s *ManagedState) Empty() bool {
 		return true
 	}
 	return s.LLMProvider == "" &&
+		s.MediaProvider == "" &&
 		len(s.AudioModels) == 0 &&
 		len(s.VisionModels) == 0 &&
 		s.TTSModel == "" &&
@@ -81,9 +83,15 @@ func normalizeManagedState(state *ManagedState) {
 		return
 	}
 	state.Version = managedStateVersion
+	if state.ImageGenerationProvider == openAIImageProviderID {
+		state.MediaProvider = ""
+	}
 	state.AudioModels = uniqueSorted(state.AudioModels)
 	state.VisionModels = uniqueSorted(state.VisionModels)
 	state.ImageGenerationModels = uniqueSorted(state.ImageGenerationModels)
+	if state.MediaProvider != "" && len(state.AudioModels) == 0 && len(state.VisionModels) == 0 {
+		state.MediaProvider = ""
+	}
 }
 
 func legacyManagedHint(cfg map[string]any, proxyAddr string) bool {
@@ -107,6 +115,10 @@ func managedSet(values []string) map[string]struct{} {
 
 func managedOwnsTTS(state *ManagedState) bool {
 	return state != nil && state.TTSModel != ""
+}
+
+func managedOwnsMediaProvider(state *ManagedState) bool {
+	return state != nil && state.MediaProvider != ""
 }
 
 func managedOwnsImageGeneration(state *ManagedState) bool {

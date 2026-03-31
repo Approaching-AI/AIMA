@@ -19,6 +19,8 @@ patterns:
   - "^vllm-nightly-audio$"
   - "vllm-nightly-audio"
 startup:
+  command: ["qwen-asr-serve", "{{.ModelPath}}"]
+  compatibility_probe: qwen_asr_autoconfig
   init_commands:
     - "pip install librosa soundfile --quiet --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
   default_args:

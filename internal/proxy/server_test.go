@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -411,6 +413,143 @@ func TestEmbeddings_RoutesToBackend(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("POST /v1/embeddings status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestAudioSpeech_RoutesToBackend(t *testing.T) {
+	var (
+		receivedPath string
+		receivedBody string
+	)
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		data, _ := io.ReadAll(r.Body)
+		receivedBody = string(data)
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write([]byte("RIFF"))
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("litetts-mnn", &Backend{
+		ModelName:  "litetts-mnn",
+		EngineType: "litetts",
+		Address:    addr,
+		BasePath:   "/tts/api/v1",
+		Ready:      true,
+	})
+
+	handler := s.handler()
+	body := `{"model":"litetts-mnn","input":"hello","voice":"demo"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /v1/audio/speech status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedPath != "/tts/api/v1/audio/speech" {
+		t.Fatalf("backend received path %q, want %q", receivedPath, "/tts/api/v1/audio/speech")
+	}
+	if !strings.Contains(receivedBody, `"model":"litetts-mnn"`) {
+		t.Fatalf("backend body missing model, got %q", receivedBody)
+	}
+}
+
+func TestAudioTranscriptions_MultipartRoutesToBackend(t *testing.T) {
+	var (
+		receivedPath        string
+		receivedContentType string
+		receivedBody        string
+	)
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedContentType = r.Header.Get("Content-Type")
+		data, _ := io.ReadAll(r.Body)
+		receivedBody = string(data)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"text":"hello"}`)
+	})
+	defer backend.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("model", "mooer-asr-1.5b"); err != nil {
+		t.Fatalf("WriteField(model): %v", err)
+	}
+	fileWriter, err := writer.CreateFormFile("file", "sample.wav")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fileWriter.Write([]byte("RIFF....WAVE")); err != nil {
+		t.Fatalf("write file body: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close(): %v", err)
+	}
+
+	s := NewServer()
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("mooer-asr-1.5b", &Backend{
+		ModelName:  "mooer-asr-1.5b",
+		EngineType: "mooer-asr-musa",
+		Address:    addr,
+		BasePath:   "",
+		Ready:      true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /v1/audio/transcriptions status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedPath != "/v1/audio/transcriptions" {
+		t.Fatalf("backend received path %q, want %q", receivedPath, "/v1/audio/transcriptions")
+	}
+	if !strings.HasPrefix(receivedContentType, "multipart/form-data; boundary=") {
+		t.Fatalf("backend content type = %q, want multipart boundary", receivedContentType)
+	}
+	if !strings.Contains(receivedBody, "mooer-asr-1.5b") || !strings.Contains(receivedBody, "sample.wav") {
+		t.Fatalf("backend body missing multipart fields, got %q", receivedBody)
+	}
+}
+
+func TestImagesGenerations_RoutesToBackend(t *testing.T) {
+	var receivedPath string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":[{"b64_json":"abc"}]}`)
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("z-image", &Backend{
+		ModelName:  "z-image",
+		EngineType: "z-image-diffusers",
+		Address:    addr,
+		BasePath:   "",
+		Ready:      true,
+	})
+
+	handler := s.handler()
+	body := `{"model":"z-image","prompt":"draw a cat"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /v1/images/generations status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedPath != "/v1/images/generations" {
+		t.Fatalf("backend received path %q, want %q", receivedPath, "/v1/images/generations")
 	}
 }
 

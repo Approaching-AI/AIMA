@@ -33,10 +33,43 @@ if [[ ! -f "$input" ]]; then
 fi
 
 AIMA_BASE_URL="${AIMA_BASE_URL:-http://127.0.0.1:6188/v1}"
+OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+
+resolve_asr_model() {
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ.get("OPENCLAW_CONFIG_PATH", Path.home() / ".openclaw" / "openclaw.json"))
+fallback = "qwen3-asr-1.7b"
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    print(fallback)
+    raise SystemExit(0)
+
+models = (
+    data.get("tools", {})
+    .get("media", {})
+    .get("audio", {})
+    .get("models", [])
+)
+for entry in models:
+    model = entry.get("model")
+    if isinstance(model, str) and model:
+        print(model)
+        break
+else:
+    print(fallback)
+PY
+}
+
+ASR_MODEL="${AIMA_ASR_MODEL:-$(resolve_asr_model)}"
 
 # Call AIMA ASR API (OpenAI-compatible /v1/audio/transcriptions)
 result=$(curl -sS -X POST "${AIMA_BASE_URL}/audio/transcriptions" \
-  -F "model=qwen3-asr-1.7b" \
+  -F "model=${ASR_MODEL}" \
   -F "file=@${input}" \
   -F "response_format=${response_format}")
 

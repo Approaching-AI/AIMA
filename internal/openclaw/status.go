@@ -188,7 +188,7 @@ func summarizeConfigured(cfg map[string]any, managed *ManagedState, proxyAddr st
 	}
 
 	if managedOwnsTTS(managed) && currentTTSManagedByAIMA(cfg, proxyAddr) {
-		if tts := lookupMap(cfg, "messages", "tts", "openai"); tts != nil {
+		if tts := lookupTTSProvider(cfg); tts != nil {
 			summary.TTSModel = asString(tts["model"])
 		}
 	}

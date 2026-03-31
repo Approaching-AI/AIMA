@@ -71,6 +71,7 @@ func MergeAIMAConfigWithState(existing map[string]any, managed *ManagedState, re
 	next.VisionModels = mergeMediaModels(existing, "image", modelIDs(vlmFromLLMs(result.LLMModels)), managedSet(managedVisionModels(managed)), result.ProxyAddr, false)
 	mergeTTS(existing, managed, next, result)
 	mergeImageGeneration(existing, managed, next, result)
+	mergeLocalMediaProvider(existing, managed, next, result)
 	mergeMCPServer(existing, managed, next, result)
 
 	pruneEmptyMaps(existing)
@@ -108,11 +109,13 @@ func mergeTTS(cfg map[string]any, managed, next *ManagedState, result *SyncResul
 	messages := ensureMap(cfg, "messages")
 	messages["tts"] = map[string]any{
 		"provider": "openai",
-		"openai": map[string]any{
-			"apiKey":  directToolAPIKey(result.APIKey),
-			"baseUrl": result.ProxyAddr,
-			"model":   result.TTSModel.ID,
-			"voice":   "default",
+		"providers": map[string]any{
+			"openai": map[string]any{
+				"apiKey":  directToolAPIKey(result.APIKey),
+				"baseUrl": result.ProxyAddr,
+				"model":   result.TTSModel.ID,
+				"voice":   "default",
+			},
 		},
 	}
 	next.TTSModel = result.TTSModel.ID
@@ -148,7 +151,13 @@ func canManageImageGeneration(cfg map[string]any, managed *ManagedState) bool {
 	if managedOwnsImageGeneration(managed) {
 		return true
 	}
-	return !hasAgentDefaultModel(cfg, "imageGenerationModel") && lookupMap(cfg, "models", "providers", openAIImageProviderID) == nil
+	if hasAgentDefaultModel(cfg, "imageGenerationModel") {
+		return false
+	}
+	if lookupMap(cfg, "models", "providers", openAIImageProviderID) == nil {
+		return true
+	}
+	return managedOwnsMediaProvider(managed)
 }
 
 func removeImageGeneration(cfg map[string]any, managed *ManagedState) {
@@ -216,7 +225,35 @@ func buildImageGenProviderModels(models []ImageGenEntry) []any {
 			"input":         []string{"text"},
 			"contextWindow": 8192,
 			"maxTokens":     1024,
-			"cost":          map[string]any{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+			"cost":          zeroCost(),
+		})
+	}
+	return out
+}
+
+func buildLocalMediaProviderModels(result *SyncResult) []any {
+	if result == nil {
+		return nil
+	}
+	out := make([]any, 0, len(result.ASRModels)+len(vlmFromLLMs(result.LLMModels)))
+	for _, model := range result.ASRModels {
+		out = append(out, map[string]any{
+			"id":            model.ID,
+			"name":          formatDisplayName(model.ID, "asr"),
+			"input":         []string{"text"},
+			"contextWindow": 8192,
+			"maxTokens":     1024,
+			"cost":          zeroCost(),
+		})
+	}
+	for _, model := range vlmFromLLMs(result.LLMModels) {
+		out = append(out, map[string]any{
+			"id":            model.ID,
+			"name":          model.Name,
+			"input":         append([]string(nil), model.Input...),
+			"contextWindow": model.ContextWindow,
+			"maxTokens":     model.MaxTokens,
+			"cost":          zeroCost(),
 		})
 	}
 	return out
@@ -276,6 +313,29 @@ func mergeMediaModels(cfg map[string]any, key string, desired []string, owned ma
 	section["models"] = models
 	media[key] = section
 	return desired
+}
+
+func mergeLocalMediaProvider(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {
+	if result == nil {
+		return
+	}
+	if managedOwnsImageGeneration(next) {
+		return
+	}
+	needsProvider := len(next.AudioModels) > 0 || len(next.VisionModels) > 0
+	provider := lookupMap(cfg, "models", "providers", openAIImageProviderID)
+	if !needsProvider {
+		if managedOwnsMediaProvider(managed) && providerManagedByAIMA(provider, result.ProxyAddr) {
+			removeProviderIfPresent(cfg, openAIImageProviderID)
+		}
+		return
+	}
+	if provider != nil && !managedOwnsMediaProvider(managed) {
+		return
+	}
+	providers := ensureMap(ensureMap(cfg, "models"), "providers")
+	providers[openAIImageProviderID] = buildProviderConfig(result.ProxyAddr, directToolAPIKey(result.APIKey), buildLocalMediaProviderModels(result))
+	next.MediaProvider = openAIImageProviderID
 }
 
 func keepUnmanagedMediaModels(section map[string]any, owned map[string]struct{}, proxyAddr string, allowLegacy bool) []any {
@@ -339,7 +399,7 @@ func removeAIMATTS(cfg map[string]any, managed *ManagedState, proxyAddr string) 
 }
 
 func currentTTSManagedByAIMA(cfg map[string]any, proxyAddr string) bool {
-	openai := lookupMap(cfg, "messages", "tts", "openai")
+	openai := lookupTTSProvider(cfg)
 	if openai == nil {
 		return false
 	}
@@ -348,6 +408,13 @@ func currentTTSManagedByAIMA(cfg map[string]any, proxyAddr string) bool {
 	}
 	env, _ := cfg["env"].(map[string]any)
 	return normalizeURL(asString(env["OPENAI_TTS_BASE_URL"])) == normalizeURL(proxyAddr)
+}
+
+func lookupTTSProvider(cfg map[string]any) map[string]any {
+	if provider := lookupMap(cfg, "messages", "tts", "providers", "openai"); provider != nil {
+		return provider
+	}
+	return lookupMap(cfg, "messages", "tts", "openai")
 }
 
 func providerManagedByAIMA(provider map[string]any, proxyAddr string) bool {
@@ -362,6 +429,10 @@ func directToolAPIKey(apiKey string) string {
 		return trimmed
 	}
 	return localOpenAIAPIKeyFallback
+}
+
+func zeroCost() map[string]any {
+	return map[string]any{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
 }
 
 func copyMap(raw any) map[string]any {

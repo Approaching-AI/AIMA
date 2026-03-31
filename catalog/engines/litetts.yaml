@@ -55,7 +55,7 @@ startup:
     grpc_port: 32109
     port: 32110  # AIMA uses this for health check URL; actual flag is --http_port in command
   health_check:
-    path: /
+    path: /tts/api/v1/voices  # GET / and /health both 404 on factory image; voices is the stable 200 probe
     timeout_s: 60
   log_patterns:
     phases:

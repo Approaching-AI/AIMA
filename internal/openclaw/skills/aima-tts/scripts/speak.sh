@@ -28,6 +28,33 @@ while [[ $# -gt 0 ]]; do
 done
 
 AIMA_BASE_URL="${AIMA_BASE_URL:-http://127.0.0.1:6188/v1}"
+OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+
+resolve_tts_model() {
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ.get("OPENCLAW_CONFIG_PATH", Path.home() / ".openclaw" / "openclaw.json"))
+fallback = "qwen3-tts-0.6b"
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    print(fallback)
+    raise SystemExit(0)
+
+tts = data.get("messages", {}).get("tts", {})
+providers = tts.get("providers", {})
+model = providers.get("openai", {}).get("model") or tts.get("openai", {}).get("model")
+if isinstance(model, str) and model:
+    print(model)
+else:
+    print(fallback)
+PY
+}
+
+TTS_MODEL="${AIMA_TTS_MODEL:-$(resolve_tts_model)}"
 
 outdir="${HOME}/.openclaw/workspace/audio"
 mkdir -p "$outdir"
@@ -36,7 +63,7 @@ outpath="${outdir}/${filename}"
 # Call AIMA TTS API (OpenAI-compatible /v1/audio/speech)
 curl -sS -X POST "${AIMA_BASE_URL}/audio/speech" \
   -H "Content-Type: application/json" \
-  -d "{\"model\": \"qwen3-tts-0.6b\", \"input\": $(printf '%s' "$text" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'), \"voice\": \"${voice}\"}" \
+  -d "{\"model\": \"${TTS_MODEL}\", \"input\": $(printf '%s' "$text" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'), \"voice\": \"${voice}\"}" \
   -o "$outpath"
 
 size=$(stat -c%s "$outpath" 2>/dev/null || stat -f%z "$outpath" 2>/dev/null || echo 0)

@@ -616,6 +616,26 @@ func TestPathLooksUsableSafetensorsRejectsBrokenShardSymlink(t *testing.T) {
 	}
 }
 
+func TestPathLooksUsableONNXDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "model_quant.onnx"), []byte("onnx"), 0o644); err != nil {
+		t.Fatalf("write onnx: %v", err)
+	}
+	if !PathLooksUsable(dir, "onnx") {
+		t.Fatal("expected ONNX directory to be treated as usable")
+	}
+}
+
+func TestPathLooksUsableMNNDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "decoder.mnn"), []byte("mnn"), 0o644); err != nil {
+		t.Fatalf("write mnn: %v", err)
+	}
+	if !PathLooksUsable(dir, "mnn") {
+		t.Fatal("expected MNN directory to be treated as usable")
+	}
+}
+
 func TestPathLooksCompatibleRejectsQuantizationMismatch(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"model_type":"qwen3","torch_dtype":"bfloat16"}`), 0o644); err != nil {

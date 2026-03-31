@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -194,9 +196,24 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/v1/models", s.handleModels)
-	mux.HandleFunc("/v1/chat/completions", s.handleInference)
-	mux.HandleFunc("/v1/completions", s.handleInference)
-	mux.HandleFunc("/v1/embeddings", s.handleInference)
+	for _, path := range []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+	} {
+		mux.HandleFunc(path, s.handleInference)
+	}
+	if s.extraRoutes == nil {
+		// OpenClaw installs protocol-aware handlers for these paths. Only use the
+		// generic passthrough fallback when no extra route set is mounted.
+		for _, path := range []string{
+			"/v1/audio/speech",
+			"/v1/audio/transcriptions",
+			"/v1/images/generations",
+		} {
+			mux.HandleFunc(path, s.handleInference)
+		}
+	}
 
 	if s.extraRoutes != nil {
 		s.extraRoutes(mux)
@@ -330,21 +347,19 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	var req struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON in request body")
+	model, err := extractModelFromRequest(r.Header.Get("Content-Type"), body)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
-	backend := s.resolveBackend(req.Model)
+	backend := s.resolveBackend(model)
 	if backend == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]any{
 			"error": map[string]string{
-				"message": fmt.Sprintf("model %q not found; available models: %s", req.Model, s.availableModels()),
+				"message": fmt.Sprintf("model %q not found; available models: %s", model, s.availableModels()),
 				"type":    "model_not_found",
 			},
 		})
@@ -355,7 +370,7 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]any{
 			"error": map[string]string{
-				"message": fmt.Sprintf("model %q is not ready", req.Model),
+				"message": fmt.Sprintf("model %q is not ready", model),
 				"type":    "service_unavailable",
 			},
 		})
@@ -398,10 +413,62 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 	slog.Info("proxy request",
 		"method", r.Method,
 		"path", r.URL.Path,
-		"model", req.Model,
+		"model", model,
 		"backend", backend.Address,
 		"latency", time.Since(start),
 	)
+}
+
+func extractModelFromRequest(contentType string, body []byte) (string, error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", fmt.Errorf("invalid content type")
+	}
+
+	switch mediaType {
+	case "", "application/json":
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", fmt.Errorf("invalid JSON in request body")
+		}
+		return req.Model, nil
+	case "application/x-www-form-urlencoded":
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			return "", fmt.Errorf("invalid form body")
+		}
+		return values.Get("model"), nil
+	case "multipart/form-data":
+		boundary := params["boundary"]
+		if boundary == "" {
+			return "", fmt.Errorf("multipart request missing boundary")
+		}
+		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return "", fmt.Errorf("invalid multipart form body")
+			}
+			if part.FormName() != "model" {
+				part.Close()
+				continue
+			}
+			data, err := io.ReadAll(io.LimitReader(part, 4096))
+			part.Close()
+			if err != nil {
+				return "", fmt.Errorf("failed to read model form field")
+			}
+			return strings.TrimSpace(string(data)), nil
+		}
+		return "", fmt.Errorf("missing model field in request body")
+	default:
+		return "", fmt.Errorf("unsupported content type %q", mediaType)
+	}
 }
 
 // resolveBackend finds the backend for a model name.

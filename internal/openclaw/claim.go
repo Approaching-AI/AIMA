@@ -157,6 +157,7 @@ func claimableState(cfg map[string]any, managed *ManagedState, expected ModelSum
 	next := &ManagedState{
 		Version:                 managedStateVersion,
 		LLMProvider:             candidate.LLMProvider,
+		MediaProvider:           candidate.MediaProvider,
 		AudioModels:             append([]string(nil), candidate.AudioModels...),
 		VisionModels:            append([]string(nil), candidate.VisionModels...),
 		TTSModel:                candidate.TTSModel,
@@ -166,6 +167,9 @@ func claimableState(cfg map[string]any, managed *ManagedState, expected ModelSum
 	if managed != nil {
 		if managed.LLMProvider != "" {
 			next.LLMProvider = ""
+		}
+		if managedOwnsMediaProvider(managed) {
+			next.MediaProvider = ""
 		}
 		next.AudioModels = subtractStrings(next.AudioModels, managed.AudioModels)
 		next.VisionModels = subtractStrings(next.VisionModels, managed.VisionModels)
@@ -188,6 +192,7 @@ func limitClaimableState(cfg map[string]any, candidate *ManagedState, expected M
 	limited := &ManagedState{
 		Version:                 managedStateVersion,
 		LLMProvider:             candidate.LLMProvider,
+		MediaProvider:           candidate.MediaProvider,
 		AudioModels:             intersectStrings(candidate.AudioModels, expected.ASRModels),
 		VisionModels:            intersectStrings(candidate.VisionModels, expected.VisionModels),
 		TTSModel:                candidate.TTSModel,
@@ -203,6 +208,9 @@ func limitClaimableState(cfg map[string]any, candidate *ManagedState, expected M
 	}
 	if limited.TTSModel == "" || limited.TTSModel != expected.TTSModel {
 		limited.TTSModel = ""
+	}
+	if len(limited.AudioModels) == 0 && len(limited.VisionModels) == 0 {
+		limited.MediaProvider = ""
 	}
 	if limited.ImageGenerationProvider != "" {
 		limited.ImageGenerationModels = uniqueSorted(limited.ImageGenerationModels)
@@ -226,9 +234,14 @@ func detectLegacyState(cfg map[string]any, proxyAddr string) *ManagedState {
 	state.AudioModels = mediaModels(lookupMap(cfg, "tools", "media", "audio"), proxyAddr)
 	state.VisionModels = mediaModels(lookupMap(cfg, "tools", "media", "image"), proxyAddr)
 	if currentTTSManagedByAIMA(cfg, proxyAddr) {
-		if tts := lookupMap(cfg, "messages", "tts", "openai"); tts != nil {
+		if tts := lookupTTSProvider(cfg); tts != nil {
 			state.TTSModel = asString(tts["model"])
 		}
+	}
+	if state.ImageGenerationProvider == "" &&
+		providerManagedByAIMA(lookupMap(cfg, "models", "providers", openAIImageProviderID), proxyAddr) &&
+		(len(state.AudioModels) > 0 || len(state.VisionModels) > 0) {
+		state.MediaProvider = openAIImageProviderID
 	}
 	if providerManagedByAIMA(lookupMap(cfg, "models", "providers", openAIImageProviderID), proxyAddr) {
 		models := configuredAgentDefaultModelsForProviders(cfg, "imageGenerationModel", []string{openAIImageProviderID}, proxyAddr)
@@ -251,9 +264,11 @@ func selectClaimSections(state *ManagedState, sections []string) *ManagedState {
 		selected.LLMProvider = state.LLMProvider
 	}
 	if _, ok := allowed[claimSectionASR]; ok {
+		selected.MediaProvider = state.MediaProvider
 		selected.AudioModels = append([]string(nil), state.AudioModels...)
 	}
 	if _, ok := allowed[claimSectionVision]; ok {
+		selected.MediaProvider = state.MediaProvider
 		selected.VisionModels = append([]string(nil), state.VisionModels...)
 	}
 	if _, ok := allowed[claimSectionTTS]; ok {
@@ -271,6 +286,7 @@ func mergeManagedStates(existing, extra *ManagedState) *ManagedState {
 	next := &ManagedState{Version: managedStateVersion}
 	if existing != nil {
 		next.LLMProvider = existing.LLMProvider
+		next.MediaProvider = existing.MediaProvider
 		next.AudioModels = append(next.AudioModels, existing.AudioModels...)
 		next.VisionModels = append(next.VisionModels, existing.VisionModels...)
 		next.TTSModel = existing.TTSModel
@@ -280,6 +296,9 @@ func mergeManagedStates(existing, extra *ManagedState) *ManagedState {
 	if extra != nil {
 		if extra.LLMProvider != "" {
 			next.LLMProvider = extra.LLMProvider
+		}
+		if extra.MediaProvider != "" {
+			next.MediaProvider = extra.MediaProvider
 		}
 		next.AudioModels = append(next.AudioModels, extra.AudioModels...)
 		next.VisionModels = append(next.VisionModels, extra.VisionModels...)

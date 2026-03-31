@@ -2902,7 +2902,9 @@ func runContainerCompatibilityProbe(
 func compatibilityProbePython(probeType string) (string, bool) {
 	switch strings.TrimSpace(probeType) {
 	case "transformers_autoconfig":
-		return `import os, transformers; from transformers import AutoConfig; model_path = os.environ.get("AIMA_MODEL_PATH", "/models"); trust_remote_code = os.environ.get("AIMA_TRUST_REMOTE_CODE", "false").lower() == "true"; cfg = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=trust_remote_code); print("AIMA_COMPAT_OK transformers=%s model_type=%s" % (transformers.__version__, getattr(cfg, "model_type", "unknown")))`, true
+		return `import os, transformers; from pathlib import Path; from transformers import AutoConfig, AutoProcessor; model_path = os.environ.get("AIMA_MODEL_PATH", "/models"); trust_remote_code = os.environ.get("AIMA_TRUST_REMOTE_CODE", "false").lower() == "true"; cfg = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=trust_remote_code); model_dir = Path(model_path); processor_name = type(AutoProcessor.from_pretrained(model_path, local_files_only=True, trust_remote_code=trust_remote_code)).__name__ if any((model_dir / name).exists() for name in ("processor_config.json", "preprocessor_config.json")) else "none"; print("AIMA_COMPAT_OK transformers=%s model_type=%s processor=%s" % (transformers.__version__, getattr(cfg, "model_type", "unknown"), processor_name))`, true
+	case "qwen_asr_autoconfig":
+		return `import os, qwen_asr, transformers; from transformers import AutoConfig; model_path = os.environ.get("AIMA_MODEL_PATH", "/models"); trust_remote_code = os.environ.get("AIMA_TRUST_REMOTE_CODE", "false").lower() == "true"; cfg = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=trust_remote_code); print("AIMA_COMPAT_OK transformers=%s model_type=%s qwen_asr=%s" % (transformers.__version__, getattr(cfg, "model_type", "unknown"), getattr(qwen_asr, "__version__", "unknown")))`, true
 	default:
 		return "", false
 	}

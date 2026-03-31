@@ -536,10 +536,14 @@ func PathLooksUsable(modelPath, format string) bool {
 	switch strings.ToLower(format) {
 	case "gguf":
 		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin")
+	case "onnx":
+		return dirHasAnyExt(modelPath, ".onnx")
+	case "mnn":
+		return dirHasAnyExt(modelPath, ".mnn")
 	case "safetensors":
 		return dirHasCompleteSafetensorsModel(modelPath)
 	case "":
-		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin") || dirHasCompleteSafetensorsModel(modelPath)
+		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin", ".onnx", ".mnn") || dirHasCompleteSafetensorsModel(modelPath)
 	default:
 		return dirHasCompleteSafetensorsModel(modelPath)
 	}

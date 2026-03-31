@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,6 +68,11 @@ func (d *Deps) handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if backend.EngineType == "litetts" {
+		d.handleLiteTTS(w, r, backend, raw)
+		return
+	}
+
 	d.reverseProxy(w, r, backend.Address, body)
 }
 
@@ -87,7 +93,16 @@ func (d *Deps) handleASR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := extractModelFromMultipart(r, body)
+	upload, err := parseASRUpload(r, body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	model := ""
+	if upload != nil {
+		model = upload.Model
+	}
 	if model == "" {
 		// Try JSON body as fallback
 		var req struct {
@@ -105,6 +120,11 @@ func (d *Deps) handleASR(w http.ResponseWriter, r *http.Request) {
 	backend := d.findBackend(model)
 	if backend == nil {
 		http.Error(w, fmt.Sprintf(`{"error":"model %q not found"}`, model), http.StatusNotFound)
+		return
+	}
+
+	if isMooERBackend(backend) {
+		d.handleMooERASR(w, r, backend, upload)
 		return
 	}
 
@@ -180,41 +200,63 @@ func (d *Deps) reverseProxy(w http.ResponseWriter, r *http.Request, targetAddr s
 	proxy.ServeHTTP(w, r)
 }
 
-// extractModelFromMultipart parses the "model" field from a multipart form body.
-func extractModelFromMultipart(r *http.Request, body []byte) string {
-	ct := r.Header.Get("Content-Type")
-	if !strings.HasPrefix(ct, "multipart/form-data") {
-		return ""
+func (d *Deps) handleLiteTTS(w http.ResponseWriter, r *http.Request, backend *Backend, raw map[string]any) {
+	text, _ := raw["input"].(string)
+	if strings.TrimSpace(text) == "" {
+		http.Error(w, `{"error":"missing or invalid input field"}`, http.StatusBadRequest)
+		return
 	}
 
-	// Find boundary from content-type
-	for _, param := range strings.Split(ct, ";") {
-		param = strings.TrimSpace(param)
-		if strings.HasPrefix(param, "boundary=") {
-			boundary := strings.TrimPrefix(param, "boundary=")
-			boundary = strings.Trim(boundary, `"`)
-			return parseModelFromMultipart(string(body), boundary)
-		}
+	speaker, _ := raw["voice"].(string)
+	if speaker == "" || speaker == "default" {
+		speaker = "AIBC006_lite"
 	}
-	return ""
+
+	payload := map[string]any{
+		"text":    text,
+		"speaker": speaker,
+		"version": "v2.0",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, `{"error":"failed to encode LiteTTS request"}`, http.StatusInternalServerError)
+		return
+	}
+
+	d.forwardRequest(w, r, backend.Address, "/tts/api/v1/generate", "application/json", body)
 }
 
-// parseModelFromMultipart extracts the "model" field value from raw multipart data.
-func parseModelFromMultipart(body, boundary string) string {
-	parts := strings.Split(body, "--"+boundary)
-	for _, part := range parts {
-		if strings.Contains(part, `name="model"`) {
-			// Value is after the double CRLF
-			idx := strings.Index(part, "\r\n\r\n")
-			if idx < 0 {
-				idx = strings.Index(part, "\n\n")
-				if idx < 0 {
-					continue
-				}
-				return strings.TrimSpace(part[idx+2:])
-			}
-			return strings.TrimSpace(part[idx+4:])
+func (d *Deps) forwardRequest(w http.ResponseWriter, r *http.Request, targetAddr, targetPath, contentType string, body []byte) {
+	if !strings.HasPrefix(targetAddr, "http://") && !strings.HasPrefix(targetAddr, "https://") {
+		targetAddr = "http://" + targetAddr
+	}
+	target, err := url.Parse(targetAddr)
+	if err != nil {
+		slog.Error("openclaw proxy: invalid backend address", "addr", targetAddr, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String()+targetPath, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Warn("openclaw proxy: backend request failed", "backend", targetAddr, "path", targetPath, "err", err)
+		http.Error(w, "backend unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
 		}
 	}
-	return ""
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }

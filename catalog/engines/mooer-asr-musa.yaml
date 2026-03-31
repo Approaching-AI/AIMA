@@ -28,7 +28,7 @@ startup:
     only_ast: false
     mode: zh2en
   health_check:
-    path: /health
+    path: ""  # custom server speaks non-standard HTTP/0.9; fall back to TCP port readiness
     timeout_s: 120
   log_patterns:
     phases:

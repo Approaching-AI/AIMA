@@ -194,6 +194,100 @@ func TestSyncWritesConfig(t *testing.T) {
 	}
 }
 
+func TestSyncWritesTTSProviderSchema(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"qwen3-tts-0.6b": {ModelName: "qwen3-tts-0.6b", EngineType: "qwen-tts-fastapi", Address: "http://127.0.0.1:8003", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	tts := lookupMap(cfg, "messages", "tts")
+	if tts == nil {
+		t.Fatal("messages.tts missing after sync")
+	}
+	if _, ok := tts["openai"]; ok {
+		t.Fatalf("messages.tts.openai should not be written anymore: %v", tts)
+	}
+	openaiTTS := lookupMap(cfg, "messages", "tts", "providers", "openai")
+	if openaiTTS == nil {
+		t.Fatal("messages.tts.providers.openai missing after sync")
+	}
+	if got := openaiTTS["model"]; got != "qwen3-tts-0.6b" {
+		t.Fatalf("messages.tts.providers.openai.model = %v, want qwen3-tts-0.6b", got)
+	}
+}
+
+func TestSyncWritesLocalOpenAIProviderForASR(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"qwen3-asr-1.7b": {ModelName: "qwen3-asr-1.7b", EngineType: "qwen-asr-fastapi", Address: "http://127.0.0.1:8001", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	openai := lookupMap(cfg, "models", "providers", "openai")
+	if openai == nil {
+		t.Fatal("models.providers.openai missing after ASR sync")
+	}
+	if got := openai["baseUrl"]; got != "http://127.0.0.1:6188/v1" {
+		t.Fatalf("openai baseUrl = %v, want http://127.0.0.1:6188/v1", got)
+	}
+	if got := openai["apiKey"]; got != "local" {
+		t.Fatalf("openai apiKey = %v, want local", got)
+	}
+	models, ok := openai["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("openai models = %#v, want 1 media model", openai["models"])
+	}
+	model, ok := models[0].(map[string]any)
+	if !ok {
+		t.Fatalf("openai model[0] = %T, want map", models[0])
+	}
+	if got := model["id"]; got != "qwen3-asr-1.7b" {
+		t.Fatalf("openai model[0].id = %v, want qwen3-asr-1.7b", got)
+	}
+	if got := stringArgs(model["input"]); len(got) != 1 || got[0] != "text" {
+		t.Fatalf("openai model[0].input = %v, want [text]", got)
+	}
+
+	managed, err := ReadManagedState(configPath)
+	if err != nil {
+		t.Fatalf("ReadManagedState failed: %v", err)
+	}
+	if managed.MediaProvider != "openai" {
+		t.Fatalf("managed media provider = %q, want openai", managed.MediaProvider)
+	}
+}
+
 func TestMergeAIMAConfigImageGenUsesOpenAIProvider(t *testing.T) {
 	merged := MergeAIMAConfig(nil, &SyncResult{
 		ImageGenModels: []ImageGenEntry{{ID: "z-image"}},
@@ -383,6 +477,7 @@ func TestMergeAIMAConfigWithManagedStateRemovesOwnedSharedSections(t *testing.T)
 
 	managed := &ManagedState{
 		Version:                 managedStateVersion,
+		MediaProvider:           "openai",
 		AudioModels:             []string{"qwen3-asr-1.7b"},
 		VisionModels:            []string{"glm-4.1v-9b"},
 		TTSModel:                "qwen3-tts-0.6b",

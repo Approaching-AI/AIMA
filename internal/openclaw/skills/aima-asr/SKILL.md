@@ -1,12 +1,12 @@
 ---
 name: aima-asr
-description: Transcribe audio files using AIMA's local qwen3-asr model (speech-to-text).
+description: Transcribe audio files using AIMA's current local ASR model (speech-to-text).
 metadata: {"openclaw":{"emoji":"🎙️","requires":{"bins":["curl"]},"always":true}}
 ---
 
-# AIMA Speech-to-Text (qwen3-asr)
+# AIMA Speech-to-Text
 
-Transcribe audio files using AIMA's local ASR model.
+Transcribe audio files using the ASR model currently managed by AIMA/OpenClaw.
 
 ## Quick start
 
@@ -28,6 +28,6 @@ Transcribe audio files using AIMA's local ASR model.
 
 ## Notes
 
-- Model: `qwen3-asr-1.7b` (local, no API key needed)
+- Model: auto-detected from `~/.openclaw/openclaw.json` (override with `AIMA_ASR_MODEL`)
 - Supported formats: wav, mp3, m4a, ogg, flac
 - Runs on AIMA proxy at `http://127.0.0.1:6188/v1`

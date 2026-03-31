@@ -112,11 +112,12 @@ func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, token := range []string{
-		"agent-onboarding-btn",
-		"showOnboardingDrawer",
-		"openOnboardingDrawer()",
-		"/ui/api/onboarding-manifest",
-		"onboarding-drawer",
+		`<template x-if="showOnboardingDrawer">`,
+		`<aside class="onboarding-drawer"`,
+		`class="agent-onboarding-btn" @click="openOnboardingDrawer()"`,
+		`async loadOnboardingManifest(force)`,
+		`const resp = await fetch('/ui/api/onboarding-manifest', { headers });`,
+		`throw new Error('invalid onboarding manifest');`,
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)

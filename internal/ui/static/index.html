@@ -3776,6 +3776,9 @@ function aimaApp() {
         const resp = await fetch('/ui/api/onboarding-manifest', { headers });
         if (!resp.ok) throw new Error('onboarding manifest unavailable');
         const data = await resp.json();
+        if (!data || typeof data !== 'object' || Array.isArray(data) || !data.locales || typeof data.locales !== 'object' || Array.isArray(data.locales)) {
+          throw new Error('invalid onboarding manifest');
+        }
         this.onboardingManifest = data;
         return data;
       } catch (e) {

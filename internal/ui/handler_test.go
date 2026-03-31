@@ -143,7 +143,7 @@ func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) 
 		"resolvedOnboardingManifest()",
 		"onboarding-command-btn",
 		"in (group.items || [])",
-		`x-text="onboardingText(item.command, '')"`,
+		`x-text="onboardingText(item.label, item.command || '')"`,
 		"onboardingLoadFailed: false",
 		"_onboardingReturnFocus: null",
 		"onboardingFocusableElements()",

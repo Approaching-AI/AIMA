@@ -2051,99 +2051,6 @@ func toEngineBinarySource(src *knowledge.EngineSource) *engine.BinarySource {
 	}
 }
 
-// DownloadProgress represents the current state of an engine or model download.
-type DownloadProgress struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`                 // "engine" | "model"
-	Name       string `json:"name"`
-	Phase      string `json:"phase"`                // "starting" | "downloading" | "pulling" | "extracting" | "complete" | "failed"
-	Downloaded int64  `json:"downloaded"`            // bytes
-	Total      int64  `json:"total"`                 // bytes, -1 = unknown
-	Speed      int64  `json:"speed"`                 // bytes/sec
-	Message    string `json:"message"`
-	Error      string `json:"error,omitempty"`
-	StartedAt  int64  `json:"started_at"`            // unix ms
-}
-
-// DownloadTracker tracks active download progress in memory.
-type DownloadTracker struct {
-	mu      sync.Mutex
-	entries map[string]*DownloadProgress
-}
-
-func NewDownloadTracker() *DownloadTracker {
-	return &DownloadTracker{entries: make(map[string]*DownloadProgress)}
-}
-
-func (t *DownloadTracker) Start(id, typ, name string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.entries[id] = &DownloadProgress{
-		ID:        id,
-		Type:      typ,
-		Name:      name,
-		Phase:     "starting",
-		Total:     -1,
-		StartedAt: time.Now().UnixMilli(),
-	}
-}
-
-func (t *DownloadTracker) Update(id, phase, message string, downloaded, total, speed int64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	e, ok := t.entries[id]
-	if !ok {
-		return
-	}
-	if phase != "" {
-		e.Phase = phase
-	}
-	if message != "" {
-		e.Message = message
-	}
-	if downloaded >= 0 {
-		e.Downloaded = downloaded
-	}
-	if total >= 0 {
-		e.Total = total
-	}
-	if speed >= 0 {
-		e.Speed = speed
-	}
-}
-
-func (t *DownloadTracker) Finish(id string, err error) {
-	t.mu.Lock()
-	e, ok := t.entries[id]
-	if ok {
-		if err != nil {
-			e.Phase = "failed"
-			e.Error = err.Error()
-		} else {
-			e.Phase = "complete"
-			e.Downloaded = e.Total
-		}
-	}
-	t.mu.Unlock()
-	// Auto-cleanup after 30s
-	time.AfterFunc(30*time.Second, func() {
-		t.mu.Lock()
-		delete(t.entries, id)
-		t.mu.Unlock()
-	})
-}
-
-func (t *DownloadTracker) List() []*DownloadProgress {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	result := make([]*DownloadProgress, 0, len(t.entries))
-	for _, e := range t.entries {
-		cp := *e
-		result = append(result, &cp)
-	}
-	return result
-}
-
 // execRunner implements engine.CommandRunner using real exec.
 type execRunner struct{}
 
@@ -3618,7 +3525,7 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 // buildToolDeps wires all ToolDeps fields to real implementations.
 // All runtime variants are provided so DeployApply can select per-deployment.
 func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store, rt runtime.Runtime, nativeRt runtime.Runtime, dockerRt runtime.Runtime, k3sRt runtime.Runtime, proxyServer *proxy.Server, k3sClient *k3s.Client, dataDir string, factoryDigests map[string]string, supportView *support.Service) *mcp.ToolDeps {
-	dlTracker := NewDownloadTracker()
+	dlTracker := NewDownloadTracker(filepath.Join(dataDir, "downloads"))
 
 	scanEnginesCore := func(ctx context.Context, runtimeFilter string, autoImport bool) (json.RawMessage, error) {
 		assetPatterns := make(map[string][]string)
@@ -3721,7 +3628,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 
 	// pullModelCore extracts the model download logic so it can be reused
 	// by both PullModel and DeployApply (auto-pull).
-	pullModelCore := func(ctx context.Context, name string) error {
+	pullModelCore := func(ctx context.Context, name string, onStatus func(phase, msg string), onProgress func(downloaded, total int64)) error {
 		ma, matchedVariant := findModelAssetOrVariant(cat, name)
 		if ma == nil {
 			return fmt.Errorf("model %q not found in catalog\navailable: %s", name, catalogModelNames(cat))
@@ -3776,11 +3683,17 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := registerExistingModel(ctx, candidate, db); err != nil {
 				slog.Warn("register existing model failed", "path", candidate, "error", err)
 			}
+			if onStatus != nil {
+				onStatus("complete", "model already available locally")
+			}
 			return nil
 		}
 
 		if resolvedVariant != nil && resolvedVariant.Source != nil && resolvedVariant.Source.Type != "local_path" {
 			slog.Info("model pull: using variant source", "variant", resolvedVariant.Name, "repo", resolvedVariant.Source.Repo)
+			if onStatus != nil {
+				onStatus("downloading", "Downloading "+resolvedVariant.Name+"...")
+			}
 			sources := []model.Source{{
 				Type:         resolvedVariant.Source.Type,
 				Repo:         resolvedVariant.Source.Repo,
@@ -3791,6 +3704,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			if err := model.DownloadFromSource(ctx, sources, destPath, model.DownloadPlan{
 				Format:       requiredFormat,
 				Quantization: requiredQuantization,
+				OnProgress:   onProgress,
 			}); err != nil {
 				return fmt.Errorf("download model %s: %w", name, err)
 			}
@@ -3831,9 +3745,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 		if len(sources) == 0 {
 			return fmt.Errorf("no download source for model %q with format %q quantization %q", name, requiredFormat, requiredQuantization)
 		}
+		if onStatus != nil {
+			onStatus("downloading", "Downloading "+name+"...")
+		}
 		if err := model.DownloadFromSource(ctx, sources, destPath, model.DownloadPlan{
 			Format:       requiredFormat,
 			Quantization: requiredQuantization,
+			OnProgress:   onProgress,
 		}); err != nil {
 			return fmt.Errorf("download model %s: %w", name, err)
 		}
@@ -4059,7 +3977,26 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			return json.Marshal(models)
 		},
 		PullModel: func(ctx context.Context, name string) error {
-			return pullModelCore(ctx, name)
+			dlID := fmt.Sprintf("model-%s-%d", name, time.Now().UnixMilli())
+			dlTracker.Start(dlID, "model", name)
+			dlTracker.Update(dlID, "downloading", "Resolving model...", -1, -1, -1)
+			keepAliveStop := make(chan struct{})
+			go dlTracker.KeepAlive(dlID, keepAliveStop)
+
+			err := func() error {
+				defer close(keepAliveStop)
+				return pullModelCore(
+					ctx,
+					name,
+					func(phase, msg string) {
+						dlTracker.Update(dlID, phase, msg, -1, -1, -1)
+					},
+					newByteProgressReporter(dlTracker, dlID, "downloading"),
+				)
+			}()
+
+			dlTracker.Finish(dlID, err)
+			return err
 		},
 		ImportModel: func(ctx context.Context, path string) (json.RawMessage, error) {
 			destDir := filepath.Join(dataDir, "models")
@@ -4196,7 +4133,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					name = cat.DefaultEngine()
 				}
 			}
+			dlID := fmt.Sprintf("engine-%s-%d", name, time.Now().UnixMilli())
+			dlTracker.Start(dlID, "engine", name)
+			dlTracker.Update(dlID, "starting", "Resolving engine...", -1, -1, -1)
+			keepAliveStop := make(chan struct{})
+			go dlTracker.KeepAlive(dlID, keepAliveStop)
+			reportProgress := func(ev engine.ProgressEvent) {
+				dlTracker.Update(dlID, ev.Phase, ev.Message, ev.Downloaded, ev.Total, ev.Speed)
+				if onProgress != nil {
+					onProgress(ev)
+				}
+			}
 			err := func() error {
+				defer close(keepAliveStop)
 				hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 				ea := cat.FindEngineByName(name, hwInfo)
 				if ea == nil {
@@ -4215,13 +4164,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 					distDir := filepath.Join(dataDir, "dist", distPlatform)
 					mgr := engine.NewBinaryManager(distDir)
-					_, downloaded, err := mgr.Ensure(ctx, toEngineBinarySource(ea.Source), onProgress)
+					_, downloaded, err := mgr.Ensure(ctx, toEngineBinarySource(ea.Source), reportProgress)
 					if err != nil {
 						return err
 					}
 					_, _ = scanEnginesCore(ctx, "native", false)
-					if !downloaded && onProgress != nil {
-						onProgress(engine.ProgressEvent{Phase: "already_available", Message: "engine binary already available locally"})
+					if !downloaded {
+						reportProgress(engine.ProgressEvent{
+							Phase:      "already_available",
+							Downloaded: -1,
+							Total:      -1,
+							Speed:      -1,
+							Message:    "engine binary already available locally",
+						})
 					}
 					return nil
 				}
@@ -4237,9 +4192,13 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 							if os.Getuid() != 0 {
 								_, _ = scanEnginesCore(ctx, "container", false)
 								if dockerRt != nil {
-									if onProgress != nil {
-										onProgress(engine.ProgressEvent{Phase: "already_available", Message: "engine image already available in Docker; Docker runtime can use it without K3S import"})
-									}
+									reportProgress(engine.ProgressEvent{
+										Phase:      "already_available",
+										Downloaded: -1,
+										Total:      -1,
+										Speed:      -1,
+										Message:    "engine image already available in Docker; Docker runtime can use it without K3S import",
+									})
 									return nil
 								}
 								return fmt.Errorf("%s", k3sDockerImportHint(fullRef))
@@ -4250,15 +4209,19 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 							inContainerd = true
 						}
 						_, _ = scanEnginesCore(ctx, "container", false)
-						if onProgress != nil {
-							msg := "engine image already available locally"
-							if rt.Name() == "k3s" && inContainerd && inDocker {
-								msg = "engine image already available locally (docker + containerd)"
-							} else if rt.Name() == "k3s" && inContainerd {
-								msg = "engine image already available in K3S containerd"
-							}
-							onProgress(engine.ProgressEvent{Phase: "already_available", Message: msg})
+						msg := "engine image already available locally"
+						if rt.Name() == "k3s" && inContainerd && inDocker {
+							msg = "engine image already available locally (docker + containerd)"
+						} else if rt.Name() == "k3s" && inContainerd {
+							msg = "engine image already available in K3S containerd"
 						}
+						reportProgress(engine.ProgressEvent{
+							Phase:      "already_available",
+							Downloaded: -1,
+							Total:      -1,
+							Speed:      -1,
+							Message:    msg,
+						})
 						return nil
 					}
 					if err := engine.Pull(ctx, engine.PullOptions{
@@ -4266,7 +4229,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						Tag:        ea.Image.Tag,
 						Registries: ea.Image.Registries,
 						SizeHintMB: ea.Image.SizeApproxMB,
-						OnProgress: onProgress,
+						OnProgress: reportProgress,
 						Runner:     &execRunner{},
 					}); err != nil {
 						return err
@@ -4278,18 +4241,25 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
 					distDir := filepath.Join(dataDir, "dist", distPlatform)
 					mgr := engine.NewBinaryManager(distDir)
-					_, downloaded, err := mgr.Ensure(ctx, toEngineBinarySource(ea.Source), onProgress)
+					_, downloaded, err := mgr.Ensure(ctx, toEngineBinarySource(ea.Source), reportProgress)
 					if err != nil {
 						return err
 					}
 					_, _ = scanEnginesCore(ctx, "native", false)
-					if !downloaded && onProgress != nil {
-						onProgress(engine.ProgressEvent{Phase: "already_available", Message: "engine binary already available locally"})
+					if !downloaded {
+						reportProgress(engine.ProgressEvent{
+							Phase:      "already_available",
+							Downloaded: -1,
+							Total:      -1,
+							Speed:      -1,
+							Message:    "engine binary already available locally",
+						})
 					}
 					return nil
 				}
 				return fmt.Errorf("engine %q has no download source for platform %s/%s", name, goruntime.GOOS, goruntime.GOARCH)
 			}()
+			dlTracker.Finish(dlID, err)
 			return err
 		},
 		ImportEngine: func(ctx context.Context, path string) error {
@@ -4443,7 +4413,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 						return nil, fmt.Errorf("model %s not found locally and auto-pull is disabled", modelName)
 					}
 					slog.Info("model not found locally, auto-pulling", "model", modelName)
-					if pullErr := pullModelCore(ctx, modelName); pullErr != nil {
+					if pullErr := pullModelCore(ctx, modelName, nil, nil); pullErr != nil {
 						return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
 					}
 					// Re-resolve model path after download

@@ -159,10 +159,11 @@ type Source struct {
 	Quantization string
 }
 
-// DownloadPlan describes the minimal local/downloaded asset set needed for a model pull.
+// DownloadPlan describes the local/downloaded asset shape required for a model pull.
 type DownloadPlan struct {
 	Format       string
 	Quantization string
+	OnProgress   func(downloaded, total int64)
 }
 
 // DownloadFromSource tries each source in order until one succeeds.
@@ -184,7 +185,7 @@ func DownloadFromSource(ctx context.Context, sources []Source, destPath string, 
 		case "local_path":
 			err = fmt.Errorf("local_path source %s is not downloadable", src.Path)
 		default:
-			err = Download(ctx, DownloadOptions{URL: src.Repo, DestPath: destPath})
+			err = Download(ctx, DownloadOptions{URL: src.Repo, DestPath: destPath, OnProgress: plan.OnProgress})
 		}
 		if err == nil {
 			return nil
@@ -314,6 +315,11 @@ func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string, plan D
 		"total_size_mb", totalSize/(1024*1024),
 	)
 
+	var downloadedBase int64
+	if plan.OnProgress != nil {
+		plan.OnProgress(downloadedBase, totalSize)
+	}
+
 	// Download each file, skipping already completed ones
 	for i, f := range toDownload {
 		fileDest := filepath.Join(destPath, filepath.FromSlash(f.Path))
@@ -327,6 +333,10 @@ func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string, plan D
 				"progress", fmt.Sprintf("[%d/%d]", i+1, len(toDownload)),
 				"file", f.Path,
 			)
+			downloadedBase += f.Size
+			if plan.OnProgress != nil {
+				plan.OnProgress(downloadedBase, totalSize)
+			}
 			continue
 		}
 		fileURL := fmt.Sprintf("%s/%s/resolve/main/%s", endpoint, repo, f.Path)
@@ -335,7 +345,15 @@ func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string, plan D
 			"file", f.Path,
 			"size_mb", f.Size/(1024*1024),
 		)
-		if err := Download(ctx, DownloadOptions{URL: fileURL, DestPath: fileDest}); err != nil {
+		if err := Download(ctx, DownloadOptions{
+			URL:      fileURL,
+			DestPath: fileDest,
+			OnProgress: func(downloaded, _ int64) {
+				if plan.OnProgress != nil {
+					plan.OnProgress(downloadedBase+downloaded, totalSize)
+				}
+			},
+		}); err != nil {
 			return fmt.Errorf("download %s: %w", f.Path, err)
 		}
 		// Verify downloaded file size matches API metadata.
@@ -347,6 +365,10 @@ func downloadHFRepo(ctx context.Context, endpoint, repo, destPath string, plan D
 				}
 				return fmt.Errorf("size mismatch for %s: expected %d, got %d", f.Path, f.Size, actualSize)
 			}
+		}
+		downloadedBase += f.Size
+		if plan.OnProgress != nil {
+			plan.OnProgress(downloadedBase, totalSize)
 		}
 	}
 	return nil
@@ -493,8 +515,16 @@ func downloadModelScopeHTTP(ctx context.Context, repo, destPath string, plan Dow
 	if err != nil {
 		return err
 	}
+	var totalSize int64
+	for _, f := range selected {
+		totalSize += f.Size
+	}
 
 	idx := 0
+	var downloadedBase int64
+	if plan.OnProgress != nil {
+		plan.OnProgress(downloadedBase, totalSize)
+	}
 	for _, f := range selected {
 		idx++
 		fileDest := filepath.Join(destPath, filepath.FromSlash(f.Path))
@@ -507,6 +537,10 @@ func downloadModelScopeHTTP(ctx context.Context, repo, destPath string, plan Dow
 				"progress", fmt.Sprintf("[%d/%d]", idx, len(selected)),
 				"file", f.Path,
 			)
+			downloadedBase += f.Size
+			if plan.OnProgress != nil {
+				plan.OnProgress(downloadedBase, totalSize)
+			}
 			continue
 		}
 		fileURL := fmt.Sprintf("https://modelscope.cn/models/%s/resolve/master/%s", repo, f.Path)
@@ -515,8 +549,20 @@ func downloadModelScopeHTTP(ctx context.Context, repo, destPath string, plan Dow
 			"file", f.Path,
 			"size_mb", f.Size/(1024*1024),
 		)
-		if err := Download(ctx, DownloadOptions{URL: fileURL, DestPath: fileDest}); err != nil {
+		if err := Download(ctx, DownloadOptions{
+			URL:      fileURL,
+			DestPath: fileDest,
+			OnProgress: func(downloaded, _ int64) {
+				if plan.OnProgress != nil {
+					plan.OnProgress(downloadedBase+downloaded, totalSize)
+				}
+			},
+		}); err != nil {
 			return fmt.Errorf("download %s: %w", f.Path, err)
+		}
+		downloadedBase += f.Size
+		if plan.OnProgress != nil {
+			plan.OnProgress(downloadedBase, totalSize)
 		}
 	}
 	return nil

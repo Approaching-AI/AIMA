@@ -428,6 +428,7 @@ func TestRegisterAllTools(t *testing.T) {
 		"hardware.detect", "hardware.metrics",
 		"model.scan", "model.list", "model.pull", "model.import", "model.info",
 		"engine.scan", "engine.list", "engine.pull", "engine.remove", "engine.plan",
+		"download.list",
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.save",
 		"knowledge.generate_pod", "knowledge.list_profiles", "knowledge.list_engines", "knowledge.list_models",

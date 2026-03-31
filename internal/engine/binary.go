@@ -213,20 +213,6 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 	return fmt.Errorf("all download sources failed: %w", lastErr)
 }
 
-// progressReader wraps an io.Reader to report download progress via a callback.
-type progressReader struct {
-	reader io.Reader
-	onRead func(n int)
-}
-
-func (pr *progressReader) Read(p []byte) (int, error) {
-	n, err := pr.reader.Read(p)
-	if n > 0 {
-		pr.onRead(n)
-	}
-	return n, err
-}
-
 // downloadAndExtract downloads url to a temp file then extracts or renames it.
 // Returns the SHA256 hex digest of the downloaded content.
 func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, onProgress func(ProgressEvent)) (string, error) {

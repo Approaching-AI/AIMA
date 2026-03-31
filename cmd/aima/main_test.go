@@ -1376,6 +1376,66 @@ func TestUpdatePerfOverlayWritesObservationOutsideCatalog(t *testing.T) {
 	}
 }
 
+func TestDownloadTrackerSharesStateAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	writer := NewDownloadTracker(dir)
+	reader := NewDownloadTracker(dir)
+
+	writer.Start("model-qwen3-8b-1", "model", "qwen3-8b")
+	writer.Update("model-qwen3-8b-1", "downloading", "Downloading qwen3-8b...", 128, 512, 64)
+
+	list := reader.List()
+	if len(list) != 1 {
+		t.Fatalf("len(list) = %d, want 1", len(list))
+	}
+	got := list[0]
+	if got.ID != "model-qwen3-8b-1" {
+		t.Fatalf("id = %q, want model-qwen3-8b-1", got.ID)
+	}
+	if got.Phase != "downloading" {
+		t.Fatalf("phase = %q, want downloading", got.Phase)
+	}
+	if got.Downloaded != 128 || got.Total != 512 || got.Speed != 64 {
+		t.Fatalf("progress = (%d/%d @ %d), want (128/512 @ 64)", got.Downloaded, got.Total, got.Speed)
+	}
+}
+
+func TestDownloadTrackerPrunesExpiredEntries(t *testing.T) {
+	dir := t.TempDir()
+	tracker := NewDownloadTracker(dir)
+	now := time.Now()
+
+	tracker.store(&DownloadProgress{
+		ID:         "done",
+		Type:       "engine",
+		Name:       "vllm",
+		Phase:      "complete",
+		StartedAt:  now.Add(-2 * time.Minute).UnixMilli(),
+		UpdatedAt:  now.Add(-time.Minute).UnixMilli(),
+		FinishedAt: now.Add(-downloadFinishedRetention - time.Second).UnixMilli(),
+	})
+	tracker.store(&DownloadProgress{
+		ID:        "stale-active",
+		Type:      "model",
+		Name:      "qwen3-8b",
+		Phase:     "downloading",
+		StartedAt: now.Add(-2 * time.Minute).UnixMilli(),
+		UpdatedAt: now.Add(-downloadActiveTTL - time.Second).UnixMilli(),
+	})
+
+	list := tracker.List()
+	if len(list) != 0 {
+		t.Fatalf("len(list) = %d, want 0", len(list))
+	}
+
+	if _, err := os.Stat(tracker.pathForID("done")); !os.IsNotExist(err) {
+		t.Fatalf("completed entry still exists, err=%v", err)
+	}
+	if _, err := os.Stat(tracker.pathForID("stale-active")); !os.IsNotExist(err) {
+		t.Fatalf("stale active entry still exists, err=%v", err)
+	}
+}
+
 func seedBenchmarkPredictionTables(t *testing.T, ctx context.Context, db *state.DB) {
 	t.Helper()
 

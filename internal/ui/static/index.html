@@ -3522,6 +3522,7 @@ function aimaApp() {
     models: [],
     downloads: [],
     _downloadTimer: null,
+    _downloadPollMs: 15000,
     deployments: [],
     fleet: [],
     // View toggle (chat / support)
@@ -3605,6 +3606,7 @@ function aimaApp() {
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
+      this._downloadTimer = setInterval(() => this.pollDownloads(), this._downloadPollMs);
       this._deployPollMs = 1000;
       this._deployTimer = setInterval(() => this.pollDeployments(), 1000);
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
@@ -3618,6 +3620,7 @@ function aimaApp() {
     destroy() {
       this._timers.forEach(t => clearInterval(t));
       this._timers = [];
+      if (this._downloadTimer) clearInterval(this._downloadTimer);
       if (this._deployTimer) clearInterval(this._deployTimer);
     },
 
@@ -4480,18 +4483,21 @@ function aimaApp() {
       const hadActive = this.downloads.some(d => d.phase !== 'complete' && d.phase !== 'failed');
       this.downloads = list;
       const hasActive = list.some(d => d.phase !== 'complete' && d.phase !== 'failed');
-      // Adaptive polling: 2s when active, stop when idle
-      if (hasActive && !this._downloadTimer) {
-        this._downloadTimer = setInterval(() => this.pollDownloads(), 2000);
-      } else if (!hasActive && this._downloadTimer) {
-        clearInterval(this._downloadTimer);
-        this._downloadTimer = null;
-        // Refresh engines/models lists when downloads finish
-        if (hadActive) {
-          this.pollEngines();
-          this.pollModels();
-        }
+      this._adjustDownloadPoll(hasActive);
+      if (!hasActive && hadActive) {
+        this.pollEngines();
+        this.pollModels();
       }
+    },
+
+    _adjustDownloadPoll(fast) {
+      const targetMs = fast ? 2000 : 15000;
+      if (this._downloadTimer && this._downloadPollMs === targetMs) return;
+      if (this._downloadTimer) {
+        clearInterval(this._downloadTimer);
+      }
+      this._downloadPollMs = targetMs;
+      this._downloadTimer = setInterval(() => this.pollDownloads(), targetMs);
     },
 
     dlPercent(dl) {

@@ -366,6 +366,7 @@ type ModelVariantHardware struct {
 	GPUArch       string `yaml:"gpu_arch"`
 	GPUModel      string `yaml:"gpu_model,omitempty"`
 	VRAMMinMiB    int    `yaml:"vram_min_mib"`
+	GPUCountMin   int    `yaml:"gpu_count_min,omitempty"` // minimum GPUs required (0 = any; typically matches tensor_parallel_size)
 	UnifiedMemory *bool  `yaml:"unified_memory,omitempty"`
 }
 
@@ -1496,10 +1497,10 @@ func LoadToSQLite(ctx context.Context, db *sql.DB, cat *Catalog) error {
 					variantID = v.Name + "-" + hwID
 				}
 				_, err := tx.ExecContext(ctx,
-					`INSERT INTO model_variants (id, model_id, hardware_id, engine_type, format, default_config, expected_perf, vram_min_mib)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO model_variants (id, model_id, hardware_id, engine_type, format, default_config, expected_perf, vram_min_mib, gpu_count_min)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					variantID, id, hwID, v.Engine, v.Format,
-					string(configJSON), string(perfJSON), v.Hardware.VRAMMinMiB)
+					string(configJSON), string(perfJSON), v.Hardware.VRAMMinMiB, v.Hardware.GPUCountMin)
 				if err != nil {
 					return fmt.Errorf("insert model_variant %s: %w", variantID, err)
 				}

@@ -241,7 +241,6 @@ func isSQLiteBusy(err error) bool {
 	return strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "database is locked")
 }
 
-
 func (d *DB) Close() error {
 	return d.db.Close()
 }
@@ -291,6 +290,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v8: exploration runs and events
 	if err := d.migrateV8(ctx); err != nil {
 		return fmt.Errorf("migrate v8: %w", err)
+	}
+	// v9: model_variants.gpu_count_min for multi-GPU variant selection
+	if err := d.migrateV9(ctx); err != nil {
+		return fmt.Errorf("migrate v9: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -465,7 +468,8 @@ CREATE TABLE model_variants (
     format TEXT,
     default_config TEXT NOT NULL,
     expected_perf TEXT,
-    vram_min_mib INTEGER
+    vram_min_mib INTEGER,
+    gpu_count_min INTEGER
 );
 CREATE INDEX idx_mv_lookup ON model_variants(model_id, hardware_id, engine_type);
 
@@ -868,6 +872,56 @@ CREATE INDEX IF NOT EXISTS idx_ee_run ON exploration_events(run_id, step_index);
 		return fmt.Errorf("create v8 tables: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 8"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV9(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 9 {
+		return nil
+	}
+
+	rows, err := d.db.QueryContext(ctx, "PRAGMA table_info(model_variants)")
+	if err != nil {
+		return fmt.Errorf("inspect model_variants: %w", err)
+	}
+
+	hasGPUCountMin := false
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultV   any
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultV, &primaryKey); err != nil {
+			return fmt.Errorf("scan model_variants column: %w", err)
+		}
+		if name == "gpu_count_min" {
+			hasGPUCountMin = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate model_variants columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close model_variants column rows: %w", err)
+	}
+
+	if !hasGPUCountMin {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE model_variants ADD COLUMN gpu_count_min INTEGER`); err != nil {
+			return fmt.Errorf("add model_variants.gpu_count_min: %w", err)
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 9"); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil

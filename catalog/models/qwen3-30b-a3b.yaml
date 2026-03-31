@@ -119,6 +119,7 @@ variants:
     hardware:
       gpu_arch: MACA
       vram_min_mib: 40960
+      gpu_count_min: 2
       unified_memory: false
     engine: vllm
     format: safetensors

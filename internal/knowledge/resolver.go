@@ -11,7 +11,7 @@ import (
 // ensuring backward compatibility with callers that only set GPUArch/CPUArch.
 type HardwareInfo struct {
 	GPUArch         string
-	GPUVRAMMiB      int  // Total GPU VRAM (0 = unknown, skip VRAM checks)
+	GPUVRAMMiB      int  // Per-GPU VRAM (0 = unknown, skip VRAM checks)
 	GPUCount        int  // Number of GPUs
 	UnifiedMemory   bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
 	CPUArch         string
@@ -113,21 +113,32 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		o(&ropts)
 	}
 
+	var partitionName string
+	if pn, ok := userOverrides["partition"]; ok {
+		partitionName = fmt.Sprint(pn)
+	}
+	partition := c.findPartitionByName(hw, partitionName)
+	slot := pickSlot(partition, userOverrides)
+
+	// Slot-level GPU limits should constrain engine/variant selection, not only pod generation.
+	selectionHW := hw
+	selectionHW.GPUCount = availableGPUCount(hw, slot)
+
 	// Auto-detect engine from model variants when not specified
 	if engineType == "" {
-		inferred, err := c.InferEngineType(modelName, hw, opts...)
+		inferred, err := c.InferEngineType(modelName, selectionHW, opts...)
 		if err != nil {
 			return nil, err
 		}
 		engineType = inferred
 	}
 
-	engine, err := c.findEngine(engineType, hw)
+	engine, err := c.findEngine(engineType, selectionHW)
 	if err != nil {
 		return nil, err
 	}
 
-	model, variant, err := c.findModelVariant(modelName, engineType, engine, hw)
+	model, variant, err := c.findModelVariant(modelName, engineType, engine, selectionHW)
 	if err != nil {
 		return nil, err
 	}
@@ -147,13 +158,6 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 				variant.Format, engine.Metadata.Name, engine.Metadata.SupportedFormats)
 		}
 	}
-
-	var partitionName string
-	if pn, ok := userOverrides["partition"]; ok {
-		partitionName = fmt.Sprint(pn)
-	}
-	partition := c.findPartitionByName(hw, partitionName)
-	slot := pickSlot(partition, userOverrides)
 
 	config := make(map[string]any)
 	provenance := make(map[string]string)
@@ -366,6 +370,10 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 
 		for _, v := range ma.Variants {
 			if v.Hardware.GPUArch != hw.GPUArch && v.Hardware.GPUArch != "*" {
+				continue
+			}
+			// GPU count filter: skip variants requiring more GPUs than available
+			if v.Hardware.GPUCountMin > 0 && hw.GPUCount > 0 && hw.GPUCount < v.Hardware.GPUCountMin {
 				continue
 			}
 			engine, err := c.findEngine(v.Engine, hw)
@@ -654,8 +662,12 @@ func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *Engine
 			if rank < 0 {
 				continue
 			}
-			// VRAM filter: skip variants requiring more VRAM than available
+			// VRAM filter: skip variants requiring more VRAM than available (per-GPU)
 			if hw.GPUVRAMMiB > 0 && v.Hardware.VRAMMinMiB > 0 && v.Hardware.VRAMMinMiB > hw.GPUVRAMMiB {
+				continue
+			}
+			// GPU count filter: skip variants requiring more GPUs than available
+			if v.Hardware.GPUCountMin > 0 && hw.GPUCount > 0 && hw.GPUCount < v.Hardware.GPUCountMin {
 				continue
 			}
 			// Unified memory filter: skip mismatched variants
@@ -771,6 +783,25 @@ func pickSlot(ps *PartitionStrategy, overrides map[string]any) *PartitionSlot {
 	}
 
 	return &PartitionSlot{Name: "default"}
+}
+
+func availableGPUCount(hw HardwareInfo, slot *PartitionSlot) int {
+	slotCount := 0
+	if slot != nil {
+		slotCount = slot.GPUCount
+	}
+
+	switch {
+	case hw.GPUCount > 0 && slotCount > 0:
+		if slotCount < hw.GPUCount {
+			return slotCount
+		}
+		return hw.GPUCount
+	case slotCount > 0:
+		return slotCount
+	default:
+		return hw.GPUCount
+	}
 }
 
 // FallbackEngine is the engine type used when no better match is found.
@@ -1010,6 +1041,18 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 						key, currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
 				}
 				break // each engine uses only one gmu parameter
+			}
+		}
+	}
+
+	// GPU count check: tensor_parallel_size must not exceed the GPUs available to this slot.
+	if gpuCount := availableGPUCount(hw, resolved.Partition); gpuCount > 0 {
+		if tp, ok := resolved.Config["tensor_parallel_size"]; ok {
+			tpSize := int(toFloat64(tp))
+			if tpSize > gpuCount {
+				r.Fit = false
+				r.Reason = fmt.Sprintf("tensor_parallel_size=%d exceeds available GPU count=%d", tpSize, gpuCount)
+				return r
 			}
 		}
 	}

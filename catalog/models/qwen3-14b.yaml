@@ -45,6 +45,7 @@ variants:
     hardware:
       gpu_arch: Ada
       vram_min_mib: 16384
+      gpu_count_min: 2
       unified_memory: false
     engine: vllm
     format: safetensors

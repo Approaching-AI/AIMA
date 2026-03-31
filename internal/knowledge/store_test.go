@@ -37,7 +37,7 @@ CREATE TABLE engine_hardware_compat (engine_id TEXT NOT NULL REFERENCES engine_a
 CREATE TABLE model_assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, family TEXT, param_count TEXT, formats TEXT, sources TEXT, raw_yaml TEXT);
 CREATE INDEX idx_ma_type ON model_assets(type);
 CREATE INDEX idx_ma_family ON model_assets(family);
-CREATE TABLE model_variants (id TEXT PRIMARY KEY, model_id TEXT NOT NULL REFERENCES model_assets(id), hardware_id TEXT NOT NULL REFERENCES hardware_profiles(id), engine_type TEXT NOT NULL, format TEXT, default_config TEXT NOT NULL, expected_perf TEXT, vram_min_mib INTEGER);
+CREATE TABLE model_variants (id TEXT PRIMARY KEY, model_id TEXT NOT NULL REFERENCES model_assets(id), hardware_id TEXT NOT NULL REFERENCES hardware_profiles(id), engine_type TEXT NOT NULL, format TEXT, default_config TEXT NOT NULL, expected_perf TEXT, vram_min_mib INTEGER, gpu_count_min INTEGER);
 CREATE INDEX idx_mv_lookup ON model_variants(model_id, hardware_id, engine_type);
 CREATE TABLE partition_strategies (id TEXT PRIMARY KEY, hardware_id TEXT NOT NULL, workload_pattern TEXT NOT NULL, slots TEXT NOT NULL, raw_yaml TEXT);
 CREATE TABLE configurations (id TEXT PRIMARY KEY, hardware_id TEXT NOT NULL, engine_id TEXT NOT NULL, model_id TEXT NOT NULL, partition_slot TEXT, config TEXT NOT NULL, config_hash TEXT NOT NULL, derived_from TEXT REFERENCES configurations(id), status TEXT DEFAULT 'experiment', tags TEXT, source TEXT DEFAULT 'local', device_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -106,6 +106,14 @@ func TestLoadToSQLite(t *testing.T) {
 		t.Error("expected model variants to be loaded")
 	}
 
+	var gpuCountMin int
+	if err := db.QueryRow("SELECT gpu_count_min FROM model_variants WHERE id = ?", "test-model-8b-testarch-testengine").Scan(&gpuCountMin); err != nil {
+		t.Fatalf("query gpu_count_min: %v", err)
+	}
+	if gpuCountMin != 0 {
+		t.Errorf("gpu_count_min = %d, want 0 for default fixture", gpuCountMin)
+	}
+
 	// Verify partition strategies loaded
 	var psCount int
 	db.QueryRow("SELECT COUNT(*) FROM partition_strategies").Scan(&psCount)
@@ -132,6 +140,26 @@ func TestLoadToSQLiteIdempotent(t *testing.T) {
 	db.QueryRow("SELECT COUNT(*) FROM hardware_profiles").Scan(&hpCount)
 	if hpCount != 1 {
 		t.Errorf("hardware_profiles count = %d, want 1 (idempotent)", hpCount)
+	}
+}
+
+func TestLoadToSQLitePersistsGPUCountMin(t *testing.T) {
+	db := mustOpenDB(t)
+	cat := mustLoadCatalog(t)
+	ctx := context.Background()
+
+	cat.ModelAssets[0].Variants[0].Hardware.GPUCountMin = 2
+
+	if err := LoadToSQLite(ctx, db, cat); err != nil {
+		t.Fatalf("LoadToSQLite: %v", err)
+	}
+
+	var gpuCountMin int
+	if err := db.QueryRow("SELECT gpu_count_min FROM model_variants WHERE id = ?", "test-model-8b-testarch-testengine").Scan(&gpuCountMin); err != nil {
+		t.Fatalf("query gpu_count_min: %v", err)
+	}
+	if gpuCountMin != 2 {
+		t.Errorf("gpu_count_min = %d, want 2", gpuCountMin)
 	}
 }
 

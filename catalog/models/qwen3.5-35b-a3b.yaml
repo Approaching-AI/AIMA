@@ -112,6 +112,7 @@ variants:
     hardware:
       gpu_arch: MACA
       vram_min_mib: 40960
+      gpu_count_min: 2
       unified_memory: false
     engine: vllm
     format: safetensors
@@ -168,6 +169,7 @@ variants:
     hardware:
       gpu_arch: Ada
       vram_min_mib: 20480
+      gpu_count_min: 2
       unified_memory: false
     engine: vllm-nightly
     format: safetensors
@@ -202,6 +204,7 @@ variants:
     hardware:
       gpu_arch: DCU
       vram_min_mib: 40960
+      gpu_count_min: 2
       unified_memory: false
     engine: vllm
     format: safetensors

@@ -1328,3 +1328,188 @@ func TestFindEngineByName(t *testing.T) {
 		})
 	}
 }
+
+func TestGPUCountFiltering(t *testing.T) {
+	// Build a catalog with a multi-GPU variant (gpu_count_min: 2) and a single-GPU fallback.
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata:  EngineMetadata{Name: "eng-multi", Type: "vllm", Version: "1.0"},
+				Hardware:  EngineHardware{GPUArch: "TestArch"},
+				Amplifier: EngineAmplifier{PerformanceMultiplier: 2.0},
+			},
+			{
+				Metadata:  EngineMetadata{Name: "eng-single", Type: "single", Version: "1.0"},
+				Hardware:  EngineHardware{GPUArch: "TestArch"},
+				Amplifier: EngineAmplifier{PerformanceMultiplier: 1.0},
+			},
+		},
+		ModelAssets: []ModelAsset{{
+			Metadata: ModelMetadata{Name: "test-multi-gpu"},
+			Variants: []ModelVariant{
+				{
+					Name:     "multi-gpu-tp2",
+					Hardware: ModelVariantHardware{GPUArch: "TestArch", VRAMMinMiB: 4096, GPUCountMin: 2},
+					Engine:   "eng-multi",
+					Format:   "safetensors",
+					DefaultConfig: map[string]any{
+						"tensor_parallel_size": 2,
+						"dtype":                "bfloat16",
+					},
+				},
+				{
+					Name:     "single-gpu",
+					Hardware: ModelVariantHardware{GPUArch: "TestArch", VRAMMinMiB: 4096},
+					Engine:   "eng-single",
+					Format:   "safetensors",
+					DefaultConfig: map[string]any{
+						"dtype": "float16",
+					},
+				},
+			},
+		}},
+		PartitionStrategies: []PartitionStrategy{{
+			Metadata: PartitionMetadata{Name: "test-multi-slot"},
+			Target: PartitionTarget{
+				HardwareProfile: "*",
+				WorkloadPattern: "single_model",
+			},
+			Slots: []PartitionSlotDef{
+				{Name: "primary", GPU: SlotGPU{Count: 2}},
+				{Name: "secondary", GPU: SlotGPU{Count: 1}},
+			},
+		}},
+	}
+
+	t.Run("2 GPUs selects multi-GPU variant", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, GPUCount: 2}
+		engine, err := cat.InferEngineType("test-multi-gpu", hw)
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		if engine != "eng-multi" {
+			t.Errorf("engine = %q, want eng-multi", engine)
+		}
+		resolved, err := cat.Resolve(hw, "test-multi-gpu", engine, nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if resolved.Config["tensor_parallel_size"] != 2 {
+			t.Errorf("tensor_parallel_size = %v, want 2", resolved.Config["tensor_parallel_size"])
+		}
+	})
+
+	t.Run("1 GPU skips multi-GPU variant", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, GPUCount: 1}
+		engine, err := cat.InferEngineType("test-multi-gpu", hw)
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		if engine != "eng-single" {
+			t.Errorf("engine = %q, want eng-single (multi-GPU variant should be filtered)", engine)
+		}
+		resolved, err := cat.Resolve(hw, "test-multi-gpu", engine, nil)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if _, has := resolved.Config["tensor_parallel_size"]; has {
+			t.Errorf("single-GPU variant should not have tensor_parallel_size")
+		}
+	})
+
+	t.Run("GPUCount=0 (unknown) does not filter", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, GPUCount: 0}
+		engine, err := cat.InferEngineType("test-multi-gpu", hw)
+		if err != nil {
+			t.Fatalf("InferEngineType: %v", err)
+		}
+		// eng-multi has higher multiplier; GPUCount=0 means unknown, should not filter
+		if engine != "eng-multi" {
+			t.Errorf("engine = %q, want eng-multi (GPUCount=0 should not filter)", engine)
+		}
+	})
+
+	t.Run("slot GPU count constrains variant selection", func(t *testing.T) {
+		hw := HardwareInfo{GPUArch: "TestArch", GPUVRAMMiB: 8192, GPUCount: 2}
+		resolved, err := cat.Resolve(hw, "test-multi-gpu", "", map[string]any{
+			"partition": "test-multi-slot",
+			"slot":      "secondary",
+		})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if resolved.Engine != "eng-single" {
+			t.Errorf("engine = %q, want eng-single for 1-GPU slot", resolved.Engine)
+		}
+		if resolved.Partition == nil || resolved.Partition.GPUCount != 1 {
+			t.Fatalf("partition GPUCount = %+v, want 1-GPU slot", resolved.Partition)
+		}
+		if _, has := resolved.Config["tensor_parallel_size"]; has {
+			t.Errorf("single-GPU slot should not select TP=2 variant")
+		}
+	})
+}
+
+func TestCheckFitTPExceedsGPUCount(t *testing.T) {
+	t.Run("TP=2 with 1 GPU rejects", func(t *testing.T) {
+		resolved := &ResolvedConfig{
+			Config: map[string]any{"tensor_parallel_size": 2},
+		}
+		hw := HardwareInfo{GPUCount: 1, GPUVRAMMiB: 24576}
+		fit := CheckFit(resolved, hw)
+		if fit.Fit {
+			t.Fatal("expected Fit=false for TP=2 on 1 GPU")
+		}
+		if !strings.Contains(fit.Reason, "tensor_parallel_size=2") || !strings.Contains(fit.Reason, "GPU count=1") {
+			t.Errorf("unexpected reason: %q", fit.Reason)
+		}
+	})
+
+	t.Run("TP=2 with 2 GPUs passes", func(t *testing.T) {
+		resolved := &ResolvedConfig{
+			Config: map[string]any{"tensor_parallel_size": 2},
+		}
+		hw := HardwareInfo{GPUCount: 2, GPUVRAMMiB: 24576}
+		fit := CheckFit(resolved, hw)
+		if !fit.Fit {
+			t.Fatalf("expected Fit=true for TP=2 on 2 GPUs, got Reason=%q", fit.Reason)
+		}
+	})
+
+	t.Run("TP=2 with GPUCount=0 (unknown) passes", func(t *testing.T) {
+		resolved := &ResolvedConfig{
+			Config: map[string]any{"tensor_parallel_size": 2},
+		}
+		hw := HardwareInfo{GPUCount: 0, GPUVRAMMiB: 24576}
+		fit := CheckFit(resolved, hw)
+		if !fit.Fit {
+			t.Fatalf("expected Fit=true when GPUCount unknown, got Reason=%q", fit.Reason)
+		}
+	})
+
+	t.Run("TP=2 with 2 GPUs but 1-GPU slot rejects", func(t *testing.T) {
+		resolved := &ResolvedConfig{
+			Config:    map[string]any{"tensor_parallel_size": 2},
+			Partition: &PartitionSlot{Name: "secondary", GPUCount: 1},
+		}
+		hw := HardwareInfo{GPUCount: 2, GPUVRAMMiB: 24576}
+		fit := CheckFit(resolved, hw)
+		if fit.Fit {
+			t.Fatal("expected Fit=false for TP=2 on 1-GPU slot")
+		}
+		if !strings.Contains(fit.Reason, "GPU count=1") {
+			t.Errorf("unexpected reason: %q", fit.Reason)
+		}
+	})
+
+	t.Run("no TP config passes", func(t *testing.T) {
+		resolved := &ResolvedConfig{
+			Config: map[string]any{"dtype": "float16"},
+		}
+		hw := HardwareInfo{GPUCount: 1, GPUVRAMMiB: 8192}
+		fit := CheckFit(resolved, hw)
+		if !fit.Fit {
+			t.Fatalf("expected Fit=true without TP config, got Reason=%q", fit.Reason)
+		}
+	})
+}

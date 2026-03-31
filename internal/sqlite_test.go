@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -22,6 +23,45 @@ func TestOpenClose(t *testing.T) {
 	db := mustOpen(t)
 	if db == nil {
 		t.Fatal("expected non-nil DB")
+	}
+}
+
+func TestSchemaIncludesModelVariantGPUCountMin(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	rows, err := db.RawDB().QueryContext(ctx, "PRAGMA table_info(model_variants)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(model_variants): %v", err)
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultVal any
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &primaryKey); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		if name == "gpu_count_min" {
+			found = true
+			if !strings.EqualFold(typ, "INTEGER") {
+				t.Errorf("gpu_count_min type = %q, want INTEGER", typ)
+			}
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+	if !found {
+		t.Fatal("expected model_variants.gpu_count_min column")
 	}
 }
 

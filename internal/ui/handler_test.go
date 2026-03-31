@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -60,6 +61,37 @@ func TestRegisterRoutes_OnboardingManifest(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != `{"version":"2026-03-31.1","locales":{"zh":{"title":"新手指南"}}}` {
 		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestRegisterRoutes_OnboardingManifestProviderError(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(&Deps{
+		OnboardingManifest: func(ctx context.Context) (json.RawMessage, error) {
+			_ = ctx
+			return nil, errors.New("manifest unavailable")
+		},
+	})(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/api/onboarding-manifest", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content-type = %q, want application/json", got)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if got := body["error"]; got != "manifest unavailable" {
+		t.Fatalf("error = %q, want manifest unavailable", got)
 	}
 }
 

@@ -47,6 +47,28 @@ deployments:
       port: 8188
     notes: "Diffusers-based image generation. Returns base64 PNG via OpenAI images/generations API."
 
+startup_order:
+  - step: 1
+    model: qwen3.5-9b
+    wait_for: health_check
+    timeout_s: 240
+    notes: "Start the primary LLM/VLM first and wait for real readiness before adding downstream modalities."
+  - step: 2
+    model: qwen3-tts-0.6b
+    wait_for: port_open
+    timeout_s: 60
+    notes: "TTS is lightweight; once port 8002 is open OpenClaw can route speech synthesis."
+  - step: 3
+    model: qwen3-asr-1.7b
+    wait_for: health_check
+    timeout_s: 240
+    notes: "ASR uses a custom audio-enabled vLLM image and should block the scenario if readiness fails."
+  - step: 4
+    model: z-image
+    wait_for: port_open
+    timeout_s: 180
+    notes: "Image generation has the heaviest cold path after the LLM; wait for the HTTP port before sync."
+
 post_deploy:
   - action: openclaw_sync
     description: "Sync all deployed models to ~/.openclaw/openclaw.json as AIMA providers"

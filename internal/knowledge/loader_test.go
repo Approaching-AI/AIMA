@@ -346,7 +346,7 @@ func TestScenarioNewFields(t *testing.T) {
 		}
 	}
 
-	// openclaw-multi should NOT have these fields (they're optional)
+	// openclaw-multi should expose startup_order but still omit optional memory/alternatives
 	var openclaw *DeploymentScenario
 	for i := range cat.DeploymentScenarios {
 		if cat.DeploymentScenarios[i].Metadata.Name == "openclaw-multi" {
@@ -360,8 +360,15 @@ func TestScenarioNewFields(t *testing.T) {
 	if openclaw.MemoryBudget != nil {
 		t.Error("openclaw-multi should not have memory_budget")
 	}
-	if len(openclaw.StartupOrder) != 0 {
-		t.Error("openclaw-multi should not have startup_order")
+	if len(openclaw.StartupOrder) != 4 {
+		t.Errorf("expected openclaw-multi to have 4 startup_order steps, got %d", len(openclaw.StartupOrder))
+	} else {
+		if openclaw.StartupOrder[0].Model != "qwen3.5-9b" {
+			t.Errorf("expected first openclaw startup step model to be qwen3.5-9b, got %s", openclaw.StartupOrder[0].Model)
+		}
+		if openclaw.StartupOrder[0].WaitFor != "health_check" {
+			t.Errorf("expected first openclaw startup step wait_for=health_check, got %s", openclaw.StartupOrder[0].WaitFor)
+		}
 	}
 	if len(openclaw.AlternativeConfigs) != 0 {
 		t.Error("openclaw-multi should not have alternative_configs")

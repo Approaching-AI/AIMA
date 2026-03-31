@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -485,6 +486,189 @@ func TestFindModelDirPrefersCompatibleAliasDirectory(t *testing.T) {
 	got := findModelDir("qwen3-30b-a3b", dataDir, "safetensors", "gptq")
 	if got != aliasDir {
 		t.Fatalf("findModelDir() = %q, want %q", got, aliasDir)
+	}
+}
+
+func TestFindModelDirRejectsIncompleteExactDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	exactDir := filepath.Join(dataDir, "models", "qwen3-30b-a3b")
+	if err := os.MkdirAll(exactDir, 0o755); err != nil {
+		t.Fatalf("mkdir exact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(exactDir, "config.json"), []byte(`{"model_type":"qwen3"}`), 0o644); err != nil {
+		t.Fatalf("write exact config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(exactDir, "tokenizer.json"), []byte(`{"version":"1.0"}`), 0o644); err != nil {
+		t.Fatalf("write exact tokenizer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(exactDir, "model.safetensors.partial"), []byte("partial"), 0o644); err != nil {
+		t.Fatalf("write exact partial: %v", err)
+	}
+
+	aliasDir := filepath.Join(dataDir, "models", "Qwen3-30B-A3B-GPTQ-Int4")
+	if err := os.MkdirAll(aliasDir, 0o755); err != nil {
+		t.Fatalf("mkdir alias dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "config.json"), []byte(`{"model_type":"qwen3"}`), 0o644); err != nil {
+		t.Fatalf("write alias config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "quantize_config.json"), []byte(`{"bits":4,"quant_method":"gptq"}`), 0o644); err != nil {
+		t.Fatalf("write alias quantize config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "tokenizer.json"), []byte(`{"version":"1.0"}`), 0o644); err != nil {
+		t.Fatalf("write alias tokenizer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "model.safetensors"), []byte("weights"), 0o644); err != nil {
+		t.Fatalf("write alias weights: %v", err)
+	}
+
+	got := findModelDir("qwen3-30b-a3b", dataDir, "safetensors", "gptq")
+	if got != aliasDir {
+		t.Fatalf("findModelDir() = %q, want %q", got, aliasDir)
+	}
+}
+
+func TestFindModelDirPreservesUnreadableExactDirectory(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("permission semantics differ on windows")
+	}
+
+	dataDir := t.TempDir()
+	exactDir := filepath.Join(dataDir, "models", "qwen3-30b-a3b")
+	if err := os.MkdirAll(exactDir, 0o755); err != nil {
+		t.Fatalf("mkdir exact dir: %v", err)
+	}
+	filePath := filepath.Join(exactDir, "config.json")
+	if err := os.WriteFile(filePath, []byte(`{"model_type":"qwen3"}`), 0o000); err != nil {
+		t.Fatalf("write unreadable config: %v", err)
+	}
+	defer os.Chmod(filePath, 0o644)
+
+	got := findModelDir("qwen3-30b-a3b", dataDir, "safetensors", "gptq")
+	if got != exactDir {
+		t.Fatalf("findModelDir() = %q, want unreadable exact path %q", got, exactDir)
+	}
+}
+
+func TestApplyScenarioSkipsRemainingDeploymentsAndPostDeployAfterWaitFailure(t *testing.T) {
+	cat := &knowledge.Catalog{
+		DeploymentScenarios: []knowledge.DeploymentScenario{{
+			Metadata: knowledge.ScenarioMetadata{Name: "demo"},
+			Deployments: []knowledge.ScenarioDeployment{
+				{Model: "model-a", Engine: "engine-a"},
+				{Model: "model-b", Engine: "engine-b"},
+			},
+			PostDeploy: []knowledge.ScenarioAction{
+				{Action: "openclaw_sync"},
+			},
+			StartupOrder: []knowledge.ScenarioStartupStep{
+				{Step: 1, Model: "model-a", WaitFor: "health_check", TimeoutS: 1},
+				{Step: 2, Model: "model-b", WaitFor: "health_check", TimeoutS: 1},
+			},
+		}},
+	}
+
+	deployCalls := 0
+	deps := &mcp.ToolDeps{
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			deployCalls++
+			if model != "model-a" {
+				t.Fatalf("unexpected DeployApply for %s", model)
+			}
+			return json.RawMessage(`{"name":"model-a-engine-a"}`), nil
+		},
+		DeployStatus: func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"failed","message":"boom"}`), nil
+		},
+		OpenClawSync: func(context.Context, bool) (json.RawMessage, error) {
+			t.Fatal("post-deploy action should be skipped after failure")
+			return nil, nil
+		},
+	}
+
+	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo", false)
+	if err != nil {
+		t.Fatalf("applyScenario: %v", err)
+	}
+
+	var resp struct {
+		Deployments []scenarioDeployResult `json:"deployments"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if deployCalls != 1 {
+		t.Fatalf("DeployApply calls = %d, want 1", deployCalls)
+	}
+	if len(resp.Deployments) != 4 {
+		t.Fatalf("deployment results len = %d, want 4", len(resp.Deployments))
+	}
+	if resp.Deployments[0].Model != "model-a" || resp.Deployments[0].Status != "ok" {
+		t.Fatalf("first result = %#v, want ok model-a", resp.Deployments[0])
+	}
+	if resp.Deployments[1].Model != "model-a_wait" || resp.Deployments[1].Status != "warning" {
+		t.Fatalf("wait result = %#v, want warning model-a_wait", resp.Deployments[1])
+	}
+	if resp.Deployments[2].Model != "model-b" || resp.Deployments[2].Status != "skipped" {
+		t.Fatalf("second deploy result = %#v, want skipped model-b", resp.Deployments[2])
+	}
+	if resp.Deployments[3].Model != "openclaw_sync" || resp.Deployments[3].Status != "skipped" {
+		t.Fatalf("post-deploy result = %#v, want skipped openclaw_sync", resp.Deployments[3])
+	}
+}
+
+func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
+	cat := &knowledge.Catalog{
+		DeploymentScenarios: []knowledge.DeploymentScenario{{
+			Metadata: knowledge.ScenarioMetadata{Name: "demo-last"},
+			Deployments: []knowledge.ScenarioDeployment{
+				{Model: "model-a", Engine: "engine-a"},
+			},
+			PostDeploy: []knowledge.ScenarioAction{
+				{Action: "openclaw_sync"},
+			},
+			StartupOrder: []knowledge.ScenarioStartupStep{
+				{Step: 1, Model: "model-a", WaitFor: "health_check", TimeoutS: 1},
+			},
+		}},
+	}
+
+	deps := &mcp.ToolDeps{
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			return json.RawMessage(`{"name":"model-a-engine-a"}`), nil
+		},
+		DeployStatus: func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"phase":"failed","message":"boom-last"}`), nil
+		},
+		OpenClawSync: func(context.Context, bool) (json.RawMessage, error) {
+			t.Fatal("post-deploy action should be skipped when the last startup_order wait fails")
+			return nil, nil
+		},
+	}
+
+	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo-last", false)
+	if err != nil {
+		t.Fatalf("applyScenario: %v", err)
+	}
+
+	var resp struct {
+		Deployments []scenarioDeployResult `json:"deployments"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Deployments) != 3 {
+		t.Fatalf("deployment results len = %d, want 3", len(resp.Deployments))
+	}
+	if resp.Deployments[0].Model != "model-a" || resp.Deployments[0].Status != "ok" {
+		t.Fatalf("first result = %#v, want ok model-a", resp.Deployments[0])
+	}
+	if resp.Deployments[1].Model != "model-a_wait" || resp.Deployments[1].Status != "warning" {
+		t.Fatalf("wait result = %#v, want warning model-a_wait", resp.Deployments[1])
+	}
+	if resp.Deployments[2].Model != "openclaw_sync" || resp.Deployments[2].Status != "skipped" {
+		t.Fatalf("post-deploy result = %#v, want skipped openclaw_sync", resp.Deployments[2])
 	}
 }
 

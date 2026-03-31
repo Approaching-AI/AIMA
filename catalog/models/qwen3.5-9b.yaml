@@ -36,6 +36,7 @@ variants:
       gpu_memory_utilization: 0.25
       max_model_len: 65536
       dtype: bfloat16
+      trust_remote_code: true
     expected_performance:
       startup_time_s: 60
       cold_start_time_s: 120
@@ -57,6 +58,7 @@ variants:
       gpu_memory_utilization: 0.80
       max_model_len: 32768
       dtype: bfloat16
+      trust_remote_code: true
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 90

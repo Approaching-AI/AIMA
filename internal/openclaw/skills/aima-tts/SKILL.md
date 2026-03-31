@@ -8,6 +8,20 @@ metadata: {"openclaw":{"emoji":"🔊","requires":{"bins":["curl"]},"always":true
 
 Generate speech audio from text using the TTS model currently managed by AIMA/OpenClaw.
 
+## When to use
+
+- The user explicitly asks for a spoken or voice reply.
+- The user asks you to say something aloud instead of only writing it.
+- The user wants a short audio clip in Chinese or English.
+
+## Required behavior
+
+- Write a short spoken script first.
+- Run `{baseDir}/scripts/speak.sh` with that script.
+- After OpenClaw attaches the generated media, reply with exactly `NO_REPLY`.
+- If TTS generation fails, give a brief text fallback that says the audio conversion failed.
+- Keep the spoken script short and in the user's language unless they ask for something longer.
+
 ## Quick start
 
 ```bash

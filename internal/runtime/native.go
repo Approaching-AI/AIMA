@@ -136,6 +136,12 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		clearPlaceholder()
 		return fmt.Errorf("deploy %s: empty command", req.Name)
 	}
+	if req.Port > 0 {
+		if conflict := r.portConflict(req.Port, req.Name); conflict != "" {
+			clearPlaceholder()
+			return fmt.Errorf("deploy %s: port %d already in use by %s", req.Name, req.Port, conflict)
+		}
+	}
 
 	// Replace templates with actual values (host path, not /models like containers)
 	command := make([]string, len(req.Command))
@@ -622,6 +628,8 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	exitSuccess := proc.exitSuccess
 	proc.mu.Unlock()
 
+	portBound := proc.port > 0 && portAlive(proc.port)
+
 	phase := "running"
 	if exited {
 		if exitSuccess {
@@ -630,6 +638,8 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 			phase = "failed"
 		}
 		ready = false
+	} else if !ready {
+		phase = "starting"
 	}
 
 	ds := &DeploymentStatus{
@@ -649,6 +659,9 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 			ds.Ready = false
 			ds.Message = errMsg
 		}
+	}
+	if !ds.Ready && ds.Phase != "failed" && ds.Phase != "stopped" {
+		r.ensureNativeStartingStatus(ds, proc.startTime, portBound, proc.labels)
 	}
 
 	return ds
@@ -681,6 +694,9 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 			// No health check info available; fall back to TCP alive.
 			ready = true
 		}
+		if !ready {
+			phase = "starting"
+		}
 	} else {
 		timeout := meta.HealthCheckTimeout
 		if timeout == 0 {
@@ -712,6 +728,9 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 			ds.Ready = false
 			ds.Message = errMsg
 		}
+	}
+	if !ds.Ready && ds.Phase != "failed" && ds.Phase != "stopped" {
+		r.ensureNativeStartingStatus(ds, meta.StartTime, alive, meta.Labels)
 	}
 	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 && !processMatches {
 		if alive {
@@ -892,6 +911,35 @@ func portAlive(port int) bool {
 	return true
 }
 
+func (r *NativeRuntime) portConflict(port int, selfName string) string {
+	if port <= 0 || !portAlive(port) {
+		return ""
+	}
+
+	r.mu.RLock()
+	for name, proc := range r.processes {
+		if name == selfName || proc == nil {
+			continue
+		}
+		if proc.port == port {
+			r.mu.RUnlock()
+			return fmt.Sprintf("deployment %q", name)
+		}
+	}
+	r.mu.RUnlock()
+
+	for _, meta := range r.loadAllMeta() {
+		if meta == nil || meta.Name == selfName {
+			continue
+		}
+		if meta.Port == port {
+			return fmt.Sprintf("deployment %q", meta.Name)
+		}
+	}
+
+	return "another process"
+}
+
 // readTail reads the last n lines from a file by seeking from the end,
 // avoiding reading the entire file into memory for large log files.
 // For small files (< 256KB), uses a forward scan for reliability on Windows
@@ -1039,13 +1087,75 @@ func (r *NativeRuntime) enrichNativeProgress(ds *DeploymentStatus, logPath strin
 			ds.StartupPhase = sp.Phase
 			ds.StartupProgress = sp.Progress
 			ds.StartupMessage = sp.Message
-		} else {
-			ds.StartupPhase = "initializing"
-			ds.StartupProgress = 5
-			ds.StartupMessage = formatPhaseName("initializing")
 		}
 	}
 	return ""
+}
+
+func (r *NativeRuntime) ensureNativeStartingStatus(ds *DeploymentStatus, startTime time.Time, portBound bool, labels map[string]string) {
+	if ds == nil || ds.Ready || ds.Phase == "failed" || ds.Phase == "stopped" {
+		return
+	}
+	ds.Phase = "starting"
+	if ds.EstimatedTotalS == 0 {
+		ds.EstimatedTotalS = r.nativeEstimatedTotalS(labels)
+	}
+	if ds.StartupPhase == "" {
+		if portBound {
+			ds.StartupPhase = "loading_model"
+		} else {
+			ds.StartupPhase = "initializing"
+		}
+	}
+	if inferred := inferNativeStartupProgress(time.Since(startTime), ds.EstimatedTotalS, portBound); inferred > ds.StartupProgress {
+		ds.StartupProgress = inferred
+	}
+	if ds.StartupMessage == "" {
+		ds.StartupMessage = formatPhaseName(ds.StartupPhase)
+	}
+}
+
+func (r *NativeRuntime) nativeEstimatedTotalS(labels map[string]string) int {
+	engineName := ""
+	if labels != nil {
+		engineName = labels["aima.dev/engine"]
+	}
+	asset := findEngineAsset(r.engineAssets, engineName)
+	if asset != nil && len(asset.TimeConstraints.ColdStartS) >= 2 {
+		return asset.TimeConstraints.ColdStartS[1]
+	}
+	return 0
+}
+
+func inferNativeStartupProgress(elapsed time.Duration, estimatedTotalS int, portBound bool) int {
+	elapsedS := int(elapsed / time.Second)
+	if elapsedS < 0 {
+		elapsedS = 0
+	}
+	if estimatedTotalS <= 0 {
+		if portBound {
+			return 35
+		}
+		return 5
+	}
+	if portBound {
+		progress := 25 + (elapsedS * 65 / estimatedTotalS)
+		if progress > 90 {
+			progress = 90
+		}
+		if progress < 25 {
+			progress = 25
+		}
+		return progress
+	}
+	progress := 5 + (elapsedS * 20 / estimatedTotalS)
+	if progress > 25 {
+		progress = 25
+	}
+	if progress < 5 {
+		progress = 5
+	}
+	return progress
 }
 
 func waitForProcessExit(proc *nativeProcess, timeout time.Duration) bool {

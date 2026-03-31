@@ -28,6 +28,16 @@ func newTestRuntime(t *testing.T) *NativeRuntime {
 	)
 }
 
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
 func newWindowsListenerScript(t *testing.T, port int, sleepSeconds int, echoArg bool) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "listener.ps1")
@@ -53,11 +63,13 @@ func newWindowsListenerScript(t *testing.T, port int, sleepSeconds int, echoArg 
 
 func TestNativeDeployAndDelete(t *testing.T) {
 	rt := newTestRuntime(t)
+	port := freeTCPPort(t)
+	wantAddr := "127.0.0.1:" + strconv.Itoa(port)
 
 	// Use a command that exists cross-platform and exits quickly after a while
 	var cmd []string
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 9999, 30, false)
+		script := newWindowsListenerScript(t, port, 30, false)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
 	} else {
 		cmd = []string{"sh", "-c", "echo hello && sleep 10"}
@@ -67,7 +79,7 @@ func TestNativeDeployAndDelete(t *testing.T) {
 		Name:    "test-deploy",
 		Engine:  "test",
 		Command: cmd,
-		Port:    9999,
+		Port:    port,
 		Labels:  map[string]string{"aima.dev/engine": "test"},
 	})
 	if err != nil {
@@ -94,8 +106,8 @@ func TestNativeDeployAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if s.Address != "127.0.0.1:9999" {
-		t.Errorf("address = %q, want %q", s.Address, "127.0.0.1:9999")
+	if s.Address != wantAddr {
+		t.Errorf("address = %q, want %q", s.Address, wantAddr)
 	}
 
 	// Delete
@@ -112,10 +124,11 @@ func TestNativeDeployAndDelete(t *testing.T) {
 
 func TestNativeDeployDuplicate(t *testing.T) {
 	rt := newTestRuntime(t)
+	port := freeTCPPort(t)
 
 	var cmd []string
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 8080, 30, false)
+		script := newWindowsListenerScript(t, port, 30, false)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
 	} else {
 		cmd = []string{"sleep", "10"}
@@ -125,7 +138,7 @@ func TestNativeDeployDuplicate(t *testing.T) {
 		Name:    "dup",
 		Engine:  "test",
 		Command: cmd,
-		Port:    8080,
+		Port:    port,
 	})
 	if err != nil {
 		t.Fatalf("first Deploy: %v", err)
@@ -146,14 +159,87 @@ func TestNativeDeployDuplicate(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+func TestNativeDeployRejectsPortAlreadyInUse(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	cmd := []string{"sleep", "10"}
+	if runtime.GOOS == "windows" {
+		script := newWindowsListenerScript(t, port+1, 30, false)
+		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
+	}
+
+	err = rt.Deploy(context.Background(), &DeployRequest{
+		Name:    "port-conflict",
+		Engine:  "test",
+		Command: cmd,
+		Port:    port,
+	})
+	if err == nil {
+		t.Fatal("expected port conflict error")
+	}
+	if !strings.Contains(err.Error(), "port") || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("error = %q, want port conflict", err)
+	}
+}
+
+func TestNativeDeployRejectsPortUsedByKnownDeployment(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := rt.saveMeta(&deploymentMeta{
+		Name:      "existing-deploy",
+		PID:       12345,
+		Port:      port,
+		Engine:    "llamacpp",
+		LogPath:   filepath.Join(t.TempDir(), "existing.log"),
+		Command:   []string{"llama-server", "--port", strconv.Itoa(port)},
+		StartTime: time.Now(),
+	}); err != nil {
+		t.Fatalf("saveMeta: %v", err)
+	}
+
+	cmd := []string{"sleep", "10"}
+	if runtime.GOOS == "windows" {
+		script := newWindowsListenerScript(t, port+1, 30, false)
+		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
+	}
+
+	err = rt.Deploy(context.Background(), &DeployRequest{
+		Name:    "new-deploy",
+		Engine:  "test",
+		Command: cmd,
+		Port:    port,
+	})
+	if err == nil {
+		t.Fatal("expected known deployment port conflict error")
+	}
+	if !strings.Contains(err.Error(), `deployment "existing-deploy"`) {
+		t.Fatalf("error = %q, want existing deployment name", err)
+	}
+}
+
 func TestNativeModelPathSubstitution(t *testing.T) {
 	rt := newTestRuntime(t)
+	port := freeTCPPort(t)
 
 	// Deploy with a command containing {{.ModelPath}} — use echo to verify substitution
 	var cmd []string
 	modelPath := "/data/models/test-model"
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 8080, 2, true)
+		script := newWindowsListenerScript(t, port, 2, true)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "{{.ModelPath}}"}
 		modelPath = "C:\\data\\models\\test-model"
 	} else {
@@ -165,7 +251,7 @@ func TestNativeModelPathSubstitution(t *testing.T) {
 		Engine:    "test",
 		Command:   cmd,
 		ModelPath: modelPath,
-		Port:      8080,
+		Port:      port,
 	})
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
@@ -241,10 +327,11 @@ func TestNativeDeleteNotFound(t *testing.T) {
 
 func TestNativeProcessDoneChannelClosedOnExit(t *testing.T) {
 	rt := newTestRuntime(t)
+	port := freeTCPPort(t)
 
 	var cmd []string
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 18081, 1, false)
+		script := newWindowsListenerScript(t, port, 1, false)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
 	} else {
 		cmd = []string{"sh", "-c", "echo done"}
@@ -254,7 +341,7 @@ func TestNativeProcessDoneChannelClosedOnExit(t *testing.T) {
 		Name:    "quick-exit",
 		Engine:  "test",
 		Command: cmd,
-		Port:    18081,
+		Port:    port,
 	}); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
@@ -296,13 +383,15 @@ func TestNativePersistenceAcrossInvocations(t *testing.T) {
 	base := t.TempDir()
 	logDir := filepath.Join(base, "logs")
 	deployDir := filepath.Join(base, "deployments")
+	port := freeTCPPort(t)
+	wantAddr := "127.0.0.1:" + strconv.Itoa(port)
 
 	// "First CLI invocation": deploy a long-running process
 	rt1 := NewNativeRuntime(logDir, "", deployDir)
 
 	var cmd []string
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 19876, 30, false)
+		script := newWindowsListenerScript(t, port, 30, false)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
 	} else {
 		cmd = []string{"sleep", "30"}
@@ -312,7 +401,7 @@ func TestNativePersistenceAcrossInvocations(t *testing.T) {
 		Name:    "persistent",
 		Engine:  "test",
 		Command: cmd,
-		Port:    19876,
+		Port:    port,
 		Labels:  map[string]string{"aima.dev/engine": "test"},
 	})
 	if err != nil {
@@ -345,8 +434,8 @@ func TestNativePersistenceAcrossInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status on rt2: %v", err)
 	}
-	if s.Address != "127.0.0.1:19876" {
-		t.Errorf("address = %q, want %q", s.Address, "127.0.0.1:19876")
+	if s.Address != wantAddr {
+		t.Errorf("address = %q, want %q", s.Address, wantAddr)
 	}
 
 	// Logs should work via persisted log path
@@ -432,8 +521,9 @@ func TestNativeDeployIgnoresStaleMetadataUsingOccupiedPort(t *testing.T) {
 	}
 
 	var cmd []string
+	port := freeTCPPort(t)
 	if runtime.GOOS == "windows" {
-		script := newWindowsListenerScript(t, 18082, 5, false)
+		script := newWindowsListenerScript(t, port, 5, false)
 		cmd = []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}
 	} else {
 		cmd = []string{"sleep", "5"}
@@ -443,7 +533,7 @@ func TestNativeDeployIgnoresStaleMetadataUsingOccupiedPort(t *testing.T) {
 		Name:    "stale",
 		Engine:  "test",
 		Command: cmd,
-		Port:    18082,
+		Port:    port,
 	}); err != nil {
 		t.Fatalf("Deploy should ignore stale metadata, got: %v", err)
 	}
@@ -668,11 +758,82 @@ func TestStatusDoesNotOverrideLiveProcessWithStalePortReuseFailure(t *testing.T)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if status.Phase != "running" {
-		t.Fatalf("phase = %q, want running", status.Phase)
+	if status.Phase != "starting" {
+		t.Fatalf("phase = %q, want starting", status.Phase)
 	}
 	if status.Message == "deployment metadata is stale; port is in use by another process" {
 		t.Fatal("stale port reuse failure should not override a live in-memory process")
+	}
+}
+
+func TestProcToStatusMarksNonReadyProcessAsStarting(t *testing.T) {
+	rt := newTestRuntime(t)
+	rt.engineAssets = []knowledge.EngineAsset{{
+		Metadata:        knowledge.EngineMetadata{Name: "llamacpp"},
+		TimeConstraints: knowledge.TimeConstraints{ColdStartS: []int{3, 10}},
+	}}
+
+	status := rt.procToStatus(&nativeProcess{
+		name:      "booting",
+		port:      freeTCPPort(t),
+		labels:    map[string]string{"aima.dev/engine": "llamacpp"},
+		startTime: time.Now().Add(-2 * time.Second),
+	})
+
+	if status.Phase != "starting" {
+		t.Fatalf("phase = %q, want starting", status.Phase)
+	}
+	if status.Ready {
+		t.Fatal("ready should be false during startup")
+	}
+	if status.StartupProgress <= 0 {
+		t.Fatalf("startup_progress = %d, want > 0", status.StartupProgress)
+	}
+	if status.StartupMessage == "" {
+		t.Fatal("startup_message should not be empty during startup")
+	}
+}
+
+func TestMetaToStatusMarksAliveUnreadyDeploymentAsStarting(t *testing.T) {
+	rt := newTestRuntime(t)
+	rt.engineAssets = []knowledge.EngineAsset{{
+		Metadata:        knowledge.EngineMetadata{Name: "llamacpp"},
+		TimeConstraints: knowledge.TimeConstraints{ColdStartS: []int{3, 10}},
+	}}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "starting", http.StatusServiceUnavailable)
+	})}
+	defer srv.Shutdown(context.Background())
+	go srv.Serve(ln)
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	status := rt.metaToStatus(&deploymentMeta{
+		Name:               "booting-http",
+		Port:               port,
+		Labels:             map[string]string{"aima.dev/engine": "llamacpp"},
+		StartTime:          time.Now().Add(-4 * time.Second),
+		HealthCheckPath:    "/health",
+		HealthCheckTimeout: 60,
+	})
+
+	if status.Phase != "starting" {
+		t.Fatalf("phase = %q, want starting", status.Phase)
+	}
+	if status.Ready {
+		t.Fatal("ready should be false while health endpoint is not ready")
+	}
+	if status.StartupProgress < 25 {
+		t.Fatalf("startup_progress = %d, want >= 25 for alive-but-unready service", status.StartupProgress)
+	}
+	if status.StartupMessage == "" {
+		t.Fatal("startup_message should not be empty")
 	}
 }
 

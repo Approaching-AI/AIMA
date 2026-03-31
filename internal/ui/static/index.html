@@ -3443,8 +3443,8 @@ function aimaApp() {
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
-      this._deployPollMs = 10000;
-      this._deployTimer = setInterval(() => this.pollDeployments(), 10000);
+      this._deployPollMs = 1000;
+      this._deployTimer = setInterval(() => this.pollDeployments(), 1000);
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
       this._timers.push(setInterval(() => this.pollAgentInfo(), 30000));
 
@@ -4337,12 +4337,12 @@ function aimaApp() {
           eta
         };
       });
-      // Adaptive polling: 3s during startup, 10s when stable
+      // Adaptive polling: surface externally-triggered deploys quickly enough to show startup.
       this._adjustDeployPoll(hasStarting);
     },
 
     _adjustDeployPoll(fast) {
-      const want = fast ? 3000 : 10000;
+      const want = fast ? 500 : 1000;
       if (this._deployPollMs === want) return;
       this._deployPollMs = want;
       if (this._deployTimer) clearInterval(this._deployTimer);

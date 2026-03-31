@@ -9,7 +9,8 @@ import (
 
 // Deps holds optional UI route dependencies.
 type Deps struct {
-	SupportManifest func(context.Context) (json.RawMessage, error)
+	SupportManifest    func(context.Context) (json.RawMessage, error)
+	OnboardingManifest func(context.Context) (json.RawMessage, error)
 }
 
 // RegisterRoutes returns a function that registers UI routes on a mux.
@@ -36,6 +37,19 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 				w.Header().Set("Content-Type", "application/json")
 				data, err := deps.SupportManifest(r.Context())
+				if err != nil {
+					w.WriteHeader(http.StatusBadGateway)
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				_, _ = w.Write(data)
+			})
+		}
+		if deps != nil && deps.OnboardingManifest != nil {
+			mux.HandleFunc("GET /ui/api/onboarding-manifest", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+				w.Header().Set("Content-Type", "application/json")
+				data, err := deps.OnboardingManifest(r.Context())
 				if err != nil {
 					w.WriteHeader(http.StatusBadGateway)
 					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

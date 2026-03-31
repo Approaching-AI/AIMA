@@ -565,6 +565,14 @@ func run() error {
 	fleetRoutes := fleet.RegisterRoutes(fleetDeps)
 	uiRoutes := ui.RegisterRoutes(&ui.Deps{
 		SupportManifest: supportSvc.GoUXManifestJSON,
+		OnboardingManifest: func(ctx context.Context) (json.RawMessage, error) {
+			_ = ctx
+			raw, err := catalog.FS.ReadFile("ui-onboarding.json")
+			if err != nil {
+				return nil, fmt.Errorf("read ui onboarding manifest: %w", err)
+			}
+			return json.RawMessage(raw), nil
+		},
 	})
 
 	// OpenClaw integration: wire adapters + routes + sync tool

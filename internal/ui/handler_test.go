@@ -34,6 +34,35 @@ func TestRegisterRoutes_SupportManifest(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_OnboardingManifest(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(&Deps{
+		OnboardingManifest: func(ctx context.Context) (json.RawMessage, error) {
+			_ = ctx
+			return json.RawMessage(`{"version":"2026-03-31.1","locales":{"zh":{"title":"新手指南"}}}`), nil
+		},
+	})(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/api/onboarding-manifest", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content-type = %q, want application/json", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache, must-revalidate" {
+		t.Fatalf("cache-control = %q, want no-cache, must-revalidate", got)
+	}
+	if got := rec.Body.String(); got != `{"version":"2026-03-31.1","locales":{"zh":{"title":"新手指南"}}}` {
+		t.Fatalf("body = %q", got)
+	}
+}
+
 func TestRegisterRoutes_FaviconAssets(t *testing.T) {
 	t.Parallel()
 

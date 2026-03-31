@@ -1,0 +1,130 @@
+{
+  "version": "2026-03-31.1",
+  "default_locale": "en",
+  "locales": {
+    "zh": {
+      "title": "新手指南",
+      "tabs": {
+        "quick_start": "快速开始",
+        "full_commands": "完整命令",
+        "troubleshooting": "遇到问题"
+      },
+      "quick_start": {
+        "intro": "先确认系统在线，再看本机模型和引擎，最后再提问或输入命令。",
+        "steps": [
+          { "title": "确认系统在线", "body": "先看顶部状态和 Agent 状态是否正常。" },
+          { "title": "确认本机资源", "body": "检查 models、engines、deployments 三块是否有内容。" },
+          { "title": "开始提问或输入命令", "body": "可以直接提问，也可以先用常用命令快速查看状态。" }
+        ],
+        "commands": [
+          { "id": "status", "command": "status", "label": "查看系统状态", "description": "检查硬件、部署和资源概况。" },
+          { "id": "hardware", "command": "hardware", "label": "查看硬件", "description": "查看 GPU、CPU、内存等基础信息。" },
+          { "id": "models", "command": "models", "label": "查看模型", "description": "确认 AIMA 已识别到哪些模型。" },
+          { "id": "engines", "command": "engines", "label": "查看引擎", "description": "确认本机可用推理引擎。" },
+          { "id": "deployments", "command": "deployments", "label": "查看部署", "description": "检查当前运行中的部署。" }
+        ]
+      },
+      "full_commands": {
+        "groups": [
+          {
+            "id": "inspect",
+            "title": "系统查看",
+            "items": [
+              { "command": "status", "description": "查看系统总体状态。" },
+              { "command": "hardware", "description": "查看硬件检测结果。" },
+              { "command": "metrics", "description": "查看实时硬件指标。" }
+            ]
+          },
+          {
+            "id": "inventory",
+            "title": "资源清单",
+            "items": [
+              { "command": "models", "description": "列出已识别模型。" },
+              { "command": "engines", "description": "列出可用引擎。" },
+              { "command": "deployments", "description": "列出当前部署。" },
+              { "command": "fleet", "description": "列出局域网设备。" }
+            ]
+          },
+          {
+            "id": "cli",
+            "title": "CLI 示例",
+            "items": [
+              { "command": "/cli help", "description": "查看 CLI 子命令帮助。" },
+              { "command": "/cli model list", "description": "通过 CLI 列出已注册模型。" },
+              { "command": "/cli engine list", "description": "通过 CLI 列出已注册引擎。" }
+            ]
+          }
+        ]
+      },
+      "troubleshooting": {
+        "items": [
+          { "title": "Agent 不可用", "body": "先用 status、hardware、models 等直接命令确认基础状态。" },
+          { "title": "需要配置", "body": "点击右上角设置，检查 LLM endpoint、model 和 API key。" },
+          { "title": "需要远程协助", "body": "点击连线灵机云，按引导进入远程协助流程。" }
+        ]
+      }
+    },
+    "en": {
+      "title": "Getting Started",
+      "tabs": {
+        "quick_start": "Quick Start",
+        "full_commands": "Commands",
+        "troubleshooting": "Troubleshooting"
+      },
+      "quick_start": {
+        "intro": "Start by confirming the system is online, then inspect local models and engines, then ask a question or run a command.",
+        "steps": [
+          { "title": "Check system health", "body": "Use the top status row and Agent status to confirm the service is ready." },
+          { "title": "Inspect local resources", "body": "Look at models, engines, and deployments before issuing tasks." },
+          { "title": "Ask or run a command", "body": "You can ask AIMA directly or begin with a common command." }
+        ],
+        "commands": [
+          { "id": "status", "command": "status", "label": "System status", "description": "Inspect hardware, deployments, and overall state." },
+          { "id": "hardware", "command": "hardware", "label": "Hardware", "description": "Show detected GPU, CPU, and memory information." },
+          { "id": "models", "command": "models", "label": "Models", "description": "List models AIMA already knows about." },
+          { "id": "engines", "command": "engines", "label": "Engines", "description": "List available inference engines." },
+          { "id": "deployments", "command": "deployments", "label": "Deployments", "description": "Show active inference deployments." }
+        ]
+      },
+      "full_commands": {
+        "groups": [
+          {
+            "id": "inspect",
+            "title": "Inspect",
+            "items": [
+              { "command": "status", "description": "Show the overall system state." },
+              { "command": "hardware", "description": "Show hardware detection details." },
+              { "command": "metrics", "description": "Show live hardware metrics." }
+            ]
+          },
+          {
+            "id": "inventory",
+            "title": "Inventory",
+            "items": [
+              { "command": "models", "description": "List detected models." },
+              { "command": "engines", "description": "List available engines." },
+              { "command": "deployments", "description": "List active deployments." },
+              { "command": "fleet", "description": "List LAN devices." }
+            ]
+          },
+          {
+            "id": "cli",
+            "title": "CLI examples",
+            "items": [
+              { "command": "/cli help", "description": "Show CLI subcommand help." },
+              { "command": "/cli model list", "description": "List registered models through the CLI endpoint." },
+              { "command": "/cli engine list", "description": "List registered engines through the CLI endpoint." }
+            ]
+          }
+        ]
+      },
+      "troubleshooting": {
+        "items": [
+          { "title": "Agent unavailable", "body": "Use direct commands like status, hardware, and models first." },
+          { "title": "Need configuration help", "body": "Open Settings and verify the LLM endpoint, model, and API key." },
+          { "title": "Need remote help", "body": "Use the support button to connect to the remote assistance flow." }
+        ]
+      }
+    }
+  }
+}

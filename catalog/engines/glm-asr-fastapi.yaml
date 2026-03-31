@@ -19,7 +19,12 @@ hardware:
   gpu_arch: "*"
   vram_min_mib: 0
 startup:
-  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--port", "8003", "--device", "cpu"]
+  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--device", "cpu"]
+  ports:
+    - name: http
+      flag: --port
+      config_key: port
+      primary: true
   default_args:
     port: 8003
   health_check:

@@ -3847,16 +3847,6 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 			modelName = rd.ModelName
 			resolved := rd.Resolved
 
-			port := 8000
-			if p, ok := resolved.Config["port"]; ok {
-				switch v := p.(type) {
-				case int:
-					port = v
-				case float64:
-					port = int(v)
-				}
-			}
-
 			modelPath := resolved.ModelPath
 			if modelPath == "" {
 				modelPath = filepath.Join(dataDir, "models", modelName)
@@ -3903,9 +3893,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				Engine:           resolved.Engine,
 				Image:            resolved.EngineImage,
 				Command:          resolved.Command,
+				PortSpecs:        append([]knowledge.StartupPort(nil), resolved.PortSpecs...),
 				InitCommands:     resolved.InitCommands,
 				ModelPath:        modelPath,
-				Port:             port,
 				Config:           resolved.Config,
 				RuntimeClassName: resolved.RuntimeClassName,
 				CPUArch:          resolved.CPUArch,
@@ -3918,7 +3908,6 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					"aima.dev/engine": resolved.Engine,
 					"aima.dev/model":  modelName,
 					"aima.dev/slot":   resolved.Slot,
-					"aima.dev/port":   fmt.Sprintf("%d", port),
 				},
 			}
 			if resolved.Partition != nil {
@@ -4050,6 +4039,9 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 					}
 				}
 			}
+			if err := allocateDeploymentPorts(ctx, deployName, activeRt.Name(), req, resolved.Provenance, listAllRuntimes(ctx, rt, nativeRt, dockerRt)); err != nil {
+				return nil, fmt.Errorf("allocate ports: %w", err)
+			}
 			if err := activeRt.Deploy(ctx, req); err != nil {
 				return nil, fmt.Errorf("deploy: %w", err)
 			}
@@ -4103,6 +4095,7 @@ func buildToolDeps(cat *knowledge.Catalog, db *state.DB, kStore *knowledge.Store
 				"slot":         resolved.Slot,
 				"runtime":      runtimeName,
 				"config":       resolved.Config,
+				"ports":        knowledge.ResolvePortBindingsFromSpecs(resolved.PortSpecs, resolved.Config),
 				"provenance":   resolved.Provenance,
 				"fit_report": map[string]any{
 					"fit":         rd.Fit.Fit,

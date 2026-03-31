@@ -12,7 +12,8 @@ import (
 )
 
 var podTemplate = template.Must(template.New("pod").Funcs(template.FuncMap{
-	"deviceVolName": deviceVolName,
+	"deviceVolName":     deviceVolName,
+	"containerPortName": containerPortName,
 }).Parse(`apiVersion: v1
 kind: Pod
 metadata:
@@ -56,9 +57,13 @@ spec:
         - "{{ . }}"
         {{- end }}
       {{- end }}
+      {{- if .Ports }}
       ports:
+        {{- range .Ports }}
         - containerPort: {{ .Port }}
-          name: http
+          name: {{ containerPortName .Name }}
+        {{- end }}
+      {{- end }}
       {{- if .ExtraEnv }}
       env:
         {{- range $k, $v := .ExtraEnv }}
@@ -91,7 +96,7 @@ spec:
       livenessProbe:
         httpGet:
           path: {{ .HealthCheckPath }}
-          port: {{ .Port }}
+          port: {{ .PrimaryPort }}
         initialDelaySeconds: {{ .HealthCheckInitDelaySec }}
         periodSeconds: 10
         timeoutSeconds: 5
@@ -99,7 +104,7 @@ spec:
       readinessProbe:
         httpGet:
           path: {{ .HealthCheckPath }}
-          port: {{ .Port }}
+          port: {{ .PrimaryPort }}
         initialDelaySeconds: 10
         periodSeconds: 5
         timeoutSeconds: 3
@@ -150,13 +155,24 @@ func deviceVolName(path string) string {
 	return name
 }
 
+func containerPortName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return "http"
+	}
+	name = strings.ReplaceAll(name, "_", "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	return name
+}
+
 type podData struct {
 	PodName                 string
 	Engine                  string
 	EngineImage             string
 	ModelName               string
 	Slot                    string
-	Port                    int
+	Ports                   []PortBinding
+	PrimaryPort             int
 	Args                    []string          // command arguments (excluding binary name -- image entrypoint is used)
 	ExtraEnv                map[string]string // merged: hardware container env (base) + engine env (override)
 	GPUMemoryMiB            int
@@ -216,15 +232,8 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		return nil, fmt.Errorf("generate pod: resolved config is nil")
 	}
 
-	port := 8000
-	if p, ok := resolved.Config["port"]; ok {
-		switch v := p.(type) {
-		case int:
-			port = v
-		case float64:
-			port = int(v)
-		}
-	}
+	bindings := ResolvePortBindingsFromSpecs(resolved.PortSpecs, resolved.Config)
+	primaryPort := PrimaryPortOrDefault(resolved.PortSpecs, resolved.Config, 8000)
 
 	modelHostPath := resolved.ModelPath
 	if modelHostPath == "" {
@@ -249,6 +258,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 	for i, c := range resolved.Command {
 		args[i] = strings.ReplaceAll(c, "{{.ModelPath}}", containerModelPath)
 	}
+	args = AppendPortBindings(args, bindings)
 
 	// Append resolved config values as CLI flags.
 	// Config keys use underscore (e.g. "gpu_memory_utilization") → "--gpu-memory-utilization".
@@ -265,8 +275,12 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 			}
 		}
 		keys := make([]string, 0, len(resolved.Config))
+		portKeys := PortConfigKeys(resolved.PortSpecs)
 		for k := range resolved.Config {
 			if k == "model_path" {
+				continue
+			}
+			if _, reserved := portKeys[k]; reserved {
 				continue
 			}
 			if !ShouldIncludeConfigFlag(resolved.Command, resolved.ModelPath, k, resolved.Config[k]) {
@@ -337,7 +351,8 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		EngineImage:      resolved.EngineImage,
 		ModelName:        resolved.ModelName,
 		Slot:             resolved.Slot,
-		Port:             port,
+		Ports:            bindings,
+		PrimaryPort:      primaryPort,
 		Args:             args,
 		ExtraEnv:         mergedEnv,
 		ModelHostPath:    modelHostPath,

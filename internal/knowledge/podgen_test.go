@@ -122,9 +122,9 @@ func TestGeneratePodWithPartition(t *testing.T) {
 		},
 		Container: &ContainerAccess{
 			Env: map[string]string{
-				"NVIDIA_VISIBLE_DEVICES":      "all",
-				"NVIDIA_DRIVER_CAPABILITIES":  "all",
-				"LD_LIBRARY_PATH":             "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+				"NVIDIA_VISIBLE_DEVICES":     "all",
+				"NVIDIA_DRIVER_CAPABILITIES": "all",
+				"LD_LIBRARY_PATH":            "/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
 			},
 			PartitionRemoveEnv: []string{"NVIDIA_VISIBLE_DEVICES"},
 		},
@@ -300,6 +300,46 @@ func TestGeneratePodAMDDevices(t *testing.T) {
 	})
 }
 
+func TestGeneratePodWithCustomStartupPorts(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "litetts",
+		EngineImage: "litetts:latest",
+		ModelPath:   "/data/models/litetts",
+		ModelName:   "qwen3-tts-0.6b",
+		Slot:        "default",
+		Config: map[string]any{
+			"grpc_port_v1beta1": 32108,
+			"grpc_port":         32109,
+			"port":              32110,
+		},
+		Command: []string{"./start_server.sh", "--target_voices", "AIBC006_lite"},
+		PortSpecs: []StartupPort{
+			{Name: "grpc-v1beta1", Flag: "--grpc_port_v1beta1", ConfigKey: "grpc_port_v1beta1"},
+			{Name: "grpc", Flag: "--grpc_port", ConfigKey: "grpc_port"},
+			{Name: "http", Flag: "--http_port", ConfigKey: "port", Primary: true},
+		},
+		HealthCheck: &HealthCheck{Path: "/", TimeoutS: 30},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	s := string(podYAML)
+	if strings.Count(s, "--http_port") != 1 {
+		t.Fatalf("expected exactly one --http_port flag, got YAML:\n%s", s)
+	}
+	if !strings.Contains(s, "--grpc_port_v1beta1") || !strings.Contains(s, "--grpc_port") {
+		t.Fatalf("expected all startup port flags in YAML:\n%s", s)
+	}
+	if !strings.Contains(s, "containerPort: 32110") {
+		t.Fatalf("expected primary container port in YAML:\n%s", s)
+	}
+	if !strings.Contains(s, "containerPort: 32108") || !strings.Contains(s, "containerPort: 32109") {
+		t.Fatalf("expected extra container ports in YAML:\n%s", s)
+	}
+}
+
 func TestGeneratePodEnvMerge(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Engine:      "vllm",
@@ -311,7 +351,7 @@ func TestGeneratePodEnvMerge(t *testing.T) {
 		Command:     []string{"vllm", "serve"},
 		Env: map[string]string{
 			"HSA_OVERRIDE_GFX_VERSION": "11.0.0",
-			"SHARED_VAR":              "engine-wins",
+			"SHARED_VAR":               "engine-wins",
 		},
 		Container: &ContainerAccess{
 			Env: map[string]string{

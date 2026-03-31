@@ -769,3 +769,46 @@ func TestHealthCheckAndWarmupUsesActualModelName(t *testing.T) {
 		t.Fatal("proc.ready should be true after successful warmup")
 	}
 }
+
+func TestDeployAppendsCustomPortFlags(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command metadata assertion uses shell script")
+	}
+	rt := newTestRuntime(t)
+	script := filepath.Join(t.TempDir(), "funasr.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	req := &DeployRequest{
+		Name:      "funasr",
+		Engine:    "funasr",
+		Command:   []string{script},
+		ModelPath: "/opt/models/funasr",
+		Config:    map[string]any{"port": 32103},
+		PortSpecs: []knowledge.StartupPort{{
+			Name:      "grpc",
+			Flag:      "--port-id",
+			ConfigKey: "port",
+			Primary:   true,
+		}},
+	}
+
+	err := rt.Deploy(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = rt.Delete(context.Background(), "funasr")
+	})
+	meta, err := rt.loadMeta("funasr")
+	if err != nil {
+		t.Fatalf("loadMeta: %v", err)
+	}
+	argStr := strings.Join(meta.Command, " ")
+	if !strings.Contains(argStr, "--port-id 32103") {
+		t.Fatalf("command = %q, want custom --port-id flag", argStr)
+	}
+	if strings.Contains(argStr, "--port 32103") {
+		t.Fatalf("command = %q, should not contain synthesized --port flag", argStr)
+	}
+}

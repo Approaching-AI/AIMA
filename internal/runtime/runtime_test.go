@@ -13,6 +13,7 @@ func TestConfigToFlagsSkipsSelectionOnlyQuantization(t *testing.T) {
 		},
 		[]string{"llama-server", "--model", "{{.ModelPath}}"},
 		"/models/qwen3/Qwen3-4B-Q4_K_M.gguf",
+		nil,
 	)
 	got := strings.Join(flags, " ")
 	if strings.Contains(got, "--quantization") {

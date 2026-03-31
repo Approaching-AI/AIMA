@@ -78,8 +78,8 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, "--label", k+"="+v)
 	}
 	// Store port in label for status lookup
-	if req.Port > 0 {
-		args = append(args, "--label", "aima.dev/port="+strconv.Itoa(req.Port))
+	if port := primaryPortForRequest(req); port > 0 {
+		args = append(args, "--label", "aima.dev/port="+strconv.Itoa(port))
 	}
 
 	// --runtime (e.g. ascend)
@@ -103,8 +103,8 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	}
 
 	// Port publish (skip when using host network)
-	if req.Port > 0 && (req.Container == nil || req.Container.NetworkMode != "host") {
-		portStr := strconv.Itoa(req.Port)
+	if port := primaryPortForRequest(req); port > 0 && (req.Container == nil || req.Container.NetworkMode != "host") {
+		portStr := strconv.Itoa(port)
 		args = append(args, "--publish", portStr+":"+portStr)
 	}
 
@@ -190,21 +190,11 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		c = strings.ReplaceAll(c, "{{.ModelName}}", req.Name)
 		command[i] = c
 	}
-
-	// Append --port if no port-related flag is already present.
-	hasPort := false
-	for _, c := range command {
-		if isPortFlag(c) {
-			hasPort = true
-			break
-		}
-	}
-	if !hasPort && req.Port > 0 {
-		command = append(command, "--port", strconv.Itoa(req.Port))
-	}
+	portBindings := portBindingsForRequest(req)
+	command = knowledge.AppendPortBindings(command, portBindings)
 
 	// Append config values as CLI flags, with template substitution
-	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath) {
+	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs)) {
 		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
 		f = strings.ReplaceAll(f, "{{.ModelPath}}", containerModelPath)
 		command = append(command, f)

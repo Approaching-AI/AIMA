@@ -19,9 +19,20 @@ source:
     fallback_version: "unknown"
 startup:
   # start_server.sh uses parse_options.sh which expects --flag_name (underscores).
-  # AIMA's configToFlags converts underscores to hyphens, so we put all TTS-specific
-  # args directly in the command to avoid the mismatch.
-  command: ["./start_server.sh", "--target_voices", "AIBC006_lite", "--grpc_port_v1beta1", "32108", "--grpc_port", "32109", "--http_port", "32110"]
+  # Port flags therefore live in startup.ports so AIMA can inject exact flags
+  # without hardcoding literal port values in the command.
+  command: ["./start_server.sh", "--target_voices", "AIBC006_lite"]
+  ports:
+    - name: grpc-v1beta1
+      flag: --grpc_port_v1beta1
+      config_key: grpc_port_v1beta1
+    - name: grpc
+      flag: --grpc_port
+      config_key: grpc_port
+    - name: http
+      flag: --http_port
+      config_key: port
+      primary: true
   work_dir: /opt/mt-ai/tts  # AIBook factory image path -- override via ~/.aima/catalog/
   env:
     TARGET_DEVICE: cpu
@@ -40,6 +51,8 @@ startup:
     POD_NAME: latest_lite
     TZ: Asia/Shanghai
   default_args:
+    grpc_port_v1beta1: 32108
+    grpc_port: 32109
     port: 32110  # AIMA uses this for health check URL; actual flag is --http_port in command
   health_check:
     path: /

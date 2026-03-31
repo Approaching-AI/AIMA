@@ -20,7 +20,12 @@ hardware:
   gpu_arch: Blackwell
   vram_min_mib: 2048
 startup:
-  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--port", "8002", "--device", "cuda"]
+  command: ["python", "main.py", "--model", "{{.ModelPath}}", "--device", "cuda"]
+  ports:
+    - name: http
+      flag: --port
+      config_key: port
+      primary: true
   init_commands:
     - "rm -rf /model && ln -s /models /model"
   default_args:

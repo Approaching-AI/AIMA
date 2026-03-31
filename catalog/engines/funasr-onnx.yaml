@@ -33,12 +33,15 @@ startup:
     - "models/speech_fsmn_vad_zh-cn-16k-common-onnx"
     - "--vad-quant"
     - "true"
-    - "--port-id"
-    - "32103"
     - "--hotword"
     - "tmp"
     - "--save-path"
     - "/tmp/funasr-recordings"
+  ports:
+    - name: grpc
+      flag: --port-id
+      config_key: port
+      primary: true
   work_dir: /opt/mt-ai/asr  # AIBook factory image path -- override via ~/.aima/catalog/
   env:
     LD_LIBRARY_PATH: "/opt/mt-ai/asr"  # contains libfunasr.so, libonnxruntime.so etc.

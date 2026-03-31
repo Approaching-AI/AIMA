@@ -220,11 +220,22 @@ type EngineStartup struct {
 	InitCommands []string            `yaml:"init_commands,omitempty"    json:"init_commands,omitempty"`
 	Env          map[string]string   `yaml:"env,omitempty"              json:"env,omitempty"`
 	WorkDir      string              `yaml:"work_dir,omitempty"         json:"work_dir,omitempty"`
+	Ports        []StartupPort       `yaml:"ports,omitempty"            json:"ports,omitempty"`
 	DefaultArgs  map[string]any      `yaml:"default_args"               json:"default_args"`
 	HealthCheck  HealthCheck         `yaml:"health_check"               json:"health_check"`
 	Warmup       WarmupConfig        `yaml:"warmup"                     json:"warmup"`
 	ExtraVolumes []ContainerVolume   `yaml:"extra_volumes,omitempty"    json:"extra_volumes,omitempty"`
 	LogPatterns  *StartupLogPatterns `yaml:"log_patterns,omitempty"   json:"log_patterns,omitempty"`
+}
+
+// StartupPort describes a named listening port that should be supplied to the
+// engine command. This keeps port flag shape in YAML instead of hardcoding it
+// in Go or embedding literal port values in startup.command.
+type StartupPort struct {
+	Name      string `yaml:"name"                  json:"name"`
+	Flag      string `yaml:"flag,omitempty"        json:"flag,omitempty"`
+	ConfigKey string `yaml:"config_key,omitempty"  json:"config_key,omitempty"`
+	Primary   bool   `yaml:"primary,omitempty"     json:"primary,omitempty"`
 }
 
 type StartupLogPatterns struct {
@@ -680,6 +691,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	}
 	if len(dst.InitCommands) == 0 {
 		dst.InitCommands = src.InitCommands
+	}
+	if len(dst.Ports) == 0 {
+		dst.Ports = src.Ports
 	}
 	if dst.DefaultArgs == nil {
 		dst.DefaultArgs = src.DefaultArgs

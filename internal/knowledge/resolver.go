@@ -51,6 +51,7 @@ type ResolvedConfig struct {
 	Provenance            map[string]string
 	Partition             *PartitionSlot
 	Command               []string
+	PortSpecs             []StartupPort
 	InitCommands          []string          // pre-commands to run before main server (from engine YAML)
 	ExtraVolumes          []ContainerVolume // additional host volumes to mount (from engine YAML)
 	HealthCheck           *HealthCheck
@@ -208,6 +209,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Provenance:         provenance,
 		Partition:          slot,
 		Command:            engine.Startup.Command,
+		PortSpecs:          engine.Startup.Ports,
 		InitCommands:       engine.Startup.InitCommands,
 		ExtraVolumes:       engine.Startup.ExtraVolumes,
 		Env:                engine.Startup.Env,

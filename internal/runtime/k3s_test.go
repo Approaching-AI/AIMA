@@ -62,9 +62,9 @@ func TestToResolvedConfig(t *testing.T) {
 		Engine:    "llamacpp",
 		Image:     "ghcr.io/ggerganov/llama.cpp:server",
 		Command:   []string{"llama-server", "--model", "{{.ModelPath}}"},
+		PortSpecs: []knowledge.StartupPort{{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true}},
 		ModelPath: "/data/models/test",
-		Port:      8080,
-		Config:    map[string]any{"n_gpu_layers": 999},
+		Config:    map[string]any{"n_gpu_layers": 999, "port": 8080},
 		Partition: &PartitionRequest{
 			GPUMemoryMiB:    4096,
 			GPUCoresPercent: 50,
@@ -104,6 +104,10 @@ func TestToResolvedConfig(t *testing.T) {
 	}
 	if rc.HealthCheck == nil || rc.HealthCheck.Path != "/health" {
 		t.Error("health check not set correctly")
+	}
+	bindings := knowledge.ResolvePortBindingsFromSpecs(rc.PortSpecs, rc.Config)
+	if len(bindings) != 1 || bindings[0].Port != 8080 || !bindings[0].Primary {
+		t.Errorf("bindings = %+v, want one primary port 8080", bindings)
 	}
 	if rc.Env == nil || rc.Env["HSA_OVERRIDE_GFX_VERSION"] != "11.0.0" {
 		t.Error("env not mapped correctly")

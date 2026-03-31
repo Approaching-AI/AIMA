@@ -93,10 +93,7 @@ func (r *K3SRuntime) Logs(ctx context.Context, name string, tailLines int) (stri
 // toResolvedConfig maps DeployRequest back to knowledge.ResolvedConfig
 // so we can reuse the existing Pod YAML template without modification.
 func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
-	port := req.Port
-	if port == 0 {
-		port = 8000
-	}
+	port := primaryPortForRequest(req)
 
 	slot := "default"
 	if req.Labels != nil {
@@ -109,7 +106,9 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 	for k, v := range req.Config {
 		config[k] = v
 	}
-	config["port"] = port
+	if port > 0 {
+		config["port"] = port
+	}
 
 	rc := &knowledge.ResolvedConfig{
 		Engine:           req.Engine,
@@ -119,6 +118,7 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 		Slot:             slot,
 		Config:           config,
 		Command:          req.Command,
+		PortSpecs:        req.PortSpecs,
 		InitCommands:     req.InitCommands,
 		ExtraVolumes:     req.ExtraVolumes,
 		RuntimeClassName: req.RuntimeClassName,
@@ -280,4 +280,3 @@ func K3SAvailable(ctx context.Context, client *k3s.Client) bool {
 	_, err := client.ListPods(probeCtx)
 	return err == nil
 }
-

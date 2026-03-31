@@ -189,6 +189,37 @@ func TestBuildRunArgs_ExtraVolumes(t *testing.T) {
 	assertContains(t, argStr, "--volume /opt/data:/data:ro", "extra volume readonly")
 }
 
+func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "tts-model",
+		Engine:    "litetts",
+		Image:     "litetts:latest",
+		Command:   []string{"./start_server.sh", "--target_voices", "AIBC006_lite"},
+		ModelPath: "/data/models/litetts",
+		PortSpecs: []knowledge.StartupPort{
+			{Name: "grpc-v1beta1", Flag: "--grpc_port_v1beta1", ConfigKey: "grpc_port_v1beta1"},
+			{Name: "grpc", Flag: "--grpc_port", ConfigKey: "grpc_port"},
+			{Name: "http", Flag: "--http_port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{
+			"grpc_port_v1beta1": 32108,
+			"grpc_port":         32109,
+			"port":              32110,
+		},
+	}
+
+	args := r.buildRunArgs("tts-model-litetts", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--grpc_port_v1beta1 32108", "custom gRPC v1beta1 port flag")
+	assertContains(t, argStr, "--grpc_port 32109", "custom gRPC port flag")
+	assertContains(t, argStr, "--http_port 32110", "custom HTTP port flag")
+	assertContains(t, argStr, "--publish 32110:32110", "only primary HTTP port is published")
+	assertNotContains(t, argStr, "--publish 32108:32108", "extra ports should stay container-local on bridge network")
+	assertNotContains(t, argStr, "--publish 32109:32109", "extra ports should stay container-local on bridge network")
+}
+
 func TestBuildRunArgs_Ascend(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

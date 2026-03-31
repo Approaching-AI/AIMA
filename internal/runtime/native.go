@@ -144,21 +144,12 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		c = strings.ReplaceAll(c, "{{.ModelName}}", req.Name)
 		command[i] = c
 	}
-
-	// Append --port if no port-related flag is already present.
-	hasPort := false
-	for _, c := range command {
-		if isPortFlag(c) {
-			hasPort = true
-			break
-		}
-	}
-	if !hasPort && req.Port > 0 {
-		command = append(command, "--port", strconv.Itoa(req.Port))
-	}
+	portBindings := portBindingsForRequest(req)
+	primaryPort := primaryPortForRequest(req)
+	command = knowledge.AppendPortBindings(command, portBindings)
 
 	// Append other config values as CLI flags, with template substitution
-	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath) {
+	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs)) {
 		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
 		f = strings.ReplaceAll(f, "{{.ModelPath}}", req.ModelPath)
 		command = append(command, f)
@@ -262,7 +253,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		done:           make(chan struct{}),
 		logFile:        procLogFile,
 		logPath:        logPath,
-		port:           req.Port,
+		port:           primaryPort,
 		labels:         req.Labels,
 		startTime:      now,
 		startupTimeout: effectiveHealthTimeout(req.HealthCheck),
@@ -277,7 +268,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		Name:           req.Name,
 		PID:            procPID,
 		ProcessGroupID: procGroupID,
-		Port:           req.Port,
+		Port:           primaryPort,
 		Engine:         req.Engine,
 		Labels:         req.Labels,
 		LogPath:        logPath,

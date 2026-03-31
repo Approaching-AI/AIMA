@@ -28,9 +28,10 @@ type DeployRequest struct {
 	Engine           string
 	Image            string   // container image (K3S, Docker)
 	Command          []string // startup command with {{.ModelPath}} placeholder
+	PortSpecs        []knowledge.StartupPort
 	InitCommands     []string // pre-commands to run before main server (K3S, Docker)
 	ModelPath        string   // host path to model files
-	Port             int
+	Port             int      // legacy fallback; prefer Config + PortSpecs
 	Config           map[string]any
 	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
 	RuntimeClassName string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
@@ -97,13 +98,13 @@ func isPortFlag(s string) bool {
 // Keys are underscore-separated (e.g. "mem_fraction_static") → "--mem-fraction-static".
 // "port" is excluded (handled separately by each runtime).
 // Bool true → flag only (no value); bool false → omitted.
-func configToFlags(config map[string]any, command []string, modelPath string) []string {
+func configToFlags(config map[string]any, command []string, modelPath string, reservedKeys map[string]struct{}) []string {
 	if len(config) == 0 {
 		return nil
 	}
 	keys := make([]string, 0, len(config))
 	for k := range config {
-		if k == "port" {
+		if _, reserved := reservedKeys[k]; reserved {
 			continue
 		}
 		if !knowledge.ShouldIncludeConfigFlag(command, modelPath, k, config[k]) {
@@ -125,4 +126,37 @@ func configToFlags(config map[string]any, command []string, modelPath string) []
 		}
 	}
 	return flags
+}
+
+func portBindingsForRequest(req *DeployRequest) []knowledge.PortBinding {
+	if req == nil {
+		return nil
+	}
+	bindings := knowledge.ResolvePortBindingsFromSpecs(req.PortSpecs, req.Config)
+	if len(bindings) > 0 {
+		return bindings
+	}
+	if req.Port > 0 {
+		return []knowledge.PortBinding{{
+			Name:      "http",
+			Flag:      "--port",
+			ConfigKey: "port",
+			Port:      req.Port,
+			Primary:   true,
+		}}
+	}
+	return nil
+}
+
+func primaryPortForRequest(req *DeployRequest) int {
+	if req == nil {
+		return 0
+	}
+	if port := knowledge.PrimaryPort(knowledge.ResolvePortBindingsFromSpecs(req.PortSpecs, req.Config)); port > 0 {
+		return port
+	}
+	if req.Port > 0 {
+		return req.Port
+	}
+	return 8000
 }

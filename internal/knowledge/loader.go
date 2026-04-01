@@ -303,11 +303,12 @@ type PowerConstraints struct {
 // --- Model Asset ---
 
 type ModelAsset struct {
-	Kind     string         `yaml:"kind"`
-	Metadata ModelMetadata  `yaml:"metadata"`
-	OpenClaw *OpenClawHints `yaml:"openclaw,omitempty"`
-	Storage  ModelStorage   `yaml:"storage"`
-	Variants []ModelVariant `yaml:"variants"`
+	Kind      string         `yaml:"kind"`
+	Metadata  ModelMetadata  `yaml:"metadata"`
+	OpenClaw  *OpenClawHints `yaml:"openclaw,omitempty"`
+	Storage   ModelStorage   `yaml:"storage"`
+	Variants  []ModelVariant `yaml:"variants"`
+	synthetic bool
 }
 
 type ModelMetadata struct {

@@ -167,11 +167,15 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 		}
 		return resolved, resolved.ModelName, nil
 	}
-	if !strings.Contains(err.Error(), "not found in catalog") {
+	rebuildSynthetic := strings.Contains(err.Error(), "not found in catalog")
+	if !rebuildSynthetic && cat.HasSyntheticModel(modelName) {
+		rebuildSynthetic = true
+	}
+	if !rebuildSynthetic {
 		return nil, "", fmt.Errorf("resolve config: %w", err)
 	}
 
-	// Catalog miss — try the scan database
+	// Catalog miss or stale synthetic model — rebuild from the scan database.
 	dbModel, dbErr := db.FindModelByName(ctx, modelName)
 	if dbErr != nil {
 		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (also not found in scan database)", modelName)
@@ -183,9 +187,19 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	slog.Info("model not in catalog, using auto-detected config",
 		"model", dbModel.Name, "format", dbModel.Format, "path", dbModel.Path)
 
-	synth := cat.BuildSyntheticModelAsset(
-		dbModel.Name, dbModel.Type, dbModel.DetectedArch, dbModel.DetectedParams, dbModel.Format, engineType)
-	cat.RegisterModel(synth)
+	synth := cat.BuildSyntheticModelAsset(knowledge.ScanMetadata{
+		Name:         dbModel.Name,
+		Type:         dbModel.Type,
+		Family:       dbModel.DetectedArch,
+		ParamCount:   dbModel.DetectedParams,
+		Format:       dbModel.Format,
+		SizeBytes:    dbModel.SizeBytes,
+		TotalParams:  dbModel.TotalParams,
+		ActiveParams: dbModel.ActiveParams,
+		Quantization: dbModel.Quantization,
+		ModelClass:   dbModel.ModelClass,
+	}, hw, engineType)
+	cat.UpsertSyntheticModel(synth)
 
 	if overrides == nil {
 		overrides = map[string]any{}

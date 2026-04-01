@@ -847,64 +847,289 @@ func (c *Catalog) DefaultEngine() string {
 	return FallbackEngine
 }
 
-// BuildSyntheticModelAsset creates a ModelAsset from scan-detected metadata
-// for models that have no YAML catalog entry. Uses wildcard gpu_arch="*"
-// so it matches any hardware, and relies on engine L0 defaults for config.
-// The catalog is used to derive the engine type from the model's file format.
-func (c *Catalog) BuildSyntheticModelAsset(name, modelType, family, paramCount, format string, requestedEngines ...string) ModelAsset {
-	if modelType == "" {
-		modelType = "llm"
+// ScanMetadata holds model metadata collected during filesystem scan,
+// used to build intelligent synthetic ModelAssets when no YAML exists.
+type ScanMetadata struct {
+	Name         string
+	Type         string
+	Family       string
+	ParamCount   string
+	Format       string
+	SizeBytes    int64
+	TotalParams  int64
+	ActiveParams int64
+	Quantization string
+	ModelClass   string
+}
+
+// bytesPerParam returns the memory bytes per parameter for a quantization format.
+func bytesPerParam(quantization string) float64 {
+	switch strings.ToLower(quantization) {
+	case "fp32":
+		return 4.0
+	case "fp16", "bf16":
+		return 2.0
+	case "fp8", "int8":
+		return 1.0
+	case "int5", "int6":
+		return 0.75
+	case "int4", "nf4":
+		return 0.5
+	default:
+		return 2.0 // conservative: assume FP16
 	}
-	engineType := c.FormatToEngine(format)
-	if engineType == "" {
-		engineType = c.DefaultEngine()
+}
+
+// estimateVRAMMiB estimates GPU memory requirements from scan metadata.
+// Returns 0 when insufficient data is available (graceful degradation).
+func estimateVRAMMiB(meta ScanMetadata) int {
+	var weightsMiB int
+	switch {
+	case meta.SizeBytes > 0:
+		weightsMiB = int(meta.SizeBytes / (1024 * 1024))
+	case meta.TotalParams > 0:
+		bpp := bytesPerParam(meta.Quantization)
+		weightsMiB = int(float64(meta.TotalParams) * bpp / (1024 * 1024))
+	default:
+		return 0
+	}
+	overheadMiB := weightsMiB / 4
+	if overheadMiB < 1024 {
+		overheadMiB = 1024
+	}
+	return weightsMiB + overheadMiB
+}
+
+// inferTP calculates the minimum tensor_parallel_size needed.
+func inferTP(estimatedVRAM int, hw HardwareInfo) int {
+	if hw.GPUVRAMMiB == 0 || hw.GPUCount == 0 || estimatedVRAM == 0 {
+		return 1
+	}
+	perGPU := hw.GPUVRAMMiB
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		osReserve := 16384
+		if hw.RAMTotalMiB < 65536 {
+			osReserve = 8192
+		}
+		perGPU = hw.RAMTotalMiB - osReserve
+	}
+	if perGPU <= 0 {
+		return 1
+	}
+	if estimatedVRAM <= int(float64(perGPU)*0.85) {
+		return 1
+	}
+	if hw.GPUCount <= 1 {
+		return 1
+	}
+	needed := (estimatedVRAM + int(float64(perGPU)*0.80) - 1) / int(float64(perGPU)*0.80)
+	tp := nextPowerOf2(needed)
+	if tp > hw.GPUCount {
+		tp = hw.GPUCount
+	}
+	return tp
+}
+
+func nextPowerOf2(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	p := 1
+	for p < n {
+		p *= 2
+	}
+	return p
+}
+
+func ceilDiv(n, d int) int {
+	if n <= 0 || d <= 0 {
+		return 0
+	}
+	return (n + d - 1) / d
+}
+
+// inferGMU calculates a safe gpu_memory_utilization value.
+// Returns 0 when hardware info is insufficient (let engine defaults apply).
+func inferGMU(estimatedVRAM int, hw HardwareInfo) float64 {
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		osReserve := 16384
+		if hw.RAMTotalMiB < 65536 {
+			osReserve = 8192
+		}
+		gmu := float64(hw.RAMTotalMiB-osReserve) / float64(hw.RAMTotalMiB)
+		if gmu > 0.85 {
+			gmu = 0.85
+		}
+		if gmu < 0.30 {
+			gmu = 0.30
+		}
+		return math.Floor(gmu*100) / 100
+	}
+	if hw.GPUVRAMMiB > 0 && estimatedVRAM > 0 {
+		gmu := float64(estimatedVRAM) / (float64(hw.GPUVRAMMiB) * 0.95)
+		if gmu > 0.90 {
+			gmu = 0.90
+		}
+		if gmu < 0.50 {
+			gmu = 0.50
+		}
+		return math.Floor(gmu*100) / 100
+	}
+	return 0
+}
+
+// inferMaxModelLen returns a conservative max_model_len based on estimated VRAM.
+func inferMaxModelLen(estimatedVRAM int) int {
+	switch {
+	case estimatedVRAM < 4096:
+		return 2048
+	case estimatedVRAM < 8192:
+		return 4096
+	case estimatedVRAM < 32768:
+		return 8192
+	default:
+		return 16384
+	}
+}
+
+// BuildSyntheticModelAsset creates a ModelAsset from scan-detected metadata
+// for models that have no YAML catalog entry. When hardware info is available,
+// generates variants with VRAM estimates, TP, and GMU to prevent OOM.
+// Falls back to wildcard variants when hardware is unknown.
+func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, requestedEngines ...string) ModelAsset {
+	if meta.Type == "" {
+		meta.Type = "llm"
+	}
+	inferredEngineType := c.FormatToEngine(meta.Format)
+	if inferredEngineType == "" {
+		inferredEngineType = c.DefaultEngine()
 	}
 
+	estimatedVRAM := estimateVRAMMiB(meta)
 	defaultEngine := c.DefaultEngine()
-	variants := []ModelVariant{{
-		Name:     name + "-auto",
-		Hardware: ModelVariantHardware{GPUArch: "*"},
-		Engine:   engineType,
-		Format:   format,
-	}}
-	// Add fallback variant when primary is a container-only engine (e.g. vllm).
-	// InferEngineType tries each variant's engine via findEngine; if vllm is
-	// unavailable (native runtime, no Source), it falls through to the default engine.
-	if engineType != defaultEngine {
+
+	var variants []ModelVariant
+	var targetedHW *ModelVariantHardware
+	var targetedCfg map[string]any
+
+	// When hardware is known, generate a targeted variant with resource estimates
+	if hw.GPUArch != "" && hw.GPUVRAMMiB > 0 && estimatedVRAM > 0 {
+		tp := inferTP(estimatedVRAM, hw)
+		gmu := inferGMU(estimatedVRAM, hw)
+		maxLen := inferMaxModelLen(estimatedVRAM)
+		perGPUVRAM := estimatedVRAM
+		if tp > 1 {
+			perGPUVRAM = ceilDiv(estimatedVRAM, tp)
+		}
+
+		hwSpec := ModelVariantHardware{
+			GPUArch:    hw.GPUArch,
+			VRAMMinMiB: perGPUVRAM,
+		}
+		if hw.UnifiedMemory {
+			um := true
+			hwSpec.UnifiedMemory = &um
+		}
+		if tp > 1 {
+			hwSpec.GPUCountMin = tp
+		}
+
+		cfg := map[string]any{"max_model_len": maxLen}
+		if gmu > 0 {
+			cfg["gpu_memory_utilization"] = gmu
+		}
+		if tp > 1 {
+			cfg["tensor_parallel_size"] = tp
+		}
+		targetedHWCopy := hwSpec
+		targetedHW = &targetedHWCopy
+		targetedCfg = cfg
+
 		variants = append(variants, ModelVariant{
-			Name:     name + "-auto-fallback",
-			Hardware: ModelVariantHardware{GPUArch: "*"},
-			Engine:   defaultEngine,
-			Format:   format,
+			Name:          meta.Name + "-" + hw.GPUArch + "-auto",
+			Hardware:      hwSpec,
+			Engine:        inferredEngineType,
+			Format:        meta.Format,
+			DefaultConfig: cfg,
+			ExpectedPerformance: map[string]any{
+				"vram_mib": estimatedVRAM,
+				"notes":    "auto-estimated from scan metadata",
+			},
 		})
 	}
-	// When the caller specifies an engine not already covered by format-inferred
-	// variants (e.g. "sglang" for a safetensors model that defaults to "vllm"),
-	// add a wildcard variant so findModelVariant can match.
-	for _, re := range requestedEngines {
-		if re == "" || re == engineType || re == defaultEngine {
-			continue
+
+	// Wildcard fallback (always present)
+	wildcardHW := ModelVariantHardware{GPUArch: "*"}
+	if estimatedVRAM > 0 {
+		wildcardHW.VRAMMinMiB = estimatedVRAM
+	}
+	variants = append(variants, ModelVariant{
+		Name:     meta.Name + "-auto",
+		Hardware: wildcardHW,
+		Engine:   inferredEngineType,
+		Format:   meta.Format,
+	})
+
+	if inferredEngineType != defaultEngine {
+		fbHW := ModelVariantHardware{GPUArch: "*"}
+		if estimatedVRAM > 0 {
+			fbHW.VRAMMinMiB = estimatedVRAM
 		}
 		variants = append(variants, ModelVariant{
-			Name:     name + "-" + re,
-			Hardware: ModelVariantHardware{GPUArch: "*"},
+			Name:     meta.Name + "-auto-fallback",
+			Hardware: fbHW,
+			Engine:   defaultEngine,
+			Format:   meta.Format,
+		})
+	}
+
+	for _, re := range requestedEngines {
+		if re == "" || re == inferredEngineType || re == defaultEngine {
+			continue
+		}
+		if targetedHW != nil {
+			cfg := make(map[string]any, len(targetedCfg))
+			for k, v := range targetedCfg {
+				cfg[k] = v
+			}
+			hwSpec := *targetedHW
+			variants = append(variants, ModelVariant{
+				Name:          meta.Name + "-" + hw.GPUArch + "-" + re + "-auto",
+				Hardware:      hwSpec,
+				Engine:        re,
+				Format:        meta.Format,
+				DefaultConfig: cfg,
+				ExpectedPerformance: map[string]any{
+					"vram_mib": estimatedVRAM,
+					"notes":    "auto-estimated from scan metadata",
+				},
+			})
+		}
+		reHW := ModelVariantHardware{GPUArch: "*"}
+		if estimatedVRAM > 0 {
+			reHW.VRAMMinMiB = estimatedVRAM
+		}
+		variants = append(variants, ModelVariant{
+			Name:     meta.Name + "-" + re,
+			Hardware: reHW,
 			Engine:   re,
-			Format:   format,
+			Format:   meta.Format,
 		})
 	}
 
 	return ModelAsset{
 		Kind: "model_asset",
 		Metadata: ModelMetadata{
-			Name:           name,
-			Type:           modelType,
-			Family:         family,
-			ParameterCount: paramCount,
+			Name:           meta.Name,
+			Type:           meta.Type,
+			Family:         meta.Family,
+			ParameterCount: meta.ParamCount,
 		},
 		Storage: ModelStorage{
-			Formats: []string{format},
+			Formats: []string{meta.Format},
 		},
-		Variants: variants,
+		Variants:  variants,
+		synthetic: true,
 	}
 }
 
@@ -917,6 +1142,38 @@ func (c *Catalog) RegisterModel(ma ModelAsset) {
 		if strings.EqualFold(existing.Metadata.Name, ma.Metadata.Name) {
 			return
 		}
+	}
+	c.ModelAssets = append(c.ModelAssets, ma)
+}
+
+// HasSyntheticModel reports whether the catalog currently contains a synthetic
+// model asset with the given name.
+func (c *Catalog) HasSyntheticModel(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.ModelAssets {
+		if strings.EqualFold(c.ModelAssets[i].Metadata.Name, name) {
+			return c.ModelAssets[i].synthetic
+		}
+	}
+	return false
+}
+
+// UpsertSyntheticModel stores a synthetic model asset, replacing an older
+// synthetic entry with the same name while leaving catalog-backed assets intact.
+func (c *Catalog) UpsertSyntheticModel(ma ModelAsset) {
+	ma.synthetic = true
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.ModelAssets {
+		if !strings.EqualFold(c.ModelAssets[i].Metadata.Name, ma.Metadata.Name) {
+			continue
+		}
+		if c.ModelAssets[i].synthetic {
+			c.ModelAssets[i] = ma
+		}
+		return
 	}
 	c.ModelAssets = append(c.ModelAssets, ma)
 }

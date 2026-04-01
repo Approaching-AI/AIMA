@@ -312,7 +312,10 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ma := cat.BuildSyntheticModelAsset("test-model", tt.modelType, "testfam", "8B", tt.format)
+			ma := cat.BuildSyntheticModelAsset(ScanMetadata{
+				Name: "test-model", Type: tt.modelType, Family: "testfam",
+				ParamCount: "8B", Format: tt.format,
+			}, HardwareInfo{})
 			if ma.Metadata.Type != tt.wantType {
 				t.Errorf("Type = %q, want %q", ma.Metadata.Type, tt.wantType)
 			}
@@ -337,6 +340,192 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEstimateVRAMMiB(t *testing.T) {
+	tests := []struct {
+		name string
+		meta ScanMetadata
+		want int
+	}{
+		{"size_bytes 8GB GGUF", ScanMetadata{SizeBytes: 8 * 1024 * 1024 * 1024}, 8192 + 2048},
+		{"params 8B fp16", ScanMetadata{TotalParams: 8_000_000_000, Quantization: "fp16"}, 15258 + 3814},
+		{"params 70B int4", ScanMetadata{TotalParams: 70_000_000_000, Quantization: "int4"}, 33378 + 8344},
+		{"size_bytes takes priority over params", ScanMetadata{SizeBytes: 5 * 1024 * 1024 * 1024, TotalParams: 70_000_000_000}, 5120 + 1280},
+		{"no data returns 0", ScanMetadata{}, 0},
+		{"small model overhead floor 1GB", ScanMetadata{SizeBytes: 500 * 1024 * 1024}, 500 + 1024},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := estimateVRAMMiB(tt.meta)
+			if got != tt.want {
+				t.Errorf("estimateVRAMMiB() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferTP(t *testing.T) {
+	tests := []struct {
+		name string
+		vram int
+		hw   HardwareInfo
+		want int
+	}{
+		{"fits single GPU", 10000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 1}, 1},
+		{"no hw info", 10000, HardwareInfo{}, 1},
+		{"needs 2 GPUs", 40000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 2}, 2},
+		{"needs 4 but only 2", 100000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 2}, 2},
+		{"needs 8 GPUs", 140000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 8}, 8},
+		{"unified memory fits", 30000, HardwareInfo{GPUVRAMMiB: 128000, GPUCount: 1, UnifiedMemory: true, RAMTotalMiB: 131072}, 1},
+		{"single GPU too small but only 1", 50000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 1}, 1},
+		{"zero estimated", 0, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 2}, 1},
+		{"round up to power of 2", 60000, HardwareInfo{GPUVRAMMiB: 24576, GPUCount: 8}, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := inferTP(tt.vram, tt.hw)
+			if got != tt.want {
+				t.Errorf("inferTP() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferGMU(t *testing.T) {
+	tests := []struct {
+		name string
+		vram int
+		hw   HardwareInfo
+		want float64
+	}{
+		{"no hw info", 10000, HardwareInfo{}, 0},
+		{"discrete small model", 5000, HardwareInfo{GPUVRAMMiB: 24576}, 0.50},
+		{"discrete large model", 22000, HardwareInfo{GPUVRAMMiB: 24576}, 0.90},
+		{"unified 128GB", 30000, HardwareInfo{GPUVRAMMiB: 128000, UnifiedMemory: true, RAMTotalMiB: 131072}, 0.85},
+		{"unified 32GB", 10000, HardwareInfo{GPUVRAMMiB: 32000, UnifiedMemory: true, RAMTotalMiB: 32768}, 0.75},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := inferGMU(tt.vram, tt.hw)
+			if got != tt.want {
+				t.Errorf("inferGMU() = %.2f, want %.2f", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSyntheticWithHardware(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "llamacpp-universal", Type: "llamacpp", Version: "1.0",
+					Default: true, SupportedFormats: []string{"gguf"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+			},
+		},
+	}
+	meta := ScanMetadata{
+		Name: "big-model", Type: "llm", Format: "safetensors",
+		SizeBytes: 16 * 1024 * 1024 * 1024, // 16GB
+	}
+	hw := HardwareInfo{GPUArch: "Ada", GPUVRAMMiB: 24576, GPUCount: 1}
+
+	ma := cat.BuildSyntheticModelAsset(meta, hw)
+
+	// Should have 3 variants: hardware-specific + wildcard + llamacpp fallback
+	if len(ma.Variants) != 3 {
+		t.Fatalf("Variants count = %d, want 3", len(ma.Variants))
+	}
+
+	// First variant should be hardware-specific with VRAM estimate
+	v := ma.Variants[0]
+	if v.Hardware.GPUArch != "Ada" {
+		t.Errorf("variant[0] GPUArch = %q, want Ada", v.Hardware.GPUArch)
+	}
+	if v.Hardware.VRAMMinMiB == 0 {
+		t.Error("variant[0] VRAMMinMiB should be > 0")
+	}
+	if v.DefaultConfig == nil {
+		t.Fatal("variant[0] DefaultConfig should not be nil")
+	}
+	if _, ok := v.DefaultConfig["gpu_memory_utilization"]; !ok {
+		t.Error("variant[0] should have gpu_memory_utilization")
+	}
+	if _, ok := v.DefaultConfig["max_model_len"]; !ok {
+		t.Error("variant[0] should have max_model_len")
+	}
+
+	// Wildcard variant should also have VRAM estimate
+	wc := ma.Variants[1]
+	if wc.Hardware.GPUArch != "*" {
+		t.Errorf("variant[1] GPUArch = %q, want *", wc.Hardware.GPUArch)
+	}
+	if wc.Hardware.VRAMMinMiB == 0 {
+		t.Error("variant[1] VRAMMinMiB should be > 0 (wildcard with VRAM constraint)")
+	}
+}
+
+func TestResolveSyntheticWithAutoTP(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					Default: true, SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{
+					Command:     []string{"serve"},
+					DefaultArgs: map[string]any{"gpu_memory_utilization": 0.9},
+				},
+			},
+		},
+	}
+
+	meta := ScanMetadata{
+		Name: "big-model", Type: "llm", Format: "safetensors",
+		SizeBytes: 32 * 1024 * 1024 * 1024,
+	}
+	hw := HardwareInfo{GPUArch: "Ada", GPUVRAMMiB: 24576, GPUCount: 2}
+	totalVRAM := estimateVRAMMiB(meta)
+
+	synth := cat.BuildSyntheticModelAsset(meta, hw)
+	cat.UpsertSyntheticModel(synth)
+
+	if len(cat.ModelAssets) != 1 {
+		t.Fatalf("ModelAssets count = %d, want 1", len(cat.ModelAssets))
+	}
+	variant := cat.ModelAssets[0].Variants[0]
+	if variant.Hardware.GPUCountMin != 2 {
+		t.Fatalf("GPUCountMin = %d, want 2", variant.Hardware.GPUCountMin)
+	}
+	if variant.Hardware.VRAMMinMiB != ceilDiv(totalVRAM, 2) {
+		t.Fatalf("VRAMMinMiB = %d, want %d", variant.Hardware.VRAMMinMiB, ceilDiv(totalVRAM, 2))
+	}
+
+	resolved, err := cat.Resolve(hw, "big-model", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "vllm" {
+		t.Fatalf("Engine = %q, want vllm", resolved.Engine)
+	}
+	if got := int(toFloat64(resolved.Config["tensor_parallel_size"])); got != 2 {
+		t.Fatalf("tensor_parallel_size = %d, want 2", got)
+	}
+	if resolved.EstimatedVRAMMiB != totalVRAM {
+		t.Fatalf("EstimatedVRAMMiB = %d, want %d", resolved.EstimatedVRAMMiB, totalVRAM)
 	}
 }
 

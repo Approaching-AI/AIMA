@@ -165,6 +165,39 @@ variants:
       latency_first_token_ms: [50, 200]
       notes: "AMD W7900D RDNA3 48GB, TP=2, BF16. vLLM-ROCm with triton flash attention."
 
+  # --- Ada (2× RTX 4090, KTransformers CPU-GPU hybrid, BF16) ---
+  # BF16 全精度 ~60GB，通过 KTransformers 将非活跃 expert 卸载到 CPU
+  # 2× RTX 4090 (48GB VRAM) + 503GB RAM → kt 实际只需 ~10-15GB GPU
+  # kt_num_gpu_experts=6: 每层保留 6 个 expert 在 GPU，其余走 CPU AMX/AVX-512
+  # 相比 llamacpp GGUF Q4: 全精度推理，精度更高；MoE 3B active 受益于 kt 架构
+  - name: qwen3-30b-a3b-ada-sglang-kt-bf16
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 16384
+      gpu_count_min: 2
+      unified_memory: false
+    engine: sglang-kt
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3-30B-A3B
+    default_config:
+      mem_fraction_static: 0.85
+      tp_size: 2
+      kt_cpuinfer: 40
+      kt_num_gpu_experts: 6
+      kt_method: BF16
+      context_length: 32768
+      disable_shared_experts_fusion: true
+      chunked_prefill_size: 32768
+      max_running_requests: 16
+      watchdog_timeout: 3000
+    expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 600
+      tokens_per_second: [15, 40]
+      notes: "SGLang-KT AppImage, BF16 全精度, CPU-GPU hybrid MoE. 2× RTX 4090 + 503GB RAM. KTransformers offloads inactive experts to CPU via AMX/AVX-512. Untested estimate — actual performance depends on CPU bandwidth and expert routing."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
   # 虽然文件大，但推理时仅激活 3B params，速度较快
@@ -182,3 +215,4 @@ variants:
     expected_performance:
       tokens_per_second: [8, 30]
       latency_first_token_ms: [40, 200]
+      notes: "Measured on test-win (i9-13980HX + RTX 4060 8GB, WSL2, 24GB RAM): 21 tok/s decode (TPOT P50=47ms), TTFT 1.4s @128 input tokens. MoE 3B active params — decode speed comparable to 8B dense."

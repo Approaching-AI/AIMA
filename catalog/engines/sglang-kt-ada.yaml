@@ -22,6 +22,8 @@ patterns:
   - "sglang-kt"
   - "ktransformers"
 startup:
+  # Native AppImage: self-contained binary, same CLI as sglang
+  command: ["sglang-kt", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
   env:
     KT_AVAILABLE: "1"
     OMP_NUM_THREADS: "1"
@@ -66,7 +68,15 @@ time_constraints:
   model_switch_s: [120, 600]
 power_constraints:
   typical_draw_watts: [200, 700]
+source:
+  # SGLang-KT AppImage: 4.4GB self-contained ELF binary
+  # Embeds Python 3.12 + SGLang + KTransformers + CUDA runtime
+  # FUSE-mounts at runtime, same CLI as python3 -m sglang.launch_server
+  binary: "sglang-kt"
+  platforms: [linux/amd64]
+  download:
+    linux/amd64: "https://r2delivery.haoup.net/sglang-appimage/SGLang-f6adb4f-kt1b4665e-x86_64.AppImage"
 runtime:
-  default: "container"
+  default: "native"
   platform_recommendations:
-    linux/amd64: "container"
+    linux/amd64: "native"

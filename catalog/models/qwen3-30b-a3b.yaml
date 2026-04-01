@@ -139,6 +139,32 @@ variants:
       vram_mib: 123012
       notes: "vLLM-MetaX 0.13.0, BF16, TP=2, 2× MetaX N260 64GB HBM2e. Measured 2026-03-06: weights 38s + torch.compile 161s + CUDA graph 27s = 226s startup. 65.8 tok/s decode (512 tokens). 61506 MiB/GPU (gmu=0.90). FLASH_ATTN backend, PIECEWISE CUDA graphs."
 
+  # --- AMD W7900D RDNA3 (8× 48GB discrete, Docker) ---
+  # BF16 weights ~60GB > 48GB single card → TP=2, 30GB per GPU
+  # 8 GPUs available, can run up to 4 TP=2 instances
+  # gmu=0.90 on 48GB ≈ 43GB per GPU → 30GB weights + 13GB KV cache
+  - name: qwen3-30b-a3b-rdna3-vllm-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 2
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3-30B-A3B
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 8192
+      dtype: bfloat16
+      tensor_parallel_size: 2
+      trust_remote_code: true
+    expected_performance:
+      tokens_per_second: [15, 40]
+      latency_first_token_ms: [50, 200]
+      notes: "AMD W7900D RDNA3 48GB, TP=2, BF16. vLLM-ROCm with triton flash attention."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
   # 虽然文件大，但推理时仅激活 3B params，速度较快

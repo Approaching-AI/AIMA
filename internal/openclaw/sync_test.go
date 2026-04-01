@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -298,9 +299,9 @@ func TestSyncWritesLocalMediaProviderForASR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConfig failed: %v", err)
 	}
-	provider := lookupMap(cfg, "models", "providers", "aima-imagegen")
+	provider := lookupMap(cfg, "models", "providers", "aima-media")
 	if provider == nil {
-		t.Fatal("models.providers.aima-imagegen missing after ASR sync")
+		t.Fatal("models.providers.aima-media missing after ASR sync")
 	}
 	if got := provider["baseUrl"]; got != "http://127.0.0.1:6188/v1" {
 		t.Fatalf("provider baseUrl = %v, want http://127.0.0.1:6188/v1", got)
@@ -327,8 +328,8 @@ func TestSyncWritesLocalMediaProviderForASR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadManagedState failed: %v", err)
 	}
-	if managed.MediaProvider != "aima-imagegen" {
-		t.Fatalf("managed media provider = %q, want aima-imagegen", managed.MediaProvider)
+	if managed.MediaProvider != "aima-media" {
+		t.Fatalf("managed media provider = %q, want aima-media", managed.MediaProvider)
 	}
 }
 
@@ -502,6 +503,9 @@ func TestSyncMigratesLegacyImageGenProviderWithMedia(t *testing.T) {
 	}
 	if provider := lookupMap(cfg, "models", "providers", "aima-imagegen"); provider == nil {
 		t.Fatal("aima-imagegen provider missing after sync")
+	}
+	if provider := lookupMap(cfg, "models", "providers", "aima-media"); provider == nil {
+		t.Fatal("aima-media provider missing after sync")
 	}
 	audio := mediaModels(lookupMap(cfg, "tools", "media", "audio"), "http://127.0.0.1:6188/v1")
 	if len(audio) != 1 || audio[0] != "qwen3-asr-1.7b" {
@@ -873,78 +877,37 @@ func TestDeployPluginsWritesAIMALocalImagePlugin(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetDir, "aima-local-image", "package.json")); err != nil {
 		t.Fatalf("expected plugin package.json: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(targetDir, "aima-local-image", "index.js")); err != nil {
+	entryPath := filepath.Join(targetDir, "aima-local-image", "index.js")
+	if _, err := os.Stat(entryPath); err != nil {
 		t.Fatalf("expected plugin entrypoint: %v", err)
 	}
+	entryData, err := os.ReadFile(entryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(plugin entrypoint): %v", err)
+	}
+	if !strings.Contains(string(entryData), `api.on("tool_result_persist"`) {
+		t.Fatal("expected image plugin to register tool_result_persist hook")
+	}
+	if !strings.Contains(string(entryData), `api.on("before_tool_call"`) {
+		t.Fatal("expected image plugin to register before_tool_call hook")
+	}
+	if !strings.Contains(string(entryData), `api.on("after_tool_call"`) {
+		t.Fatal("expected image plugin to register after_tool_call hook")
+	}
+	if !strings.Contains(string(entryData), `Do not use placeholder paths like /tmp/tmp.jpg or /path/to/generated-image.jpg.`) {
+		t.Fatal("expected image plugin guidance to forbid placeholder image paths")
+	}
+	if !strings.Contains(string(entryData), `".openclaw", "workspace", "media"`) {
+		t.Fatal("expected image plugin to copy generated images into the OpenClaw workspace")
+	}
+	if !strings.Contains(string(entryData), `const rememberedGeneratedImages = new Map();`) {
+		t.Fatal("expected image plugin to remember image_generate outputs for later image tool calls")
+	}
+	if !strings.Contains(string(entryData), `".openclaw", "state", "aima-local-image.json"`) {
+		t.Fatal("expected image plugin to persist generated image references across hook contexts")
+	}
 }
 
-func TestCleanupLegacyAgentModelCatalogsRemovesLegacyImageGenProvider(t *testing.T) {
-	t.Parallel()
-
-	stateDir := t.TempDir()
-	modelsPath := filepath.Join(stateDir, "agents", "main", "agent", "models.json")
-	if err := os.MkdirAll(filepath.Dir(modelsPath), 0755); err != nil {
-		t.Fatalf("mkdir models dir: %v", err)
-	}
-
-	initial := map[string]any{
-		"providers": map[string]any{
-			"aima": map[string]any{
-				"baseUrl": "http://127.0.0.1:6188/v1",
-				"models": []any{
-					map[string]any{"id": "qwen3.5-9b"},
-				},
-			},
-			"openai": map[string]any{
-				"baseUrl": "http://127.0.0.1:6188/v1",
-				"models": []any{
-					map[string]any{"id": "z-image"},
-				},
-			},
-			"external-openai": map[string]any{
-				"baseUrl": "https://api.openai.com/v1",
-				"models": []any{
-					map[string]any{"id": "gpt-4o"},
-				},
-			},
-		},
-	}
-	data, err := json.MarshalIndent(initial, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal initial models.json: %v", err)
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(modelsPath, data, 0644); err != nil {
-		t.Fatalf("write models.json: %v", err)
-	}
-
-	if err := CleanupLegacyAgentModelCatalogs(stateDir, "http://127.0.0.1:6188/v1", []ImageGenEntry{{ID: "z-image"}}); err != nil {
-		t.Fatalf("CleanupLegacyAgentModelCatalogs failed: %v", err)
-	}
-
-	var cleaned map[string]any
-	raw, err := os.ReadFile(modelsPath)
-	if err != nil {
-		t.Fatalf("read models.json: %v", err)
-	}
-	if err := json.Unmarshal(raw, &cleaned); err != nil {
-		t.Fatalf("unmarshal cleaned models.json: %v", err)
-	}
-
-	providers, ok := cleaned["providers"].(map[string]any)
-	if !ok {
-		t.Fatalf("providers = %T, want map", cleaned["providers"])
-	}
-	if _, ok := providers["openai"]; ok {
-		t.Fatal("legacy openai image-generation provider should be removed from agent models cache")
-	}
-	if _, ok := providers["aima"]; !ok {
-		t.Fatal("aima provider should be preserved")
-	}
-	if _, ok := providers["external-openai"]; !ok {
-		t.Fatal("external openai provider should be preserved")
-	}
-}
 
 func TestSyncKeepsManagedMCPServerWithoutReadyBackends(t *testing.T) {
 	t.Parallel()

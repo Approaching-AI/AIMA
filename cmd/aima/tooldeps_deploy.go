@@ -155,7 +155,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		deployName := knowledge.SanitizePodName(modelName + "-" + resolved.Engine)
 		suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
 		if existing, _ := findDeploymentStatus(ctx, deployName, suppressRecentlyDeleted, activeRt, rt, nativeRt, dockerRt); existing != nil {
-			if existing.Ready || existing.Phase == "running" || existing.Phase == "starting" {
+			if shouldReuseExistingDeployment(existing, engineType, slot, configOverrides) {
 				proxyServer.RegisterBackend(modelName, &proxy.Backend{
 					ModelName:  modelName,
 					EngineType: resolved.Engine,

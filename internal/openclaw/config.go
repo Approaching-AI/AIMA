@@ -13,6 +13,7 @@ import (
 const (
 	aimaLLMProviderID         = "aima"
 	aimaMCPServerID           = "aima"
+	aimaMediaProviderID       = "aima-media"
 	legacyLLMProviderID       = "vllm"
 	aimaImageGenProviderID    = "aima-imagegen"
 	legacyImageGenProviderID  = "openai" // pre-v0.2.1: image gen used "openai" provider
@@ -216,10 +217,7 @@ func canManageImageGeneration(cfg map[string]any, managed *ManagedState, result 
 	if hasAgentDefaultModel(cfg, "imageGenerationModel") {
 		return false
 	}
-	if lookupMap(cfg, "models", "providers", aimaImageGenProviderID) == nil {
-		return true
-	}
-	return managedOwnsMediaProvider(managed)
+	return lookupMap(cfg, "models", "providers", aimaImageGenProviderID) == nil
 }
 
 func legacyImageGenerationOwned(cfg map[string]any, result *SyncResult) bool {
@@ -410,14 +408,11 @@ func mergeLocalMediaProvider(cfg map[string]any, managed, next *ManagedState, re
 	if result == nil {
 		return
 	}
-	if managedOwnsImageGeneration(next) {
-		return
-	}
 	needsProvider := len(next.AudioModels) > 0 || len(next.VisionModels) > 0
-	provider := lookupMap(cfg, "models", "providers", aimaImageGenProviderID)
+	provider := lookupMap(cfg, "models", "providers", aimaMediaProviderID)
 	if !needsProvider {
 		if managedOwnsMediaProvider(managed) && providerManagedByAIMA(provider, result.ProxyAddr) {
-			removeProviderIfPresent(cfg, aimaImageGenProviderID)
+			removeProviderIfPresent(cfg, aimaMediaProviderID)
 		}
 		return
 	}
@@ -425,8 +420,8 @@ func mergeLocalMediaProvider(cfg map[string]any, managed, next *ManagedState, re
 		return
 	}
 	providers := ensureMap(ensureMap(cfg, "models"), "providers")
-	providers[aimaImageGenProviderID] = buildProviderConfig(result.ProxyAddr, directToolAPIKey(result.APIKey), buildLocalMediaProviderModels(result))
-	next.MediaProvider = aimaImageGenProviderID
+	providers[aimaMediaProviderID] = buildProviderConfig(result.ProxyAddr, directToolAPIKey(result.APIKey), buildLocalMediaProviderModels(result))
+	next.MediaProvider = aimaMediaProviderID
 }
 
 func keepUnmanagedMediaModels(section map[string]any, owned map[string]struct{}, proxyAddr string, allowLegacy bool) []any {

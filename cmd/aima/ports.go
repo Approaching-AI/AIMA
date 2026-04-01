@@ -44,6 +44,7 @@ func allocateDeploymentPorts(
 	}
 
 	reservedPorts := reservedHostPorts(deployments, owner)
+	ownerPorts := ownerHostPorts(deployments, owner)
 	selectedPorts := make(map[int]struct{}, len(hostIndexes))
 	if req.Config == nil {
 		req.Config = make(map[string]any)
@@ -52,6 +53,16 @@ func allocateDeploymentPorts(
 	for _, idx := range hostIndexes {
 		binding := bindings[idx]
 		explicit := strings.EqualFold(provenance[binding.ConfigKey], "L1")
+		if !explicit {
+			if reused, ok := ownerPorts[hostPortLabel(binding.ConfigKey)]; ok && reused >= minHostPort && reused <= maxHostPort {
+				bindings[idx].Port = reused
+				if binding.ConfigKey != "" {
+					req.Config[binding.ConfigKey] = reused
+				}
+				selectedPorts[reused] = struct{}{}
+				continue
+			}
+		}
 		port, err := chooseHostPort(binding.Port, explicit, reservedPorts, selectedPorts)
 		if err != nil {
 			return err
@@ -160,6 +171,41 @@ func reservedHostPorts(deployments []*runtime.DeploymentStatus, owner string) ma
 		}
 	}
 	return reserved
+}
+
+func ownerHostPorts(deployments []*runtime.DeploymentStatus, owner string) map[string]int {
+	if owner == "" {
+		return nil
+	}
+	ports := make(map[string]int)
+	for _, deployment := range deployments {
+		if deployment == nil || deployment.Name != owner {
+			continue
+		}
+		for key, value := range deployment.Labels {
+			if key != hostPortLabelBase && !strings.HasPrefix(key, hostPortLabelBase+".") {
+				continue
+			}
+			port, err := strconv.Atoi(value)
+			if err != nil || port <= 0 {
+				continue
+			}
+			ports[key] = port
+		}
+		if _, ok := ports[hostPortLabelBase]; ok {
+			continue
+		}
+		if portValue, ok := deployment.Labels["aima.dev/port"]; ok {
+			port, err := strconv.Atoi(portValue)
+			if err == nil && port > 0 {
+				ports[hostPortLabelBase] = port
+			}
+		}
+	}
+	if len(ports) == 0 {
+		return nil
+	}
+	return ports
 }
 
 func hostPortBindingIndexes(runtimeName string, req *runtime.DeployRequest, bindings []knowledge.PortBinding) []int {

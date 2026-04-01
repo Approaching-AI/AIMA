@@ -157,10 +157,6 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 	result.Written = true
 
 	stateDir := filepath.Dir(deps.ConfigPath)
-	if err := CleanupLegacyAgentModelCatalogs(stateDir, result.ProxyAddr, result.ImageGenModels); err != nil {
-		slog.Warn("openclaw sync: failed to clean legacy agent model catalogs", "err", err)
-	}
-
 	// Deploy AIMA skills to ~/.openclaw/skills/
 	skillsDir := filepath.Join(stateDir, "skills")
 	if err := DeploySkills(skillsDir); err != nil {

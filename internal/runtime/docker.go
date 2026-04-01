@@ -108,6 +108,11 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, "--publish", portStr+":"+portStr)
 	}
 
+	// AIMA owns readiness via knowledge YAML. Never inherit image-baked
+	// health checks blindly; override them when YAML provides one, otherwise
+	// disable them to avoid stale ports or incorrect image defaults.
+	args = append(args, dockerHealthArgs(req)...)
+
 	modelHostPath := req.ModelPath
 	containerModelPath := "/models"
 	if isContainerModelFilePath(modelHostPath) {
@@ -518,6 +523,36 @@ func cdiAvailable() bool {
 
 func (r *DockerRuntime) removeContainer(ctx context.Context, name string) {
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", name).Run()
+}
+
+func dockerHealthArgs(req *DeployRequest) []string {
+	if req == nil || req.HealthCheck == nil || strings.TrimSpace(req.HealthCheck.Path) == "" {
+		return []string{"--no-healthcheck"}
+	}
+	port := primaryPortForRequest(req)
+	if port <= 0 {
+		return []string{"--no-healthcheck"}
+	}
+	path := req.HealthCheck.Path
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	probeTimeoutS := 5
+	if req.HealthCheck.TimeoutS > probeTimeoutS && req.HealthCheck.TimeoutS < 30 {
+		probeTimeoutS = req.HealthCheck.TimeoutS
+	}
+	startPeriodS := 60
+	if req.HealthCheck.TimeoutS > startPeriodS {
+		startPeriodS = req.HealthCheck.TimeoutS
+	}
+	cmd := fmt.Sprintf("curl -fsS --max-time %d http://localhost:%d%s >/dev/null || exit 1", probeTimeoutS, port, path)
+	return []string{
+		"--health-cmd", cmd,
+		"--health-interval", "10s",
+		"--health-timeout", fmt.Sprintf("%ds", probeTimeoutS),
+		"--health-start-period", fmt.Sprintf("%ds", startPeriodS),
+		"--health-retries", "3",
+	}
 }
 
 func shouldRetryDockerWithLegacyNVIDIAGPU(args []string, output []byte) bool {

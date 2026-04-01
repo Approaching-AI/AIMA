@@ -90,9 +90,6 @@ func normalizeManagedState(state *ManagedState) {
 		return
 	}
 	state.Version = managedStateVersion
-	if state.ImageGenerationProvider == aimaImageGenProviderID || state.ImageGenerationProvider == legacyImageGenProviderID {
-		state.MediaProvider = ""
-	}
 	state.AudioModels = uniqueSorted(state.AudioModels)
 	state.VisionModels = uniqueSorted(state.VisionModels)
 	state.ImageModelModels = uniqueSorted(state.ImageModelModels)

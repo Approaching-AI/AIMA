@@ -121,6 +121,41 @@ func TestReservedHostPortsFallsBackToLegacyPrimaryPortLabel(t *testing.T) {
 	}
 }
 
+func TestAllocateDeploymentPortsReusesExistingOwnerHostPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	busyPort := ln.Addr().(*net.TCPAddr).Port
+	req := &runtime.DeployRequest{
+		Config: map[string]any{
+			"port": busyPort,
+		},
+		PortSpecs: []knowledge.StartupPort{{Name: "http", Primary: true}},
+	}
+	deployments := []*runtime.DeploymentStatus{{
+		Name:    "deploy-a",
+		Phase:   "running",
+		Runtime: "docker",
+		Labels: map[string]string{
+			"aima.dev/host-port": strconv.Itoa(busyPort),
+			"aima.dev/port":      strconv.Itoa(busyPort),
+		},
+	}}
+
+	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{"port": "L0"}, deployments); err != nil {
+		t.Fatalf("allocateDeploymentPorts: %v", err)
+	}
+	if got := req.Config["port"]; got != busyPort {
+		t.Fatalf("config.port = %v, want reused owner port %d", got, busyPort)
+	}
+	if req.Labels["aima.dev/host-port"] != strconv.Itoa(busyPort) {
+		t.Fatalf("unexpected host-port label: %+v", req.Labels)
+	}
+}
+
 func TestAllocateDeploymentPortsNativeReservesAllHostPorts(t *testing.T) {
 	req := &runtime.DeployRequest{
 		Config: map[string]any{

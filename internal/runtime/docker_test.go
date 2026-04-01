@@ -210,6 +210,48 @@ func TestBuildRunArgs_ExpandsEnvTemplates(t *testing.T) {
 	assertContains(t, argStr, "--env MODEL_NAME=z-image", "model name env should expand")
 }
 
+func TestBuildRunArgs_UsesKnowledgeHealthcheck(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "z-image",
+		Engine:    "z-image-diffusers",
+		Image:     "qujing-z-image:latest",
+		Command:   []string{"python3", "server.py"},
+		ModelPath: "/data/models/z-image",
+		PortSpecs: []knowledge.StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{"port": 8188},
+		HealthCheck: &HealthCheckConfig{
+			Path:     "/health",
+			TimeoutS: 120,
+		},
+	}
+
+	args := r.buildRunArgs("z-image-z-image-diffusers", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--health-cmd", "docker health command")
+	assertContains(t, argStr, "http://localhost:8188/health", "health command should target primary port")
+	assertContains(t, argStr, "--health-start-period 120s", "health start period should honor YAML timeout")
+	assertNotContains(t, argStr, "--no-healthcheck", "knowledge healthcheck should override image defaults")
+}
+
+func TestBuildRunArgs_DisablesImageHealthcheckWithoutKnowledgeHealthcheck(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:    "tts-model",
+		Engine:  "qwen-tts-fastapi-cuda-blackwell",
+		Image:   "qwen3-tts-cuda-arm64:latest",
+		Command: []string{"python", "main.py"},
+	}
+
+	args := r.buildRunArgs("tts-model-qwen-tts-fastapi-cuda-blackwell", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--no-healthcheck", "runtime should disable image-baked healthchecks when YAML omits one")
+}
+
 func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

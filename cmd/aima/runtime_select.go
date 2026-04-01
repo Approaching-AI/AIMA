@@ -237,3 +237,21 @@ func filterDeploymentStatuses(statuses []*runtime.DeploymentStatus, suppress fun
 	}
 	return filtered
 }
+
+func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineType, slot string, configOverrides map[string]any) bool {
+	if existing == nil {
+		return false
+	}
+	if !(existing.Ready || existing.Phase == "running" || existing.Phase == "starting") {
+		return false
+	}
+	// Explicit deployment intents should reconcile the runtime instead of
+	// short-circuiting on a same-name deployment that may have drifted.
+	if strings.TrimSpace(engineType) != "" {
+		return false
+	}
+	if strings.TrimSpace(slot) != "" {
+		return false
+	}
+	return len(configOverrides) == 0
+}

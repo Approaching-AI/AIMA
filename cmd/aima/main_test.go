@@ -568,6 +568,22 @@ func TestDeploymentMatchesQuery(t *testing.T) {
 	}
 }
 
+func TestShouldReuseExistingDeployment(t *testing.T) {
+	existing := &aimaRuntime.DeploymentStatus{Name: "qwen3-tts-0-6b-qwen-tts-fastapi-cuda-blackwell", Phase: "running", Ready: true}
+	if !shouldReuseExistingDeployment(existing, "", "", nil) {
+		t.Fatal("expected plain deploy query to reuse existing deployment")
+	}
+	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}) {
+		t.Fatal("expected config override to force runtime reconciliation")
+	}
+	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil) {
+		t.Fatal("expected explicit engine selection to force runtime reconciliation")
+	}
+	if shouldReuseExistingDeployment(existing, "", "slot-a", nil) {
+		t.Fatal("expected explicit slot selection to force runtime reconciliation")
+	}
+}
+
 func TestScenarioWaitForReadyHealthCheckReady(t *testing.T) {
 	err := scenarioWaitForReady(context.Background(), "demo-deploy", "health_check", 1,
 		func(context.Context, string) (json.RawMessage, error) {

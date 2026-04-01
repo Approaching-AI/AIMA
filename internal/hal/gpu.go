@@ -338,6 +338,14 @@ func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 				gpu.SDKVersion = "ROCm " + ver
 			}
 		}
+		// Fallback: parse version from dpkg when /opt/rocm is not installed (minimal rocm-smi)
+		if gpu.SDKVersion == "" {
+			if out, err := runner.Run(ctx, "dpkg-query", "-W", "-f=${Version}", "rocm-smi"); err == nil {
+				if ver := strings.TrimSpace(string(out)); ver != "" {
+					gpu.SDKVersion = "ROCm " + ver
+				}
+			}
+		}
 	}
 	if gpu.DriverVersion == "" {
 		// Try modinfo first; amdgpu built into kernel often has no version field,

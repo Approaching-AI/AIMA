@@ -30,6 +30,9 @@ startup:
     - "rm -rf /model && ln -s /models /model"
   default_args:
     port: 8002
+    # GB10 上这条 CUDA 路线需要 transformers 自动分配设备；固定 cuda:0 会在
+    # generate_voice_clone() 里触发 CUDA runtime 错误。
+    device_map: auto
   # No health_check: TTS server is single-threaded; liveness probe
   # kills the pod during long inference requests (2-5 min).
   warmup:

@@ -35,7 +35,7 @@ Authorization: Bearer <KEY>
 │       └──────┬───────┘       └──────────────────────┘  │
 │              │                        │                 │
 │       ┌──────▼───────┐        ┌───────▼──────┐         │
-│       │  56 MCP Tools │        │  Backends    │         │
+│       │  94 MCP Tools │        │  Backends    │         │
 │       │  (single      │        │  local K3S   │         │
 │       │   source of   │        │  local native│         │
 │       │   truth)      │        │  remote mDNS │         │

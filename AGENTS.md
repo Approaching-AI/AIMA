@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 79 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 94 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -145,7 +145,7 @@ mature external tools (K3S, HAMi, containerd, SQLite) together with YAML knowled
 
 ## Architecture Invariants (Never Violate)
 
-Read `design/ARCHITECTURE.md` §14 for full list. The critical ones:
+Read `design/ARCHITECTURE.md` §5 for full list. The critical ones:
 
 1. **INV-1/2: No code branches for engine/model types.** Engine behavior = YAML. Model metadata = YAML.
    Adding a new engine or model = writing YAML, zero Go code.
@@ -171,7 +171,7 @@ internal/
   engine/                     # Engine image scan/pull/import + native binary manager
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
-  mcp/                        # MCP server + 61 tool implementations
+  mcp/                        # MCP server + 94 tool implementations
   agent/                      # Go Agent loop (L3a) + Dispatcher
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)

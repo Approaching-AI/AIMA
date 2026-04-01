@@ -99,7 +99,7 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   Tier 1: Docker + CDI │ Tier 2: + K3S + HAMi (GPU 分区)      │
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
-│   79 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
+│   94 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
 │   Web UI (嵌入式 SPA) · TUI 终端仪表盘 · mDNS 多网卡发现 · 审计+回滚  │
 └─────────────────────────────────────────────────────────────┘
 ```

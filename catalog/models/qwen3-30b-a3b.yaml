@@ -198,6 +198,41 @@ variants:
       tokens_per_second: [15, 40]
       notes: "SGLang-KT AppImage, BF16 全精度, CPU-GPU hybrid MoE. 2× RTX 4090 + 503GB RAM. KTransformers offloads inactive experts to CPU via AMX/AVX-512. Untested estimate — actual performance depends on CPU bandwidth and expert routing."
 
+  # --- Ada 单卡 (RTX 4060 8GB via WSL, KTransformers, GPTQ-Int4) ---
+  # GPTQ-Int4 权重 ~16GB，kt_method=GPTQ_INT4 使用 GPTQSafeTensorLoader + AVX2 内核
+  # 要求: sym=true, desc_act=false (Qwen3-30B-A3B-GPTQ-Int4 满足)
+  # 单卡 8GB: 非 expert 层 ~3GB + 2 GPU expert ~1GB + KV = ~6GB
+  # CPU RAM 需 ~12GB 放 CPU expert；WSL 需配置 memory>=24GB
+  # i9-13980HX 有 AVX2 (P+E 核)，kt_cpuinfer=16 用全部 P-cores
+  # 注意: v0.5.1 AppImage 的 BF16SafeTensorLoader 不支持 GPTQ, 需 v0.5.2+
+  - name: qwen3-30b-a3b-ada-1gpu-sglang-kt-gptq
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 4096
+      unified_memory: false
+    engine: sglang-kt
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3-30B-A3B-GPTQ-Int4
+      quantization: gptq
+    default_config:
+      mem_fraction_static: 0.70
+      tp_size: 1
+      kt_cpuinfer: 16
+      kt_num_gpu_experts: 2
+      kt_method: GPTQ_INT4
+      quantization: gptq_marlin
+      context_length: 4096
+      disable_shared_experts_fusion: true
+      max_running_requests: 4
+      watchdog_timeout: 3000
+    expected_performance:
+      startup_time_s: 60
+      cold_start_time_s: 300
+      tokens_per_second: [5, 15]
+      notes: "SGLang-KT AppImage v0.5.2+, GPTQ-Int4 (AVX2 GPTQ_INT4 kernel), CPU-GPU hybrid MoE. 1× RTX 4060 8GB (WSL2) + 24GB+ CPU RAM. kt_num_gpu_experts=2 to fit in 8GB. Requires sym=true, desc_act=false GPTQ model."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
   # 虽然文件大，但推理时仅激活 3B params，速度较快

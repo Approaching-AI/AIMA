@@ -3,16 +3,16 @@ _profile: sglang
 metadata:
   name: sglang-kt-ada
   type: sglang-kt
-  version: "0.5.9-kt0.5.1"
+  version: "0.5.9-kt0.5.2"
 hardware:
   gpu_arch: Ada
   vram_min_mib: 4096
 image:
   # KTransformers + SGLang: CPU-GPU hybrid MoE inference
-  # kt-kernel 0.5.1 (AMX/AVX-512 CPU expert offloading)
-  # Built from lmsysorg/sglang:v0.5.9 + kt-kernel + transformers 5
+  # kt-kernel 0.5.2 (AMX/AVX-512/AVX2 CPU expert offloading, GPTQ_INT4 support)
+  # Built from lmsysorg/sglang + kt-kernel + transformers 5
   name: aima/sglang-kt
-  tag: "v0.5.9-kt0.5.1"
+  tag: "v0.5.9-kt0.5.2"
   size_approx_mb: 42000
   platforms: [linux/amd64]
   registries:
@@ -75,7 +75,7 @@ source:
   binary: "sglang-kt"
   platforms: [linux/amd64]
   download:
-    linux/amd64: "https://r2delivery.haoup.net/sglang-appimage/SGLang-f6adb4f-kt1b4665e-x86_64.AppImage"
+    linux/amd64: "https://r2delivery.haoup.net/sglang-appimage/SGLang-a53cb6d-kt9e6484a-x86_64.AppImage"
 runtime:
   default: "native"
   platform_recommendations:

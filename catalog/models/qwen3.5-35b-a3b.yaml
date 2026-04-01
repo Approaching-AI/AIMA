@@ -236,11 +236,9 @@ variants:
       notes: "vLLM 0.9.2 DCU, FP16, TP=2, untested estimate. 2× BW150 64GB each."
 
   # --- Ada (2× RTX 4090, KTransformers CPU-GPU hybrid, BF16) ---
-  # ⛔ BLOCKED: 当前 AppImage (v0.5.9-kt0.5.1) 内置 transformers 不支持 qwen3_5_moe 架构
-  # 已验证 2026-03-31: tokenizer 报 AttributeError (Qwen2TokenizerFast has no attribute tokenizer)
-  # 需等待新 AppImage 包含 transformers>=5.0 后启用
   # BF16 全精度 ~72GB，KTransformers 卸载非活跃 expert 到 CPU
   # 2× RTX 4090 (48GB) + 503GB RAM → kt 只需 ~10-15GB GPU VRAM
+  # v0.5.1 BLOCKED (transformers 不支持 qwen3_5_moe), v0.5.2 已支持 Qwen3.5
   - name: qwen3.5-35b-a3b-ada-sglang-kt-bf16
     hardware:
       gpu_arch: Ada
@@ -267,13 +265,40 @@ variants:
       startup_time_s: 120
       cold_start_time_s: 600
       tokens_per_second: [15, 40]
-      notes: "BLOCKED: AppImage v0.5.9-kt0.5.1 不支持 qwen3_5_moe 架构 (需 transformers>=5.0)。已验证 2026-03-31 tokenizer 失败。等待新 AppImage 版本。"
+      notes: "SGLang-KT AppImage v0.5.2+, BF16 全精度, CPU-GPU hybrid MoE. 2× RTX 4090 + 503GB RAM. v0.5.2 adds Qwen3.5 Day0 support. Untested estimate."
 
-  # --- Ada 单卡 + KTransformers GPTQ: 不可行 ---
-  # 已验证 2026-03-31: 双重阻塞:
-  # 1. KTransformers CPU expert offload 要求 BF16 权重, GPTQ 量化格式不兼容
-  # 2. 当前 AppImage 不支持 qwen3_5_moe 架构
-  # 此配置下应使用 llamacpp GGUF Q4 (下方 universal variant)
+  # --- Ada 单卡 (RTX 4060 8GB via WSL, KTransformers, GPTQ-Int4) ---
+  # GPTQ-Int4 权重 ~18GB，kt_method=GPTQ_INT4 使用 GPTQSafeTensorLoader + AVX2 内核
+  # 要求: sym=true, desc_act=false
+  # 单卡 8GB: 非 expert 层 ~3GB + 2 GPU expert ~1GB + KV = ~6GB
+  # v0.5.2 AppImage 支持 qwen3_5_moe + GPTQ_INT4 CPU expert offload
+  - name: qwen3.5-35b-a3b-ada-1gpu-sglang-kt-gptq
+    hardware:
+      gpu_arch: Ada
+      vram_min_mib: 4096
+      unified_memory: false
+    engine: sglang-kt
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3.5-35B-A3B-GPTQ-Int4
+      quantization: gptq
+    default_config:
+      mem_fraction_static: 0.70
+      tp_size: 1
+      kt_cpuinfer: 16
+      kt_num_gpu_experts: 2
+      kt_method: GPTQ_INT4
+      quantization: gptq_marlin
+      context_length: 4096
+      disable_shared_experts_fusion: true
+      max_running_requests: 4
+      watchdog_timeout: 3000
+    expected_performance:
+      startup_time_s: 60
+      cold_start_time_s: 300
+      tokens_per_second: [5, 15]
+      notes: "SGLang-KT AppImage v0.5.2+, GPTQ-Int4 (AVX2 GPTQ_INT4 kernel), CPU-GPU hybrid MoE. 1× RTX 4060 8GB (WSL2) + 24GB+ CPU RAM. 35B/3B active — same active params as 30B. Untested estimate."
 
   # --- 所有设备通用 (llamacpp + GGUF Q4_K_M=21GB) ---
   # linux-1 fallback, dev-win (8GB) / mac-m4 (16GB) 需大量 CPU offload

@@ -1,0 +1,35 @@
+kind: hardware_profile
+metadata:
+  name: amd-w7900d-x86
+  description: "AMD Radeon Pro W7900D (Navi 31, RDNA3), x86_64, 48GB VRAM per GPU, discrete"
+hardware:
+  gpu:
+    arch: RDNA3
+    vram_mib: 49136
+    compute_id: "gfx1100"
+    compute_units: 6144
+    resource_name: "amd.com/gpu"
+  cpu:
+    arch: x86_64
+    cores: 64
+    freq_ghz: 2.7
+  ram:
+    total_mib: 1048576
+    bandwidth_gbps: 460
+  unified_memory: false
+constraints:
+  tdp_watts: 241
+  power_modes: [241]
+  cooling: active
+partition:
+  gpu_tools: [engine_params]
+  cpu_tools: [cgroups]
+container:
+  devices:
+    - /dev/kfd
+    - /dev/dri
+  env:
+    HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+  security:
+    privileged: false
+    supplemental_groups: [44, 109]

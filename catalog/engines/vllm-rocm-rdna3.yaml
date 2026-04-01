@@ -1,0 +1,49 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-rocm-rdna3
+  type: vllm
+  version: "0.8.5"
+hardware:
+  gpu_arch: RDNA3
+  vram_min_mib: 4096
+image:
+  # Official vLLM ROCm image — supports gfx1100 (Navi 31) natively
+  name: vllm/vllm-openai
+  tag: "v0.8.5-rocm"
+  size_approx_mb: 15000
+  platforms: [linux/amd64]
+  registries:
+    - docker.io/vllm/vllm-openai
+    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai-rocm
+patterns:
+  - "^vllm$"
+  - "^vllm-"
+  - "^vllm/"
+  - "-vllm"
+  - "vllm/"
+  - ":vllm"
+  - "vllm-rocm"
+  - "gfx1100"
+startup:
+  env:
+    HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+    VLLM_USE_TRITON_FLASH_ATTN: "1"
+  default_args:
+    gpu_memory_utilization: 0.90
+    max_model_len: 8192
+  health_check:
+    timeout_s: 600
+amplifier:
+  features:
+    - triton_flash_attention
+  performance_gain: "High throughput on RDNA3 discrete GPU with ROCm, supports tensor parallelism"
+time_constraints:
+  cold_start_s: [60, 180]
+  model_switch_s: [60, 180]
+power_constraints:
+  typical_draw_watts: [100, 241]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

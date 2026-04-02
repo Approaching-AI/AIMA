@@ -25,6 +25,9 @@ startup:
   # Native AppImage: self-contained binary, same CLI as sglang
   command: ["sglang-kt", "--model-path", "{{.ModelPath}}", "--host", "0.0.0.0"]
   env:
+    # AppImage runtime needs FUSE on many Linux hosts; extract-and-run keeps
+    # native startup working on WSL and non-FUSE setups without extra steps.
+    APPIMAGE_EXTRACT_AND_RUN: "1"
     KT_AVAILABLE: "1"
     OMP_NUM_THREADS: "1"
     SGLANG_DISABLE_CUDNN_CHECK: "1"

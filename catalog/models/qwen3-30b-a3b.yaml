@@ -209,11 +209,12 @@ variants:
   # 实测 (v0.5.2, WSL2): 无 CUDA graph 6.5 → CUDA graph 8.5 tok/s
   # CUDA graph 需 WSL toolchain: conda install cuda-toolkit libcurand-dev ninja gcc
   # AppImage 仅预编译 SM100 (Blackwell), SM89 (Ada) 需 JIT → 首次启动慢
+  # 该变体按实测目标机型收敛到 8GB Ada 单卡；低于 8GB 会误导 auto-resolve
   # llamacpp Q4_K_M 在同硬件达 21 tok/s，sglang-kt 适合对精度/功能有要求的场景
   - name: qwen3-30b-a3b-ada-1gpu-sglang-kt-gptq
     hardware:
       gpu_arch: Ada
-      vram_min_mib: 4096
+      vram_min_mib: 8192
       unified_memory: false
     engine: sglang-kt
     format: safetensors
@@ -239,7 +240,7 @@ variants:
       cold_start_time_s: 300
       tokens_per_second: [7, 9]
       vram_mib: 6000
-      notes: "SGLang-KT AppImage v0.5.2, GPTQ-Int4 (AVX2 GPTQ_INT4 kernel), CPU-GPU hybrid MoE. 1× RTX 4060 8GB (WSL2, i9-13980HX 24-core) + 24GB CPU RAM. Measured 2026-04-02: 8.53 tok/s decode (triton+CUDA graph, gpu=4, cpu=24, tp=2). CUDA graph enabled (requires cuda.h + curand.h symlinks in conda). Parameter sweep: cpuinfer must match physical cores (24), NOT logical (32, causes 5× regression). threadpool_count=2 gives 3-6% boost. gpu_experts=4 marginal over 2; gpu=6 OOMs. llamacpp Q4_K_M reaches 21 tok/s — gap due to CPU expert offload bandwidth overhead."
+      notes: "SGLang-KT AppImage v0.5.2, GPTQ-Int4 (AVX2 GPTQ_INT4 kernel), CPU-GPU hybrid MoE. 1× RTX 4060 8GB (WSL2, i9-13980HX 24-core) + 24GB CPU RAM. Measured 2026-04-02: 8.53 tok/s decode (triton+CUDA graph, gpu=4, cpu=24, tp=1). CUDA graph enabled (requires cuda.h + curand.h symlinks in conda). Parameter sweep: cpuinfer must match physical cores (24), NOT logical (32, causes 5× regression). threadpool_count=2 gives 3-6% boost. gpu_experts=4 marginal over 2; gpu=6 OOMs. llamacpp Q4_K_M reaches 21 tok/s — gap due to CPU expert offload bandwidth overhead."
 
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)

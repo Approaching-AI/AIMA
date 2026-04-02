@@ -721,6 +721,49 @@ func TestResolveVRAMZeroSkipsFilter(t *testing.T) {
 	}
 }
 
+func TestRealCatalogKTLowVRAMDoesNotMatchSingleGPUVariants(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	tests := []string{
+		"qwen3-30b-a3b",
+		"qwen3.5-35b-a3b",
+	}
+	hw := HardwareInfo{
+		GPUArch:     "Ada",
+		GPUVRAMMiB:  4096,
+		GPUCount:    1,
+		Platform:    "linux/amd64",
+		RuntimeType: "native",
+	}
+
+	for _, modelName := range tests {
+		modelName := modelName
+		t.Run(modelName, func(t *testing.T) {
+			if _, err := cat.Resolve(hw, modelName, "sglang-kt", nil); err == nil {
+				t.Fatalf("Resolve(%s, sglang-kt) unexpectedly succeeded on 4 GiB Ada", modelName)
+			}
+		})
+	}
+}
+
+func TestRealCatalogSGLangKTUsesAppImageExtractAndRunFallback(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	engine := cat.FindEngineByName("sglang-kt-ada", HardwareInfo{GPUArch: "Ada"})
+	if engine == nil {
+		t.Fatal("sglang-kt-ada engine not found in real catalog")
+	}
+	if got := engine.Startup.Env["APPIMAGE_EXTRACT_AND_RUN"]; got != "1" {
+		t.Fatalf("APPIMAGE_EXTRACT_AND_RUN = %q, want 1", got)
+	}
+}
+
 func TestResolveUnifiedMemoryFilter(t *testing.T) {
 	unified := true
 	discrete := false

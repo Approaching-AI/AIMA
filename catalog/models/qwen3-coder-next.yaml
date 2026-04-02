@@ -1,0 +1,64 @@
+kind: model_asset
+metadata:
+  name: qwen3-coder-next
+  type: llm
+  family: qwen
+  parameter_count: "80B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    # BF16 原始权重, ~160GB
+    - type: huggingface
+      repo: Qwen/Qwen3-Coder-Next
+      format: safetensors
+    - type: modelscope
+      repo: Qwen/Qwen3-Coder-Next
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- AMD W7900D RDNA3 (4× 48GB discrete, vLLM ROCm, BF16) ---
+  # 80B MoE (512 experts, 10 active/tok, 3B active params), BF16 ~160GB → TP=4, ~40GB/GPU
+  # gmu=0.90 on 48GB ≈ 43GB/GPU → 40GB weights + 3GB KV cache
+  # max_model_len=4096 due to tight VRAM; sufficient for code generation
+  # Validated 2026-04-02: 11.8 tok/s decode (512 tokens)
+  # Performance bottleneck: vLLM fused_moe Triton kernel has no pre-tuned config for
+  #   E=512,N=128 on AMD Radeon (gfx1100). AITER MoE backend is gfx9-only (MI200/MI300).
+  #   TP=8 tested: 8.1 tok/s (worse — more PCIe all-reduce overhead).
+  #   llama.cpp ROCm tested: MUL_MAT_ID kernel crashes on 512 experts (gfx1100).
+  #   Compare: Qwen3-30B-A3B (128 experts) = 65 tok/s on same hardware.
+  #   Compare: Qwen3-Coder-Next FP8 on GB10 Blackwell = 42.5 tok/s (tuned CUDA kernels).
+  - name: qwen3-coder-next-rdna3-vllm-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 4
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3-Coder-Next
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 4096
+      dtype: bfloat16
+      tensor_parallel_size: 4
+      enforce_eager: true
+      trust_remote_code: true
+    expected_performance:
+      tokens_per_second: [10, 14]
+      latency_first_token_ms: [100, 500]
+      startup_time_s: 300
+      vram_mib: 163840
+      notes: "Validated 2026-04-02 on 4× W7900D 48GB RDNA3. vLLM ROCm 0.16.0, BF16, TP=4, enforce-eager. 11.8 tok/s decode (512 tokens). MoE 512 experts / 10 active — fused_moe E=512 lacks RDNA3 kernel tuning (AITER gfx9-only, Triton uses default config). TP=8 slower (8.1 tok/s). llama.cpp ROCm crashes (MUL_MAT_ID unsupported for 512 experts on gfx1100). Awaiting AMD vLLM ROCm E=512 kernel optimization."
+
+  # --- GB10 Blackwell (128GB unified, BF16) ---
+  # 160GB BF16 > 128GB unified → does NOT fit without offload
+  # Use qwen3-coder-next-fp8.yaml (FP8 ~80GB) for Blackwell instead
+  #
+  # --- RDNA3 llama.cpp GGUF (NOT viable) ---
+  # Q4_K_M ~48GB available at Qwen/Qwen3-Coder-Next-GGUF
+  # BLOCKED: ggml-hip MUL_MAT_ID kernel crashes on 512 experts with gfx1100
+  # Error: "ROCm error: unspecified launch failure" in ggml_cuda_compute_forward

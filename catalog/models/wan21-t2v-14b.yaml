@@ -1,0 +1,68 @@
+kind: model_asset
+metadata:
+  name: wan21-t2v-14b
+  type: video_gen
+  family: wan
+  parameter_count: "14B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Wan-AI/Wan2.1-T2V-14B-Diffusers
+      format: safetensors
+    - type: huggingface
+      repo: Wan-AI/Wan2.1-T2V-14B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- AMD W7900D RDNA3 (diffusers + PyTorch ROCm, BF16) ---
+  # Wan2.1-T2V-14B: transformer 53GB + UMT5-xxl encoder 11GB + VAE 0.5GB ≈ 65GB
+  # enable_model_cpu_offload mode: loads components on demand to GPU
+  # Validated 2026-04-02: 20 steps 480×832 17 frames = 4m52s diffusion + ~9min overhead = 14min total
+  # Diffusers format required: use Wan-AI/Wan2.1-T2V-14B-Diffusers (NOT the raw checkpoint repo)
+  - name: wan21-t2v-14b-rdna3-diffusers-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 1
+      unified_memory: false
+    engine: z-image-diffusers
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Wan-AI/Wan2.1-T2V-14B-Diffusers
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      num_frames: 17
+      height: 480
+      width: 832
+      guidance_scale: 5.0
+    expected_performance:
+      seconds_per_step: [13.8, 15.0]
+      total_time_s: [800, 900]
+      notes: "Validated 2026-04-02 on W7900D 48GB RDNA3. diffusers WanPipeline, BF16, cpu_offload. 14s/step steady-state (first step 31s JIT). 20 steps = 4m52s diffusion, ~14min total with cpu_offload overhead. Optimization: device_map=balanced on 4 GPUs should reduce overhead significantly."
+
+  # --- GB10 Blackwell (diffusers, BF16, unified memory) ---
+  # 65GB model on 128GB unified → fits comfortably
+  - name: wan21-t2v-14b-blackwell-diffusers-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: z-image-diffusers
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Wan-AI/Wan2.1-T2V-14B-Diffusers
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      num_frames: 17
+      height: 480
+      width: 832
+      guidance_scale: 5.0
+    expected_performance:
+      notes: "Estimated. Wan2.1-T2V-14B 65GB BF16 on GB10 128GB unified. Should fit entirely in GPU memory for faster inference."

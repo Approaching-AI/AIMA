@@ -242,6 +242,29 @@ variants:
       vram_mib: 6000
       notes: "SGLang-KT AppImage v0.5.2, GPTQ-Int4 (AVX2 GPTQ_INT4 kernel), CPU-GPU hybrid MoE. 1× RTX 4060 8GB (WSL2, i9-13980HX 24-core) + 24GB CPU RAM. Measured 2026-04-02: 8.53 tok/s decode (triton+CUDA graph, gpu=4, cpu=24, tp=1). CUDA graph enabled (requires cuda.h + curand.h symlinks in conda). Parameter sweep: cpuinfer must match physical cores (24), NOT logical (32, causes 5× regression). threadpool_count=2 gives 3-6% boost. gpu_experts=4 marginal over 2; gpu=6 OOMs. llamacpp Q4_K_M reaches 21 tok/s — gap due to CPU expert offload bandwidth overhead."
 
+  # --- AMD W7900D RDNA3 (llamacpp-rocm, GGUF Q4_K_M) ---
+  # Validated 2026-04-01: 71-75 tok/s decode on 8× W7900D
+  # MoE Q4_K_M = 18GB → fits on single GPU, but llama.cpp auto-splits across all
+  # 49/49 layers GPU-offloaded, gfx1100 natively supported
+  - name: qwen3-30b-a3b-rdna3-llamacpp-q4
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 20480
+      unified_memory: false
+    engine: llamacpp
+    format: gguf
+    source:
+      type: huggingface
+      repo: Qwen/Qwen3-30B-A3B-GGUF
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      ctx_size: 4096
+    expected_performance:
+      tokens_per_second: [65, 80]
+      latency_first_token_ms: [20, 100]
+      notes: "Validated 2026-04-01 on 8× W7900D 48GB RDNA3. llama.cpp full-rocm Docker, Q4_K_M 18GB, 49/49 layers offloaded. 71-75 tok/s decode (512 tokens). MoE 3B active params = fast decode."
+
   # --- 所有设备通用 (llamacpp + GGUF) ---
   # MoE Q4_K_M = 18.6GB → linux-1 (24GB/GPU ✓), amd395 (128GB unified ✓)
   # 虽然文件大，但推理时仅激活 3B params，速度较快

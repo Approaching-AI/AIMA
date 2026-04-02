@@ -1,0 +1,59 @@
+kind: engine_asset
+_profile: llamacpp
+metadata:
+  name: llamacpp-rocm-rdna3
+  type: llamacpp
+  version: "latest"
+hardware:
+  gpu_arch: RDNA3
+  vram_min_mib: 2048
+image:
+  # Official llama.cpp ROCm image — full GPU offload on gfx1100 (W7900D, RX 7900 XTX)
+  # Validated 2026-04-01 on 8× W7900D 48GB: Qwen3-30B-A3B Q4_K_M = 71-75 tok/s
+  name: ghcr.io/ggml-org/llama.cpp
+  tag: "full-rocm"
+  size_approx_mb: 8450
+  platforms: [linux/amd64]
+  registries:
+    - ghcr.io/ggml-org/llama.cpp
+    - ghcr.m.daocloud.io/ggml-org/llama.cpp
+patterns:
+  - "^llama\\.cpp$"
+  - "^llamacpp$"
+  - "^llamacpp-rocm"
+  - "-llamacpp"
+  - "llama-rocm"
+  - "gguf-rocm"
+startup:
+  env:
+    HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+    HSA_ENABLE_SDMA: "0"
+  default_args:
+    n_gpu_layers: 999
+    ctx_size: 4096
+  docker_args:
+    - "--device /dev/kfd"
+    - "--device /dev/dri"
+    - "--group-add video"
+  health_check:
+    timeout_s: 120
+amplifier:
+  features:
+    - rocm_hip_offload
+    - multi_gpu_split
+  performance_gain: "Full GPU offload on RDNA3, auto-splits across multiple GPUs"
+  notes: |
+    Validated on 8× AMD W7900D 48GB (gfx1100, RDNA3).
+    Qwen3-30B-A3B Q4_K_M (18GB): 71-75 tok/s decode, all 49 layers offloaded.
+    llama.cpp auto-detects all 8 GPUs (393GB total) and distributes layers.
+    MoE models particularly fast due to low active params per token.
+    Docker entrypoint: --server -m /models/FILE.gguf -ngl 999 -c 4096 --host 0.0.0.0
+time_constraints:
+  cold_start_s: [5, 30]
+  model_switch_s: [5, 30]
+power_constraints:
+  typical_draw_watts: [50, 241]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"

@@ -1,0 +1,59 @@
+kind: model_asset
+metadata:
+  name: flux2-dev
+  type: image_gen
+  family: flux
+  parameter_count: "12B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: black-forest-labs/FLUX.2-dev
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- AMD W7900D RDNA3 (diffusers + PyTorch ROCm, BF16) ---
+  # FLUX.2-dev: Flux2Transformer2DModel 61GB + Mistral 3 text encoder 45GB + VAE 0.3GB = 106GB
+  # 4 GPU device_map="balanced" → ~26GB/GPU, fits in 48GB/GPU
+  # AOTriton experimental flash attention enabled
+  # Validated 2026-04-02: 20 steps @ 1024×1024 = 6m19s (~18s/step steady-state)
+  - name: flux2-dev-rdna3-diffusers-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 4
+      unified_memory: false
+    engine: z-image-diffusers
+    format: safetensors
+    source:
+      type: huggingface
+      repo: black-forest-labs/FLUX.2-dev
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      height: 1024
+      width: 1024
+    expected_performance:
+      seconds_per_step: [17.8, 20.0]
+      total_time_s: [360, 400]
+      vram_mib: 106496
+      notes: "Validated 2026-04-02 on 4× W7900D 48GB RDNA3. diffusers Flux2Pipeline, BF16, device_map=balanced. Mistral 3 text encoder (45GB) + Flux2Transformer (61GB). 18s/step steady-state (first step 42s for AOTriton JIT). 20 steps 1024x1024 = 6m19s total. TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 required."
+
+  # --- GB10 Blackwell (diffusers, BF16, unified memory) ---
+  # 106GB model on 128GB unified → gpu_memory tight but feasible
+  - name: flux2-dev-blackwell-diffusers-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 65536
+      unified_memory: true
+    engine: z-image-diffusers
+    format: safetensors
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      height: 1024
+      width: 1024
+    expected_performance:
+      notes: "Estimated. FLUX.2-dev 106GB BF16 on GB10 128GB unified memory. Tight fit — may need sequential offload or reduced resolution."

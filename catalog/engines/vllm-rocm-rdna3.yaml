@@ -3,19 +3,20 @@ _profile: vllm
 metadata:
   name: vllm-rocm-rdna3
   type: vllm
-  version: "0.8.5"
+  version: "0.16.0"
 hardware:
   gpu_arch: RDNA3
   vram_min_mib: 4096
 image:
-  # Official vLLM ROCm image — supports gfx1100 (Navi 31) natively
-  name: vllm/vllm-openai
-  tag: "v0.8.5-rocm"
-  size_approx_mb: 15000
+  # AMD official Navi-specific vLLM ROCm image — gfx1100 (W7900D, RX 7900 XTX)
+  # Validated 2026-04-01 on 8× W7900D 48GB: InternVL3-78B TP=8 = 17.8 tok/s
+  name: rocm/vllm-dev
+  tag: "rocm7.2.1_navi_ubuntu24.04_py3.12_pytorch_2.9_vllm_0.16.0"
+  size_approx_mb: 17400
   platforms: [linux/amd64]
   registries:
-    - docker.io/vllm/vllm-openai
-    - registry.cn-hangzhou.aliyuncs.com/aima/vllm-openai-rocm
+    - docker.io/rocm/vllm-dev
+    - docker.m.daocloud.io/rocm/vllm-dev
 patterns:
   - "^vllm$"
   - "^vllm-"
@@ -28,19 +29,33 @@ patterns:
 startup:
   env:
     HSA_OVERRIDE_GFX_VERSION: "11.0.0"
-    VLLM_USE_TRITON_FLASH_ATTN: "1"
+    HSA_ENABLE_SDMA: "0"
   default_args:
     gpu_memory_utilization: 0.90
-    max_model_len: 8192
+    max_model_len: 4096
+    enforce_eager: true
+  docker_args:
+    - "--device /dev/kfd"
+    - "--device /dev/dri"
+    - "--group-add video"
+    - "--ipc host"
+    - "--shm-size 16g"
   health_check:
     timeout_s: 600
 amplifier:
   features:
     - triton_flash_attention
-  performance_gain: "High throughput on RDNA3 discrete GPU with ROCm, supports tensor parallelism"
+    - tensor_parallelism
+  performance_gain: "High throughput on RDNA3 discrete GPU with ROCm 7.2.1, supports TP up to 8 GPUs"
+  notes: |
+    Validated on 8× AMD W7900D 48GB (gfx1100, RDNA3).
+    enforce_eager recommended — torch.compile consumes ~1GB extra VRAM per GPU.
+    Qwen3.5 models NOT supported (vLLM 0.16.0 lacks Qwen3_5 arch).
+    Supported: Qwen3, InternVL3, Step3.5, Llama, Mistral, DeepSeek, etc.
+    InternVL3-78B TP=8: 17.8 tok/s decode (BF16, 512 tokens).
 time_constraints:
-  cold_start_s: [60, 180]
-  model_switch_s: [60, 180]
+  cold_start_s: [60, 300]
+  model_switch_s: [60, 300]
 power_constraints:
   typical_draw_watts: [100, 241]
 runtime:

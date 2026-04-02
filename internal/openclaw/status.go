@@ -27,6 +27,7 @@ type Status struct {
 	AIMAConfigured bool            `json:"aima_configured"`
 	ClaimNeeded    bool            `json:"claim_needed"`
 	SyncReady      bool            `json:"sync_ready"`
+	PluginDrift    bool            `json:"plugin_drift,omitempty"`
 	MCPServer      *MCPServerEntry `json:"mcp_server,omitempty"`
 	Expected       ModelSummary    `json:"expected"`
 	Configured     ModelSummary    `json:"configured"`
@@ -87,6 +88,7 @@ func Inspect(ctx context.Context, deps *Deps) (*Status, error) {
 			pluginIssues := inspectManagedPlugins(deps.ConfigPath, cfg, desiredPluginRoots(expectedResult))
 			if len(pluginIssues) > 0 {
 				pluginReady = false
+				status.PluginDrift = true
 				status.Issues = append(status.Issues, pluginIssues...)
 			}
 		}

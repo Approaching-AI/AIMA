@@ -1,0 +1,71 @@
+kind: model_asset
+metadata:
+  name: internvl3-78b
+  type: vlm
+  family: internvl
+  parameter_count: "78B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: OpenGVLab/InternVL3-78B
+      format: safetensors
+    - type: modelscope
+      repo: OpenGVLab/InternVL3-78B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- AMD W7900D RDNA3 (8× 48GB discrete, vLLM ROCm, BF16) ---
+  # 78B dense VLM, BF16 weights ~147GB → TP=8, ~18.4GB/GPU
+  # gmu=0.90 on 48GB ≈ 43GB/GPU → 18.4GB weights + 24.6GB KV cache
+  # Validated 2026-04-01: 17.8 tok/s decode (512 tokens)
+  - name: internvl3-78b-rdna3-vllm-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 8
+      unified_memory: false
+    engine: vllm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: OpenGVLab/InternVL3-78B
+    default_config:
+      gpu_memory_utilization: 0.90
+      max_model_len: 4096
+      dtype: bfloat16
+      tensor_parallel_size: 8
+      trust_remote_code: true
+      enforce_eager: true
+    expected_performance:
+      tokens_per_second: [15, 20]
+      latency_first_token_ms: [100, 500]
+      startup_time_s: 300
+      vram_mib: 147000
+      notes: "Validated 2026-04-01 on 8× W7900D 48GB RDNA3. vLLM ROCm 0.16.0, BF16, TP=8, enforce-eager. 17.8 tok/s decode (512 tokens). torch.compile skipped (enforce_eager) to save ~1GB/GPU VRAM."
+
+  # --- MetaX N260 (2× 64GB HBM2e, vLLM-MetaX, BF16) ---
+  # BF16 ~147GB, TP=2 → 73.5GB/GPU > 64GB → does NOT fit
+  # Would need quantization or more GPUs
+  # Placeholder: not validated
+
+  # --- GB10 Blackwell (128GB unified, vLLM, BF16) ---
+  # 147GB BF16 > 128GB → does NOT fit in BF16
+  # Could work with FP8 quantization (~74GB)
+  - name: internvl3-78b-blackwell-vllm-fp8
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 65536
+      unified_memory: true
+    engine: vllm
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.60
+      max_model_len: 4096
+      dtype: auto
+      quantization: fp8
+      trust_remote_code: true
+    expected_performance:
+      notes: "Estimated. FP8 quantization ~74GB on 128GB unified. Not yet validated."

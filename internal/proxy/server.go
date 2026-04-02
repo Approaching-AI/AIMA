@@ -22,9 +22,15 @@ import (
 // DefaultPort is the default listen port for the AIMA proxy server.
 const DefaultPort = 6188
 
+// LabelServedModel stores the upstream model identifier expected by the backend.
+// The proxy keeps routing by AIMA's canonical model name, but rewrites forwarded
+// requests to this model when the engine expects a different served name.
+const LabelServedModel = "aima.dev/served-model"
+
 // Backend represents a running inference engine.
 type Backend struct {
 	ModelName           string `json:"model_name"`
+	UpstreamModel       string `json:"upstream_model,omitempty"`
 	EngineType          string `json:"engine_type"`
 	Address             string `json:"address"`
 	BasePath            string `json:"base_path"`
@@ -39,6 +45,16 @@ func cloneBackend(b *Backend) *Backend {
 	}
 	cp := *b
 	return &cp
+}
+
+func backendUpstreamModel(b *Backend) string {
+	if b == nil {
+		return ""
+	}
+	if model := strings.TrimSpace(b.UpstreamModel); model != "" {
+		return model
+	}
+	return strings.TrimSpace(b.ModelName)
 }
 
 // Server is the HTTP inference proxy.
@@ -398,6 +414,9 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 	if requestRewriter != nil {
 		body = requestRewriter(r.URL.Path, r.Header.Get("Content-Type"), model, backend.EngineType, body)
 	}
+	if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
+		body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
+	}
 
 	// Determine the target path: basePath + suffix from original request
 	// e.g., request to /v1/chat/completions with basePath=/v1 → forward to /v1/chat/completions
@@ -490,6 +509,36 @@ func extractModelFromRequest(contentType string, body []byte) (string, error) {
 		return "", fmt.Errorf("missing model field in request body")
 	default:
 		return "", fmt.Errorf("unsupported content type %q", mediaType)
+	}
+}
+
+func rewriteModelInBody(contentType string, body []byte, model string) []byte {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil && strings.TrimSpace(contentType) != "" {
+		return body
+	}
+
+	switch mediaType {
+	case "", "application/json":
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			return body
+		}
+		req["model"] = model
+		out, err := json.Marshal(req)
+		if err != nil {
+			return body
+		}
+		return out
+	case "application/x-www-form-urlencoded":
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			return body
+		}
+		values.Set("model", model)
+		return []byte(values.Encode())
+	default:
+		return body
 	}
 }
 

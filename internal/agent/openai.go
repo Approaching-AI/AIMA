@@ -390,12 +390,23 @@ func (c *OpenAIClient) resolveModel(ctx context.Context) (string, error) {
 	cachedAt := c.modelCachedAt
 	c.mu.RUnlock()
 
-	if model != "" {
-		return model, nil
-	}
-
 	if cached != "" && time.Since(cachedAt) < modelCacheTTL {
 		return cached, nil
+	}
+
+	if model != "" {
+		models, err := c.fetchModels(ctx)
+		if err != nil {
+			return model, nil
+		}
+		if matched := matchConfiguredModel(models, model); matched != "" {
+			c.mu.Lock()
+			c.cachedModel = matched
+			c.modelCachedAt = time.Now()
+			c.mu.Unlock()
+			return matched, nil
+		}
+		return model, nil
 	}
 
 	models, err := c.fetchModels(ctx)
@@ -471,16 +482,29 @@ func (c *OpenAIClient) Available(ctx context.Context) bool {
 		if err != nil {
 			return false
 		}
-		for _, candidate := range models {
-			if candidate.ID == model {
-				return true
-			}
-		}
-		return false
+		return matchConfiguredModel(models, model) != ""
 	}
 
 	_, err := c.resolveModel(ctx)
 	return err == nil
+}
+
+func matchConfiguredModel(models []modelData, requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return ""
+	}
+	for _, candidate := range models {
+		if candidate.ID == requested {
+			return candidate.ID
+		}
+	}
+	for _, candidate := range models {
+		if strings.EqualFold(candidate.ID, requested) {
+			return candidate.ID
+		}
+	}
+	return ""
 }
 
 func (c *OpenAIClient) fetchModels(ctx context.Context) ([]modelData, error) {

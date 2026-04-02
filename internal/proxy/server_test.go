@@ -331,6 +331,42 @@ func TestChatCompletions_UnknownModelReturns404(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_RewritesModelToBackendUpstreamModel(t *testing.T) {
+	var receivedModel string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("Decode backend body: %v", err)
+		}
+		receivedModel, _ = req["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-1","choices":[{"message":{"content":"ok"}}]}`)
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("qwen3-8b", &Backend{
+		ModelName:     "qwen3-8b",
+		UpstreamModel: "musachat_local",
+		EngineType:    "vllm-musa",
+		Address:       addr,
+		Ready:         true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3-8b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedModel != "musachat_local" {
+		t.Fatalf("backend model = %q, want musachat_local", receivedModel)
+	}
+}
+
 func TestChatCompletions_NotReadyModelReturns503(t *testing.T) {
 	backendCalls := 0
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {

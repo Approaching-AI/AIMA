@@ -21,7 +21,12 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 			Phase:   "running",
 			Ready:   true,
 			Address: "10.42.0.73:8000",
-			Labels:  map[string]string{"aima.dev/model": "qwen3-8b", "aima.dev/engine": "vllm", "aima.dev/context_window": "16384"},
+			Labels: map[string]string{
+				"aima.dev/model":          "qwen3-8b",
+				"aima.dev/engine":         "vllm",
+				"aima.dev/context_window": "16384",
+				LabelServedModel:          "musachat_local",
+			},
 		},
 	})
 
@@ -41,6 +46,9 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 	}
 	if b.ContextWindowTokens != 16384 {
 		t.Errorf("context_window_tokens = %d, want 16384", b.ContextWindowTokens)
+	}
+	if b.UpstreamModel != "musachat_local" {
+		t.Errorf("upstreamModel = %q, want %q", b.UpstreamModel, "musachat_local")
 	}
 }
 

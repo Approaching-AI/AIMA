@@ -4075,6 +4075,7 @@ function aimaApp() {
 
     async callTool(name, params) {
       const raw = await this.callToolRaw(name, params);
+      if (raw == null) return {};
       if (raw._err) return { _err: raw._err };
       if (raw.error && typeof raw.error === 'string') return { _err: raw.error };
       if (raw.content && Array.isArray(raw.content) && raw.content.length > 0) {
@@ -4355,7 +4356,7 @@ function aimaApp() {
 
     async pollSystemStatus() {
       const data = await this.callTool('system.status');
-      if (data._err) return;
+      if (!data || data._err) return;
       this.systemOnline = true;
 
       // Capture hostname from backend
@@ -5074,7 +5075,7 @@ function aimaApp() {
 
     async pollEngines() {
       const data = await this.callTool('engine.list');
-      if (data._err) return;
+      if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       this.engines = list.map(e => ({
         id: e.id || (e.type + (e.tag || '')),
@@ -5086,7 +5087,7 @@ function aimaApp() {
 
     async pollModels() {
       const data = await this.callTool('model.list');
-      if (data._err) return;
+      if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       // Deduplicate by name (multiple registrations of same model file)
       const seen = new Set();
@@ -5102,7 +5103,7 @@ function aimaApp() {
     },
 
     deploymentForModel(modelName) {
-      return this.deployments.find(d => d.model === modelName) || null;
+      return this.deployments.find(d => d.model === modelName || (!d.model && d.name === modelName)) || null;
     },
 
     modelDotClass(modelName) {
@@ -5198,7 +5199,7 @@ function aimaApp() {
 
     async pollDeployments() {
       const data = await this.callTool('deploy.list');
-      if (data._err) return;
+      if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       const hasStarting = list.some(d => d.phase === 'starting' || (d.phase === 'running' && !d.ready));
       this.deployments = list.map(d => {
@@ -5237,7 +5238,7 @@ function aimaApp() {
 
     async pollFleet() {
       const data = await this.callTool('fleet.list_devices');
-      if (data._err) return;
+      if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       this.fleet = list.map(d => ({
         id: d.id || d.name || 'unknown',
@@ -5259,23 +5260,24 @@ function aimaApp() {
     async pollAgentInfo() {
       // Fetch agent.status
       const statusData = await this.callTool('agent.status');
-      if (!statusData._err) {
+      if (statusData && !statusData._err) {
         this.agentInfo.agentAvailableFromStatus = statusData.agent_available === true;
+      } else {
+        this.agentInfo.agentAvailableFromStatus = false;
       }
 
       // Fetch LLM config from system.config
       var endpoint = await this.getConfig('llm.endpoint');
-      if (endpoint && endpoint !== '***') this.agentInfo.llmEndpoint = endpoint;
+      this.agentInfo.llmEndpoint = endpoint && endpoint !== '***' ? endpoint : '';
 
       var model = await this.getConfig('llm.model');
-      if (model && model !== '***') this.agentInfo.llmModel = model;
+      this.agentInfo.llmModel = model && model !== '***' ? model : '';
 
       var ua = await this.getConfig('llm.user_agent');
-      if (ua && ua !== '***') this.agentInfo.llmUserAgent = ua;
+      this.agentInfo.llmUserAgent = ua && ua !== '***' ? ua : '';
 
-      // Update agentAvailable based on combined info
-      this.agentAvailable = this.agentInfo.agentAvailableFromStatus === true ||
-        this._agentConfirmed === true;
+      this.agentAvailable = this.agentInfo.agentAvailableFromStatus === true;
+      if (!this.agentAvailable) this._agentConfirmed = false;
     },
     _agentConfirmed: false,
 
@@ -5311,6 +5313,10 @@ function aimaApp() {
     },
 
     async sendAgent(text) {
+      if (!this.agentAvailable) {
+        await this.sendDirect(text);
+        return;
+      }
       const params = { query: text };
       if (this.sessionId) params.session_id = this.sessionId;
 

@@ -29,11 +29,16 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		if model == "" {
 			model = d.Name
 		}
+		upstreamModel := model
+		if labelModel := strings.TrimSpace(d.Labels[LabelServedModel]); labelModel != "" {
+			upstreamModel = labelModel
+		}
 		active[strings.ToLower(model)] = true
 
 		if d.Ready && d.Address != "" {
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				UpstreamModel:       upstreamModel,
 				EngineType:          d.Labels["aima.dev/engine"],
 				Address:             d.Address,
 				Ready:               true,
@@ -50,8 +55,12 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 			if engineType == "" {
 				engineType = b.EngineType
 			}
+			if strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
+				upstreamModel = backendUpstreamModel(b)
+			}
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				UpstreamModel:       upstreamModel,
 				EngineType:          engineType,
 				Address:             b.Address,
 				BasePath:            b.BasePath,
@@ -62,6 +71,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		} else {
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				UpstreamModel:       upstreamModel,
 				EngineType:          d.Labels["aima.dev/engine"],
 				Ready:               false,
 				ContextWindowTokens: contextWindowFromLabels(d.Labels),

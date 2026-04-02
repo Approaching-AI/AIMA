@@ -58,6 +58,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		modelName = rd.ModelName
 		resolved := rd.Resolved
+		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
 
 		modelPath := resolved.ModelPath
 		if modelPath == "" {
@@ -117,9 +118,10 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			GPUResourceName:  resolved.GPUResourceName,
 			ExtraVolumes:     resolved.ExtraVolumes,
 			Labels: map[string]string{
-				"aima.dev/engine": resolved.Engine,
-				"aima.dev/model":  modelName,
-				"aima.dev/slot":   resolved.Slot,
+				"aima.dev/engine":      resolved.Engine,
+				"aima.dev/model":       modelName,
+				"aima.dev/slot":        resolved.Slot,
+				proxy.LabelServedModel: upstreamModel,
 			},
 		}
 		if contextWindow := contextWindowFromResolvedConfig(resolved.Config); contextWindow > 0 {
@@ -163,6 +165,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			if shouldReuseExistingDeployment(existing, engineType, slot, configOverrides) {
 				proxyServer.RegisterBackend(modelName, &proxy.Backend{
 					ModelName:           modelName,
+					UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 					EngineType:          resolved.Engine,
 					Address:             existing.Address,
 					Ready:               existing.Ready,
@@ -293,6 +296,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		proxyServer.RegisterBackend(modelName, &proxy.Backend{
 			ModelName:           modelName,
+			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
 			Ready:               false,
 			ContextWindowTokens: contextWindowFromResolvedConfig(resolved.Config),
@@ -658,4 +662,32 @@ func firstPositiveInt(values ...int) int {
 		}
 	}
 	return 0
+}
+
+func resolvedServedModelName(modelName string, config map[string]any) string {
+	if config != nil {
+		if raw, ok := config["served_model_name"].(string); ok {
+			if served := strings.TrimSpace(raw); served != "" {
+				return served
+			}
+		}
+	}
+	return modelName
+}
+
+func deploymentUpstreamModel(ds *runtime.DeploymentStatus, fallback string) string {
+	if ds != nil && ds.Labels != nil {
+		if served := strings.TrimSpace(ds.Labels[proxy.LabelServedModel]); served != "" {
+			return served
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	if ds != nil && ds.Labels != nil {
+		if model := strings.TrimSpace(ds.Labels["aima.dev/model"]); model != "" {
+			return model
+		}
+	}
+	return ""
 }

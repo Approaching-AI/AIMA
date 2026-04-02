@@ -271,6 +271,41 @@ func TestOpenAIClient_Available_ConfiguredModelMustExist(t *testing.T) {
 	}
 }
 
+func TestOpenAIClient_ConfiguredModelCaseInsensitive(t *testing.T) {
+	var requestedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			json.NewEncoder(w).Encode(modelsResponse{Data: []modelData{{ID: "qwen3.5-35b-a3b"}}})
+		case "/v1/chat/completions":
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("Decode request: %v", err)
+			}
+			requestedModel, _ = req["model"].(string)
+			json.NewEncoder(w).Encode(chatResponse{
+				Choices: []chatChoice{
+					{Message: chatMessage{Role: "assistant", Content: "ok"}},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewOpenAIClient(srv.URL+"/v1", WithModel("Qwen3.5-35B-A3B"))
+	if !client.Available(context.Background()) {
+		t.Fatal("Available() = false, want true for case-insensitive model match")
+	}
+	if _, err := client.ChatCompletion(context.Background(), []Message{{Role: "user", Content: "test"}}, nil); err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	if requestedModel != "qwen3.5-35b-a3b" {
+		t.Fatalf("requested model = %q, want qwen3.5-35b-a3b", requestedModel)
+	}
+}
+
 func TestOpenAIClient_FleetDiscovery_EmptyModels(t *testing.T) {
 	// Local server returns empty model list
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

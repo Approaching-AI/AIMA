@@ -21,8 +21,15 @@ func StartSyncLoop(ctx context.Context, deps *Deps, interval time.Duration) {
 		if summaryCount(status.Expected) == 0 && !status.AIMAConfigured && (status.MCPServer == nil || status.MCPServer.Registered) {
 			return
 		}
+		pluginDrift := status.PluginDrift
+
 		if _, err := Sync(ctx, deps, false); err != nil {
 			slog.Warn("openclaw auto-sync: sync failed", "error", err)
+			return
+		}
+
+		if pluginDrift {
+			slog.Info("openclaw auto-sync: plugin drift fixed, gateway file watcher will reload config")
 		}
 	}
 

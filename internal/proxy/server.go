@@ -414,7 +414,6 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 	if requestRewriter != nil {
 		body = requestRewriter(r.URL.Path, r.Header.Get("Content-Type"), model, backend.EngineType, body)
 	}
-	body = stripOrphanedToolChoice(body)
 	if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
 		body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
 	}
@@ -511,30 +510,6 @@ func extractModelFromRequest(contentType string, body []byte) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported content type %q", mediaType)
 	}
-}
-
-// stripOrphanedToolChoice removes tool_choice from JSON request bodies when
-// tools is empty or absent. Prevents vLLM 400 errors when clients send
-// tool_choice:"auto" without defining any tools.
-func stripOrphanedToolChoice(body []byte) []byte {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return body
-	}
-	if _, has := req["tool_choice"]; !has {
-		return body
-	}
-	tools, _ := req["tools"].([]any)
-	if len(tools) > 0 {
-		return body
-	}
-	delete(req, "tool_choice")
-	delete(req, "tools")
-	out, err := json.Marshal(req)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 func rewriteModelInBody(contentType string, body []byte, model string) []byte {

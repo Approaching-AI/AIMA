@@ -48,3 +48,14 @@ variants:
       tokens_per_second: [21, 23]
       vram_mib: 84232
       notes: "KTransformers + SGLang hybrid, 2× RTX 4090 + Xeon 8488C AMX. 256 experts, 30 on GPU, rest CPU-offloaded via AMX. 228GB RAM. Optimal params from 22-config sweep: gpu_experts=30 (+5 tok/s vs 15), cpuinfer=64 (+3% vs 40). 2026-03-03."
+
+  # --- AMD W7900D RDNA3 (8× 48GB, vLLM ROCm) ---
+  # BLOCKED: Qwen3_5MoeForConditionalGeneration (multimodal MoE + Gated-DeltaNet hybrid)
+  # requires transformers>=5.0 AND vLLM native qwen3_5_moe support
+  # vLLM ROCm 0.16.0 (transformers 4.57.6) does not support this architecture
+  # Tested 2026-04-02: pip upgrade transformers → model recognized,
+  #   but vLLM has no Qwen3_5Moe model class. --model-impl transformers fails
+  #   (ConditionalGeneration not compatible with CausalLM backend).
+  #   TransformersMultiModalMoEForCausalLM override fails at weight loading
+  #   (model.mtp + model.visual modules not mapped).
+  # BF16 ~244GB / TP=8 = ~30.5GB/GPU would fit comfortably if supported.

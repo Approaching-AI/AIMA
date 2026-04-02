@@ -347,6 +347,58 @@ func TestHandleASRCleanResponse(t *testing.T) {
 	}
 }
 
+func TestStripOrphanedToolChoice(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    map[string]any
+		wantKeys []string // keys that should remain
+		noKeys   []string // keys that should be stripped
+	}{
+		{
+			name:     "tool_choice with empty tools",
+			input:    map[string]any{"model": "test", "tool_choice": "auto", "tools": []any{}},
+			wantKeys: []string{"model"},
+			noKeys:   []string{"tool_choice", "tools"},
+		},
+		{
+			name:     "tool_choice without tools key",
+			input:    map[string]any{"model": "test", "tool_choice": "auto"},
+			wantKeys: []string{"model"},
+			noKeys:   []string{"tool_choice"},
+		},
+		{
+			name:     "tool_choice with non-empty tools - keep both",
+			input:    map[string]any{"model": "test", "tool_choice": "auto", "tools": []any{map[string]any{"type": "function"}}},
+			wantKeys: []string{"model", "tool_choice", "tools"},
+		},
+		{
+			name:     "no tool_choice - unchanged",
+			input:    map[string]any{"model": "test", "messages": []any{}},
+			wantKeys: []string{"model", "messages"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _ := json.Marshal(tt.input)
+			result := stripOrphanedToolChoice(body)
+			var got map[string]any
+			if err := json.Unmarshal(result, &got); err != nil {
+				t.Fatalf("unmarshal result: %v", err)
+			}
+			for _, key := range tt.wantKeys {
+				if _, ok := got[key]; !ok {
+					t.Errorf("expected key %q to be present", key)
+				}
+			}
+			for _, key := range tt.noKeys {
+				if _, ok := got[key]; ok {
+					t.Errorf("expected key %q to be stripped", key)
+				}
+			}
+		})
+	}
+}
+
 func TestConsumeMooerPayloadPackedTokens(t *testing.T) {
 	packed := []byte{}
 	packed = protowire.AppendVarint(packed, 101)

@@ -43,7 +43,7 @@ variants:
     expected_performance:
       seconds_per_step: [13.8, 15.0]
       total_time_s: [800, 900]
-      notes: "Validated 2026-04-02 on W7900D 48GB RDNA3. diffusers WanPipeline, BF16, cpu_offload. 14s/step steady-state (first step 31s JIT). 20 steps = 4m52s diffusion, ~14min total with cpu_offload overhead. Optimization: device_map=balanced on 4 GPUs should reduce overhead significantly."
+      notes: "Validated 2026-04-02 on W7900D 48GB RDNA3. diffusers WanPipeline, BF16, cpu_offload. 14s/step steady-state (first step 31s JIT). 20 steps = 4m52s diffusion, ~14min total. Tested device_map=balanced on 4 GPUs: 13.97s/step diffusion (same), 800s total (13.3min, only 5% faster). Bottleneck is VAE decode (~8.7min of 13.3min total), not diffusion. Multi-GPU does not parallelize transformer — only splits components across devices."
 
   # --- GB10 Blackwell (diffusers, BF16, unified memory) ---
   # 65GB model on 128GB unified → fits comfortably

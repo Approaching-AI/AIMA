@@ -233,8 +233,37 @@ func RequestBodyRewriter(cat CatalogReader) func(path, contentType, model, engin
 			}
 			body = mergeRequestPatchBody(body, patch.Body)
 		}
+		body = stripOrphanedToolChoice(body)
 		return body
 	}
+}
+
+// stripOrphanedToolChoice removes tool_choice from JSON request bodies when
+// tools is empty or absent. Prevents vLLM 400 errors when OpenClaw sends
+// tool_choice:"auto" without defining any tools.
+func stripOrphanedToolChoice(body []byte) []byte {
+	// Fast path: skip full JSON parse if no tool_choice present.
+	if !bytes.Contains(body, []byte(`"tool_choice"`)) {
+		return body
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+	if _, has := req["tool_choice"]; !has {
+		return body
+	}
+	tools, _ := req["tools"].([]any)
+	if len(tools) > 0 {
+		return body
+	}
+	delete(req, "tool_choice")
+	delete(req, "tools")
+	out, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func matchesRequestPatch(patch RequestPatch, path, engineType string) bool {

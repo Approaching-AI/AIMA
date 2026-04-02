@@ -198,9 +198,7 @@ func isToolRejectionError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "tool choice requires") ||
-		strings.Contains(msg, "tool_choice") ||
-		strings.Contains(msg, "enable-auto-tool-choice") ||
+	return strings.Contains(msg, "enable-auto-tool-choice") ||
 		strings.Contains(msg, "tools is not supported")
 }
 

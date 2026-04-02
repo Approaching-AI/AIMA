@@ -73,6 +73,12 @@ func newServeCmd(app *App) *cobra.Command {
 				if app.FleetClient != nil {
 					app.FleetClient.SetAPIKey(apiKey)
 				}
+				// Sync proxy API key to LLM client when it targets the local proxy,
+				// so the agent can authenticate with its own proxy.
+				if app.LLMClient != nil && app.LLMClient.IsLocalEndpoint() {
+					app.LLMClient.SetAPIKey(apiKey)
+					slog.Info("synced proxy API key to agent LLM client (local endpoint)")
+				}
 				slog.Info("API key authentication enabled")
 			}
 

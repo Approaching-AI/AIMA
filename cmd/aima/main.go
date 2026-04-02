@@ -393,6 +393,9 @@ func run() error {
 		case "api_key":
 			proxyServer.SetAPIKey(value)
 			fleetClient.SetAPIKey(value)
+			if llmClient.IsLocalEndpoint() {
+				llmClient.SetAPIKey(value)
+			}
 			slog.Info("API key hot-reloaded via system.config")
 		case "llm.endpoint":
 			llmClient.SetEndpoint(value)
@@ -443,6 +446,7 @@ func run() error {
 		FleetRegistry: fleetRegistry,
 		FleetClient:   fleetClient,
 		Support:       supportSvc,
+		LLMClient:     llmClient,
 		OpenBrowser:   defaultRootArgs(os.Args) != nil,
 	}
 

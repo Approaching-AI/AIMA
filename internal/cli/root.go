@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	state "github.com/jguan/aima/internal"
+	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/fleet"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
@@ -23,7 +24,8 @@ type App struct {
 	FleetRegistry *fleet.Registry
 	FleetClient   *fleet.Client
 	Support       *support.Service
-	OpenBrowser   bool // When true, the default (no-subcommand) invocation opens the UI in a browser.
+	LLMClient     *agent.OpenAIClient // Agent's LLM client — used to sync proxy API key.
+	OpenBrowser   bool                // When true, the default (no-subcommand) invocation opens the UI in a browser.
 }
 
 // NewRootCmd creates the root aima command with all subcommands.

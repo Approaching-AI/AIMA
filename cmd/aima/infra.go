@@ -66,9 +66,9 @@ func loadLLMSettings(ctx context.Context, db *state.DB) llmSettings {
 		Endpoint: fmt.Sprintf("http://localhost:%d/v1", proxy.DefaultPort),
 	}
 	if endpoint := os.Getenv("AIMA_LLM_ENDPOINT"); endpoint != "" {
-		settings.Endpoint = endpoint
+		settings.Endpoint = agent.EnsureHTTPScheme(endpoint)
 	} else if v, err := db.GetConfig(ctx, "llm.endpoint"); err == nil && v != "" {
-		settings.Endpoint = v
+		settings.Endpoint = agent.EnsureHTTPScheme(v)
 	}
 	if model := os.Getenv("AIMA_LLM_MODEL"); model != "" {
 		settings.Model = model
@@ -79,6 +79,12 @@ func loadLLMSettings(ctx context.Context, db *state.DB) llmSettings {
 		settings.APIKey = apiKey
 	} else if v, err := db.GetConfig(ctx, "llm.api_key"); err == nil && v != "" {
 		settings.APIKey = v
+	} else if agent.IsLoopbackEndpoint(settings.Endpoint) {
+		// When targeting local proxy with no explicit LLM key,
+		// fall back to proxy API key so agent can self-authenticate.
+		if v, err := db.GetConfig(ctx, "api_key"); err == nil && v != "" {
+			settings.APIKey = v
+		}
 	}
 	if userAgent := os.Getenv("AIMA_LLM_USER_AGENT"); userAgent != "" {
 		settings.UserAgent = userAgent

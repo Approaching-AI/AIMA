@@ -97,6 +97,7 @@ func WithExtraParams(params map[string]any) OpenAIOption {
 // NewOpenAIClient creates an OpenAI-compatible LLM client.
 // baseURL should include the /v1 prefix (e.g. "http://localhost:6188/v1").
 func NewOpenAIClient(baseURL string, opts ...OpenAIOption) *OpenAIClient {
+	baseURL = EnsureHTTPScheme(baseURL)
 	c := &OpenAIClient{
 		baseURL:       baseURL,
 		httpClient:    &http.Client{Timeout: defaultRequestTimeout(baseURL)},
@@ -108,8 +109,22 @@ func NewOpenAIClient(baseURL string, opts ...OpenAIOption) *OpenAIClient {
 	return c
 }
 
+// Endpoint returns the current base URL.
+func (c *OpenAIClient) Endpoint() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL
+}
+
+// IsLocalEndpoint returns true when the client targets a loopback address.
+func (c *OpenAIClient) IsLocalEndpoint() bool {
+	return IsLoopbackEndpoint(c.Endpoint())
+}
+
 // SetEndpoint updates the base URL at runtime (hot-swap, no restart).
+// If the URL has no scheme, "http://" is prepended automatically.
 func (c *OpenAIClient) SetEndpoint(baseURL string) {
+	baseURL = EnsureHTTPScheme(baseURL)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.baseURL = baseURL
@@ -305,7 +320,7 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 const modelCacheTTL = 30 * time.Second
 
 func defaultRequestTimeout(baseURL string) time.Duration {
-	if isLoopbackEndpoint(baseURL) {
+	if IsLoopbackEndpoint(baseURL) {
 		return 30 * time.Minute
 	}
 	return 5 * time.Minute
@@ -318,7 +333,8 @@ func estimatePromptTokens(body []byte) int {
 	return (len(body)+3)/4 + 64
 }
 
-func isLoopbackEndpoint(baseURL string) bool {
+// IsLoopbackEndpoint returns true if the URL targets a loopback address.
+func IsLoopbackEndpoint(baseURL string) bool {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return false
@@ -342,7 +358,7 @@ func statusURLFromBaseURL(baseURL string) string {
 }
 
 func (c *OpenAIClient) resolveLocalContextWindow(ctx context.Context, baseURL, model, apiKey, userAgent string) (int, bool) {
-	if !isLoopbackEndpoint(baseURL) || strings.TrimSpace(model) == "" || c.httpClient == nil {
+	if !IsLoopbackEndpoint(baseURL) || strings.TrimSpace(model) == "" || c.httpClient == nil {
 		return 0, false
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -602,4 +618,14 @@ func sanitizeToolName(name string) string {
 		return name
 	}
 	return strings.ReplaceAll(name, ".", "__")
+}
+
+// EnsureHTTPScheme prepends "http://" when the URL has no scheme at all.
+// URLs that already contain "://" (http, https, or anything else) are returned as-is.
+func EnsureHTTPScheme(rawURL string) string {
+	s := strings.TrimSpace(rawURL)
+	if s == "" || strings.Contains(s, "://") {
+		return s
+	}
+	return "http://" + s
 }

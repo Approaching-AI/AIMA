@@ -20,6 +20,9 @@ hardware-reference/
 *.swp
 *.swo
 
+# Playwright CLI artifacts
+.playwright-cli/
+
 # OS
 .DS_Store
 Thumbs.db

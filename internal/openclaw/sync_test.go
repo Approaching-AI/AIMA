@@ -525,8 +525,12 @@ func TestSyncMigratesLegacyImageGenProviderWithMedia(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConfig failed: %v", err)
 	}
-	if provider := lookupMap(cfg, "models", "providers", "openai"); provider != nil {
-		t.Fatalf("legacy openai provider should be migrated away: %v", provider)
+	// Legacy openai image-gen provider is migrated to aima-imagegen, but
+	// ensureAudioAuthProvider recreates models.providers.openai for ASR auth.
+	if provider := lookupMap(cfg, "models", "providers", "openai"); provider == nil {
+		t.Fatal("openai provider should exist for audio auth")
+	} else if asString(provider["apiKey"]) != "local" {
+		t.Fatalf("openai provider apiKey = %q, want %q", asString(provider["apiKey"]), "local")
 	}
 	if provider := lookupMap(cfg, "models", "providers", "aima-imagegen"); provider == nil {
 		t.Fatal("aima-imagegen provider missing after sync")

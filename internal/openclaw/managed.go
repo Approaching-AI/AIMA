@@ -22,6 +22,7 @@ type ManagedState struct {
 	TTSModel                string   `json:"tts_model,omitempty"`
 	ImageGenerationProvider string   `json:"image_generation_provider,omitempty"`
 	ImageGenerationModels   []string `json:"image_generation_models,omitempty"`
+	AudioAuthProvider       string   `json:"audio_auth_provider,omitempty"`
 	PluginAllow             []string `json:"plugin_allow,omitempty"`
 	MCPServerName           string   `json:"mcp_server_name,omitempty"`
 }
@@ -83,6 +84,7 @@ func (s *ManagedState) Empty() bool {
 		s.TTSModel == "" &&
 		s.ImageGenerationProvider == "" &&
 		len(s.ImageGenerationModels) == 0 &&
+		s.AudioAuthProvider == "" &&
 		len(s.PluginAllow) == 0 &&
 		s.MCPServerName == ""
 }

@@ -26,10 +26,8 @@ func RegisterRoutes(deps *Deps) func(*http.ServeMux) {
 // handleTTS proxies TTS requests to the backend serving the requested model.
 // Expects JSON body: {"model":"<model-name>", "input":"...", "voice":"..."}
 //
-// The proxy strips unsupported response_format values before forwarding.
-// Some TTS backends (e.g. qwen3-tts FastAPI) only support "wav" output;
-// clients like OpenClaw always request "mp3". Removing the field lets the
-// backend use its default format, avoiding 422 errors.
+// The request body is forwarded as-is, including response_format. TTS backends
+// are expected to handle the requested format (wav, mp3, opus, flac, aac, pcm).
 func (d *Deps) handleTTS(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -54,13 +52,6 @@ func (d *Deps) handleTTS(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		http.Error(w, `{"error":"missing or invalid model field"}`, http.StatusBadRequest)
 		return
-	}
-
-	// Strip response_format if it's not "wav" — our TTS backends only produce WAV.
-	// Callers get valid audio regardless; most HTTP audio clients handle WAV fine.
-	if fmt, ok := raw["response_format"].(string); ok && fmt != "wav" {
-		delete(raw, "response_format")
-		body, _ = json.Marshal(raw)
 	}
 
 	backend := d.findBackend(model)

@@ -70,10 +70,16 @@ func MergeAIMAConfigWithState(existing map[string]any, managed *ManagedState, re
 
 	mergeLLMProvider(existing, managed, next, result)
 	next.AudioModels = mergeMediaModels(existing, "audio", audioIDs(result.ASRModels), managedSet(managedAudioModels(managed)), result.ProxyAddr, false)
+	if len(next.AudioModels) > 0 {
+		if audio := lookupMap(existing, "tools", "media", "audio"); audio != nil {
+			audio["echoTranscript"] = true
+		}
+	}
 	next.VisionModels = mergeMediaModels(existing, "image", modelIDs(result.VLMModels), managedSet(managedVisionModels(managed)), result.ProxyAddr, false)
 	mergeImageModel(existing, managed, next, result)
 	mergeTTS(existing, managed, next, result)
 	mergeImageGeneration(existing, managed, next, result)
+	ensureAudioAuthProvider(existing, managed, next, result)
 	mergeLocalMediaProvider(existing, managed, next, result)
 	mergeMCPServer(existing, managed, next, result)
 	mergePluginAllowlist(existing, managed, next, result)
@@ -235,6 +241,44 @@ func legacyImageGenerationOwned(cfg map[string]any, result *SyncResult) bool {
 	}
 	configured := configuredAgentDefaultModelsForProviders(cfg, "imageGenerationModel", []string{legacyImageGenProviderID}, result.ProxyAddr)
 	return stringSlicesEqual(uniqueSorted(configured), expected)
+}
+
+// ensureAudioAuthProvider ensures models.providers.openai has an apiKey when
+// ASR audio models are deployed. OpenClaw's transcription pipeline resolves
+// the API key via resolveApiKeyForProvider('openai') and silently skips
+// transcription when no key is found.
+func ensureAudioAuthProvider(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {
+	const providerID = "openai"
+	ownsAudioAuth := managed != nil && managed.AudioAuthProvider == providerID
+
+	if len(next.AudioModels) == 0 {
+		if ownsAudioAuth {
+			provider := lookupMap(cfg, "models", "providers", providerID)
+			if providerManagedByAIMA(provider, result.ProxyAddr) {
+				removeProviderIfPresent(cfg, providerID)
+			}
+		}
+		return
+	}
+
+	existing := lookupMap(cfg, "models", "providers", providerID)
+	if existing != nil {
+		if _, hasKey := existing["apiKey"]; !hasKey {
+			existing["apiKey"] = directToolAPIKey(result.APIKey)
+		}
+		if ownsAudioAuth || providerManagedByAIMA(existing, result.ProxyAddr) {
+			next.AudioAuthProvider = providerID
+		}
+		return
+	}
+
+	providers := ensureMap(ensureMap(cfg, "models"), "providers")
+	providers[providerID] = map[string]any{
+		"apiKey":  directToolAPIKey(result.APIKey),
+		"baseUrl": result.ProxyAddr,
+		"models":  []any{},
+	}
+	next.AudioAuthProvider = providerID
 }
 
 func removeImageGeneration(cfg map[string]any, managed *ManagedState) {

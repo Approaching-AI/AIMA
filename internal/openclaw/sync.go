@@ -94,11 +94,15 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		modelType := deps.Catalog.ModelType(b.ModelName)
 		switch modelType {
 		case "llm", "vlm":
+			ctxWindow := b.ContextWindowTokens // prefer actual deployment config
+			if ctxWindow <= 0 {
+				ctxWindow = deps.Catalog.ModelContextWindow(b.ModelName) // fallback to catalog
+			}
 			entry := ModelEntry{
 				ID:            b.ModelName,
 				Name:          formatDisplayName(b.ModelName, modelType),
-				ContextWindow: deps.Catalog.ModelContextWindow(b.ModelName),
-				MaxTokens:     defaultMaxTokens(deps.Catalog.ModelContextWindow(b.ModelName)),
+				ContextWindow: ctxWindow,
+				MaxTokens:     defaultMaxTokens(ctxWindow),
 			}
 			if modelType == "vlm" {
 				entry.Input = []string{"text", "image"}
@@ -311,15 +315,14 @@ func isSizeSuffix(s string) bool {
 }
 
 // defaultMaxTokens returns a reasonable maxTokens based on context window.
+// This is the maximum output tokens OpenClaw will allow per request.
 func defaultMaxTokens(contextWindow int) int {
 	if contextWindow <= 0 {
 		return 4096
 	}
-	// Default to 1/4 of context window, capped at 8192
-	max := contextWindow / 4
-	if max > 8192 {
-		return 8192
-	}
+	// Use half the context window for output (other half reserved for input),
+	// with a floor of 1024 tokens.
+	max := contextWindow / 2
 	if max < 1024 {
 		return 1024
 	}

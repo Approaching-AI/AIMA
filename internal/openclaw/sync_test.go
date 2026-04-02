@@ -1130,14 +1130,69 @@ func TestDefaultMaxTokens(t *testing.T) {
 	}{
 		{0, 4096},
 		{2048, 1024},
-		{32768, 8192},
-		{65536, 8192},
-		{8192, 2048},
+		{32768, 16384},
+		{65536, 32768},
+		{131072, 65536},
+		{8192, 4096},
 	}
 	for _, tt := range tests {
 		got := defaultMaxTokens(tt.ctx)
 		if got != tt.want {
 			t.Errorf("defaultMaxTokens(%d) = %d, want %d", tt.ctx, got, tt.want)
 		}
+	}
+}
+
+func TestSyncUsesDeploymentContextWindow(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			// Deployment overrides context window to 16384 (catalog says 32768 for qwen3-8b)
+			"qwen3-8b": {ModelName: "qwen3-8b", EngineType: "vllm", Address: "http://127.0.0.1:8000", Ready: true, ContextWindowTokens: 16384},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+	}
+
+	result, err := Sync(context.Background(), deps, true)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if len(result.LLMModels) != 1 {
+		t.Fatalf("expected 1 LLM model, got %d", len(result.LLMModels))
+	}
+	if result.LLMModels[0].ContextWindow != 16384 {
+		t.Errorf("ContextWindow = %d, want 16384 (from deployment, not catalog's 32768)", result.LLMModels[0].ContextWindow)
+	}
+	if result.LLMModels[0].MaxTokens != 8192 {
+		t.Errorf("MaxTokens = %d, want 8192 (16384/2)", result.LLMModels[0].MaxTokens)
+	}
+}
+
+func TestSyncFallsToCatalogWhenNoDeploymentContextWindow(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			// No ContextWindowTokens set — should fall back to catalog (32768)
+			"qwen3-8b": {ModelName: "qwen3-8b", EngineType: "vllm", Address: "http://127.0.0.1:8000", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+	}
+
+	result, err := Sync(context.Background(), deps, true)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if len(result.LLMModels) != 1 {
+		t.Fatalf("expected 1 LLM model, got %d", len(result.LLMModels))
+	}
+	if result.LLMModels[0].ContextWindow != 32768 {
+		t.Errorf("ContextWindow = %d, want 32768 (from catalog fallback)", result.LLMModels[0].ContextWindow)
+	}
+	if result.LLMModels[0].MaxTokens != 16384 {
+		t.Errorf("MaxTokens = %d, want 16384 (32768/2)", result.LLMModels[0].MaxTokens)
 	}
 }

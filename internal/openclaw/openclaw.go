@@ -24,11 +24,12 @@ type BackendLister interface {
 
 // Backend mirrors proxy.Backend fields needed by this plugin.
 type Backend struct {
-	ModelName  string
-	EngineType string
-	Address    string
-	Ready      bool
-	Remote     bool
+	ModelName           string
+	EngineType          string
+	Address             string
+	Ready               bool
+	Remote              bool
+	ContextWindowTokens int // actual deployed context window (from aima.dev/context_window label)
 }
 
 type RequestPatch struct {

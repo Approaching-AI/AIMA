@@ -473,11 +473,12 @@ func (a proxyBackendAdapter) ListBackends() map[string]*openclaw.Backend {
 	result := make(map[string]*openclaw.Backend, len(pbs))
 	for k, b := range pbs {
 		result[k] = &openclaw.Backend{
-			ModelName:  b.ModelName,
-			EngineType: b.EngineType,
-			Address:    b.Address,
-			Ready:      b.Ready,
-			Remote:     b.Remote,
+			ModelName:           b.ModelName,
+			EngineType:          b.EngineType,
+			Address:             b.Address,
+			Ready:               b.Ready,
+			Remote:              b.Remote,
+			ContextWindowTokens: b.ContextWindowTokens,
 		}
 	}
 	return result

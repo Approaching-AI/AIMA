@@ -15,7 +15,7 @@ deployments:
     modalities: [text, vision]
     config:
       gpu_memory_utilization: 0.25
-      max_model_len: 65536
+      max_model_len: 32768
       dtype: bfloat16
       port: 8000
     notes: "Dense 9B, native multimodal (text+vision). gmu=0.25 on 120GB ~ 30GB headroom."

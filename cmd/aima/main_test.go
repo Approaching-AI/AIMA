@@ -22,6 +22,8 @@ import (
 	"github.com/jguan/aima/internal/mcp"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 	"github.com/jguan/aima/internal/ui"
+	"github.com/spf13/cobra"
+	"github.com/spf13/cobra"
 )
 
 type fakeRuntime struct {
@@ -243,6 +245,26 @@ func TestRegisterUIRoutes_OnboardingManifestUsesDynamicBuilder(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("generated manifest missing %q\nmanifest=%s", want, body)
 		}
+	}
+}
+func TestRewriteOnboardingCommands_DropsKnownCommandWhenCLICommandIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := &cobra.Command{Use: "aima"}
+	items := []onboardingCommand{
+		{ID: "help", Command: "/cli help", Description: "show help"},
+		{ID: "custom", Command: "/cli custom", Description: "custom command"},
+	}
+
+	got := rewriteOnboardingCommands(items, root, "demo-llm")
+	if len(got) != 1 {
+		t.Fatalf("rewriteOnboardingCommands() item count = %d, want 1 (%#v)", len(got), got)
+	}
+	if got[0].ID != "custom" {
+		t.Fatalf("rewriteOnboardingCommands() preserved wrong item: %#v", got)
+	}
+	if got[0].Command != "/cli custom" {
+		t.Fatalf("rewriteOnboardingCommands() command = %q, want /cli custom", got[0].Command)
 	}
 }
 func TestParseExtraParamsStrict(t *testing.T) {

@@ -200,6 +200,32 @@ func TestRegisterRoutes_IndexOnboardingInsertIsFillOnly(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexFallbackOnboardingUsesCLICommands(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`command: '/cli status'`,
+		`command: '/cli hal detect'`,
+		`command: '/cli model list'`,
+		`command: '/cli engine list'`,
+		`command: '/cli deploy list'`,
+		`/cli status, /cli hal detect, and /cli model list`,
+		`/cli status、/cli hal detect、/cli model list`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("fallback onboarding missing %q", token)
+		}
+	}
+}
+
 func TestRegisterRoutes_FaviconAssets(t *testing.T) {
 	t.Parallel()
 

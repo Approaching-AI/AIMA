@@ -183,16 +183,17 @@ func rewriteOnboardingGroups(groups []onboardingGroup, root *cobra.Command, samp
 func rewriteOnboardingCommands(items []onboardingCommand, root *cobra.Command, sampleModel string) []onboardingCommand {
 	out := make([]onboardingCommand, 0, len(items))
 	for _, item := range items {
-		if command, ok := resolveOnboardingCLICommand(item.ID, root, sampleModel); ok {
-			item.Command = command
-			item.Description = replaceSampleModelPlaceholder(item.Description, sampleModel)
-			item.Label = replaceSampleModelPlaceholder(item.Label, sampleModel)
-			out = append(out, item)
-			continue
-		}
 		item.Command = replaceSampleModelPlaceholder(item.Command, sampleModel)
 		item.Description = replaceSampleModelPlaceholder(item.Description, sampleModel)
 		item.Label = replaceSampleModelPlaceholder(item.Label, sampleModel)
+		if command, ok := resolveOnboardingCLICommand(item.ID, root, sampleModel); ok {
+			item.Command = command
+			out = append(out, item)
+			continue
+		}
+		if _, ok := onboardingCommandSpecs[item.ID]; ok {
+			continue
+		}
 		if strings.TrimSpace(item.Command) == "" {
 			continue
 		}

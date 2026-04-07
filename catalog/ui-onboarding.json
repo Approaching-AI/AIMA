@@ -67,7 +67,7 @@
       },
       "troubleshooting": {
         "items": [
-          { "title": "Agent 不可用", "body": "先用 status、hardware、models 等直接命令确认基础状态。" },
+          { "title": "Agent 不可用", "body": "先用 /cli status、/cli hal detect、/cli model list 等直接命令确认基础状态。" },
           { "title": "需要配置", "body": "点击右上角设置，检查 LLM endpoint、model 和 API key。" },
           { "title": "需要远程协助", "body": "点击连线灵机云，按引导进入远程协助流程。" }
         ]
@@ -138,7 +138,7 @@
       },
       "troubleshooting": {
         "items": [
-          { "title": "Agent unavailable", "body": "Use direct commands like status, hardware, and models first." },
+          { "title": "Agent unavailable", "body": "Use direct commands like /cli status, /cli hal detect, and /cli model list first." },
           { "title": "Need configuration help", "body": "Open Settings and verify the LLM endpoint, model, and API key." },
           { "title": "Need remote help", "body": "Use the support button to connect to the remote assistance flow." }
         ]

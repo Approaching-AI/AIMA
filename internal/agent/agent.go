@@ -205,6 +205,42 @@ func (a *Agent) setToolMode(m toolMode) {
 	a.mu.Unlock()
 }
 
+// ProbeToolMode performs a lightweight LLM call with a dummy tool to detect
+// whether the backend supports tool calling. This resolves the Tier 1→2
+// upgrade deadlock where Explorer cannot self-detect tool mode because
+// LLMPlanner bypasses Agent.Ask() which is the normal detection path.
+func (a *Agent) ProbeToolMode(ctx context.Context) {
+	if a.llm == nil {
+		return
+	}
+	a.mu.RLock()
+	mode := a.mode
+	a.mu.RUnlock()
+	if mode != toolModeUnknown {
+		return // already detected
+	}
+
+	probe := []ToolDefinition{{
+		Name:        "noop",
+		Description: "probe",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}}
+	_, err := a.llm.ChatCompletion(ctx, []Message{
+		{Role: "user", Content: "hi"},
+	}, probe)
+	if err != nil && isToolRejectionError(err) {
+		a.setToolMode(toolModeContextOnly)
+		slog.Info("tool mode probed", "result", "context_only")
+		return
+	}
+	if err == nil {
+		a.setToolMode(toolModeEnabled)
+		slog.Info("tool mode probed", "result", "enabled")
+		return
+	}
+	slog.Debug("tool mode probe inconclusive", "error", err)
+}
+
 // isToolRejectionError checks if the error is caused by the backend not
 // supporting tool calling (e.g., vLLM missing --enable-auto-tool-choice).
 func isToolRejectionError(err error) bool {

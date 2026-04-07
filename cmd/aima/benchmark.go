@@ -199,6 +199,12 @@ func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, new
 		return false, ""
 	}
 
+	// B7: Never promote configs with zero throughput — they represent
+	// inconclusive benchmarks (no inference service running).
+	if newThroughput <= 0 {
+		return false, ""
+	}
+
 	// No golden exists -> promote this one directly
 	if goldenCfg == nil {
 		if err := db.UpdateConfigStatus(ctx, newConfigID, "golden"); err == nil {

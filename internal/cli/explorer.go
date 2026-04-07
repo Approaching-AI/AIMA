@@ -43,7 +43,15 @@ func newExplorerStatusCmd(app *App) *cobra.Command {
 func newExplorerTriggerCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "trigger",
-		Short: "Trigger a manual exploration cycle",
+		Short: "Trigger a manual exploration cycle (requires 'aima serve' mode)",
+		Long: `Trigger a manual exploration cycle.
+
+NOTE: This command publishes an event to the in-process EventBus. The Explorer
+processes events asynchronously in a background goroutine that only runs while
+the process is alive. In CLI mode the process exits immediately after the event
+is published, so the exploration will NOT actually execute.
+
+Use 'aima serve --mcp' and call explorer.trigger via MCP for actual execution.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps.ExplorerTrigger == nil {
 				return fmt.Errorf("explorer not available")

@@ -99,7 +99,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 
 
 	// Knowledge sync (K6)
-	syncHTTPClient := &http.Client{Timeout: 30 * time.Second}
+	syncHTTPClient := &http.Client{Timeout: 120 * time.Second}
 	deps.SyncPush = func(ctx context.Context) (json.RawMessage, error) {
 		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")

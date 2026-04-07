@@ -4,10 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// stripCodeFence removes markdown code fences that LLMs often wrap around JSON.
+func stripCodeFence(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, "```") {
+		if i := strings.Index(trimmed, "\n"); i != -1 {
+			trimmed = trimmed[i+1:]
+		}
+		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
+	return trimmed
+}
 
 // LLMCompleter is the interface for LLM completions used by the Advisor.
 type LLMCompleter interface {
@@ -64,10 +78,11 @@ func (a *Advisor) Recommend(ctx context.Context, req RecommendRequest) (*Recomme
 
 	userPrompt := a.buildRecommendPrompt(req, configs, benchmarks)
 
-	raw, err := a.llm.Complete(ctx, promptRecommend, userPrompt)
+	rawLLM, err := a.llm.Complete(ctx, promptRecommend, userPrompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("llm complete: %w", err)
 	}
+	raw := stripCodeFence(rawLLM)
 
 	var resp RecommendResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
@@ -135,10 +150,11 @@ func (a *Advisor) OptimizeScenario(ctx context.Context, req OptimizeRequest) (*O
 
 	userPrompt := a.buildOptimizePrompt(req, configs, benchmarks)
 
-	raw, err := a.llm.Complete(ctx, promptOptimize, userPrompt)
+	rawLLM, err := a.llm.Complete(ctx, promptOptimize, userPrompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("llm complete: %w", err)
 	}
+	raw := stripCodeFence(rawLLM)
 
 	var resp OptimizeResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
@@ -213,10 +229,11 @@ func (a *Advisor) GenerateScenario(ctx context.Context, req GenerateScenarioRequ
 
 	userPrompt := a.buildScenarioPrompt(req, allConfigs)
 
-	raw, err := a.llm.Complete(ctx, promptGenerateScenario, userPrompt)
+	rawLLM, err := a.llm.Complete(ctx, promptGenerateScenario, userPrompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("llm complete: %w", err)
 	}
+	raw := stripCodeFence(rawLLM)
 
 	var resp GenerateScenarioResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
@@ -224,12 +241,20 @@ func (a *Advisor) GenerateScenario(ctx context.Context, req GenerateScenarioRequ
 	}
 
 	modelsJSON, _ := json.Marshal(req.Models)
+	// Convert json.RawMessage deployments to []any for proper YAML serialization
+	var deployments []any
+	for _, d := range resp.Deployments {
+		var obj any
+		if err := json.Unmarshal(d, &obj); err == nil {
+			deployments = append(deployments, obj)
+		}
+	}
 	scenarioYAMLBytes, err := yaml.Marshal(map[string]any{
 		"name":        resp.Name,
 		"description": resp.Description,
 		"goal":        req.Goal,
 		"hardware":    hardware,
-		"deployments": resp.Deployments,
+		"deployments": deployments,
 		"total_vram":  resp.TotalVRAM,
 		"reasoning":   resp.Reasoning,
 		"confidence":  resp.Confidence,

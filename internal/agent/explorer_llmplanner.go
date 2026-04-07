@@ -19,9 +19,13 @@ func NewLLMPlanner(agent *Agent) *LLMPlanner {
 }
 
 func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, error) {
-	prompt := buildPlannerPrompt(input)
+	// B8: Filter input to reduce prompt size — only send local-hardware
+	// gaps and limit collections to avoid multi-minute LLM calls.
+	filtered := filterPlanInput(input)
+
 	// The planner emits a pure JSON plan and does not request tool calls.
 	// It intentionally bypasses profile-filtered tool discovery.
+	prompt := buildPlannerPrompt(filtered)
 	resp, err := p.agent.llm.ChatCompletion(ctx, []Message{
 		{Role: "system", Content: llmPlannerSystemPrompt},
 		{Role: "user", Content: prompt},
@@ -42,16 +46,67 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 	return plan, nil
 }
 
+const (
+	maxLLMGaps          = 20
+	maxLLMOpenQuestions  = 10
+	maxLLMHistory       = 5
+)
+
+// filterPlanInput reduces PlanInput to a size suitable for LLM prompts.
+// Only gaps matching local hardware are kept; collections are capped.
+func filterPlanInput(input PlanInput) PlanInput {
+	localHW := firstTaskHardware(input.Hardware.Profile, input.Hardware.GPUArch)
+
+	// Filter gaps to local hardware only
+	var localGaps []GapEntry
+	for _, g := range input.Gaps {
+		if g.Hardware == localHW || g.Hardware == "" {
+			localGaps = append(localGaps, g)
+		}
+	}
+	if len(localGaps) > maxLLMGaps {
+		localGaps = localGaps[:maxLLMGaps]
+	}
+
+	// Cap open questions
+	oq := input.OpenQuestions
+	if len(oq) > maxLLMOpenQuestions {
+		oq = oq[:maxLLMOpenQuestions]
+	}
+
+	// Cap history
+	hist := input.History
+	if len(hist) > maxLLMHistory {
+		hist = hist[:maxLLMHistory]
+	}
+
+	return PlanInput{
+		Hardware:      input.Hardware,
+		Gaps:          localGaps,
+		ActiveDeploys: input.ActiveDeploys,
+		Advisories:    input.Advisories,
+		History:       hist,
+		OpenQuestions:  oq,
+		Event:         input.Event,
+	}
+}
+
 const llmPlannerSystemPrompt = `You are an AI inference optimization planner. Given device hardware info, knowledge gaps, and deployment state, generate an exploration plan as JSON.
 
 Output format:
-{"tasks":[{"kind":"validate|tune|open_question|compare","model":"...","engine":"...","params":{},"reason":"...","priority":0}]}
+{"tasks":[{"kind":"validate|tune|open_question","model":"...","engine":"...","params":{},"reason":"...","priority":0}]}
+
+Task kinds:
+- validate: benchmark a model+engine config to establish baseline performance
+- tune: search parameter space (quantization, batch_size, tp_size) to optimize performance
+- open_question: test a specific hypothesis from the open questions list
 
 Rules:
 - Prioritize deployed models without benchmarks (kind=validate)
 - For tune tasks, suggest specific parameter ranges based on hardware VRAM
 - Consider central advisories and validate them
 - Max 5 tasks per plan
+- Only use task kinds listed above
 - Be specific about WHY each task matters`
 
 func buildPlannerPrompt(input PlanInput) string {
@@ -88,6 +143,6 @@ func parsePlanResponse(content string) (*ExplorerPlan, error) {
 		ID:        id,
 		Tier:      2,
 		Tasks:     parsed.Tasks,
-		Reasoning: content,
+		Reasoning: trimmed, // O6: use stripped version, not raw content with code fences
 	}, nil
 }

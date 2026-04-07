@@ -15,6 +15,7 @@ type OpenAICompleter struct {
 	baseURL string
 	apiKey  string
 	model   string
+	headers map[string]string
 	client  *http.Client
 }
 
@@ -24,6 +25,11 @@ type OpenAIOption func(*OpenAICompleter)
 // WithOpenAIModel sets the model name (default: gpt-4).
 func WithOpenAIModel(model string) OpenAIOption {
 	return func(c *OpenAICompleter) { c.model = model }
+}
+
+// WithOpenAIHeaders adds custom HTTP headers to every request.
+func WithOpenAIHeaders(headers map[string]string) OpenAIOption {
+	return func(c *OpenAICompleter) { c.headers = headers }
 }
 
 // NewOpenAICompleter creates a completer using the OpenAI chat completions API.
@@ -64,6 +70,9 @@ func (c *OpenAICompleter) Complete(ctx context.Context, systemPrompt, userPrompt
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.client.Do(req)

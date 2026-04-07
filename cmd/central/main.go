@@ -37,7 +37,17 @@ func main() {
 	}
 
 	if llmEndpoint != "" {
-		completer := central.NewOpenAICompleter(llmEndpoint, llmKey, central.WithOpenAIModel(llmModel))
+		opts := []central.OpenAIOption{central.WithOpenAIModel(llmModel)}
+		if hdrs := os.Getenv("CENTRAL_LLM_HEADERS"); hdrs != "" {
+			headers := make(map[string]string)
+			for _, pair := range strings.Split(hdrs, ",") {
+				if k, v, ok := strings.Cut(pair, "="); ok {
+					headers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+			}
+			opts = append(opts, central.WithOpenAIHeaders(headers))
+		}
+		completer := central.NewOpenAICompleter(llmEndpoint, llmKey, opts...)
 
 		advisor := central.NewAdvisor(srv.Store(), completer)
 		srv.SetAdvisor(advisor)

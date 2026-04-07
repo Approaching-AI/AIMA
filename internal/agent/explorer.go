@@ -252,7 +252,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	slog.Debug("explorer event", "type", ev.Type)
 
 	// Re-detect tier periodically (LLM may have come online/offline)
-	if e.refreshTier() {
+	if e.refreshTier(ctx) {
 		e.mu.RLock()
 		currentTier := e.tier
 		e.mu.RUnlock()
@@ -454,14 +454,6 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 		default:
 		}
 
-		// Skip tasks that require LLM if tier has degraded
-		if taskRequiresLLM(task.Kind) && e.detectTier() < 2 {
-			slog.Info("explorer: skipping LLM-only task (tier degraded)",
-				"kind", task.Kind, "model", task.Model)
-			task.Status = "skipped_tier_degraded"
-			continue
-		}
-
 		slog.Info("explorer: executing task",
 			"kind", task.Kind, "model", task.Model, "engine", task.Engine,
 			"progress", fmt.Sprintf("%d/%d", i+1, len(plan.Tasks)))
@@ -500,11 +492,6 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 			SummaryJSON: summaryJSON,
 		})
 	}
-}
-
-// taskRequiresLLM returns true for task kinds that need LLM reasoning.
-func taskRequiresLLM(kind string) bool {
-	return kind == "compare"
 }
 
 func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult {
@@ -679,7 +666,15 @@ func (e *Explorer) notifySlotWaitersLocked() {
 	close(old)
 }
 
-func (e *Explorer) refreshTier() bool {
+func (e *Explorer) refreshTier(ctx context.Context) bool {
+	// O4: If agent is available but tool mode is still unknown, probe it.
+	// This resolves the Tier 1→2 self-upgrade deadlock: LLMPlanner calls
+	// llm.ChatCompletion directly (not Agent.Ask), so tool mode detection
+	// that normally happens inside Ask() never triggers.
+	if e.agent != nil && e.agent.Available() && e.agent.ToolMode() == "unknown" {
+		e.agent.ProbeToolMode(ctx)
+	}
+
 	newTier := e.detectTier()
 	e.mu.Lock()
 	defer e.mu.Unlock()

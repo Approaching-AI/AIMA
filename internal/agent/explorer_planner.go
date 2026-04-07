@@ -77,7 +77,7 @@ type ExplorerPlan struct {
 
 // PlanTask is a single exploration unit.
 type PlanTask struct {
-	Kind      string         `json:"kind"` // "validate", "tune", "open_question", "compare"
+	Kind      string         `json:"kind"` // "validate", "tune", "open_question"
 	Hardware  string         `json:"hardware,omitempty"`
 	Model     string         `json:"model"`
 	Engine    string         `json:"engine"`
@@ -127,11 +127,16 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 		})
 	}
 
-	// Rule 3: knowledge gaps -- max 3 per cycle, sorted by model name (stable)
-	sorted := make([]GapEntry, len(input.Gaps))
-	copy(sorted, input.Gaps)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Model < sorted[j].Model })
-	for i, gap := range sorted {
+	// Rule 3: knowledge gaps -- max 3 per cycle, filtered to local hardware,
+	// sorted by model name (stable)
+	var localGaps []GapEntry
+	for _, g := range input.Gaps {
+		if g.Hardware == defaultHardware || g.Hardware == "" {
+			localGaps = append(localGaps, g)
+		}
+	}
+	sort.Slice(localGaps, func(i, j int) bool { return localGaps[i].Model < localGaps[j].Model })
+	for i, gap := range localGaps {
 		if i >= 3 {
 			break
 		}

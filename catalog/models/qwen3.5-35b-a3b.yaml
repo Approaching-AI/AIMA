@@ -107,6 +107,45 @@ variants:
       vram_mib: 67100
       notes: "vllm-spark-tf5 v0.16.1rc1, FLASH_ATTN backend. gmu=0.9, 262K context, tool calling enabled (qwen3_xml parser)."
 
+  # --- 2× GB10 多机 PP=2 (Blackwell, 2×128GB unified, Ray cluster) ---
+  # Pipeline Parallel: 前半层在 head GPU, 后半层在 worker GPU
+  # PP 比 TP 更适合跨节点 (25 tok/s vs 15 tok/s), 因为只在 pipeline 分界处传激活值
+  # 需要: 200Gbps 直连, RoCE RDMA, GLOO_SOCKET_IFNAME 在容器级设置
+  # Ray cluster: head 10.0.1.2:6379, worker 10.0.1.1
+  - name: qwen3.5-35b-a3b-blackwell-2node-pp2-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      gpu_count_min: 2
+      unified_memory: true
+    engine: vllm-nightly
+    format: safetensors
+    compatibility:
+      repair_init_commands:
+        - 'python3 -m pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple transformers==5.4.0'
+        - 'python3 -m pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple mistral_common==1.10.0'
+        - 'python3 -c "from pathlib import Path; p=Path(\"/usr/local/lib/python3.12/dist-packages/transformers/modeling_rope_utils.py\"); t=p.read_text(); old=\"        received_keys -= ignore_keys\n\"; new=\"        received_keys -= set(ignore_keys)\n\"; p.write_text(t.replace(old, new, 1) if old in t else t)"'
+    default_config:
+      gpu_memory_utilization: 0.8
+      max_model_len: 8192
+      dtype: bfloat16
+      pipeline_parallel_size: 2
+      distributed_executor_backend: ray
+      enforce_eager: true
+      trust_remote_code: true
+    container_env:
+      VLLM_ATTENTION_BACKEND: TRITON_ATTN
+      GLOO_SOCKET_IFNAME: enp1s0f1np1
+      NCCL_SOCKET_IFNAME: enp1s0f1np1
+      NCCL_IB_DISABLE: "0"
+      NCCL_IB_HCA: "rocep1s0f1,roceP2p1s0f1"
+    expected_performance:
+      startup_time_s: 120
+      cold_start_time_s: 300
+      tokens_per_second: [23, 25]
+      vram_mib: 67100
+      notes: "2× GB10 PP=2, vllm-openai:qwen3_5-cu130 (v0.16.0rc2), Ray 2.54.0, NCCL RoCE RDMA over 200Gbps direct link. PP decode 23-25 tok/s (vs TP=2 12-17 tok/s). KV cache 1.47M tokens, 509x concurrency @8K. GLOO_SOCKET_IFNAME must be set at container level (docker run -e), not just in command — Ray workers inherit container env. First request ~70s warmup. 2026-04-07."
+
   # --- MetaX N260 (MACA, 2× 64GB HBM2e, Docker) ---
   # ⛔ BLOCKED: vLLM-MetaX 0.13.0 不支持 Qwen3_5MoeForConditionalGeneration 架构
   # qwen3_5_moe model_type 需要 transformers>=5.0 + vLLM>=0.16.0

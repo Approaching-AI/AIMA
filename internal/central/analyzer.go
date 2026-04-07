@@ -252,7 +252,7 @@ func (a *Analyzer) RunGapScan(ctx context.Context) (*GapScanResult, error) {
 		Reasoning       string `json:"reasoning"`
 		SuggestedAction string `json:"suggested_action"`
 	}
-	if err := json.Unmarshal([]byte(raw), &gaps); err != nil {
+	if err := json.Unmarshal([]byte(stripCodeFence(raw)), &gaps); err != nil {
 		run.Status = AnalysisStatusFailed
 		run.Error = "parse gap response: " + err.Error()
 		run.DurationMs = int(time.Since(start).Milliseconds())
@@ -347,7 +347,7 @@ func (a *Analyzer) RunPatternDiscovery(ctx context.Context) (*PatternResult, err
 	}
 
 	var resp OptimizeResponse
-	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+	if err := json.Unmarshal([]byte(stripCodeFence(raw)), &resp); err != nil {
 		run.Status = AnalysisStatusFailed
 		run.Error = "parse pattern response: " + err.Error()
 		run.DurationMs = int(time.Since(start).Milliseconds())
@@ -430,7 +430,7 @@ func (a *Analyzer) RunScenarioHealth(ctx context.Context) (*ScenarioHealthResult
 		Reasoning       string `json:"reasoning"`
 		SuggestedAction string `json:"suggested_action"`
 	}
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+	if err := json.Unmarshal([]byte(stripCodeFence(raw)), &items); err != nil {
 		run.Status = AnalysisStatusFailed
 		run.Error = "parse scenario health response: " + err.Error()
 		run.DurationMs = int(time.Since(start).Milliseconds())

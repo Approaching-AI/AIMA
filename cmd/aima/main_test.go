@@ -230,16 +230,21 @@ func TestBuildOnboardingManifestJSON_LocalizesTopLevelCommandDescriptions(t *tes
 
 	zhHelp := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli help")
 	enHelp := findOnboardingCommandDescription(t, en.FullCommands.Groups, "top_level_commands", "/cli help")
-	if zhHelp != "查看任意命令的帮助信息" {
-		t.Fatalf("zh /cli help description = %q, want %q", zhHelp, "查看任意命令的帮助信息")
+	if zhHelp != "查看任意命令帮助。可直接执行，例如 /cli help；查看 model 的帮助可用 /cli help model。" {
+		t.Fatalf("zh /cli help description = %q, want %q", zhHelp, "查看任意命令帮助。可直接执行，例如 /cli help；查看 model 的帮助可用 /cli help model。")
 	}
-	if enHelp != "Help about any command" {
-		t.Fatalf("en /cli help description = %q, want %q", enHelp, "Help about any command")
+	if enHelp != "View help for any command. You can run it directly, for example /cli help; for model help use /cli help model." {
+		t.Fatalf("en /cli help description = %q, want %q", enHelp, "View help for any command. You can run it directly, for example /cli help; for model help use /cli help model.")
 	}
 
 	zhModel := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli model")
-	if zhModel != "管理模型" {
-		t.Fatalf("zh /cli model description = %q, want %q", zhModel, "管理模型")
+	if zhModel != "管理模型。需要子命令，例如 /cli model list 或 /cli model pull qwen3-8b。" {
+		t.Fatalf("zh /cli model description = %q, want %q", zhModel, "管理模型。需要子命令，例如 /cli model list 或 /cli model pull qwen3-8b。")
+	}
+
+	zhDeploy := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli deploy")
+	if zhDeploy != "部署推理服务。通常需要模型名，例如 /cli deploy qwen3-8b --dry-run；查看部署列表可用 /cli deploy list。" {
+		t.Fatalf("zh /cli deploy description = %q, want %q", zhDeploy, "部署推理服务。通常需要模型名，例如 /cli deploy qwen3-8b --dry-run；查看部署列表可用 /cli deploy list。")
 	}
 }
 

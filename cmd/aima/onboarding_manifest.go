@@ -135,34 +135,64 @@ var onboardingCommandSpecs = map[string]onboardingCommandSpec{
 
 var onboardingTopLevelCommandDescriptions = map[string]map[string]string{
 	"zh": {
-		"agent":      "管理 AI Agent 子系统",
-		"app":        "管理应用依赖声明",
-		"ask":        "向 AI Agent 提问",
-		"askforhelp": "连接支持服务，并可选择创建远程协助任务",
-		"benchmark":  "记录并查询基准测试结果",
-		"catalog":    "管理 YAML 知识目录",
-		"completion": "为指定 shell 生成自动补全脚本",
-		"config":     "获取或设置持久化配置",
-		"deploy":     "部署推理服务",
-		"discover":   "发现局域网上的 LLM 推理服务",
-		"engine":     "管理推理引擎",
-		"explore":    "持久化探索任务",
-		"fleet":      "管理局域网中的 AIMA 设备集群",
-		"hal":        "硬件抽象层：检测能力并采集指标",
-		"help":       "查看任意命令的帮助信息",
-		"init":       "安装基础设施栈（默认 Docker，--k3s 为完整 K3S+HAMi）",
-		"knowledge":  "管理知识库",
-		"mcp":        "通过 stdio 提供 MCP 服务",
-		"model":      "管理模型",
-		"openclaw":   "OpenClaw 集成：将 AIMA 模型同步为 providers",
-		"run":        "下载、部署并提供模型服务（类似 ollama run）",
-		"scenario":   "管理部署场景",
-		"serve":      "启动 AIMA 服务",
-		"status":     "显示系统状态",
-		"tui":        "交互式终端仪表盘",
-		"tuning":     "自动调优：参数搜索 + 基准测试 + 应用最佳结果",
-		"undeploy":   "移除已部署的推理服务",
-		"version":    "显示 AIMA 版本和构建信息",
+		"agent":      "管理 AI Agent 子系统。需要子命令，例如 /cli agent status。",
+		"app":        "管理应用依赖声明。需要子命令，例如 /cli app list；注册应用可用 /cli app register --name demo --needs '[]'。",
+		"ask":        "向 AI Agent 提问。需要补问题内容，例如 /cli ask 这台机器适合跑什么模型？",
+		"askforhelp": "连接支持服务。可直接写求助内容，例如 /cli askforhelp 模型部署失败。",
+		"benchmark":  "记录并查询基准测试结果。需要子命令，例如 /cli benchmark list。",
+		"catalog":    "管理 YAML 知识目录。需要子命令，例如 /cli catalog status 或 /cli catalog validate。",
+		"completion": "为指定 shell 生成自动补全脚本。需要补 shell 名称，例如 /cli completion zsh。",
+		"config":     "获取或设置持久化配置。需要子命令，例如 /cli config get agent.endpoint 或 /cli config set agent.model {sample_model}。",
+		"deploy":     "部署推理服务。通常需要模型名，例如 /cli deploy {sample_model} --dry-run；查看部署列表可用 /cli deploy list。",
+		"discover":   "发现局域网上的 LLM 推理服务。可直接执行，例如 /cli discover。",
+		"engine":     "管理推理引擎。需要子命令，例如 /cli engine list 或 /cli engine pull。",
+		"explore":    "持久化探索任务。需要子命令，例如 /cli explore start --model {sample_model} 或 /cli explore status --id <run-id>。",
+		"fleet":      "管理局域网中的 AIMA 设备集群。需要子命令，例如 /cli fleet devices 或 /cli fleet info <device-id>。",
+		"hal":        "硬件抽象层：检测能力并采集指标。需要子命令，例如 /cli hal detect 或 /cli hal metrics。",
+		"help":       "查看任意命令帮助。可直接执行，例如 /cli help；查看 model 的帮助可用 /cli help model。",
+		"init":       "安装基础设施栈。可直接执行，例如 /cli init；完整安装可用 /cli init --k3s。",
+		"knowledge":  "管理知识库。需要子命令，例如 /cli knowledge list 或 /cli knowledge resolve {sample_model}。",
+		"mcp":        "通过 stdio 提供 MCP 服务。可直接执行，例如 /cli mcp。",
+		"model":      "管理模型。需要子命令，例如 /cli model list 或 /cli model pull {sample_model}。",
+		"openclaw":   "OpenClaw 集成：将 AIMA 模型同步为 providers。需要子命令，例如 /cli openclaw status 或 /cli openclaw sync。",
+		"run":        "下载、部署并提供模型服务。需要模型名，例如 /cli run {sample_model}。",
+		"scenario":   "管理部署场景。需要子命令，例如 /cli scenario list 或 /cli scenario apply <scenario-name>。",
+		"serve":      "启动 AIMA 服务。可直接执行，例如 /cli serve。",
+		"status":     "显示系统状态。可直接执行，例如 /cli status。",
+		"tui":        "交互式终端仪表盘。可直接执行，例如 /cli tui。",
+		"tuning":     "自动调优：参数搜索 + 基准测试 + 应用最佳结果。需要子命令，例如 /cli tuning start --model {sample_model} 或 /cli tuning results。",
+		"undeploy":   "移除已部署的推理服务。需要部署名，例如 /cli undeploy <deployment-name>。",
+		"version":    "显示 AIMA 版本和构建信息。可直接执行，例如 /cli version。",
+	},
+	"en": {
+		"agent":      "Manage the AI agent subsystem. It needs a subcommand, for example /cli agent status.",
+		"app":        "Manage application dependency declarations. It needs a subcommand, for example /cli app list; to register an app use /cli app register --name demo --needs '[]'.",
+		"ask":        "Ask the AI agent a question. You need to add the question text, for example /cli ask What model fits this machine?",
+		"askforhelp": "Connect to the support service. You can write the help request directly, for example /cli askforhelp Model deployment failed.",
+		"benchmark":  "Record and query benchmark results. It needs a subcommand, for example /cli benchmark list.",
+		"catalog":    "Manage the YAML knowledge catalog. It needs a subcommand, for example /cli catalog status or /cli catalog validate.",
+		"completion": "Generate shell autocompletion. You need to add the shell name, for example /cli completion zsh.",
+		"config":     "Get or set persistent configuration. It needs a subcommand, for example /cli config get agent.endpoint or /cli config set agent.model {sample_model}.",
+		"deploy":     "Deploy an inference service. It usually needs a model name, for example /cli deploy {sample_model} --dry-run; to inspect deployments use /cli deploy list.",
+		"discover":   "Discover LLM inference services on the local network. You can run it directly, for example /cli discover.",
+		"engine":     "Manage inference engines. It needs a subcommand, for example /cli engine list or /cli engine pull.",
+		"explore":    "Run persistent exploration jobs. It needs a subcommand, for example /cli explore start --model {sample_model} or /cli explore status --id <run-id>.",
+		"fleet":      "Manage AIMA devices on the LAN. It needs a subcommand, for example /cli fleet devices or /cli fleet info <device-id>.",
+		"hal":        "Inspect hardware capabilities and metrics. It needs a subcommand, for example /cli hal detect or /cli hal metrics.",
+		"help":       "View help for any command. You can run it directly, for example /cli help; for model help use /cli help model.",
+		"init":       "Install the infrastructure stack. You can run it directly, for example /cli init; for the full install use /cli init --k3s.",
+		"knowledge":  "Manage the knowledge base. It needs a subcommand, for example /cli knowledge list or /cli knowledge resolve {sample_model}.",
+		"mcp":        "Serve MCP over stdio. You can run it directly, for example /cli mcp.",
+		"model":      "Manage models. It needs a subcommand, for example /cli model list or /cli model pull {sample_model}.",
+		"openclaw":   "Manage the OpenClaw integration. It needs a subcommand, for example /cli openclaw status or /cli openclaw sync.",
+		"run":        "Download, deploy, and serve a model. You need to add a model name, for example /cli run {sample_model}.",
+		"scenario":   "Manage deployment scenarios. It needs a subcommand, for example /cli scenario list or /cli scenario apply <scenario-name>.",
+		"serve":      "Start the AIMA server. You can run it directly, for example /cli serve.",
+		"status":     "Show system status. You can run it directly, for example /cli status.",
+		"tui":        "Open the terminal dashboard. You can run it directly, for example /cli tui.",
+		"tuning":     "Auto-tune model parameters. It needs a subcommand, for example /cli tuning start --model {sample_model} or /cli tuning results.",
+		"undeploy":   "Remove a deployed inference service. You need to add the deployment name, for example /cli undeploy <deployment-name>.",
+		"version":    "Show version and build information. You can run it directly, for example /cli version.",
 	},
 }
 
@@ -201,7 +231,7 @@ func rewriteOnboardingGroups(localeKey string, groups []onboardingGroup, root *c
 	out := make([]onboardingGroup, 0, len(groups))
 	for _, group := range groups {
 		if group.ID == "top_level_commands" {
-			group.Items = buildTopLevelOnboardingCommands(localeKey, root)
+			group.Items = buildTopLevelOnboardingCommands(localeKey, root, sampleModel)
 		} else {
 			group.Items = rewriteOnboardingCommands(group.Items, root, sampleModel)
 		}
@@ -235,7 +265,7 @@ func rewriteOnboardingCommands(items []onboardingCommand, root *cobra.Command, s
 	return out
 }
 
-func buildTopLevelOnboardingCommands(localeKey string, root *cobra.Command) []onboardingCommand {
+func buildTopLevelOnboardingCommands(localeKey string, root *cobra.Command, sampleModel string) []onboardingCommand {
 	if root == nil {
 		return nil
 	}
@@ -248,19 +278,19 @@ func buildTopLevelOnboardingCommands(localeKey string, root *cobra.Command) []on
 		items = append(items, onboardingCommand{
 			ID:          cmd.Name(),
 			Command:     "/cli " + cmd.Name(),
-			Description: onboardingCommandDescription(localeKey, cmd),
+			Description: onboardingCommandDescription(localeKey, cmd, sampleModel),
 		})
 	}
 	return items
 }
 
-func onboardingCommandDescription(localeKey string, cmd *cobra.Command) string {
+func onboardingCommandDescription(localeKey string, cmd *cobra.Command, sampleModel string) string {
 	if cmd == nil {
 		return ""
 	}
 	if translations := onboardingTopLevelCommandDescriptions[localeKey]; translations != nil {
 		if translated := strings.TrimSpace(translations[cmd.Name()]); translated != "" {
-			return translated
+			return replaceSampleModelPlaceholder(translated, sampleModel)
 		}
 	}
 	if short := strings.TrimSpace(cmd.Short); short != "" {

@@ -1,0 +1,82 @@
+kind: model_asset
+metadata:
+  name: gemma-4-26b-a4b-it
+  type: vlm
+  family: gemma
+  parameter_count: "26B"
+  license: apache-2.0
+  description: "Google DeepMind Gemma 4 26B A4B-it: MoE VLM, official BF16 safetensors, image/text input with text output"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: google/gemma-4-26B-A4B-it
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 / DGX Spark (Blackwell, 128GB unified, custom Gemma4 vLLM image) ---
+  # Official BF16 weights fit in unified memory, but stable serving on GB10 required:
+  #   1. a Gemma 4-capable ARM64 vLLM runtime on Blackwell SM121
+  #   2. enforce_eager=true
+  #   3. replacing a corrupted first safetensors shard that caused zero logits / <pad> output
+  - name: gemma-4-26b-a4b-it-blackwell-vllm-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-gemma4-blackwell
+    format: safetensors
+    source:
+      type: huggingface
+      repo: google/gemma-4-26B-A4B-it
+    default_config:
+      gpu_memory_utilization: 0.74
+      max_model_len: 155648
+      dtype: bfloat16
+      enforce_eager: true
+    expected_performance:
+      startup_time_s: 180
+      cold_start_time_s: 300
+      tokens_per_second: [24, 28]
+      latency_first_token_ms: [127, 489]
+      tpot_ms: [45, 59]
+      vram_mib: 92800
+      max_context_tokens: 155648
+      notes: |
+        Validated 2026-04-04 on NVIDIA GB10 / DGX Spark Blackwell ARM64 with 128GB unified memory.
+        Serving stack: qujing/vllm-gemma4-gb10:0.19.0-torchmoe2, official Hugging Face BF16
+        safetensors, gpu_memory_utilization=0.74, max_model_len=155648, enforce_eager=true.
+
+        Single-stream long-context spot checks (TTFT / decode):
+          128 -> 127ms / 24.65 tok/s
+          512 -> 129ms / 24.44 tok/s
+          1024 -> 130ms / 24.01 tok/s
+          2048 -> 121ms / 27.25 tok/s
+          4096 -> 128ms / 27.31 tok/s
+          8192 -> 146ms / 28.19 tok/s
+          16384 -> 167ms / 27.45 tok/s
+          32768 -> 207ms / 27.12 tok/s
+          65536 -> 316ms / 27.87 tok/s
+          98304 -> 411ms / 26.34 tok/s
+          131072 -> 489ms / 25.91 tok/s
+
+        AIMA benchmark matrix at the same config:
+          C1 / in128 / out128 -> 21.12 tok/s, TTFT P50 219ms, TPOT P50 45.6ms
+          C1 / in1024 / out128 -> 19.77 tok/s, TTFT P50 636ms, TPOT P50 46.2ms
+          C4 / in128 / out128 -> 44.81 tok/s, TTFT P50 1068ms, TPOT P50 59.0ms
+          C4 / in1024 / out128 -> 47.32 tok/s, TTFT P50 1106ms, TPOT P50 55.2ms
+
+        Root-cause note: if generation collapses to repeated <pad> tokens or all-zero logits,
+        verify safetensors shard integrity before tuning vLLM. On GB10, a corrupted
+        model-00001-of-00002.safetensors zeroed activations after layer 25; re-downloading
+        the official shard fixed the issue.
+
+        Experimental gpu_memory_utilization=0.85 raises KV cache size to 225,376 tokens
+        at max_model_len=155648, but AIMA benchmarking did not show throughput gains and
+        short-prompt C=4 latency regressed. Keep 0.74 as the catalog default.
+      engine_compatibility:
+        vllm-gemma4-blackwell: "supported (validated GB10 path)"
+        vllm-blackwell: "NOT supported for Gemma 4 on the validated GB10 stack (runtime too old)"
+        vllm-spark: "not required for this model; local Gemma4 image is the validated path"

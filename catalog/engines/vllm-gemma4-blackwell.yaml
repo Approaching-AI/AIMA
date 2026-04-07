@@ -1,0 +1,50 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-gemma4-blackwell
+  type: vllm
+  version: "0.19.0-gemma4"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  # Custom GB10 / DGX Spark ARM64 image validated for Gemma 4 on Blackwell SM121.
+  # Built after confirming older Blackwell images either lacked Gemma 4 model support
+  # or hit runtime incompatibilities on GB10.
+  name: qujing/vllm-gemma4-gb10
+  tag: "0.19.0-torchmoe2"
+  size_approx_mb: 9000
+  platforms: [linux/arm64]
+  distribution: local
+patterns:
+  - "^vllm-gemma4-blackwell$"
+  - "vllm-gemma4"
+  - "gemma4-gb10"
+startup:
+  env:
+    VLLM_ATTENTION_BACKEND: TRITON_ATTN
+  default_args:
+    # Validated stable default on GB10: keeps long-context headroom without the
+    # short-request regressions seen at gpu_memory_utilization=0.85.
+    gpu_memory_utilization: 0.74
+    max_model_len: 155648
+    dtype: bfloat16
+    enforce_eager: true
+  health_check:
+    timeout_s: 900
+amplifier:
+  features:
+    - triton_attention
+    - gemma4_model_support
+    - moe_inference
+    - bf16
+  performance_gain: "Validated Gemma 4 BF16 serving path for GB10 Blackwell ARM64"
+time_constraints:
+  cold_start_s: [120, 300]
+  model_switch_s: [120, 300]
+power_constraints:
+  typical_draw_watts: [40, 80]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

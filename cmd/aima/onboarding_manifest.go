@@ -133,6 +133,39 @@ var onboardingCommandSpecs = map[string]onboardingCommandSpec{
 	},
 }
 
+var onboardingTopLevelCommandDescriptions = map[string]map[string]string{
+	"zh": {
+		"agent":      "管理 AI Agent 子系统",
+		"app":        "管理应用依赖声明",
+		"ask":        "向 AI Agent 提问",
+		"askforhelp": "连接支持服务，并可选择创建远程协助任务",
+		"benchmark":  "记录并查询基准测试结果",
+		"catalog":    "管理 YAML 知识目录",
+		"completion": "为指定 shell 生成自动补全脚本",
+		"config":     "获取或设置持久化配置",
+		"deploy":     "部署推理服务",
+		"discover":   "发现局域网上的 LLM 推理服务",
+		"engine":     "管理推理引擎",
+		"explore":    "持久化探索任务",
+		"fleet":      "管理局域网中的 AIMA 设备集群",
+		"hal":        "硬件抽象层：检测能力并采集指标",
+		"help":       "查看任意命令的帮助信息",
+		"init":       "安装基础设施栈（默认 Docker，--k3s 为完整 K3S+HAMi）",
+		"knowledge":  "管理知识库",
+		"mcp":        "通过 stdio 提供 MCP 服务",
+		"model":      "管理模型",
+		"openclaw":   "OpenClaw 集成：将 AIMA 模型同步为 providers",
+		"run":        "下载、部署并提供模型服务（类似 ollama run）",
+		"scenario":   "管理部署场景",
+		"serve":      "启动 AIMA 服务",
+		"status":     "显示系统状态",
+		"tui":        "交互式终端仪表盘",
+		"tuning":     "自动调优：参数搜索 + 基准测试 + 应用最佳结果",
+		"undeploy":   "移除已部署的推理服务",
+		"version":    "显示 AIMA 版本和构建信息",
+	},
+}
+
 func buildOnboardingManifestJSON(cat *knowledge.Catalog) (json.RawMessage, error) {
 	raw, err := catalog.FS.ReadFile("ui-onboarding.json")
 	if err != nil {
@@ -149,12 +182,12 @@ func buildOnboardingManifestJSON(cat *knowledge.Catalog) (json.RawMessage, error
 	root.InitDefaultCompletionCmd()
 
 	sampleModel := pickOnboardingSampleModel(cat)
-	for _, locale := range manifest.Locales {
+	for localeKey, locale := range manifest.Locales {
 		if locale == nil {
 			continue
 		}
 		locale.QuickStart.Commands = rewriteOnboardingCommands(locale.QuickStart.Commands, root, sampleModel)
-		locale.FullCommands.Groups = rewriteOnboardingGroups(locale.FullCommands.Groups, root, sampleModel)
+		locale.FullCommands.Groups = rewriteOnboardingGroups(localeKey, locale.FullCommands.Groups, root, sampleModel)
 	}
 
 	out, err := json.Marshal(manifest)
@@ -164,11 +197,11 @@ func buildOnboardingManifestJSON(cat *knowledge.Catalog) (json.RawMessage, error
 	return json.RawMessage(out), nil
 }
 
-func rewriteOnboardingGroups(groups []onboardingGroup, root *cobra.Command, sampleModel string) []onboardingGroup {
+func rewriteOnboardingGroups(localeKey string, groups []onboardingGroup, root *cobra.Command, sampleModel string) []onboardingGroup {
 	out := make([]onboardingGroup, 0, len(groups))
 	for _, group := range groups {
 		if group.ID == "top_level_commands" {
-			group.Items = buildTopLevelOnboardingCommands(root)
+			group.Items = buildTopLevelOnboardingCommands(localeKey, root)
 		} else {
 			group.Items = rewriteOnboardingCommands(group.Items, root, sampleModel)
 		}
@@ -202,7 +235,7 @@ func rewriteOnboardingCommands(items []onboardingCommand, root *cobra.Command, s
 	return out
 }
 
-func buildTopLevelOnboardingCommands(root *cobra.Command) []onboardingCommand {
+func buildTopLevelOnboardingCommands(localeKey string, root *cobra.Command) []onboardingCommand {
 	if root == nil {
 		return nil
 	}
@@ -215,15 +248,20 @@ func buildTopLevelOnboardingCommands(root *cobra.Command) []onboardingCommand {
 		items = append(items, onboardingCommand{
 			ID:          cmd.Name(),
 			Command:     "/cli " + cmd.Name(),
-			Description: onboardingCommandDescription(cmd),
+			Description: onboardingCommandDescription(localeKey, cmd),
 		})
 	}
 	return items
 }
 
-func onboardingCommandDescription(cmd *cobra.Command) string {
+func onboardingCommandDescription(localeKey string, cmd *cobra.Command) string {
 	if cmd == nil {
 		return ""
+	}
+	if translations := onboardingTopLevelCommandDescriptions[localeKey]; translations != nil {
+		if translated := strings.TrimSpace(translations[cmd.Name()]); translated != "" {
+			return translated
+		}
 	}
 	if short := strings.TrimSpace(cmd.Short); short != "" {
 		return short

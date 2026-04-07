@@ -209,6 +209,40 @@ func TestBuildOnboardingManifestJSON_MarksSampleModelExamplesAsReplaceable(t *te
 	}
 }
 
+func TestBuildOnboardingManifestJSON_LocalizesTopLevelCommandDescriptions(t *testing.T) {
+	t.Parallel()
+
+	raw, err := buildOnboardingManifestJSON(&knowledge.Catalog{})
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	var manifest onboardingManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal onboarding manifest: %v", err)
+	}
+
+	zh := manifest.Locales["zh"]
+	en := manifest.Locales["en"]
+	if zh == nil || en == nil {
+		t.Fatalf("missing locales: %#v", manifest.Locales)
+	}
+
+	zhHelp := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli help")
+	enHelp := findOnboardingCommandDescription(t, en.FullCommands.Groups, "top_level_commands", "/cli help")
+	if zhHelp != "查看任意命令的帮助信息" {
+		t.Fatalf("zh /cli help description = %q, want %q", zhHelp, "查看任意命令的帮助信息")
+	}
+	if enHelp != "Help about any command" {
+		t.Fatalf("en /cli help description = %q, want %q", enHelp, "Help about any command")
+	}
+
+	zhModel := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli model")
+	if zhModel != "管理模型" {
+		t.Fatalf("zh /cli model description = %q, want %q", zhModel, "管理模型")
+	}
+}
+
 func TestRegisterUIRoutes_OnboardingManifestUsesDynamicBuilder(t *testing.T) {
 	t.Parallel()
 
@@ -266,6 +300,25 @@ func TestRewriteOnboardingCommands_DropsKnownCommandWhenCLICommandIsMissing(t *t
 	if got[0].Command != "/cli custom" {
 		t.Fatalf("rewriteOnboardingCommands() command = %q, want /cli custom", got[0].Command)
 	}
+}
+
+func findOnboardingCommandDescription(t *testing.T, groups []onboardingGroup, groupID, command string) string {
+	t.Helper()
+
+	for _, group := range groups {
+		if group.ID != groupID {
+			continue
+		}
+		for _, item := range group.Items {
+			if item.Command == command {
+				return item.Description
+			}
+		}
+		t.Fatalf("command %q not found in group %q", command, groupID)
+	}
+
+	t.Fatalf("group %q not found", groupID)
+	return ""
 }
 func TestParseExtraParamsStrict(t *testing.T) {
 	tests := []struct {

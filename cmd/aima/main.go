@@ -86,6 +86,21 @@ func defaultRootArgs(args []string) []string {
 	return nil
 }
 
+func registerUIRoutes(mux *http.ServeMux, cat *knowledge.Catalog, deps *ui.Deps) {
+	if deps == nil {
+		deps = &ui.Deps{}
+	}
+	deps.OnboardingManifest = func(ctx context.Context) (json.RawMessage, error) {
+		_ = ctx
+		raw, err := buildOnboardingManifestJSON(cat)
+		if err != nil {
+			return nil, fmt.Errorf("build ui onboarding manifest: %w", err)
+		}
+		return raw, nil
+	}
+	ui.RegisterRoutes(deps)(mux)
+}
+
 type scenarioDeployResult struct {
 	Model  string          `json:"model"`
 	Engine string          `json:"engine"`
@@ -563,9 +578,9 @@ func run() error {
 		},
 	}
 	fleetRoutes := fleet.RegisterRoutes(fleetDeps)
-	uiRoutes := ui.RegisterRoutes(&ui.Deps{
+	uiDeps := &ui.Deps{
 		SupportManifest: supportSvc.GoUXManifestJSON,
-	})
+	}
 
 	// OpenClaw integration: wire adapters + routes + sync tool
 	mcpCommand := "aima"
@@ -697,7 +712,7 @@ func run() error {
 	)
 	proxyServer.SetExtraRoutes(func(mux *http.ServeMux) {
 		fleetRoutes(mux)
-		uiRoutes(mux)
+		registerUIRoutes(mux, cat, uiDeps)
 		openclawRoutes(mux)
 		mux.HandleFunc("POST /api/v1/cli/exec", cli.NewExecHandler(func() *cli.App { return app }))
 		mux.HandleFunc("/api/v1/power", handlePowerSnapshot(cat))

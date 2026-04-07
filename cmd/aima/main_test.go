@@ -13,12 +13,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jguan/aima/catalog"
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/agent"
 	benchpkg "github.com/jguan/aima/internal/benchmark"
+	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
+	"github.com/jguan/aima/internal/ui"
 )
 
 type fakeRuntime struct {
@@ -79,6 +82,169 @@ func (m *mockCommandRunner) Pipe(ctx context.Context, from, to []string) error {
 	return nil
 }
 
+func TestOnboardingManifestEmbeddedShape(t *testing.T) {
+	t.Parallel()
+
+	raw, err := catalog.FS.ReadFile("ui-onboarding.json")
+	if err != nil {
+		t.Fatalf("read embedded onboarding manifest: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal onboarding manifest: %v", err)
+	}
+
+	if _, ok := payload["version"].(string); !ok {
+		t.Fatalf("version missing or not a string: %#v", payload["version"])
+	}
+	if _, ok := payload["default_locale"].(string); !ok {
+		t.Fatalf("default_locale missing or not a string: %#v", payload["default_locale"])
+	}
+	if _, ok := payload["locales"].(map[string]any); !ok {
+		t.Fatalf("locales missing or not an object: %#v", payload["locales"])
+	}
+}
+
+func TestBuildOnboardingManifestJSON_IncludesAllTopLevelCommands(t *testing.T) {
+	t.Parallel()
+
+	raw, err := buildOnboardingManifestJSON(&knowledge.Catalog{})
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	var manifest onboardingManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal onboarding manifest: %v", err)
+	}
+
+	zh, ok := manifest.Locales["zh"]
+	if !ok || zh == nil {
+		t.Fatalf("zh locale missing: %#v", manifest.Locales)
+	}
+
+	var topLevel onboardingGroup
+	found := false
+	for _, group := range zh.FullCommands.Groups {
+		if group.ID == "top_level_commands" {
+			topLevel = group
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("top_level_commands group missing: %#v", zh.FullCommands.Groups)
+	}
+
+	root := cli.NewRootCmd(&cli.App{})
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+
+	want := make(map[string]struct{})
+	for _, cmd := range root.Commands() {
+		if cmd == nil || cmd.Hidden {
+			continue
+		}
+		want["/cli "+cmd.Name()] = struct{}{}
+	}
+
+	got := make(map[string]struct{})
+	for _, item := range topLevel.Items {
+		got[item.Command] = struct{}{}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("top_level_commands item count = %d, want %d\nitems=%#v", len(got), len(want), topLevel.Items)
+	}
+
+	for command := range want {
+		if _, ok := got[command]; !ok {
+			t.Fatalf("top_level_commands missing command %s\nitems=%#v", command, topLevel.Items)
+		}
+	}
+
+	for command := range got {
+		if _, ok := want[command]; !ok {
+			t.Fatalf("top_level_commands has unexpected command %s\nitems=%#v", command, topLevel.Items)
+		}
+	}
+}
+
+func TestBuildOnboardingManifestJSON_MarksSampleModelExamplesAsReplaceable(t *testing.T) {
+	t.Parallel()
+
+	cat := &knowledge.Catalog{
+		ModelAssets: []knowledge.ModelAsset{
+			{
+				Metadata: knowledge.ModelMetadata{
+					Name:           "demo-llm",
+					Type:           "llm",
+					Family:         "demo",
+					ParameterCount: "1B",
+				},
+			},
+		},
+	}
+
+	raw, err := buildOnboardingManifestJSON(cat)
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	text := string(raw)
+	for _, want := range []string{
+		`"/cli help"`,
+		`"/cli model pull demo-llm"`,
+		`"/cli deploy demo-llm --dry-run"`,
+		`"/cli run demo-llm"`,
+		"demo-llm 是示例模型名，可替换成你自己的模型名",
+		"demo-llm is an example model name; replace it with your own model name",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generated manifest missing %q\nmanifest=%s", want, text)
+		}
+	}
+}
+
+func TestRegisterUIRoutes_OnboardingManifestUsesDynamicBuilder(t *testing.T) {
+	t.Parallel()
+
+	cat := &knowledge.Catalog{
+		ModelAssets: []knowledge.ModelAsset{
+			{
+				Metadata: knowledge.ModelMetadata{
+					Name:           "demo-llm",
+					Type:           "llm",
+					Family:         "demo",
+					ParameterCount: "1B",
+				},
+			},
+		},
+	}
+
+	mux := http.NewServeMux()
+	registerUIRoutes(mux, cat, &ui.Deps{})
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/api/onboarding-manifest", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"/cli help"`,
+		`"/cli completion"`,
+		`"/cli model pull demo-llm"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("generated manifest missing %q\nmanifest=%s", want, body)
+		}
+	}
+}
 func TestParseExtraParamsStrict(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -316,14 +482,14 @@ func TestDeployAutoPullAllowed(t *testing.T) {
 func TestPrepareContainerCompatibilityUsesRepairInitCommands(t *testing.T) {
 	modelPath := t.TempDir()
 	resolved := &knowledge.ResolvedConfig{
-		ModelName:           "qwen3.5-9b",
-		ModelFormat:         "safetensors",
-		EngineImage:         "vllm/vllm-openai:qwen3_5-cu130",
-		CompatibilityProbe:  "transformers_autoconfig",
-		RepairInitCommands:  []string{"python3 -m pip install --no-cache-dir --upgrade transformers"},
-		Config:              map[string]any{"trust_remote_code": true},
-		EngineDistribution:  "registry",
-		EngineRegistries:    []string{"docker.io/vllm/vllm-openai"},
+		ModelName:          "qwen3.5-9b",
+		ModelFormat:        "safetensors",
+		EngineImage:        "vllm/vllm-openai:qwen3_5-cu130",
+		CompatibilityProbe: "transformers_autoconfig",
+		RepairInitCommands: []string{"python3 -m pip install --no-cache-dir --upgrade transformers"},
+		Config:             map[string]any{"trust_remote_code": true},
+		EngineDistribution: "registry",
+		EngineRegistries:   []string{"docker.io/vllm/vllm-openai"},
 	}
 
 	repairProbeUsed := false

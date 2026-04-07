@@ -550,6 +550,36 @@ body {
   align-items: center;
   gap: 5px;
 }
+.agent-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-onboarding-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-smooth),
+    color var(--duration-fast) var(--ease-smooth),
+    border-color var(--duration-fast) var(--ease-smooth);
+}
+.agent-onboarding-btn:hover,
+.agent-onboarding-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--text-tertiary);
+  background: var(--input-bg);
+}
 .agent-support-btn {
   display: inline-flex;
   align-items: center;
@@ -596,6 +626,152 @@ body {
   border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
+}
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  z-index: 140;
+}
+.onboarding-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-medium);
+  box-shadow: -20px 0 36px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  z-index: 141;
+}
+.onboarding-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 18px 20px 12px;
+  border-bottom: 0.5px solid var(--border-medium);
+}
+.onboarding-drawer-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.onboarding-drawer-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.onboarding-close-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid var(--border-medium);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.onboarding-close-btn:hover {
+  color: var(--text);
+  background: var(--input-bg);
+}
+.onboarding-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 12px 20px;
+  border-bottom: 0.5px solid var(--border-medium);
+}
+.onboarding-tabs button {
+  border: 1px solid var(--border-medium);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.onboarding-tabs button.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.onboarding-drawer-body {
+  padding: 16px 20px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-loading {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.onboarding-error {
+  font-size: 13px;
+  color: var(--error);
+}
+.onboarding-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-steps {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: var(--panel-border);
+  background: var(--bg-panel);
+}
+.onboarding-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-command-btn {
+  width: 100%;
+  border: var(--panel-border);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease-smooth),
+    background var(--duration-fast) var(--ease-smooth);
+}
+.onboarding-command-btn:hover {
+  border-color: rgba(10, 132, 255, 0.35);
+  background: var(--input-bg);
+}
+.onboarding-command-btn strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.onboarding-command-btn span {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 /* Chat messages - refined typography */
@@ -1883,9 +2059,27 @@ body {
     padding: 12px 16px;
     gap: 12px;
   }
+  .agent-header-actions {
+    gap: 6px;
+  }
+  .agent-onboarding-btn {
+    padding: 6px 9px;
+    font-size: 11px;
+  }
   .agent-support-btn {
     padding: 7px 10px;
     font-size: 12px;
+  }
+  .onboarding-drawer {
+    width: 100vw;
+    border-left: none;
+    box-shadow: none;
+  }
+  .onboarding-tabs {
+    padding: 10px 14px;
+  }
+  .onboarding-drawer-body {
+    padding: 14px;
   }
 }
 </style>
@@ -2053,12 +2247,17 @@ body {
             </div>
           </div>
         </div>
-        <button class="agent-support-btn"
-          :class="{ active: currentView === 'support', connected: supportConnected }"
-          @click="openSupportFlow()">
-          <span class="support-dot"></span>
-          <span x-text="supportEntryLabel()"></span>
-        </button>
+        <div class="agent-header-actions">
+          <button class="agent-onboarding-btn" x-ref="onboardingTrigger" @click="openOnboardingDrawer()" :title="t('onboarding_title')">
+            <span x-text="t('onboarding_title')"></span>
+          </button>
+          <button class="agent-support-btn"
+            :class="{ active: currentView === 'support', connected: supportConnected }"
+            @click="openSupportFlow()">
+            <span class="support-dot"></span>
+            <span x-text="supportEntryLabel()"></span>
+          </button>
+        </div>
       </div>
 
       <!-- Chat View -->
@@ -2657,6 +2856,81 @@ body {
     </div>
   </template>
 
+  <template x-if="showOnboardingDrawer">
+    <div>
+      <div class="onboarding-overlay" @click="closeOnboardingDrawer()"></div>
+      <aside class="onboarding-drawer" x-ref="onboardingDrawer" role="dialog" aria-modal="true" :aria-label="t('onboarding_title')" tabindex="-1" @keydown.tab.prevent="cycleOnboardingFocus($event)">
+        <div class="onboarding-drawer-header">
+          <div>
+            <h3 class="onboarding-drawer-title" x-text="onboardingText(((onboardingLocaleData() || {}).title), t('onboarding_title'))"></h3>
+            <p class="onboarding-drawer-subtitle" x-text="t('onboarding_subtitle')"></p>
+          </div>
+          <button class="onboarding-close-btn" x-ref="onboardingCloseBtn" @click="closeOnboardingDrawer()" :title="t('cancel')">&times;</button>
+        </div>
+
+        <div class="onboarding-tabs">
+          <button type="button" :class="{ active: onboardingTab === 'quick_start' }" @click="onboardingTab = 'quick_start'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).quick_start), t('onboarding_tab_quick_start'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'full_commands' }" @click="onboardingTab = 'full_commands'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).full_commands), t('onboarding_tab_full_commands'))"></button>
+          <button type="button" :class="{ active: onboardingTab === 'troubleshooting' }" @click="onboardingTab = 'troubleshooting'" x-text="onboardingText((((onboardingLocaleData() || {}).tabs || {}).troubleshooting), t('onboarding_tab_troubleshooting'))"></button>
+        </div>
+
+        <div class="onboarding-drawer-body">
+          <div class="onboarding-loading" x-show="onboardingLoading" x-text="t('loading')"></div>
+          <div class="onboarding-error" x-show="onboardingError" x-text="onboardingError"></div>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'quick_start' && onboardingLocaleData()">
+            <p class="support-note" x-text="onboardingText(((((onboardingLocaleData() || {}).quick_start) || {}).intro), '')"></p>
+            <ol class="onboarding-steps">
+              <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).quick_start) || {}).steps) || [])" :key="item.id || item.command || idx">
+                <li class="onboarding-step">
+                  <strong x-text="onboardingText(item.title, '')"></strong>
+                  <span class="support-note" x-text="onboardingText(item.body, '')"></span>
+                </li>
+              </template>
+            </ol>
+            <div class="support-starter-section" x-show="(((((onboardingLocaleData() || {}).quick_start) || {}).commands) || []).length > 0">
+              <div class="support-starter-label" x-text="t('onboarding_common_commands')"></div>
+              <div class="onboarding-command-list">
+                <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).quick_start) || {}).commands) || [])" :key="item.id || item.command || idx">
+                  <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
+                    <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                    <span x-text="onboardingText(item.description, item.command || '')"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'full_commands' && onboardingLocaleData()">
+            <template x-for="(group, groupIdx) in (((((onboardingLocaleData() || {}).full_commands) || {}).groups) || [])" :key="group.id || onboardingText(group.title, '') || groupIdx">
+              <div class="support-starter-section">
+                <div class="support-starter-label" x-text="onboardingText(group.title, '')"></div>
+                <p class="support-note" x-show="onboardingText(group.description, '')" x-text="onboardingText(group.description, '')"></p>
+                <div class="onboarding-command-list">
+                  <template x-for="(item, itemIdx) in (group.items || [])" :key="item.id || item.command || itemIdx">
+                    <button type="button" class="onboarding-command-btn" @click="insertOnboardingCommand(item.command)">
+                      <strong x-text="onboardingText(item.label, item.command || '')"></strong>
+                      <span x-text="onboardingText(item.description, item.command || '')"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </section>
+
+          <section class="onboarding-section" x-show="onboardingTab === 'troubleshooting' && onboardingLocaleData()">
+            <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).troubleshooting) || {}).items) || [])" :key="item.id || onboardingText(item.title, '') || idx">
+              <div class="onboarding-step">
+                <strong x-text="onboardingText(item.title, '')"></strong>
+                <span class="support-note" x-text="onboardingText(item.body, '')"></span>
+              </div>
+            </template>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </template>
+
 </div>
 
 <!-- Alpine.js: local file for offline-first (INV-8) -->
@@ -2773,6 +3047,13 @@ var I18N = {
     support_service: 'Support Service',
     support_enabled: 'Enable Support',
     support_endpoint_label: 'Service Endpoint',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
   },
   zh: {
     system_online: '\u7CFB\u7EDF\u5728\u7EBF',
@@ -2881,6 +3162,13 @@ var I18N = {
     support_service: '\u652F\u6301\u670D\u52A1',
     support_enabled: '\u542F\u7528\u652F\u6301',
     support_endpoint_label: '\u670D\u52A1\u5730\u5740',
+    onboarding_title: '\u65B0\u624B\u6307\u5357',
+    onboarding_subtitle: '\u7ED9\u7B2C\u4E00\u6B21\u6253\u5F00 AIMA \u7684\u7528\u6237\u4E00\u4E2A\u8D77\u70B9',
+    onboarding_tab_quick_start: '\u5FEB\u901F\u5F00\u59CB',
+    onboarding_tab_full_commands: '\u5B8C\u6574\u547D\u4EE4',
+    onboarding_tab_troubleshooting: '\u9047\u5230\u95EE\u9898',
+    onboarding_common_commands: '\u5E38\u7528\u547D\u4EE4',
+    loading: '\u52A0\u8F7D\u4E2D...',
     cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u53EF\u7528 MCP \u5DE5\u5177',
     cli_help_usage: '\u7528\u6CD5: /cli <\u5DE5\u5177\u540D> [\u53C2\u6570]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: '\u672A\u77E5\u5DE5\u5177: ',
@@ -2964,6 +3252,13 @@ var I18N = {
     support_service: '\u30B5\u30DD\u30FC\u30C8\u30B5\u30FC\u30D3\u30B9',
     support_enabled: '\u30B5\u30DD\u30FC\u30C8\u6709\u52B9\u5316',
     support_endpoint_label: '\u30B5\u30FC\u30D3\u30B9\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
     cli_help_header: 'CLI\u30E2\u30FC\u30C9 \u2014 \u5229\u7528\u53EF\u80FD\u306AMCP\u30C4\u30FC\u30EB',
     cli_help_usage: '\u4F7F\u3044\u65B9: /cli <\u30C4\u30FC\u30EB\u540D> [\u30D1\u30E9\u30E1\u30FC\u30BF]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: '\u4E0D\u660E\u306A\u30C4\u30FC\u30EB: ',
@@ -3047,6 +3342,13 @@ var I18N = {
     support_service: '\uC9C0\uC6D0 \uC11C\uBE44\uC2A4',
     support_enabled: '\uC9C0\uC6D0 \uD65C\uC131\uD654',
     support_endpoint_label: '\uC11C\uBE44\uC2A4 \uC5D4\uB4DC\uD3EC\uC778\uD2B8',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
     cli_help_header: 'CLI \uBAA8\uB4DC \u2014 \uC0AC\uC6A9 \uAC00\uB2A5\uD55C MCP \uB3C4\uAD6C',
     cli_help_usage: '\uC0AC\uC6A9\uBC95: /cli <\uB3C4\uAD6C\uBA85> [\uB9E4\uAC1C\uBCC0\uC218]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: '\uC54C \uC218 \uC5C6\uB294 \uB3C4\uAD6C: ',
@@ -3130,6 +3432,13 @@ var I18N = {
     support_service: 'Servicio de soporte',
     support_enabled: 'Activar soporte',
     support_endpoint_label: 'Endpoint del servicio',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
   },
   fr: {
     system_online: 'Syst\u00E8me en ligne',
@@ -3210,6 +3519,13 @@ var I18N = {
     support_service: 'Service de support',
     support_enabled: 'Activer le support',
     support_endpoint_label: 'Point d\'acc\u00E8s du service',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
     cli_help_header: 'Mode CLI \u2014 Outils MCP disponibles',
     cli_help_usage: 'Utilisation : /cli <outil> [param\u00E8tres]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: 'Outil inconnu : ',
@@ -3293,6 +3609,13 @@ var I18N = {
     support_service: 'Support-Dienst',
     support_enabled: 'Support aktivieren',
     support_endpoint_label: 'Dienst-Endpunkt',
+    onboarding_title: 'Onboarding',
+    onboarding_subtitle: 'A starting point for first-time AIMA users',
+    onboarding_tab_quick_start: 'Quick start',
+    onboarding_tab_full_commands: 'Full commands',
+    onboarding_tab_troubleshooting: 'Troubleshooting',
+    onboarding_common_commands: 'Common Commands',
+    loading: 'Loading...',
     cli_help_header: 'CLI-Modus \u2014 Verf\u00FCgbare MCP-Tools',
     cli_help_usage: 'Verwendung: /cli <Tool> [Parameter]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: 'Unbekanntes Tool: ',
@@ -3381,6 +3704,13 @@ function aimaApp() {
     supportManifest: null,
     supportManifestLoading: false,
     supportManifestError: '',
+    showOnboardingDrawer: false,
+    onboardingTab: 'quick_start',
+    onboardingManifest: null,
+    onboardingLoading: false,
+    onboardingLoadFailed: false,
+    onboardingError: '',
+    _onboardingReturnFocus: null,
     openclaw: {
       connected: false,
       gatewayLive: false,
@@ -3544,6 +3874,205 @@ function aimaApp() {
       } finally {
         this.supportManifestLoading = false;
       }
+    },
+
+    async loadOnboardingManifest(force) {
+      if (this.onboardingLoading) return this.onboardingManifest;
+      if (this.onboardingManifest && !force) return this.onboardingManifest;
+
+      this.onboardingLoading = true;
+      this.onboardingError = '';
+      this.onboardingLoadFailed = false;
+      try {
+        const headers = {};
+        if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+        const resp = await fetch('/ui/api/onboarding-manifest', { headers });
+        if (!resp.ok) throw new Error('onboarding manifest unavailable');
+        const data = await resp.json();
+        if (!data || typeof data !== 'object' || Array.isArray(data) || !data.locales || typeof data.locales !== 'object' || Array.isArray(data.locales)) {
+          throw new Error('invalid onboarding manifest');
+        }
+        this.onboardingManifest = data;
+        this.onboardingLoadFailed = false;
+        return data;
+      } catch (e) {
+        this.onboardingError = (e && e.message) ? e.message : 'onboarding manifest unavailable';
+        this.onboardingLoadFailed = true;
+        return null;
+      } finally {
+        this.onboardingLoading = false;
+      }
+    },
+
+    onboardingLocaleKey() {
+      const manifest = this.resolvedOnboardingManifest();
+      if (manifest && manifest.locales && typeof manifest.locales === 'object') {
+        if (manifest.locales[this.lang]) return this.lang;
+        if (manifest.default_locale && manifest.locales[manifest.default_locale]) return manifest.default_locale;
+        if (manifest.locales.en) return 'en';
+        const localeKeys = Object.keys(manifest.locales);
+        if (localeKeys.length) return localeKeys[0];
+      }
+      return this.lang === 'zh' ? 'zh' : 'en';
+    },
+
+    onboardingText(value, fallback) {
+      if (!value) return fallback || '';
+      if (typeof value === 'string') return value || fallback || '';
+      const locale = this.onboardingLocaleKey();
+      return value[locale] || value.en || value.zh || fallback || '';
+    },
+
+    defaultOnboardingManifest() {
+      return {
+        version: 'fallback',
+        default_locale: 'en',
+        locales: {
+          zh: {
+            title: '新手指南',
+            tabs: {
+              quick_start: '快速开始',
+              full_commands: '完整命令',
+              troubleshooting: '遇到问题'
+            },
+            quick_start: {
+              intro: '内置说明暂时不可用，先用这些命令确认系统状态。',
+              steps: [
+                { title: '确认系统在线', body: '先看顶部状态和 Agent 状态。' },
+                { title: '确认本机资源', body: '查看模型、引擎和部署。' },
+                { title: '开始提问', body: '输入命令或直接提问。' }
+              ],
+              commands: [
+                { id: 'status', command: 'status', label: '查看系统状态', description: '检查当前系统概况。' },
+                { id: 'hardware', command: 'hardware', label: '查看硬件', description: '查看硬件检测结果。' },
+                { id: 'models', command: 'models', label: '查看模型', description: '列出已识别模型。' },
+                { id: 'engines', command: 'engines', label: '查看引擎', description: '列出可用引擎。' },
+                { id: 'deployments', command: 'deployments', label: '查看部署', description: '列出当前部署。' }
+              ]
+            },
+            full_commands: { groups: [] },
+            troubleshooting: {
+              items: [
+                { title: 'Agent 不可用', body: '先用 status、hardware、models 等直接命令。' }
+              ]
+            }
+          },
+          en: {
+            title: 'Getting Started',
+            tabs: {
+              quick_start: 'Quick Start',
+              full_commands: 'Commands',
+              troubleshooting: 'Troubleshooting'
+            },
+            quick_start: {
+              intro: 'The embedded guide is unavailable, so start with these commands.',
+              steps: [
+                { title: 'Check system health', body: 'Start with the top status and Agent state.' },
+                { title: 'Inspect local resources', body: 'Review models, engines, and deployments.' },
+                { title: 'Ask or run a command', body: 'Enter a command or ask AIMA directly.' }
+              ],
+              commands: [
+                { id: 'status', command: 'status', label: 'System status', description: 'Inspect the overall system state.' },
+                { id: 'hardware', command: 'hardware', label: 'Hardware', description: 'Show hardware detection details.' },
+                { id: 'models', command: 'models', label: 'Models', description: 'List known models.' },
+                { id: 'engines', command: 'engines', label: 'Engines', description: 'List available engines.' },
+                { id: 'deployments', command: 'deployments', label: 'Deployments', description: 'List active deployments.' }
+              ]
+            },
+            full_commands: { groups: [] },
+            troubleshooting: {
+              items: [
+                { title: 'Agent unavailable', body: 'Start with direct commands like status, hardware, and models.' }
+              ]
+            }
+          }
+        }
+      };
+    },
+
+    resolvedOnboardingManifest() {
+      if (this.onboardingManifest) return this.onboardingManifest;
+      if (this.onboardingLoadFailed) return this.defaultOnboardingManifest();
+      return null;
+    },
+
+    onboardingLocaleData() {
+      const manifest = this.resolvedOnboardingManifest();
+      if (!manifest || !manifest.locales || typeof manifest.locales !== 'object') return null;
+      const locale = this.onboardingLocaleKey();
+      return manifest.locales[locale] || manifest.locales.en || manifest.locales.zh || null;
+    },
+
+    onboardingFocusableElements() {
+      if (!this.$refs.onboardingDrawer) return [];
+      return Array.from(this.$refs.onboardingDrawer.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => el && typeof el.focus === 'function' && !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true' && el.offsetParent !== null);
+    },
+
+    focusOnboardingDrawer() {
+      this.$nextTick(() => {
+        const focusables = this.onboardingFocusableElements();
+        const target = this.$refs.onboardingCloseBtn || focusables[0] || this.$refs.onboardingDrawer;
+        if (target && typeof target.focus === 'function') target.focus();
+      });
+    },
+
+    cycleOnboardingFocus(e) {
+      const focusables = this.onboardingFocusableElements();
+      if (!focusables.length) {
+        if (this.$refs.onboardingDrawer) this.$refs.onboardingDrawer.focus();
+        return;
+      }
+      const current = document.activeElement;
+      let idx = focusables.indexOf(current);
+      if (idx === -1) {
+        idx = e.shiftKey ? 0 : -1;
+      }
+      const nextIdx = e.shiftKey
+        ? (idx <= 0 ? focusables.length - 1 : idx - 1)
+        : (idx >= focusables.length - 1 ? 0 : idx + 1);
+      focusables[nextIdx].focus();
+    },
+
+    restoreOnboardingFocus() {
+      const restoreTarget = this._onboardingReturnFocus;
+      this._onboardingReturnFocus = null;
+      this.$nextTick(() => {
+        if (restoreTarget && restoreTarget.isConnected && typeof restoreTarget.focus === 'function') {
+          restoreTarget.focus();
+          return;
+        }
+        if (this.$refs.onboardingTrigger && typeof this.$refs.onboardingTrigger.focus === 'function') {
+          this.$refs.onboardingTrigger.focus();
+        }
+      });
+    },
+
+    insertOnboardingCommand(command) {
+      if (!command) return;
+      this.currentView = 'chat';
+      this.mobileTab = 'chat';
+      this.input = command;
+      this.closeOnboardingDrawer();
+      this.$nextTick(() => {
+        if (this.$refs.chatInput) this.$refs.chatInput.focus();
+      });
+    },
+
+    openOnboardingDrawer() {
+      this._onboardingReturnFocus = document.activeElement && typeof document.activeElement.focus === 'function'
+        ? document.activeElement
+        : null;
+      this.showOnboardingDrawer = true;
+      this.onboardingTab = 'quick_start';
+      this.loadOnboardingManifest();
+      this.focusOnboardingDrawer();
+    },
+
+    closeOnboardingDrawer() {
+      if (!this.showOnboardingDrawer) return;
+      this.showOnboardingDrawer = false;
+      this.restoreOnboardingFocus();
     },
 
     // Helper to get a single config value (returns string or null)
@@ -5177,7 +5706,17 @@ function aimaApp() {
 
     // Global keyboard shortcut
     handleGlobalKey(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      const key = String(e.key || '').toLowerCase();
+      if (this.showOnboardingDrawer) {
+        if (key === 'escape') {
+          e.preventDefault();
+          this.closeOnboardingDrawer();
+        } else if ((e.ctrlKey || e.metaKey) && key === 'k') {
+          e.preventDefault();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && key === 'k') {
         e.preventDefault();
         if (this.$refs.chatInput) this.$refs.chatInput.focus();
       }

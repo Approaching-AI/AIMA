@@ -410,6 +410,7 @@ func run() error {
 	tuner := agent.NewTuner(automationTools)
 	explorationMgr = agent.NewExplorationManager(db, tuner, automationTools)
 	eventBus := agent.NewEventBus()
+	ac.eventBus = eventBus
 	patrol = agent.NewPatrol(agent.DefaultPatrolConfig(), toolAdapter, db.InsertPatrolAlert,
 		agent.WithHealer(healer),
 		agent.WithActionCallback(func(ctx context.Context, a agent.PatrolAction) {
@@ -420,11 +421,19 @@ func run() error {
 		agent.WithEventBus(eventBus),
 	)
 
-	// 9h. Explorer subsystem (v0.4)
+	// 9h. Explorer subsystem (v0.4) with advisory feedback bridge
 	explorer := agent.NewExplorer(agent.ExplorerConfig{
 		Schedule: agent.DefaultScheduleConfig(),
 		Enabled:  true,
-	}, goAgent, explorationMgr, db, eventBus)
+	}, goAgent, explorationMgr, db, eventBus,
+		agent.WithAdvisoryFeedback(func(ctx context.Context, advisoryID, status, reason string) error {
+			if deps.AdvisoryFeedback == nil {
+				return nil
+			}
+			_, err := deps.AdvisoryFeedback(ctx, advisoryID, status, reason)
+			return err
+		}),
+	)
 	go explorer.Start(context.Background())
 
 	// Wire explorer MCP tools

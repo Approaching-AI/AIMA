@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/proxy"
@@ -26,4 +27,5 @@ type appContext struct {
 	dataDir  string
 	digests  map[string]string // factory catalog digests
 	support  *support.Service
+	eventBus *agent.EventBus // shared EventBus for Explorer events
 }

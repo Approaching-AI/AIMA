@@ -41,6 +41,9 @@ type Explorer struct {
 	gatherGaps    func(ctx context.Context) ([]GapEntry, error)
 	gatherDeploys func(ctx context.Context) ([]DeployStatus, error)
 
+	// Advisory feedback callback, wired via WithAdvisoryFeedback.
+	advisoryFeedback func(ctx context.Context, advisoryID, status, reason string) error
+
 	mu         sync.RWMutex
 	running    bool
 	tier       int
@@ -60,6 +63,11 @@ func WithGatherGaps(fn func(ctx context.Context) ([]GapEntry, error)) ExplorerOp
 // WithGatherDeploys sets the function to gather active deployments.
 func WithGatherDeploys(fn func(ctx context.Context) ([]DeployStatus, error)) ExplorerOption {
 	return func(e *Explorer) { e.gatherDeploys = fn }
+}
+
+// WithAdvisoryFeedback sets the callback for sending advisory feedback to central.
+func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reason string) error) ExplorerOption {
+	return func(e *Explorer) { e.advisoryFeedback = fn }
 }
 
 func NewExplorer(config ExplorerConfig, agent *Agent, explMgr *ExplorationManager, db *state.DB, bus *EventBus, opts ...ExplorerOption) *Explorer {
@@ -173,6 +181,16 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		e.harvester = NewHarvester(newTier)
 	}
 
+	// Handle central advisory/scenario events directly (even at tier 0)
+	switch ev.Type {
+	case EventCentralAdvisory:
+		e.handleAdvisory(ctx, ev)
+		return
+	case EventCentralScenario:
+		e.handleScenario(ctx, ev)
+		return
+	}
+
 	if e.tier == 0 {
 		slog.Debug("explorer: tier 0, skipping event", "type", ev.Type)
 		return
@@ -229,6 +247,93 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 
 	// Execute plan tasks sequentially
 	e.executePlan(ctx, plan)
+}
+
+// handleAdvisory processes a central advisory event: parse advisory,
+// create a validation task, execute it, and send feedback to central.
+func (e *Explorer) handleAdvisory(ctx context.Context, ev ExplorerEvent) {
+	if len(ev.Advisory) == 0 {
+		slog.Warn("explorer: advisory event with empty payload")
+		return
+	}
+
+	var adv struct {
+		ID       string `json:"id"`
+		Model    string `json:"model"`
+		Engine   string `json:"engine"`
+		Hardware string `json:"hardware"`
+		Type     string `json:"type"`
+		Title    string `json:"title"`
+		Details  string `json:"details"`
+	}
+	if err := json.Unmarshal(ev.Advisory, &adv); err != nil {
+		slog.Warn("explorer: parse advisory", "error", err)
+		return
+	}
+
+	slog.Info("explorer: received central advisory",
+		"id", adv.ID, "type", adv.Type, "model", adv.Model, "engine", adv.Engine)
+
+	// If no exploration manager, just log and send feedback that we can't validate
+	if e.explMgr == nil || e.tier == 0 {
+		slog.Info("explorer: cannot validate advisory (no exploration manager or tier 0)")
+		e.sendAdvisoryFeedback(ctx, adv.ID, "deferred", "no exploration capability on this device")
+		return
+	}
+
+	// Create and execute a validation task
+	task := PlanTask{
+		Kind:   "validate",
+		Model:  adv.Model,
+		Engine: adv.Engine,
+		Reason: fmt.Sprintf("validate central advisory %s", adv.ID),
+	}
+
+	result := e.executeTask(ctx, task)
+
+	// Send feedback based on result
+	if result.Success {
+		reason := fmt.Sprintf("validated: %.1f tok/s, TTFT P95 %.0fms", result.Throughput, result.TTFTP95)
+		e.sendAdvisoryFeedback(ctx, adv.ID, "accepted", reason)
+	} else {
+		e.sendAdvisoryFeedback(ctx, adv.ID, "rejected", "validation failed: "+result.Error)
+	}
+
+	// Harvest results as usual
+	actions := e.harvester.Harvest(ctx, HarvestInput{Task: task, Result: result})
+	for _, a := range actions {
+		slog.Info("explorer: advisory harvest action", "type", a.Type, "detail", a.Detail)
+	}
+}
+
+// handleScenario processes a central scenario event. Currently logs and defers.
+func (e *Explorer) handleScenario(ctx context.Context, ev ExplorerEvent) {
+	if len(ev.Advisory) == 0 {
+		return
+	}
+
+	var scenario struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(ev.Advisory, &scenario); err != nil {
+		slog.Warn("explorer: parse scenario", "error", err)
+		return
+	}
+
+	slog.Info("explorer: received central scenario",
+		"id", scenario.ID, "name", scenario.Name)
+}
+
+func (e *Explorer) sendAdvisoryFeedback(ctx context.Context, advisoryID, status, reason string) {
+	if e.advisoryFeedback == nil {
+		slog.Debug("explorer: no advisory feedback callback, skipping")
+		return
+	}
+	if err := e.advisoryFeedback(ctx, advisoryID, status, reason); err != nil {
+		slog.Warn("explorer: advisory feedback failed",
+			"advisory_id", advisoryID, "error", err)
+	}
 }
 
 func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {

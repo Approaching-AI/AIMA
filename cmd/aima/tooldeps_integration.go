@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
@@ -352,6 +353,19 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 			return nil, fmt.Errorf("import pulled knowledge: %w", err)
 		}
 		_ = db.SetSyncTimestamp(ctx, "pull")
+
+		// Sync v2: also pull advisories and publish to EventBus
+		advisoryCount, scenarioCount := pullAdvisoriesToEventBus(ctx, ac, deps)
+
+		// Merge advisory/scenario counts into result
+		var merged map[string]any
+		if err := json.Unmarshal(result, &merged); err == nil {
+			merged["advisories_pulled"] = advisoryCount
+			merged["scenarios_pulled"] = scenarioCount
+			if out, err := json.Marshal(merged); err == nil {
+				return out, nil
+			}
+		}
 		return result, nil
 	}
 
@@ -376,6 +390,205 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 			"last_push": pushAt,
 			"last_pull": pullAt,
 		})
+	}
+
+	// Sync v2: advisory pull, scenario requests, feedback (v0.4 integration)
+	deps.SyncPullAdvisories = func(ctx context.Context) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/v1/advisories", nil)
+		if err != nil {
+			return nil, err
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pull advisories: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read advisories response: %w", err)
+		}
+		return body, nil
+	}
+
+	deps.SyncPullScenarios = func(ctx context.Context) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/v1/scenarios", nil)
+		if err != nil {
+			return nil, err
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pull scenarios: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read scenarios response: %w", err)
+		}
+		return body, nil
+	}
+
+	deps.AdvisoryFeedback = func(ctx context.Context, advisoryID, feedbackStatus, reason string) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		accepted := feedbackStatus == "accepted"
+		payload, _ := json.Marshal(map[string]any{
+			"feedback": reason,
+			"accepted": accepted,
+		})
+		req, err := http.NewRequestWithContext(ctx, "POST",
+			endpoint+"/api/v1/advisories/"+advisoryID+"/feedback",
+			strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("send advisory feedback: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d: %s", resp.StatusCode, string(body))
+		}
+		return json.Marshal(map[string]any{
+			"advisory_id": advisoryID,
+			"status":      feedbackStatus,
+			"ok":          true,
+		})
+	}
+
+	deps.RequestAdvise = func(ctx context.Context, model, engine, intent string) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		hwInfo, _ := hal.Detect(ctx)
+		hardware := ""
+		if hwInfo != nil && hwInfo.GPU != nil {
+			hardware = hwInfo.GPU.Arch
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"action":   "recommend",
+			"hardware": hardware,
+			"model":    model,
+			"engine":   engine,
+			"goal":     intent,
+		})
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint+"/api/v1/advise",
+			strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request advise: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d: %s", resp.StatusCode, string(body))
+		}
+		return body, nil
+	}
+
+	deps.RequestScenario = func(ctx context.Context, hardware string, models []string, goal string) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"hardware": hardware,
+			"models":   models,
+			"goal":     goal,
+		})
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint+"/api/v1/scenarios/generate",
+			strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request scenario: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d: %s", resp.StatusCode, string(body))
+		}
+		return body, nil
+	}
+
+	deps.ListCentralScenarios = func(ctx context.Context, hardware, source string) (json.RawMessage, error) {
+		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		if endpoint == "" {
+			return nil, fmt.Errorf("central.endpoint not configured")
+		}
+		url := endpoint + "/api/v1/scenarios"
+		sep := "?"
+		if hardware != "" {
+			url += sep + "hardware=" + hardware
+			sep = "&"
+		}
+		if source != "" {
+			url += sep + "source=" + source
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("list central scenarios: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d: %s", resp.StatusCode, string(body))
+		}
+		return body, nil
 	}
 
 	// Power mode (S3)
@@ -546,6 +759,53 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 			return json.Marshal(questions)
 		}
 	}
+}
+
+// pullAdvisoriesToEventBus fetches advisories and scenarios from central
+// and publishes them as events on the EventBus for Explorer processing.
+func pullAdvisoriesToEventBus(ctx context.Context, ac *appContext, deps *mcp.ToolDeps) (advisoryCount, scenarioCount int) {
+	if ac.eventBus == nil {
+		return 0, 0
+	}
+
+	// Pull advisories
+	if deps.SyncPullAdvisories != nil {
+		data, err := deps.SyncPullAdvisories(ctx)
+		if err == nil {
+			var advisories []json.RawMessage
+			if json.Unmarshal(data, &advisories) == nil {
+				for _, adv := range advisories {
+					ac.eventBus.Publish(agent.ExplorerEvent{
+						Type:     agent.EventCentralAdvisory,
+						Advisory: adv,
+					})
+				}
+				advisoryCount = len(advisories)
+			}
+		} else {
+			slog.Debug("pull advisories failed", "error", err)
+		}
+	}
+
+	// Pull scenarios
+	if deps.SyncPullScenarios != nil {
+		data, err := deps.SyncPullScenarios(ctx)
+		if err == nil {
+			var scenarios []json.RawMessage
+			if json.Unmarshal(data, &scenarios) == nil {
+				for _, scn := range scenarios {
+					ac.eventBus.Publish(agent.ExplorerEvent{
+						Type:     agent.EventCentralScenario,
+						Advisory: scn,
+					})
+				}
+				scenarioCount = len(scenarios)
+			}
+		} else {
+			slog.Debug("pull scenarios failed", "error", err)
+		}
+	}
+	return
 }
 
 // suppress "imported and not used" for packages only referenced in struct tags

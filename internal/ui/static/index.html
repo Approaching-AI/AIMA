@@ -4503,17 +4503,17 @@ function aimaApp() {
                 { title: '开始提问', body: '输入命令或直接提问。' }
               ],
               commands: [
-                { id: 'status', command: 'status', label: '查看系统状态', description: '检查当前系统概况。' },
-                { id: 'hardware', command: 'hardware', label: '查看硬件', description: '查看硬件检测结果。' },
-                { id: 'models', command: 'models', label: '查看模型', description: '列出已识别模型。' },
-                { id: 'engines', command: 'engines', label: '查看引擎', description: '列出可用引擎。' },
-                { id: 'deployments', command: 'deployments', label: '查看部署', description: '列出当前部署。' }
+                { id: 'status', command: '/cli status', label: '查看系统状态', description: '检查当前系统概况。' },
+                { id: 'hardware', command: '/cli hal detect', label: '查看硬件', description: '查看硬件检测结果。' },
+                { id: 'models', command: '/cli model list', label: '查看模型', description: '列出已识别模型。' },
+                { id: 'engines', command: '/cli engine list', label: '查看引擎', description: '列出可用引擎。' },
+                { id: 'deployments', command: '/cli deploy list', label: '查看部署', description: '列出当前部署。' }
               ]
             },
             full_commands: { groups: [] },
             troubleshooting: {
               items: [
-                { title: 'Agent 不可用', body: '先用 status、hardware、models 等直接命令。' }
+                { title: 'Agent 不可用', body: '先用 /cli status、/cli hal detect、/cli model list 等直接命令。' }
               ]
             }
           },
@@ -4532,17 +4532,17 @@ function aimaApp() {
                 { title: 'Ask or run a command', body: 'Enter a command or ask AIMA directly.' }
               ],
               commands: [
-                { id: 'status', command: 'status', label: 'System status', description: 'Inspect the overall system state.' },
-                { id: 'hardware', command: 'hardware', label: 'Hardware', description: 'Show hardware detection details.' },
-                { id: 'models', command: 'models', label: 'Models', description: 'List known models.' },
-                { id: 'engines', command: 'engines', label: 'Engines', description: 'List available engines.' },
-                { id: 'deployments', command: 'deployments', label: 'Deployments', description: 'List active deployments.' }
+                { id: 'status', command: '/cli status', label: 'System status', description: 'Inspect the overall system state.' },
+                { id: 'hardware', command: '/cli hal detect', label: 'Hardware', description: 'Show hardware detection details.' },
+                { id: 'models', command: '/cli model list', label: 'Models', description: 'List known models.' },
+                { id: 'engines', command: '/cli engine list', label: 'Engines', description: 'List available engines.' },
+                { id: 'deployments', command: '/cli deploy list', label: 'Deployments', description: 'List active deployments.' }
               ]
             },
             full_commands: { groups: [] },
             troubleshooting: {
               items: [
-                { title: 'Agent unavailable', body: 'Start with direct commands like status, hardware, and models.' }
+                { title: 'Agent unavailable', body: 'Start with direct commands like /cli status, /cli hal detect, and /cli model list.' }
               ]
             }
           }

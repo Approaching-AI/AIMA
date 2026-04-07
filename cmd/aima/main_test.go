@@ -18,10 +18,12 @@ import (
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/agent"
 	benchpkg "github.com/jguan/aima/internal/benchmark"
+	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
+	"github.com/spf13/cobra"
 )
 
 type fakeRuntime struct {
@@ -104,6 +106,186 @@ func TestOnboardingManifestEmbeddedShape(t *testing.T) {
 	if _, ok := payload["locales"].(map[string]any); !ok {
 		t.Fatalf("locales missing or not an object: %#v", payload["locales"])
 	}
+}
+
+func TestBuildOnboardingManifestJSON_IncludesAllTopLevelCommands(t *testing.T) {
+	t.Parallel()
+
+	raw, err := buildOnboardingManifestJSON(&knowledge.Catalog{})
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	var manifest onboardingManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal onboarding manifest: %v", err)
+	}
+
+	zh, ok := manifest.Locales["zh"]
+	if !ok || zh == nil {
+		t.Fatalf("zh locale missing: %#v", manifest.Locales)
+	}
+
+	var topLevel onboardingGroup
+	found := false
+	for _, group := range zh.FullCommands.Groups {
+		if group.ID == "top_level_commands" {
+			topLevel = group
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("top_level_commands group missing: %#v", zh.FullCommands.Groups)
+	}
+
+	root := cli.NewRootCmd(&cli.App{})
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+
+	want := make(map[string]struct{})
+	for _, cmd := range root.Commands() {
+		if cmd == nil || cmd.Hidden {
+			continue
+		}
+		want["/cli "+cmd.Name()] = struct{}{}
+	}
+
+	got := make(map[string]struct{})
+	for _, item := range topLevel.Items {
+		got[item.Command] = struct{}{}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("top_level_commands item count = %d, want %d\nitems=%#v", len(got), len(want), topLevel.Items)
+	}
+
+	for command := range want {
+		if _, ok := got[command]; !ok {
+			t.Fatalf("top_level_commands missing command %s\nitems=%#v", command, topLevel.Items)
+		}
+	}
+
+	for command := range got {
+		if _, ok := want[command]; !ok {
+			t.Fatalf("top_level_commands has unexpected command %s\nitems=%#v", command, topLevel.Items)
+		}
+	}
+}
+
+func TestBuildOnboardingManifestJSON_MarksSampleModelExamplesAsReplaceable(t *testing.T) {
+	t.Parallel()
+
+	cat := &knowledge.Catalog{
+		ModelAssets: []knowledge.ModelAsset{
+			{
+				Metadata: knowledge.ModelMetadata{
+					Name:           "demo-llm",
+					Type:           "llm",
+					Family:         "demo",
+					ParameterCount: "1B",
+				},
+			},
+		},
+	}
+
+	raw, err := buildOnboardingManifestJSON(cat)
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	text := string(raw)
+	for _, want := range []string{
+		`"/cli help"`,
+		`"/cli model pull demo-llm"`,
+		`"/cli deploy demo-llm --dry-run"`,
+		`"/cli run demo-llm"`,
+		"demo-llm 是示例模型名，可替换成你自己的模型名",
+		"demo-llm is an example model name; replace it with your own model name",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generated manifest missing %q\nmanifest=%s", want, text)
+		}
+	}
+}
+
+func TestBuildOnboardingManifestJSON_LocalizesTopLevelCommandDescriptions(t *testing.T) {
+	t.Parallel()
+
+	raw, err := buildOnboardingManifestJSON(&knowledge.Catalog{})
+	if err != nil {
+		t.Fatalf("build onboarding manifest: %v", err)
+	}
+
+	var manifest onboardingManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal onboarding manifest: %v", err)
+	}
+
+	zh := manifest.Locales["zh"]
+	en := manifest.Locales["en"]
+	if zh == nil || en == nil {
+		t.Fatalf("missing locales: %#v", manifest.Locales)
+	}
+
+	zhHelp := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli help")
+	enHelp := findOnboardingCommandDescription(t, en.FullCommands.Groups, "top_level_commands", "/cli help")
+	if zhHelp != "查看任意命令帮助。可直接执行，例如 /cli help；查看 model 的帮助可用 /cli help model。" {
+		t.Fatalf("zh /cli help description = %q, want %q", zhHelp, "查看任意命令帮助。可直接执行，例如 /cli help；查看 model 的帮助可用 /cli help model。")
+	}
+	if enHelp != "View help for any command. You can run it directly, for example /cli help; for model help use /cli help model." {
+		t.Fatalf("en /cli help description = %q, want %q", enHelp, "View help for any command. You can run it directly, for example /cli help; for model help use /cli help model.")
+	}
+
+	zhModel := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli model")
+	if zhModel != "管理模型。需要子命令，例如 /cli model list 或 /cli model pull qwen3-8b。" {
+		t.Fatalf("zh /cli model description = %q, want %q", zhModel, "管理模型。需要子命令，例如 /cli model list 或 /cli model pull qwen3-8b。")
+	}
+
+	zhDeploy := findOnboardingCommandDescription(t, zh.FullCommands.Groups, "top_level_commands", "/cli deploy")
+	if zhDeploy != "部署推理服务。通常需要模型名，例如 /cli deploy qwen3-8b --dry-run；查看部署列表可用 /cli deploy list。" {
+		t.Fatalf("zh /cli deploy description = %q, want %q", zhDeploy, "部署推理服务。通常需要模型名，例如 /cli deploy qwen3-8b --dry-run；查看部署列表可用 /cli deploy list。")
+	}
+}
+
+func TestRewriteOnboardingCommands_DropsKnownCommandWhenCLICommandIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := &cobra.Command{Use: "aima"}
+	items := []onboardingCommand{
+		{ID: "help", Command: "/cli help", Description: "show help"},
+		{ID: "custom", Command: "/cli custom", Description: "custom command"},
+	}
+
+	got := rewriteOnboardingCommands(items, root, "demo-llm")
+	if len(got) != 1 {
+		t.Fatalf("rewriteOnboardingCommands() item count = %d, want 1 (%#v)", len(got), got)
+	}
+	if got[0].ID != "custom" {
+		t.Fatalf("rewriteOnboardingCommands() preserved wrong item: %#v", got)
+	}
+	if got[0].Command != "/cli custom" {
+		t.Fatalf("rewriteOnboardingCommands() command = %q, want /cli custom", got[0].Command)
+	}
+}
+
+func findOnboardingCommandDescription(t *testing.T, groups []onboardingGroup, groupID, command string) string {
+	t.Helper()
+
+	for _, group := range groups {
+		if group.ID != groupID {
+			continue
+		}
+		for _, item := range group.Items {
+			if item.Command == command {
+				return item.Description
+			}
+		}
+		t.Fatalf("command %q not found in group %q", command, groupID)
+	}
+
+	t.Fatalf("group %q not found", groupID)
+	return ""
 }
 
 func TestParseExtraParamsStrict(t *testing.T) {

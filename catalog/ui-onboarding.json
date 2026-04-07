@@ -17,11 +17,12 @@
           { "title": "开始提问或输入命令", "body": "可以直接提问，也可以先用常用命令快速查看状态。" }
         ],
         "commands": [
-          { "id": "status", "command": "status", "label": "查看系统状态", "description": "检查硬件、部署和资源概况。" },
-          { "id": "hardware", "command": "hardware", "label": "查看硬件", "description": "查看 GPU、CPU、内存等基础信息。" },
-          { "id": "models", "command": "models", "label": "查看模型", "description": "确认 AIMA 已识别到哪些模型。" },
-          { "id": "engines", "command": "engines", "label": "查看引擎", "description": "确认本机可用推理引擎。" },
-          { "id": "deployments", "command": "deployments", "label": "查看部署", "description": "检查当前运行中的部署。" }
+          { "id": "status", "command": "/cli status", "label": "查看系统状态", "description": "检查硬件、部署和资源概况。" },
+          { "id": "help", "command": "/cli help", "label": "查看帮助", "description": "查看命令帮助和可用用法。" },
+          { "id": "hardware", "command": "/cli hal detect", "label": "查看硬件", "description": "查看 GPU、CPU、内存等基础信息。" },
+          { "id": "models", "command": "/cli model list", "label": "查看模型", "description": "确认 AIMA 已识别到哪些模型。" },
+          { "id": "engines", "command": "/cli engine list", "label": "查看引擎", "description": "确认本机可用推理引擎。" },
+          { "id": "deployments", "command": "/cli deploy list", "label": "查看部署", "description": "检查当前运行中的部署。" }
         ]
       },
       "full_commands": {
@@ -30,35 +31,43 @@
             "id": "inspect",
             "title": "系统查看",
             "items": [
-              { "command": "status", "description": "查看系统总体状态。" },
-              { "command": "hardware", "description": "查看硬件检测结果。" },
-              { "command": "metrics", "description": "查看实时硬件指标。" }
+              { "id": "status", "command": "/cli status", "description": "查看系统总体状态。" },
+              { "id": "hardware", "command": "/cli hal detect", "description": "查看硬件检测结果。" },
+              { "id": "metrics", "command": "/cli hal metrics", "description": "查看实时硬件指标。" }
             ]
           },
           {
             "id": "inventory",
             "title": "资源清单",
             "items": [
-              { "command": "models", "description": "列出已识别模型。" },
-              { "command": "engines", "description": "列出可用引擎。" },
-              { "command": "deployments", "description": "列出当前部署。" },
-              { "command": "fleet", "description": "列出局域网设备。" }
+              { "id": "models", "command": "/cli model list", "description": "列出已识别模型。" },
+              { "id": "engines", "command": "/cli engine list", "description": "列出可用引擎。" },
+              { "id": "deployments", "command": "/cli deploy list", "description": "列出当前部署。" },
+              { "id": "fleet_devices", "command": "/cli fleet devices", "description": "列出局域网设备。" }
             ]
           },
           {
-            "id": "cli",
-            "title": "CLI 示例",
+            "id": "top_level_commands",
+            "title": "顶层命令",
+            "description": "由服务端动态填充的顶层命令列表。",
+            "items": []
+          },
+          {
+            "id": "common_examples",
+            "title": "常用示例",
             "items": [
-              { "command": "/cli help", "description": "查看 CLI 子命令帮助。" },
-              { "command": "/cli model list", "description": "通过 CLI 列出已注册模型。" },
-              { "command": "/cli engine list", "description": "通过 CLI 列出已注册引擎。" }
+              { "id": "engine_plan", "command": "/cli engine plan", "description": "先看当前硬件推荐使用哪个引擎。" },
+              { "id": "engine_pull", "command": "/cli engine pull", "description": "预先拉取默认引擎，减少首次部署等待。" },
+              { "id": "model_pull", "command": "/cli model pull {sample_model}", "description": "按模型名下载模型文件，`{sample_model}` 是示例值，可替换为实际模型名。" },
+              { "id": "deploy_dry_run", "command": "/cli deploy {sample_model} --dry-run", "description": "先预览部署解析结果和推荐配置，`{sample_model}` 是示例值，可替换为实际模型名。" },
+              { "id": "run", "command": "/cli run {sample_model}", "description": "一条命令拉取、部署并等待服务就绪，`{sample_model}` 是示例值，可替换为实际模型名。" }
             ]
           }
         ]
       },
       "troubleshooting": {
         "items": [
-          { "title": "Agent 不可用", "body": "先用 status、hardware、models 等直接命令确认基础状态。" },
+          { "title": "Agent 不可用", "body": "先用 /cli status、/cli hal detect、/cli model list 等直接命令确认基础状态。" },
           { "title": "需要配置", "body": "点击右上角设置，检查 LLM endpoint、model 和 API key。" },
           { "title": "需要远程协助", "body": "点击连线灵机云，按引导进入远程协助流程。" }
         ]
@@ -79,11 +88,12 @@
           { "title": "Ask or run a command", "body": "You can ask AIMA directly or begin with a common command." }
         ],
         "commands": [
-          { "id": "status", "command": "status", "label": "System status", "description": "Inspect hardware, deployments, and overall state." },
-          { "id": "hardware", "command": "hardware", "label": "Hardware", "description": "Show detected GPU, CPU, and memory information." },
-          { "id": "models", "command": "models", "label": "Models", "description": "List models AIMA already knows about." },
-          { "id": "engines", "command": "engines", "label": "Engines", "description": "List available inference engines." },
-          { "id": "deployments", "command": "deployments", "label": "Deployments", "description": "Show active inference deployments." }
+          { "id": "status", "command": "/cli status", "label": "System status", "description": "Inspect hardware, deployments, and overall state." },
+          { "id": "help", "command": "/cli help", "label": "Help", "description": "Show command help and available usage." },
+          { "id": "hardware", "command": "/cli hal detect", "label": "Hardware", "description": "Show detected GPU, CPU, and memory information." },
+          { "id": "models", "command": "/cli model list", "label": "Models", "description": "List models AIMA already knows about." },
+          { "id": "engines", "command": "/cli engine list", "label": "Engines", "description": "List available inference engines." },
+          { "id": "deployments", "command": "/cli deploy list", "label": "Deployments", "description": "Show active inference deployments." }
         ]
       },
       "full_commands": {
@@ -92,35 +102,43 @@
             "id": "inspect",
             "title": "Inspect",
             "items": [
-              { "command": "status", "description": "Show the overall system state." },
-              { "command": "hardware", "description": "Show hardware detection details." },
-              { "command": "metrics", "description": "Show live hardware metrics." }
+              { "id": "status", "command": "/cli status", "description": "Show the overall system state." },
+              { "id": "hardware", "command": "/cli hal detect", "description": "Show hardware detection details." },
+              { "id": "metrics", "command": "/cli hal metrics", "description": "Show live hardware metrics." }
             ]
           },
           {
             "id": "inventory",
             "title": "Inventory",
             "items": [
-              { "command": "models", "description": "List detected models." },
-              { "command": "engines", "description": "List available engines." },
-              { "command": "deployments", "description": "List active deployments." },
-              { "command": "fleet", "description": "List LAN devices." }
+              { "id": "models", "command": "/cli model list", "description": "List detected models." },
+              { "id": "engines", "command": "/cli engine list", "description": "List available engines." },
+              { "id": "deployments", "command": "/cli deploy list", "description": "List active deployments." },
+              { "id": "fleet_devices", "command": "/cli fleet devices", "description": "List LAN devices." }
             ]
           },
           {
-            "id": "cli",
-            "title": "CLI examples",
+            "id": "top_level_commands",
+            "title": "Top-level commands",
+            "description": "Top-level commands filled dynamically by the server.",
+            "items": []
+          },
+          {
+            "id": "common_examples",
+            "title": "Common examples",
             "items": [
-              { "command": "/cli help", "description": "Show CLI subcommand help." },
-              { "command": "/cli model list", "description": "List registered models through the CLI endpoint." },
-              { "command": "/cli engine list", "description": "List registered engines through the CLI endpoint." }
+              { "id": "engine_plan", "command": "/cli engine plan", "description": "Check which engine the current hardware should use." },
+              { "id": "engine_pull", "command": "/cli engine pull", "description": "Pre-pull the default engine to reduce first-run latency." },
+              { "id": "model_pull", "command": "/cli model pull {sample_model}", "description": "Download a model by name; `{sample_model}` is an example value and can be replaced with a real model name." },
+              { "id": "deploy_dry_run", "command": "/cli deploy {sample_model} --dry-run", "description": "Preview the resolved deployment plan before execution; `{sample_model}` is an example value and can be replaced with a real model name." },
+              { "id": "run", "command": "/cli run {sample_model}", "description": "Resolve, pull, deploy, and wait for readiness in one command; `{sample_model}` is an example value and can be replaced with a real model name." }
             ]
           }
         ]
       },
       "troubleshooting": {
         "items": [
-          { "title": "Agent unavailable", "body": "Use direct commands like status, hardware, and models first." },
+          { "title": "Agent unavailable", "body": "Use direct commands like /cli status, /cli hal detect, and /cli model list first." },
           { "title": "Need configuration help", "body": "Open Settings and verify the LLM endpoint, model, and API key." },
           { "title": "Need remote help", "body": "Use the support button to connect to the remote assistance flow." }
         ]

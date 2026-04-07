@@ -258,11 +258,11 @@ func run() error {
 		SupportManifest: supportSvc.GoUXManifestJSON,
 		OnboardingManifest: func(ctx context.Context) (json.RawMessage, error) {
 			_ = ctx
-			raw, err := catalog.FS.ReadFile("ui-onboarding.json")
+			raw, err := buildOnboardingManifestJSON(cat)
 			if err != nil {
-				return nil, fmt.Errorf("read ui onboarding manifest: %w", err)
+				return nil, fmt.Errorf("build ui onboarding manifest: %w", err)
 			}
-			return json.RawMessage(raw), nil
+			return raw, nil
 		},
 	})
 

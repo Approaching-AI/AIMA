@@ -164,6 +164,68 @@ func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) 
 	}
 }
 
+func TestRegisterRoutes_IndexOnboardingInsertIsFillOnly(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	start := strings.Index(body, "insertOnboardingCommand(command) {")
+	if start == -1 {
+		t.Fatal("insertOnboardingCommand not found")
+	}
+	end := strings.Index(body[start:], "\n\n    openOnboardingDrawer() {")
+	if end == -1 {
+		t.Fatal("could not isolate insertOnboardingCommand body")
+	}
+	fnBody := body[start : start+end]
+
+	for _, token := range []string{
+		"this.currentView = 'chat';",
+		"this.mobileTab = 'chat';",
+		"this.input = command;",
+		"this.closeOnboardingDrawer();",
+	} {
+		if !strings.Contains(fnBody, token) {
+			t.Fatalf("insertOnboardingCommand missing %q", token)
+		}
+	}
+	if strings.Contains(fnBody, "this.send(") || strings.Contains(fnBody, "await this.send(") {
+		t.Fatalf("insertOnboardingCommand should not auto-send, body=%s", fnBody)
+	}
+}
+
+func TestRegisterRoutes_IndexFallbackOnboardingUsesCLICommands(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`command: '/cli status'`,
+		`command: '/cli hal detect'`,
+		`command: '/cli model list'`,
+		`command: '/cli engine list'`,
+		`command: '/cli deploy list'`,
+		`/cli status, /cli hal detect, and /cli model list`,
+		`/cli status、/cli hal detect、/cli model list`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("fallback onboarding missing %q", token)
+		}
+	}
+}
+
 func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	t.Parallel()
 

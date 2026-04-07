@@ -1,0 +1,109 @@
+kind: model_asset
+metadata:
+  name: ltx23-t2v-22b
+  type: video_gen
+  family: ltx
+  parameter_count: "22B"
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/ltx-2.3"
+  sources:
+    - type: huggingface
+      repo: Lightricks/LTX-Video-2.3-22B-Distilled
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- AMD W7900D RDNA3 (单卡全量加载, BF16) — 最优配置 ---
+  # LTX-2.3 22B DiT: 主模型 ~46GB + LoRA ~7.6GB + 上采样器 ~262MB + Gemma 3 12B ~23GB
+  # 两阶段 pipeline: Stage 1 半分辨率 30步 → 空间上采样 2x → Stage 2 全分辨率 3步 (distilled)
+  # 文本编码器 Gemma 3 12B 在 RDNA3 上 BF16 输出 NaN，必须跑 CPU FP32
+  # streaming_prefetch_count=None: 22B BF16 全量加载到 VRAM (~41GB/48GB)
+  # VAE 解码仅 8s（vs streaming 模式的 148s）— 18.7x 加速
+  # Validated 2026-04-07: 768×512, 81帧, 30步 → 327.7s 总计
+  - name: ltx23-t2v-22b-rdna3-nostream-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 45056  # 需要 ~41GB 实际使用，48GB 卡
+      gpu_count_min: 1
+      unified_memory: false
+    engine: ltx23-pipelines-rocm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Lightricks/LTX-Video-2.3-22B-Distilled
+    default_config:
+      dtype: bfloat16
+      streaming_prefetch_count: null  # 全量加载，不 streaming
+      max_batch_size: 1
+      height: 512
+      width: 768
+      num_frames: 81            # 4n+1 公式, 81帧 = 3.375s @24fps
+      num_steps: 30
+      frame_rate: 24.0
+      seed: 42
+      # Guider 参数
+      cfg_scale: 3.0
+      stg_scale: 1.0
+      rescale_scale: 0.7
+      modality_scale: 3.0
+      skip_step: 0
+      stg_blocks: [28]
+      # VAE Tiling（小 tile 防 OOM）
+      vae_spatial_tile_px: 256
+      vae_spatial_overlap_px: 32
+      vae_temporal_tile_frames: 32
+      vae_temporal_overlap_frames: 8
+      # 文本编码器
+      text_encoder_device: cpu   # RDNA3 workaround: Gemma 3 NaN bug
+      text_encoder_dtype: float32
+      # 推理模式
+      use_no_grad: true          # RDNA3 workaround: conv3d 不兼容 inference_mode
+    expected_performance:
+      seconds_per_step: [5.1, 5.9]
+      total_time_s: [300, 350]
+      notes: "Validated 2026-04-07 on AMD W7900D 48GB RDNA3. ltx-pipelines 1.1.0 + ltx-core 1.1.0 + PyTorch 2.5.1+rocm6.2 + transformers 4.57.6. 全量加载 (no streaming): 22B BF16 占 VRAM 40.8/48 GiB。两阶段去噪: Stage 1 30步 × 5.14s/step = 154s, Stage 2 3步 × 5.34s/step = 16s。空间上采样 + VAE 解码 + 编码: ~158s。文本编码 (CPU FP32): 21s。总计 327.7s (5.5分钟) 生成 768×512, 81帧 (3.375s @24fps) 视频+音频。输出 H.264 MP4 含 AAC 同步音频。"
+
+  # --- AMD W7900D RDNA3 (单卡 streaming 模式, BF16) — 低 VRAM 备选 ---
+  # streaming_prefetch_count=2: transformer 层按需流入 GPU，VRAM 峰值仅 ~1GB
+  # 代价: VAE 解码 148s (vs 全量加载的 8s)，总体慢 32%
+  # 适用于 VRAM 紧张或多任务共享 GPU 的场景
+  # Validated 2026-04-07: 768×512, 81帧, 30步 → 480.8s 总计
+  - name: ltx23-t2v-22b-rdna3-streaming-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 2048  # streaming 模式 VRAM 峰值仅 ~1GB
+      gpu_count_min: 1
+      unified_memory: false
+    engine: ltx23-pipelines-rocm
+    format: safetensors
+    source:
+      type: huggingface
+      repo: Lightricks/LTX-Video-2.3-22B-Distilled
+    default_config:
+      dtype: bfloat16
+      streaming_prefetch_count: 2  # streaming 模式: 按需加载 transformer 层
+      max_batch_size: 1
+      height: 512
+      width: 768
+      num_frames: 81
+      num_steps: 30
+      frame_rate: 24.0
+      seed: 42
+      cfg_scale: 3.0
+      stg_scale: 1.0
+      rescale_scale: 0.7
+      modality_scale: 3.0
+      skip_step: 0
+      stg_blocks: [28]
+      vae_spatial_tile_px: 256
+      vae_spatial_overlap_px: 32
+      vae_temporal_tile_frames: 32
+      vae_temporal_overlap_frames: 8
+      text_encoder_device: cpu
+      text_encoder_dtype: float32
+      use_no_grad: true
+    expected_performance:
+      seconds_per_step: [5.7, 6.0]
+      total_time_s: [450, 520]
+      notes: "Validated 2026-04-07 on AMD W7900D 48GB RDNA3. Streaming 模式 (prefetch=2): VRAM 峰值仅 ~1 GiB，模型层按需流入 GPU。Stage 1 30步 × 5.93s/step = 178s, Stage 2 3步 × 5.70s/step = 17s。VAE 解码 148.2s (streaming 下模型占用内存碎片化导致)。总计 480.8s (8.0分钟)。比全量加载慢 32%，但适用于 VRAM 不足或需要多任务共享 GPU 的场景。"

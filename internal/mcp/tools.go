@@ -257,4 +257,5 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	registerAgentTools(s, deps)
 	registerIntegrationTools(s, deps)
 	registerExplorerTools(s, deps)
+	registerCentralScenarioTools(s, deps)
 }

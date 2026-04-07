@@ -496,7 +496,7 @@ func registerKnowledgeTools(s *Server, deps *ToolDeps) {
 	// knowledge.sync_pull
 	s.RegisterTool(&Tool{
 		Name:        "knowledge.sync_pull",
-		Description: "Pull new knowledge from the central server (configs/benchmarks newer than last pull).",
+		Description: "Pull new knowledge from the central server (configs/benchmarks newer than last pull), including advisories and scenarios from the v2 sync protocol.",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.SyncPull == nil {
@@ -505,6 +505,70 @@ func registerKnowledgeTools(s *Server, deps *ToolDeps) {
 			data, err := deps.SyncPull(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("knowledge.sync_pull: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.advise — request recommendation from central
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.advise",
+		Description: "Request an AI-powered engine/config recommendation from the central knowledge server for a model on this hardware.",
+		InputSchema: schema(
+			`"model":{"type":"string","description":"Model name to get advice for, e.g. 'qwen3-8b'"},`+
+				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm'. Omit to get a recommendation."},`+
+				`"intent":{"type":"string","description":"Optimization intent: 'low-latency', 'high-throughput', 'balanced'"}`,
+			"model"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RequestAdvise == nil {
+				return ErrorResult("central advise not configured — set central.endpoint first"), nil
+			}
+			var p struct {
+				Model  string `json:"model"`
+				Engine string `json:"engine"`
+				Intent string `json:"intent"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.Model == "" {
+				return ErrorResult("model is required"), nil
+			}
+			data, err := deps.RequestAdvise(ctx, p.Model, p.Engine, p.Intent)
+			if err != nil {
+				return nil, fmt.Errorf("knowledge.advise for %s: %w", p.Model, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// knowledge.advisory_feedback — send feedback on a central advisory
+	s.RegisterTool(&Tool{
+		Name:        "knowledge.advisory_feedback",
+		Description: "Send feedback on a central advisory after local validation (accepted/rejected with reason).",
+		InputSchema: schema(
+			`"advisory_id":{"type":"string","description":"Advisory ID from central server"},`+
+				`"status":{"type":"string","enum":["accepted","rejected","partial"],"description":"Feedback status"},`+
+				`"reason":{"type":"string","description":"Explanation of why advisory was accepted or rejected"}`,
+			"advisory_id", "status"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.AdvisoryFeedback == nil {
+				return ErrorResult("advisory feedback not configured — set central.endpoint first"), nil
+			}
+			var p struct {
+				AdvisoryID string `json:"advisory_id"`
+				Status     string `json:"status"`
+				Reason     string `json:"reason"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse params: %w", err)
+			}
+			if p.AdvisoryID == "" || p.Status == "" {
+				return ErrorResult("advisory_id and status are required"), nil
+			}
+			data, err := deps.AdvisoryFeedback(ctx, p.AdvisoryID, p.Status, p.Reason)
+			if err != nil {
+				return nil, fmt.Errorf("knowledge.advisory_feedback for %s: %w", p.AdvisoryID, err)
 			}
 			return TextResult(string(data)), nil
 		},

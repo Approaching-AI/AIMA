@@ -168,4 +168,12 @@ type ToolDeps struct {
 	ExplorerStatus  func(ctx context.Context) (json.RawMessage, error)
 	ExplorerConfig  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 	ExplorerTrigger func(ctx context.Context) (json.RawMessage, error)
+
+	// Sync v2: advisory pull/push (v0.4 integration)
+	SyncPullAdvisories func(ctx context.Context) (json.RawMessage, error)
+	SyncPullScenarios  func(ctx context.Context) (json.RawMessage, error)
+	AdvisoryFeedback   func(ctx context.Context, advisoryID, status, reason string) (json.RawMessage, error)
+	RequestAdvise      func(ctx context.Context, model, engine, intent string) (json.RawMessage, error)
+	RequestScenario    func(ctx context.Context, hardware string, models []string, goal string) (json.RawMessage, error)
+	ListCentralScenarios func(ctx context.Context, hardware, source string) (json.RawMessage, error)
 }

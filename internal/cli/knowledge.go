@@ -20,6 +20,7 @@ func newKnowledgeCmd(app *App) *cobra.Command {
 		newKnowledgeImportCmd(app),
 		newKnowledgeSyncCmd(app),
 		newKnowledgeValidateCmd(app),
+		newKnowledgeAdviseCmd(app),
 	)
 
 	return cmd
@@ -217,4 +218,35 @@ func newKnowledgeValidateCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newKnowledgeAdviseCmd(app *App) *cobra.Command {
+	var engine, intent string
+
+	cmd := &cobra.Command{
+		Use:   "advise <model>",
+		Short: "Request AI-powered recommendation from central server",
+		Long: `Request a config/engine recommendation from the central knowledge server.
+Requires central.endpoint to be configured.
+
+Examples:
+  aima knowledge advise qwen3-8b
+  aima knowledge advise qwen3-8b --engine vllm --intent low-latency`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.RequestAdvise == nil {
+				return fmt.Errorf("central advise not configured — set central.endpoint first")
+			}
+			data, err := app.ToolDeps.RequestAdvise(cmd.Context(), args[0], engine, intent)
+			if err != nil {
+				return fmt.Errorf("advise for %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&engine, "engine", "", "Engine type (omit for recommendation)")
+	cmd.Flags().StringVar(&intent, "intent", "", "Optimization intent: low-latency, high-throughput, balanced")
+	return cmd
 }

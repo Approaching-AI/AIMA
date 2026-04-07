@@ -30,8 +30,10 @@ type PlanInput struct {
 
 // LocalModel describes a model installed on this device.
 type LocalModel struct {
-	Name   string `json:"name"`
-	Format string `json:"format"` // "safetensors", "gguf"
+	Name      string `json:"name"`
+	Format    string `json:"format"`     // "safetensors", "gguf"
+	Type      string `json:"type"`       // "llm", "asr", "tts", "embedding", "reranker"
+	SizeBytes int64  `json:"size_bytes"` // on-disk size (≈ VRAM needed for non-quantized)
 }
 
 // LocalEngine describes an engine installed on this device with catalog metadata.
@@ -118,6 +120,11 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 	localModels := toSet(input.LocalModels)
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
 	modelFormats := localModelFormatMap(input.LocalModels)
+	modelTypes := localModelTypeMap(input.LocalModels)
+	totalVRAMMiB := input.Hardware.VRAMMiB * input.Hardware.GPUCount
+	if totalVRAMMiB == 0 {
+		totalVRAMMiB = input.Hardware.VRAMMiB // single GPU fallback
+	}
 
 	// Rule 1: deployed models without benchmarks -- highest priority
 	for _, d := range input.ActiveDeploys {
@@ -151,7 +158,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 	}
 
 	// Rule 3: knowledge gaps -- max 3 per cycle, filtered to local hardware,
-	// filtered to locally available model+engine combos + format compatibility
+	// filtered to locally available model+engine combos + format/type/VRAM compatibility
 	var localGaps []GapEntry
 	for _, g := range input.Gaps {
 		if g.Hardware != defaultHardware && g.Hardware != "" {
@@ -161,6 +168,14 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 			continue
 		}
 		if !engineFormatCompatible(g.Engine, modelFormats[g.Model]) {
+			continue
+		}
+		// B24: skip non-LLM models for LLM-only engines
+		if !engineSupportsModelType(g.Engine, modelTypes[g.Model]) {
+			continue
+		}
+		// B23: skip models that obviously won't fit in total VRAM
+		if !modelFitsVRAM(g.Model, input.LocalModels, totalVRAMMiB) {
 			continue
 		}
 		localGaps = append(localGaps, g)
@@ -224,7 +239,7 @@ func hasHistoryFor(history []ExplorationRun, model, engine string) bool {
 }
 
 // deduplicateTasks removes tasks whose model+engine already has a completed
-// exploration run in history (B11 fix).
+// exploration run in history, OR has failed too many times (B11 + B22 fix).
 func deduplicateTasks(tasks []PlanTask, history []ExplorationRun) []PlanTask {
 	if len(history) == 0 {
 		return tasks
@@ -232,11 +247,31 @@ func deduplicateTasks(tasks []PlanTask, history []ExplorationRun) []PlanTask {
 	filtered := tasks[:0]
 	for _, t := range tasks {
 		// Advisories (with SourceRef) always pass — central asked us to re-validate.
-		if t.SourceRef != "" || !hasHistoryFor(history, t.Model, t.Engine) {
+		if t.SourceRef != "" {
 			filtered = append(filtered, t)
+			continue
 		}
+		if hasHistoryFor(history, t.Model, t.Engine) {
+			continue // already completed successfully
+		}
+		// B22: stop retrying after repeated failures (≥2 failed, 0 completed)
+		if failCountFor(history, t.Model, t.Engine) >= 2 {
+			continue
+		}
+		filtered = append(filtered, t)
 	}
 	return filtered
+}
+
+// failCountFor counts how many times a model+engine has failed in history.
+func failCountFor(history []ExplorationRun, model, engine string) int {
+	n := 0
+	for _, h := range history {
+		if h.ModelID == model && h.EngineID == engine && h.Status == "failed" {
+			n++
+		}
+	}
+	return n
 }
 
 func firstTaskHardware(values ...string) string {
@@ -279,6 +314,47 @@ func engineFormatCompatible(engineType, modelFormat string) bool {
 	default:
 		return true // unknown engine — allow
 	}
+}
+
+// modelFitsVRAM checks if a model can plausibly fit in total available VRAM.
+// Uses model on-disk size as approximation of VRAM needed (conservative for quantized).
+// B23: skip obviously impossible models (e.g., 360GB DeepSeek on 96GB VRAM).
+func modelFitsVRAM(modelName string, models []LocalModel, totalVRAMMiB int) bool {
+	if totalVRAMMiB <= 0 {
+		return true // unknown VRAM — allow (best-effort)
+	}
+	for _, m := range models {
+		if m.Name == modelName && m.SizeBytes > 0 {
+			modelMiB := int(m.SizeBytes / (1024 * 1024))
+			// Model weights + ~25% overhead for KV cache and activations
+			needed := modelMiB + modelMiB/4
+			return needed <= totalVRAMMiB
+		}
+	}
+	return true // model not found in local list — allow
+}
+
+// engineSupportsModelType checks if an engine type can serve a model type.
+// B24: sglang-kt/vllm/sglang only serve LLM; other types need specialized engines.
+func engineSupportsModelType(engineType, modelType string) bool {
+	if modelType == "" || modelType == "llm" {
+		return true // unknown or LLM — always allowed
+	}
+	switch engineType {
+	case "vllm", "sglang", "sglang-kt":
+		return false // these engines only serve text LLMs
+	default:
+		return true // specialized engines decide themselves
+	}
+}
+
+// localModelTypeMap builds a name→type map for type compatibility checks.
+func localModelTypeMap(models []LocalModel) map[string]string {
+	m := make(map[string]string, len(models))
+	for _, model := range models {
+		m[model.Name] = model.Type
+	}
+	return m
 }
 
 func localEngineTypeSet(engines []LocalEngine) map[string]bool {

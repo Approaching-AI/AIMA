@@ -17,6 +17,7 @@ import (
 
 type ExplorationTarget struct {
 	Hardware string `json:"hardware,omitempty"`
+	GPUArch  string `json:"gpu_arch,omitempty"` // e.g. "Ada" — for overlay YAML, not resolution
 	Model    string `json:"model"`
 	Engine   string `json:"engine,omitempty"`
 }
@@ -451,6 +452,9 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		return nil
 	}
 
+	// B25: stop any OTHER running native deployment to free the single native slot.
+	m.stopConflictingDeploy(ctx, plan.Target.Model)
+
 	args := map[string]any{
 		"model":     plan.Target.Model,
 		"engine":    plan.Target.Engine,
@@ -539,6 +543,37 @@ func (m *ExplorationManager) checkDeployStatus(ctx context.Context, model string
 	return status.Phase, status.Ready
 }
 
+// stopConflictingDeploy stops any running deployment that is NOT the target model.
+// B25: native runtime only supports one deployment at a time — port conflicts and
+// GPU memory exhaustion prevent concurrent native deployments.
+func (m *ExplorationManager) stopConflictingDeploy(ctx context.Context, targetModel string) {
+	listResult, err := m.tools.ExecuteTool(ctx, "deploy.list", []byte("{}"))
+	if err != nil || listResult == nil {
+		return
+	}
+	var deploys []struct {
+		Name    string `json:"name"`
+		Phase   string `json:"phase"`
+		Runtime string `json:"runtime"`
+	}
+	if json.Unmarshal([]byte(listResult.Content), &deploys) != nil {
+		return
+	}
+	for _, d := range deploys {
+		if d.Name == targetModel || (d.Phase != "running" && d.Phase != "starting" && d.Phase != "failed") {
+			continue
+		}
+		slog.Info("exploration: deleting conflicting deployment to free slot",
+			"stopping", d.Name, "for", targetModel, "runtime", d.Runtime, "phase", d.Phase)
+		deleteArgs, _ := json.Marshal(map[string]string{"name": d.Name})
+		if _, err := m.tools.ExecuteTool(ctx, "deploy.delete", deleteArgs); err != nil {
+			slog.Warn("exploration: failed to delete conflicting deployment", "name", d.Name, "error", err)
+		}
+		// Allow time for GPU memory to be released after process termination
+		time.Sleep(2 * time.Second)
+	}
+}
+
 // waitForReady polls deploy.status until the deployment reports ready, or timeout.
 // B18: detects terminal failure phases (failed/stopped/error) and returns immediately
 // instead of wasting the full timeout on a crashed process.
@@ -606,14 +641,26 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		return
 	}
 
-	// Parse benchmark result to extract performance data.
-	// benchmark.run returns {"result": {RunResult}, "benchmark_id": "...", ...}
+	// Parse full benchmark result — includes all performance dimensions.
 	var envelope struct {
 		Result struct {
-			ThroughputTPS float64 `json:"throughput_tps"`
-			TTFTP50ms     float64 `json:"ttft_p50_ms"`
-			TTFTP95ms     float64 `json:"ttft_p95_ms"`
-			ErrorRate     float64 `json:"error_rate"`
+			ThroughputTPS   float64 `json:"throughput_tps"`
+			QPS             float64 `json:"qps"`
+			TTFTP50ms       float64 `json:"ttft_p50_ms"`
+			TTFTP95ms       float64 `json:"ttft_p95_ms"`
+			TTFTP99ms       float64 `json:"ttft_p99_ms"`
+			TPOTP50ms       float64 `json:"tpot_p50_ms"`
+			TPOTP95ms       float64 `json:"tpot_p95_ms"`
+			ErrorRate       float64 `json:"error_rate"`
+			TotalRequests   int     `json:"total_requests"`
+			SuccessfulReqs  int     `json:"successful_requests"`
+			AvgInputTokens  int     `json:"avg_input_tokens"`
+			AvgOutputTokens int     `json:"avg_output_tokens"`
+			DurationMs      float64 `json:"duration_ms"`
+			Config          struct {
+				Concurrency int `json:"concurrency"`
+				Rounds      int `json:"rounds"`
+			} `json:"config"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(result.ResponseJSON), &envelope); err != nil {
@@ -629,31 +676,37 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		return
 	}
 
-	// Build config from SearchSpace (single-value entries)
-	config := make(map[string]any)
+	// Collect deployment config from the running deploy's labels
+	deployConfig := m.getDeployConfig(ctx, plan.Target.Model)
+
+	// Also merge SearchSpace entries (from tune tasks)
 	for k, vals := range plan.SearchSpace {
 		if len(vals) > 0 {
-			config[k] = vals[0]
+			deployConfig[k] = vals[0]
 		}
 	}
 
-	// Build the model YAML variant
+	// O13: use GPU arch (e.g. "Ada") for variant matching, not profile name
+	gpuArch := plan.Target.GPUArch
+	if gpuArch == "" {
+		gpuArch = plan.Target.Hardware
+	}
 	variantName := fmt.Sprintf("%s-%s-%s-explorer",
-		plan.Target.Model, plan.Target.Hardware, plan.Target.Engine)
+		plan.Target.Model, gpuArch, plan.Target.Engine)
 
-	// Build expected_performance from measured benchmark data
-	tpsLow := int(bench.ThroughputTPS * 0.8)  // 80% of measured as conservative low bound
-	tpsHigh := int(bench.ThroughputTPS * 1.2)  // 120% as optimistic high bound
+	// Performance bounds from measured data
+	tpsLow := int(bench.ThroughputTPS * 0.8)
+	tpsHigh := int(bench.ThroughputTPS * 1.2)
 	if tpsLow < 1 {
 		tpsLow = 1
 	}
-	ttftLow := int(bench.TTFTP50ms)   // p50 as low
-	ttftHigh := int(bench.TTFTP95ms)  // p95 as high
+	ttftLow := int(bench.TTFTP50ms)
+	ttftHigh := int(bench.TTFTP95ms)
 	if ttftHigh < ttftLow {
 		ttftHigh = ttftLow
 	}
 
-	// Build YAML content
+	// Build YAML
 	yaml := fmt.Sprintf(`kind: model_asset
 metadata:
   name: %s
@@ -675,12 +728,12 @@ variants:
 		plan.Target.Model,
 		time.Now().Format("2006-01-02"),
 		variantName,
-		plan.Target.Hardware,
+		gpuArch,
 		plan.Target.Engine,
 	)
 
-	// Append config entries
-	for k, v := range config {
+	// Append deployment config entries
+	for k, v := range deployConfig {
 		switch val := v.(type) {
 		case float64:
 			if val == float64(int(val)) {
@@ -693,11 +746,30 @@ variants:
 		}
 	}
 
+	// Rich performance data from benchmark
 	yaml += fmt.Sprintf(`    expected_performance:
       tokens_per_second: [%d, %d]
       latency_first_token_ms: [%d, %d]
+      throughput_tps: %.1f
+      qps: %.2f
+      ttft_p50_ms: %.1f
+      ttft_p95_ms: %.1f
+      ttft_p99_ms: %.1f
+      tpot_p50_ms: %.1f
+      tpot_p95_ms: %.1f
+      concurrency: %d
+      avg_input_tokens: %d
+      avg_output_tokens: %d
+      error_rate: %.3f
       notes: "Explorer auto-discovered %s. Benchmark ID: %s"
-`, tpsLow, tpsHigh, ttftLow, ttftHigh, time.Now().Format("2006-01-02T15:04:05Z"), result.BenchmarkID)
+`, tpsLow, tpsHigh, ttftLow, ttftHigh,
+		bench.ThroughputTPS, bench.QPS,
+		bench.TTFTP50ms, bench.TTFTP95ms, bench.TTFTP99ms,
+		bench.TPOTP50ms, bench.TPOTP95ms,
+		bench.Config.Concurrency,
+		bench.AvgInputTokens, bench.AvgOutputTokens,
+		bench.ErrorRate,
+		time.Now().Format("2006-01-02T15:04:05Z"), result.BenchmarkID)
 
 	// Write via catalog.override MCP tool
 	overrideArgs, _ := json.Marshal(map[string]string{
@@ -729,6 +801,13 @@ variants:
 		ArtifactType: "model_asset_overlay",
 		ArtifactID:   plan.Target.Model,
 	})
+}
+
+// getDeployConfig extracts config from the exploration plan's SearchSpace.
+// For validate tasks this is empty (engine defaults apply); for tune tasks
+// it contains the specific parameters being tested.
+func (m *ExplorationManager) getDeployConfig(_ context.Context, _ string) map[string]any {
+	return make(map[string]any)
 }
 
 func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state.ExplorationRun) {

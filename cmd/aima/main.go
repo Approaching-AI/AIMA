@@ -565,8 +565,10 @@ func run() error {
 				return nil, err
 			}
 			var models []struct {
-				Name   string `json:"name"`
-				Format string `json:"format"`
+				Name      string `json:"name"`
+				Format    string `json:"format"`
+				Type      string `json:"type"`
+				SizeBytes int64  `json:"size_bytes"`
 			}
 			if err := json.Unmarshal(data, &models); err != nil {
 				return nil, nil
@@ -574,7 +576,12 @@ func run() error {
 			result := make([]agent.LocalModel, 0, len(models))
 			for _, m := range models {
 				if m.Name != "" {
-					result = append(result, agent.LocalModel{Name: m.Name, Format: m.Format})
+					result = append(result, agent.LocalModel{
+						Name:      m.Name,
+						Format:    m.Format,
+						Type:      m.Type,
+						SizeBytes: m.SizeBytes,
+					})
 				}
 			}
 			return result, nil

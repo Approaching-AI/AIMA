@@ -59,6 +59,7 @@ type Explorer struct {
 	running          bool
 	tier             int
 	activePlan       *ExplorerPlan
+	cachedGPUArch    string // cached from gatherHardware for overlay YAML (O13)
 	lastRun          time.Time
 	cancel           context.CancelFunc
 	activeExecutions int
@@ -261,7 +262,7 @@ func (e *Explorer) Trigger() {
 }
 
 func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
-	slog.Debug("explorer event", "type", ev.Type)
+	slog.Info("explorer event received", "type", ev.Type)
 
 	// Re-detect tier periodically (LLM may have come online/offline)
 	if e.refreshTier(ctx) {
@@ -295,14 +296,20 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	}
 
 	// Build plan input from current state
+	slog.Info("explorer: building plan input")
 	input, err := e.buildPlanInput(ctx, &ev)
 	if err != nil {
 		slog.Warn("explorer: build plan input failed", "error", err)
 		return
 	}
+	slog.Info("explorer: plan input ready",
+		"gaps", len(input.Gaps), "deploys", len(input.ActiveDeploys),
+		"models", len(input.LocalModels), "engines", len(input.LocalEngines),
+		"history", len(input.History), "hw", input.Hardware.Profile)
 
 	// Generate exploration plan
 	planner := e.currentPlanner()
+	slog.Info("explorer: generating plan", "tier", tier)
 	plan, err := planner.Plan(ctx, *input)
 	degraded := false
 	if err != nil {
@@ -325,8 +332,9 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		plan.Reasoning = "rule-based (degraded from Tier 2)"
 	}
 
+	slog.Info("explorer: plan generated", "tasks", len(plan.Tasks), "id", plan.ID, "tier", plan.Tier)
 	if len(plan.Tasks) == 0 {
-		slog.Debug("explorer: no tasks to execute")
+		slog.Info("explorer: no tasks to execute after filtering")
 		return
 	}
 
@@ -525,6 +533,7 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult
 		SourceRef: task.SourceRef,
 		Target: ExplorationTarget{
 			Hardware: task.Hardware,
+			GPUArch:  e.cachedGPUArch,
 			Model:    task.Model,
 			Engine:   task.Engine,
 		},
@@ -578,6 +587,9 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 		hardware, err := e.gatherHardware(ctx)
 		if err == nil {
 			input.Hardware = hardware
+			if hardware.GPUArch != "" {
+				e.cachedGPUArch = hardware.GPUArch
+			}
 		}
 	}
 

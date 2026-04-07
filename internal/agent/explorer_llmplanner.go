@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -26,6 +27,7 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 	// The planner emits a pure JSON plan and does not request tool calls.
 	// It intentionally bypasses profile-filtered tool discovery.
 	prompt := buildPlannerPrompt(filtered)
+	slog.Info("explorer: LLM planner calling ChatCompletion", "prompt_len", len(prompt))
 	resp, err := p.agent.llm.ChatCompletion(ctx, []Message{
 		{Role: "system", Content: llmPlannerSystemPrompt},
 		{Role: "user", Content: prompt},
@@ -33,6 +35,7 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 	if err != nil {
 		return nil, fmt.Errorf("LLM plan generation: %w", err)
 	}
+	slog.Info("explorer: LLM planner response received", "content_len", len(resp.Content))
 	plan, err := parsePlanResponse(resp.Content)
 	if err != nil {
 		return nil, err
@@ -41,15 +44,27 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 	localModels := toSet(input.LocalModels)
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
 	modelFormats := localModelFormatMap(input.LocalModels)
+	modelTypes := localModelTypeMap(input.LocalModels)
+	totalVRAMMiB := input.Hardware.VRAMMiB * input.Hardware.GPUCount
+	if totalVRAMMiB == 0 {
+		totalVRAMMiB = input.Hardware.VRAMMiB
+	}
 	for i := range plan.Tasks {
 		if plan.Tasks[i].Hardware == "" {
 			plan.Tasks[i].Hardware = defaultHardware
 		}
 	}
-	// Post-filter: remove tasks referencing models/engines not on this device + format check
-	plan.Tasks = filterLocalTasks(plan.Tasks, localModels, localEngineTypes, modelFormats)
+	preFilterCount := len(plan.Tasks)
+	for _, t := range plan.Tasks {
+		slog.Info("explorer: LLM proposed task", "kind", t.Kind, "model", t.Model, "engine", t.Engine, "reason", t.Reason)
+	}
+	// Post-filter: remove tasks referencing models/engines not on this device + format/type/VRAM check
+	plan.Tasks = filterLocalTasks(plan.Tasks, localModels, localEngineTypes, modelFormats, modelTypes, input.LocalModels, totalVRAMMiB)
+	afterLocalFilter := len(plan.Tasks)
 	// B11: dedup against completed history
 	plan.Tasks = deduplicateTasks(plan.Tasks, input.History)
+	slog.Info("explorer: LLM plan filtering",
+		"llm_proposed", preFilterCount, "after_local_filter", afterLocalFilter, "after_dedup", len(plan.Tasks))
 	return plan, nil
 }
 
@@ -66,8 +81,13 @@ func filterPlanInput(input PlanInput) PlanInput {
 	localModels := toSet(input.LocalModels)
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
 	modelFormats := localModelFormatMap(input.LocalModels)
+	modelTypes := localModelTypeMap(input.LocalModels)
+	totalVRAMMiB := input.Hardware.VRAMMiB * input.Hardware.GPUCount
+	if totalVRAMMiB == 0 {
+		totalVRAMMiB = input.Hardware.VRAMMiB
+	}
 
-	// Filter gaps to local hardware AND locally available resources AND format compatibility
+	// Filter gaps to local hardware AND locally available resources AND format/type/VRAM compatibility
 	var localGaps []GapEntry
 	for _, g := range input.Gaps {
 		if g.Hardware != localHW && g.Hardware != "" {
@@ -77,6 +97,12 @@ func filterPlanInput(input PlanInput) PlanInput {
 			continue
 		}
 		if !engineFormatCompatible(g.Engine, modelFormats[g.Model]) {
+			continue
+		}
+		if !engineSupportsModelType(g.Engine, modelTypes[g.Model]) {
+			continue
+		}
+		if !modelFitsVRAM(g.Model, input.LocalModels, totalVRAMMiB) {
 			continue
 		}
 		localGaps = append(localGaps, g)
@@ -183,18 +209,28 @@ func parsePlanResponse(content string) (*ExplorerPlan, error) {
 	}, nil
 }
 
-// filterLocalTasks removes tasks whose model or engine is not locally available
-// or where the model format is incompatible with the engine type.
-func filterLocalTasks(tasks []PlanTask, localModels, localEngines map[string]bool, modelFormats map[string]string) []PlanTask {
+// filterLocalTasks removes tasks whose model or engine is not locally available,
+// where the model format/type is incompatible, or where the model won't fit in VRAM.
+func filterLocalTasks(tasks []PlanTask, localModels, localEngines map[string]bool, modelFormats, modelTypes map[string]string, allModels []LocalModel, totalVRAMMiB int) []PlanTask {
 	if len(localModels) == 0 && len(localEngines) == 0 {
 		return tasks
 	}
 	filtered := tasks[:0]
 	for _, t := range tasks {
 		if !isLocallyAvailable(t.Model, t.Engine, localModels, localEngines) {
+			slog.Info("explorer: filter rejected (not local)", "model", t.Model, "engine", t.Engine)
 			continue
 		}
 		if !engineFormatCompatible(t.Engine, modelFormats[t.Model]) {
+			slog.Info("explorer: filter rejected (format)", "model", t.Model, "engine", t.Engine, "format", modelFormats[t.Model])
+			continue
+		}
+		if !engineSupportsModelType(t.Engine, modelTypes[t.Model]) {
+			slog.Info("explorer: filter rejected (type)", "model", t.Model, "engine", t.Engine, "type", modelTypes[t.Model])
+			continue
+		}
+		if !modelFitsVRAM(t.Model, allModels, totalVRAMMiB) {
+			slog.Info("explorer: filter rejected (VRAM)", "model", t.Model, "total_vram_mib", totalVRAMMiB)
 			continue
 		}
 		filtered = append(filtered, t)

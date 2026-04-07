@@ -1,0 +1,171 @@
+kind: engine_asset
+metadata:
+  name: ltx23-pipelines-rocm
+  type: ltx-pipelines
+  version: "1.1.0"
+image:
+  # LTX-2.3 不使用 Docker 镜像，在 Python venv 中直接运行
+  # venv 路径: /disk/ssd1/ltx23-env/ (PyTorch 2.5.1+rocm6.2)
+  name: null
+  tag: null
+  size_approx_mb: 0
+  platforms: [linux/amd64]
+  distribution: native
+patterns:
+  - "^ltx23-pipelines"
+  - "ltx.*pipelines"
+  - "ltx-2\\.3"
+hardware:
+  gpu_arch: RDNA3
+  vram_min_mib: 40960
+  gpu_count_min: 1
+startup:
+  # 单 GPU Python 脚本执行，非持久化服务
+  command: ["python3"]
+  env:
+    HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+    HIP_VISIBLE_DEVICES: "1"
+    PYTORCH_HIP_ALLOC_CONF: "max_split_size_mb:128"
+    TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL: "1"
+  default_args:
+    streaming_prefetch_count: null  # 全量加载到 VRAM（最优）
+    height: 512
+    width: 768
+    num_frames: 81
+    num_steps: 30
+    frame_rate: 24.0
+    cfg_scale: 3.0
+    stg_scale: 1.0
+    rescale_scale: 0.7
+    modality_scale: 3.0
+    stg_blocks: [28]
+    # VAE tiling（小 tile 防 OOM）
+    vae_spatial_tile_px: 256
+    vae_spatial_overlap_px: 32
+    vae_temporal_tile_frames: 32
+    vae_temporal_overlap_frames: 8
+  health_check:
+    path: null
+    timeout_s: 600
+  warmup:
+    enabled: false
+  log_patterns:
+    phases:
+      - name: text_encoding
+        pattern: "Building text encoder|Encoding.*prompts"
+        progress: 10
+      - name: stage1_denoise
+        pattern: "Stage 1.*step|stage1.*denois"
+        progress: 40
+      - name: spatial_upscale
+        pattern: "spatial.*upscal|upsampl"
+        progress: 60
+      - name: stage2_denoise
+        pattern: "Stage 2.*step|stage2.*denois"
+        progress: 70
+      - name: vae_decode
+        pattern: "VAE.*decod|vae.*decod"
+        progress: 85
+      - name: encode_video
+        pattern: "encode.*video|Writing.*mp4"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|HIP out of memory"
+        message: "GPU OOM — 尝试 streaming_prefetch_count=2 或减小 VAE tile"
+      - pattern: "NaN|nan"
+        message: "Gemma 3 NaN bug — 确保文本编码器在 CPU 上运行 (FP32)"
+      - pattern: "rope_local_base_freq|Gemma3TextConfig"
+        message: "transformers 版本不兼容 — 需要 >=4.52 且 <5.0"
+      - pattern: "cannot be saved for backward"
+        message: "VAE conv3d 不兼容 inference_mode — 需使用 torch.no_grad()"
+api:
+  protocol: custom
+  base_path: null
+amplifier:
+  features:
+    - single_gpu_inference
+    - video_generation
+    - audio_generation
+    - two_stage_pipeline
+    - distilled_model
+  performance_gain: "单卡 48GB 全量加载 22B BF16，5.5 分钟生成 3.4 秒 768×512 视频+音频"
+  resource_expansion:
+    cpu_offload: true  # 文本编码器强制 CPU
+    ssd_offload: false
+  performance_multiplier: 1.0
+  extends_resource_boundary: false
+  effective_vram_multiplier: 1.0
+partition_hints:
+  min_gpu_memory_mib: 40960
+  min_gpu_count: 1
+  recommended_gpu_cores_percent: 100
+time_constraints:
+  cold_start_s: [20, 30]  # 文本编码器加载
+  generation_per_81_frames_s: [300, 500]
+power_constraints:
+  typical_draw_watts: [200, 300]
+runtime:
+  default: "native"
+  platform_recommendations:
+    linux/amd64: "native"
+dependencies:
+  packages:
+    - name: ltx-pipelines
+      version: "1.1.0"
+      source: "https://github.com/Lightricks/LTX-Video (source install from packages/ltx-pipelines/)"
+    - name: ltx-core
+      version: "1.1.0"
+      source: "https://github.com/Lightricks/LTX-Video (source install from packages/ltx-core/)"
+    - name: transformers
+      version: "4.57.6"
+      note: "必须 >=4.52 且 <5.0 (5.x 破坏 Gemma3TextConfig)"
+    - name: diffusers
+      version: "0.37.1"
+    - name: torch
+      version: "2.5.1+rocm6.2"
+  models:
+    - name: ltx-2.3-22b-distilled
+      size_gb: 46
+      format: safetensors
+      source: "Lightricks/LTX-Video-2.3-22B-Distilled (HuggingFace)"
+    - name: ltx-2.3-22b-distilled-lora-384
+      size_gb: 7.6
+      format: safetensors
+      source: "Lightricks/LTX-Video-2.3-22B-Distilled (LoRA adapter)"
+    - name: ltx-2.3-spatial-upscaler-x2-1.1
+      size_gb: 0.3
+      format: safetensors
+      source: "Lightricks/LTX-Video-2.3-22B-Distilled (spatial upscaler)"
+    - name: gemma-3-12b-it
+      size_gb: 23
+      format: safetensors
+      source: "google/gemma-3-12b-it (HuggingFace)"
+notes: |
+  LTX-2.3 (22B) 视频+音频生成引擎，基于 Lightricks 的 ltx-pipelines。
+  DiT 架构，两阶段 pipeline：Stage 1 半分辨率去噪 (30步) → 空间上采样 2x → Stage 2 全分辨率精炼 (3步 distilled)。
+
+  RDNA3 三个关键 Workaround：
+  1. Gemma 3 文本编码器 NaN: hipBLASLt 在 gfx1100 不兼容，BF16 输出全 NaN。
+     修复: monkey-patch PromptEncoder._text_encoder_ctx()，强制 CPU + FP32。
+     影响: 文本编码 ~21s (GPU 预估 <3s)，仅运行一次，总时间影响 ~4%。
+
+  2. VAE conv3d 与 torch.inference_mode() 不兼容:
+     ROCm PyTorch 2.5.1 的 conv3d 在 inference_mode 下需保存 tensor 用于 backward。
+     修复: torch.no_grad() 替代 torch.inference_mode()。
+
+  3. transformers 5.x 破坏 Gemma3TextConfig:
+     5.x 移除了 rope_local_base_freq 和 rope_scaling["rope_type"]。
+     修复: 降级到 transformers >=4.52,<5.0。
+
+  两种运行模式：
+  - 全量加载 (streaming_prefetch_count=None): 22B BF16 ≈ 44GB → 48GB 卡刚好装下。
+    VAE 解码 8s，总计 328s。推荐。
+  - Streaming (streaming_prefetch_count=2): VRAM 峰值 ~1GB，但 VAE 解码 148s，总计 481s。
+    仅在 VRAM 不足时使用。
+
+  验证记录 2026-04-07:
+  - 768×512, 81帧 (3.375s @24fps), 30步 → 327.7s (5.5分钟)
+  - 去噪速度: 5.14s/step (Stage 1), 5.34s/step (Stage 2)
+  - VAE 解码: 7.9s (全量加载) vs 148.2s (streaming)
+  - GPU VRAM 峰值: 40.8 GiB / 48 GiB
+  - 输出: H.264 MP4, 24fps, 含 AAC 同步音频

@@ -400,6 +400,15 @@ func (m *ExplorationManager) executeValidate(ctx context.Context, run *state.Exp
 		return
 	}
 
+	// Resolve actual endpoint from deploy.status — the model may be on a non-default port.
+	if plan.BenchmarkProfile.Endpoint == "" {
+		if addr := m.resolveDeployEndpoint(ctx, plan.Target.Model); addr != "" {
+			plan.BenchmarkProfile.Endpoint = addr
+			slog.Info("exploration: resolved benchmark endpoint from deployment",
+				"model", plan.Target.Model, "endpoint", addr)
+		}
+	}
+
 	stepResult, err := m.executeBenchmarkStep(ctx, run, plan, "validate", 0)
 	if err != nil {
 		run.Status = "failed"
@@ -413,14 +422,33 @@ func (m *ExplorationManager) executeValidate(ctx context.Context, run *state.Exp
 	run.CompletedAt = time.Now()
 	run.SummaryJSON = stepResult.ResponseJSON
 	_ = m.db.UpdateExplorationRun(context.Background(), run)
+
+	// Task #13: After successful benchmark, write discovered knowledge as overlay YAML.
+	m.maybeCreateKnowledge(ctx, run, plan, stepResult)
 }
 
 // ensureDeployed deploys the target model+engine with config if not already running.
-// For validate tasks, config comes from SearchSpace (single-value entries).
-// For tune tasks, the Tuner handles deploy internally, so this is typically a no-config baseline.
+// B17: checks deploy.status first — if already ready, skip deploy; if starting, wait;
+// only call deploy.apply when no existing deployment or previous one failed.
 func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan) error {
 	if m.tools == nil {
 		return fmt.Errorf("no tool executor")
+	}
+
+	// B17: Pre-check — avoid "already starting" errors by inspecting current state.
+	phase, ready := m.checkDeployStatus(ctx, plan.Target.Model)
+	if ready {
+		slog.Info("exploration: model already deployed and ready, skipping deploy",
+			"model", plan.Target.Model, "engine", plan.Target.Engine)
+		return nil
+	}
+	if phase == "starting" || phase == "pulling" {
+		slog.Info("exploration: model already deploying, waiting for ready",
+			"model", plan.Target.Model, "phase", phase)
+		if err := m.waitForReady(ctx, plan.Target.Model); err != nil {
+			return fmt.Errorf("wait for in-progress deploy %s: %w", plan.Target.Model, err)
+		}
+		return nil
 	}
 
 	args := map[string]any{
@@ -429,7 +457,6 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		"auto_pull": false, // Explorer must never download — only use locally available resources.
 	}
 	// Flatten SearchSpace into config overrides for deploy.
-	// SearchSpace from PlanTask.Params has single-value arrays; extract the first value.
 	if len(plan.SearchSpace) > 0 {
 		config := make(map[string]any, len(plan.SearchSpace))
 		for k, vals := range plan.SearchSpace {
@@ -487,7 +514,6 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		"model", plan.Target.Model, "engine", plan.Target.Engine)
 
 	// B14: Wait for the service to become ready before benchmarking.
-	// Without this, the benchmark hits an unloaded model and gets 0 tok/s.
 	if err := m.waitForReady(ctx, plan.Target.Model); err != nil {
 		slog.Warn("exploration: readiness check failed, proceeding anyway",
 			"model", plan.Target.Model, "error", err)
@@ -495,7 +521,27 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 	return nil
 }
 
+// checkDeployStatus returns the current phase and readiness of a deployment.
+// Returns ("", false) if the deployment doesn't exist or status can't be determined.
+func (m *ExplorationManager) checkDeployStatus(ctx context.Context, model string) (string, bool) {
+	statusArgs, _ := json.Marshal(map[string]string{"name": model})
+	result, err := m.tools.ExecuteTool(ctx, "deploy.status", statusArgs)
+	if err != nil || result == nil {
+		return "", false
+	}
+	var status struct {
+		Phase string `json:"phase"`
+		Ready bool   `json:"ready"`
+	}
+	if json.Unmarshal([]byte(result.Content), &status) != nil {
+		return "", false
+	}
+	return status.Phase, status.Ready
+}
+
 // waitForReady polls deploy.status until the deployment reports ready, or timeout.
+// B18: detects terminal failure phases (failed/stopped/error) and returns immediately
+// instead of wasting the full timeout on a crashed process.
 func (m *ExplorationManager) waitForReady(ctx context.Context, model string) error {
 	if m.tools == nil {
 		return nil
@@ -513,9 +559,16 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 				Phase string `json:"phase"`
 				Ready bool   `json:"ready"`
 			}
-			if json.Unmarshal([]byte(result.Content), &status) == nil && status.Ready {
-				slog.Info("exploration: service ready", "model", model)
-				return nil
+			if json.Unmarshal([]byte(result.Content), &status) == nil {
+				if status.Ready {
+					slog.Info("exploration: service ready", "model", model)
+					return nil
+				}
+				// B18: fail fast on terminal phases — process crashed or was stopped.
+				switch status.Phase {
+				case "failed", "stopped", "error", "exited":
+					return fmt.Errorf("deployment %s entered terminal phase %q", model, status.Phase)
+				}
 			}
 		}
 		select {
@@ -525,6 +578,157 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 		}
 	}
 	return fmt.Errorf("timeout waiting for %s to become ready after %v", model, maxWait)
+}
+
+// resolveDeployEndpoint queries deploy.status to get the actual inference address.
+// Returns an OpenAI-compatible endpoint URL or empty string.
+func (m *ExplorationManager) resolveDeployEndpoint(ctx context.Context, model string) string {
+	statusArgs, _ := json.Marshal(map[string]string{"name": model})
+	result, err := m.tools.ExecuteTool(ctx, "deploy.status", statusArgs)
+	if err != nil || result == nil {
+		return ""
+	}
+	var status struct {
+		Address string `json:"address"`
+		Ready   bool   `json:"ready"`
+	}
+	if json.Unmarshal([]byte(result.Content), &status) != nil || status.Address == "" {
+		return ""
+	}
+	return fmt.Sprintf("http://%s/v1/chat/completions", status.Address)
+}
+
+// maybeCreateKnowledge writes a model YAML overlay when Explorer successfully
+// benchmarks a model+engine combo. This is the core value of autonomous exploration:
+// discovered working configs become permanent catalog knowledge for future resolves.
+func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, result *benchmarkStepResult) {
+	if m.tools == nil || result == nil {
+		return
+	}
+
+	// Parse benchmark result to extract performance data.
+	// benchmark.run returns {"result": {RunResult}, "benchmark_id": "...", ...}
+	var envelope struct {
+		Result struct {
+			ThroughputTPS float64 `json:"throughput_tps"`
+			TTFTP50ms     float64 `json:"ttft_p50_ms"`
+			TTFTP95ms     float64 `json:"ttft_p95_ms"`
+			ErrorRate     float64 `json:"error_rate"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result.ResponseJSON), &envelope); err != nil {
+		slog.Warn("exploration: cannot parse benchmark for knowledge creation", "error", err)
+		return
+	}
+	bench := envelope.Result
+
+	// Only create knowledge if benchmark actually produced meaningful data
+	if bench.ThroughputTPS <= 0 || bench.ErrorRate >= 0.5 {
+		slog.Info("exploration: skipping knowledge creation — no meaningful benchmark data",
+			"tps", bench.ThroughputTPS, "error_rate", bench.ErrorRate)
+		return
+	}
+
+	// Build config from SearchSpace (single-value entries)
+	config := make(map[string]any)
+	for k, vals := range plan.SearchSpace {
+		if len(vals) > 0 {
+			config[k] = vals[0]
+		}
+	}
+
+	// Build the model YAML variant
+	variantName := fmt.Sprintf("%s-%s-%s-explorer",
+		plan.Target.Model, plan.Target.Hardware, plan.Target.Engine)
+
+	// Build expected_performance from measured benchmark data
+	tpsLow := int(bench.ThroughputTPS * 0.8)  // 80% of measured as conservative low bound
+	tpsHigh := int(bench.ThroughputTPS * 1.2)  // 120% as optimistic high bound
+	if tpsLow < 1 {
+		tpsLow = 1
+	}
+	ttftLow := int(bench.TTFTP50ms)   // p50 as low
+	ttftHigh := int(bench.TTFTP95ms)  // p95 as high
+	if ttftHigh < ttftLow {
+		ttftHigh = ttftLow
+	}
+
+	// Build YAML content
+	yaml := fmt.Sprintf(`kind: model_asset
+metadata:
+  name: %s
+  type: llm
+  family: explorer-discovered
+  parameter_count: unknown
+  notes: "Auto-discovered by Explorer on %s"
+storage:
+  formats: [safetensors, gguf]
+variants:
+  - name: %s
+    hardware:
+      gpu_arch: "%s"
+      vram_min_mib: 0
+    engine: %s
+    format: safetensors
+    default_config:
+`,
+		plan.Target.Model,
+		time.Now().Format("2006-01-02"),
+		variantName,
+		plan.Target.Hardware,
+		plan.Target.Engine,
+	)
+
+	// Append config entries
+	for k, v := range config {
+		switch val := v.(type) {
+		case float64:
+			if val == float64(int(val)) {
+				yaml += fmt.Sprintf("      %s: %d\n", k, int(val))
+			} else {
+				yaml += fmt.Sprintf("      %s: %v\n", k, val)
+			}
+		default:
+			yaml += fmt.Sprintf("      %s: %v\n", k, v)
+		}
+	}
+
+	yaml += fmt.Sprintf(`    expected_performance:
+      tokens_per_second: [%d, %d]
+      latency_first_token_ms: [%d, %d]
+      notes: "Explorer auto-discovered %s. Benchmark ID: %s"
+`, tpsLow, tpsHigh, ttftLow, ttftHigh, time.Now().Format("2006-01-02T15:04:05Z"), result.BenchmarkID)
+
+	// Write via catalog.override MCP tool
+	overrideArgs, _ := json.Marshal(map[string]string{
+		"kind":    "model_asset",
+		"name":    plan.Target.Model,
+		"content": yaml,
+	})
+
+	overrideResult, err := m.tools.ExecuteTool(ctx, "catalog.override", overrideArgs)
+	if err != nil {
+		slog.Warn("exploration: failed to create knowledge overlay",
+			"model", plan.Target.Model, "error", err)
+		return
+	}
+
+	slog.Info("exploration: created knowledge overlay from benchmark",
+		"model", plan.Target.Model, "engine", plan.Target.Engine,
+		"tps", bench.ThroughputTPS, "result", overrideResult)
+
+	// Record as exploration event
+	_ = m.db.InsertExplorationEvent(context.Background(), &state.ExplorationEvent{
+		RunID:        run.ID,
+		StepIndex:    99, // post-benchmark knowledge creation step
+		StepKind:     "knowledge_create",
+		Status:       "completed",
+		ToolName:     "catalog.override",
+		RequestJSON:  string(overrideArgs),
+		ResponseJSON: func() string { if overrideResult != nil { return overrideResult.Content }; return "" }(),
+		ArtifactType: "model_asset_overlay",
+		ArtifactID:   plan.Target.Model,
+	})
 }
 
 func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state.ExplorationRun) {

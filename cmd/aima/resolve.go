@@ -168,6 +168,12 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 		return resolved, resolved.ModelName, nil
 	}
 	rebuildSynthetic := strings.Contains(err.Error(), "not found in catalog")
+	// Also trigger synthetic rebuild when the model exists in catalog but has
+	// no variant for the requested engine — Explorer needs this to discover
+	// working configs for engine+model combos not yet cataloged.
+	if !rebuildSynthetic && strings.Contains(err.Error(), "no variant of model") {
+		rebuildSynthetic = true
+	}
 	if !rebuildSynthetic && cat.HasSyntheticModel(modelName) {
 		rebuildSynthetic = true
 	}

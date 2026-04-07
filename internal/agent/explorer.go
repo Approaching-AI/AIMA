@@ -92,10 +92,11 @@ func (e *Explorer) detectTier() int {
 }
 
 func (e *Explorer) setupPlanner() {
-	// LLMPlanner will be wired in when available (Task 9).
-	// For now, always use RulePlanner. setupPlanner is called again
-	// when tier changes, so LLMPlanner can be injected later.
-	e.planner = &RulePlanner{}
+	if e.tier >= 2 && e.agent != nil {
+		e.planner = NewLLMPlanner(e.agent)
+	} else {
+		e.planner = &RulePlanner{}
+	}
 }
 
 // Start begins the Explorer's background loops.

@@ -97,24 +97,23 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 	// deploy.dry_run
 	s.RegisterTool(&Tool{
 		Name:        "deploy.dry_run",
-		Description: "Preview a deployment without executing it. Returns resolved config, hardware fitness report, generated Pod YAML, and warnings. No side effects.",
+		Description: "Preview a deployment without executing it. Returns resolved config, hardware fitness report, generated Pod YAML, and warnings. No side effects. Set output=pod_yaml to get only the generated Pod YAML manifest.",
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model to deploy, e.g. 'qwen3-0.6b'"},`+
 				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm', 'llamacpp'. Omit to auto-select."},`+
 				`"slot":{"type":"string","description":"Partition slot for multi-model, e.g. 'slot-0'. Omit for default."},`+
 				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9}"},`+
-				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection."}`,
+				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection."},`+
+				`"output":{"type":"string","enum":["","pod_yaml"],"description":"Output format: omit for full dry-run report, 'pod_yaml' for K3S Pod YAML manifest only"}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.DeployDryRun == nil {
-				return ErrorResult("deploy.dry_run not implemented"), nil
-			}
 			var p struct {
 				Model         string         `json:"model"`
 				Engine        string         `json:"engine"`
 				Slot          string         `json:"slot"`
 				Config        map[string]any `json:"config"`
 				MaxColdStartS int            `json:"max_cold_start_s"`
+				Output        string         `json:"output"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -127,6 +126,22 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 					p.Config = map[string]any{}
 				}
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
+			}
+
+			// output=pod_yaml: call GeneratePod instead of DeployDryRun
+			if p.Output == "pod_yaml" {
+				if deps.GeneratePod == nil {
+					return ErrorResult("deploy.dry_run pod_yaml not implemented"), nil
+				}
+				data, err := deps.GeneratePod(ctx, p.Model, p.Engine, p.Slot)
+				if err != nil {
+					return nil, fmt.Errorf("generate pod for %s/%s: %w", p.Model, p.Engine, err)
+				}
+				return TextResult(string(data)), nil
+			}
+
+			if deps.DeployDryRun == nil {
+				return ErrorResult("deploy.dry_run not implemented"), nil
 			}
 			data, err := deps.DeployDryRun(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {

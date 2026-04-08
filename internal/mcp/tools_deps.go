@@ -29,10 +29,6 @@ type ToolDeps struct {
 	PullEngine    func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
 	ImportEngine  func(ctx context.Context, path string) error
 	RemoveEngine  func(ctx context.Context, name string, deleteFiles bool) error
-	EnginePlan    func(ctx context.Context) (json.RawMessage, error)
-
-	// Download progress
-	ListDownloads func(ctx context.Context) (json.RawMessage, error)
 
 	// Deployment (runtime package)
 	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
@@ -72,9 +68,6 @@ type ToolDeps struct {
 	StackInit      func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error)
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
-	// Discovery
-	DiscoverLAN func(ctx context.Context, timeoutS int) (json.RawMessage, error)
-
 	// Catalog overlay
 	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
@@ -86,14 +79,12 @@ type ToolDeps struct {
 	// Agent
 	DispatchAsk       func(ctx context.Context, query string, skipPerms bool, sessionID string) (json.RawMessage, string, error)
 	AgentStatus       func(ctx context.Context) (json.RawMessage, error)
-	AgentGuide        func(ctx context.Context) (json.RawMessage, error)
 	RollbackList      func(ctx context.Context) (json.RawMessage, error)
 	RollbackRestore   func(ctx context.Context, id int64) (json.RawMessage, error)
 	SupportAskForHelp func(ctx context.Context, description, endpoint, inviteCode, workerCode, recoveryCode, referralCode string) (json.RawMessage, error)
 
 	// System
 	SystemStatus func(ctx context.Context) (json.RawMessage, error)
-	ExecShell    func(ctx context.Context, command string) (json.RawMessage, error)
 	GetConfig    func(ctx context.Context, key string) (string, error)
 	SetConfig    func(ctx context.Context, key, value string) error
 
@@ -129,9 +120,6 @@ type ToolDeps struct {
 	ExploreStop         func(ctx context.Context, runID string) (json.RawMessage, error)
 	ExploreResult       func(ctx context.Context, runID string) (json.RawMessage, error)
 
-	// Power history (F4)
-	PowerHistory func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-
 	// Validation (F5)
 	ValidateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
@@ -141,18 +129,10 @@ type ToolDeps struct {
 	// Open questions (I6)
 	OpenQuestions func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
-	// App management (D4)
-	AppRegister  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	AppProvision func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	AppList      func(ctx context.Context) (json.RawMessage, error)
-
 	// Knowledge sync (K6)
 	SyncPush   func(ctx context.Context) (json.RawMessage, error)
 	SyncPull   func(ctx context.Context) (json.RawMessage, error)
 	SyncStatus func(ctx context.Context) (json.RawMessage, error)
-
-	// Power mode (S3)
-	PowerMode func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
 	// OpenClaw integration
 	OpenClawSync   func(ctx context.Context, dryRun bool) (json.RawMessage, error)

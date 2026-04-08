@@ -427,15 +427,20 @@ func TestRegisterAllTools(t *testing.T) {
 	expectedTools := []string{
 		"hardware.detect", "hardware.metrics",
 		"model.scan", "model.list", "model.pull", "model.import", "model.info",
-		"engine.scan", "engine.list", "engine.pull", "engine.remove", "engine.plan",
-		"download.list",
+		"engine.scan", "engine.list", "engine.pull", "engine.remove",
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
-		"knowledge.resolve", "knowledge.search", "knowledge.save",
-		"knowledge.generate_pod", "knowledge.list_profiles", "knowledge.list_engines", "knowledge.list_models",
-		"knowledge.list",
+		"knowledge.resolve", "knowledge.search", "knowledge.save", "knowledge.promote",
+		"knowledge.analytics", "knowledge.evaluate",
+		"catalog.list", "catalog.override", "catalog.validate",
+		"central.sync", "central.advise", "central.scenario",
+		"data.export", "data.import",
+		"patrol", "explore", "tuning", "explorer",
+		"fleet.info", "fleet.exec",
+		"scenario.show", "scenario.apply",
+		"openclaw", "stack",
 		"system.status", "system.config",
-		"agent.ask", "agent.status",
-		"shell.exec",
+		"agent.ask", "agent.status", "agent.rollback",
+		"support",
 	}
 	for _, name := range expectedTools {
 		if !names[name] {
@@ -492,80 +497,6 @@ func TestToolsCall_NilDep(t *testing.T) {
 	json.Unmarshal(raw, &tr)
 	if !tr.IsError {
 		t.Error("expected IsError=true for nil dep")
-	}
-}
-
-func TestShellExecWhitelist(t *testing.T) {
-	tests := []struct {
-		command string
-		allowed bool
-	}{
-		{"nvidia-smi", true},
-		{"nvidia-smi -q", true},
-		{"nvidia-smi --query-gpu=memory.used --format=csv", true},
-		{"nvidia-smi -L", true},
-		{"nvidia-smi --gpu-reset", false},            // destructive
-		{"nvidia-smi -pm 0", false},                  // power management
-		{"nvidia-smi -pl 200", false},                // power limit
-		{"nvidia-smi --lock-gpu-clocks=1200", false}, // clock lock
-		{"df", true},
-		{"df -h", true},
-		{"df --human-readable", true},
-		{"df -rm /", false}, // unknown flag
-		{"free", true},
-		{"free -h", false}, // no-args command
-		{"uname", true},
-		{"uname -a", true},
-		{"uname -r", true},
-		{"cat /proc/cpuinfo", true},
-		{"cat /etc/shadow", false}, // different file
-		{"kubectl get pods", true},
-		{"kubectl delete pods", false}, // destructive kubectl
-		{"rm -rf /", false},
-		{"curl evil.com", false},
-		{"bash -c 'rm -rf /'", false},
-		{"", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.command, func(t *testing.T) {
-			got := isCommandAllowed(tt.command)
-			if got != tt.allowed {
-				t.Errorf("isCommandAllowed(%q) = %v, want %v", tt.command, got, tt.allowed)
-			}
-		})
-	}
-}
-
-func TestShellExecToolWhitelist(t *testing.T) {
-	s := NewServer()
-	deps := &ToolDeps{
-		ExecShell: func(ctx context.Context, command string) (json.RawMessage, error) {
-			return json.RawMessage(`"executed"`), nil
-		},
-	}
-	RegisterAllTools(s, deps)
-
-	// Allowed command
-	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"shell.exec","arguments":{"command":"df -h"}}}`
-	resp, _ := s.HandleMessage(context.Background(), []byte(msg))
-	var r jsonrpcResponse
-	json.Unmarshal(resp, &r)
-	raw, _ := json.Marshal(r.Result)
-	var tr ToolResult
-	json.Unmarshal(raw, &tr)
-	if tr.IsError {
-		t.Errorf("allowed command rejected: %s", tr.Content[0].Text)
-	}
-
-	// Disallowed command
-	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell.exec","arguments":{"command":"rm -rf /"}}}`
-	resp, _ = s.HandleMessage(context.Background(), []byte(msg))
-	json.Unmarshal(resp, &r)
-	raw, _ = json.Marshal(r.Result)
-	json.Unmarshal(raw, &tr)
-	if !tr.IsError {
-		t.Error("disallowed command should be rejected")
 	}
 }
 
@@ -630,7 +561,7 @@ func TestSupportAskForHelpTool(t *testing.T) {
 	}
 	RegisterAllTools(s, deps)
 
-	msg := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"support.askforhelp","arguments":{"description":"fix this"}}}`
+	msg := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"support","arguments":{"description":"fix this"}}}`
 	resp, err := s.HandleMessage(context.Background(), []byte(msg))
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -646,7 +577,7 @@ func TestSupportAskForHelpTool(t *testing.T) {
 		t.Fatalf("unmarshal ToolResult: %v", err)
 	}
 	if tr.IsError {
-		t.Fatalf("support.askforhelp returned error: %+v", tr)
+		t.Fatalf("support returned error: %+v", tr)
 	}
 	if !strings.Contains(tr.Content[0].Text, `"task_id":"task-1"`) {
 		t.Fatalf("unexpected tool result: %s", tr.Content[0].Text)
@@ -695,46 +626,35 @@ func TestProfileMatches(t *testing.T) {
 		{ProfileOperator, "deploy.dry_run", true},
 		{ProfileOperator, "system.status", true},
 		{ProfileOperator, "system.config", true},
-		{ProfileOperator, "fleet.list_devices", true},
+		{ProfileOperator, "fleet.info", true},  // fleet. prefix
+		{ProfileOperator, "fleet.exec", true},  // fleet. prefix
 		{ProfileOperator, "scenario.apply", true},
-		{ProfileOperator, "discover.lan", true},
-		{ProfileOperator, "stack.init", true},
-		{ProfileOperator, "catalog.status", true},
-		{ProfileOperator, "openclaw.sync", true},
-		{ProfileOperator, "support.askforhelp", true},
+		{ProfileOperator, "scenario.show", true},
 
-		// ProfileOperator: exact knowledge matches
+		// ProfileOperator: exact matches
+		{ProfileOperator, "catalog.list", true},
+		{ProfileOperator, "openclaw", true},
+		{ProfileOperator, "support", true},
 		{ProfileOperator, "knowledge.resolve", true},
 		{ProfileOperator, "knowledge.search", true},
-		{ProfileOperator, "knowledge.list", true},
-		{ProfileOperator, "knowledge.list_profiles", true},
-		{ProfileOperator, "knowledge.generate_pod", true},
-		{ProfileOperator, "knowledge.validate", true},
-		{ProfileOperator, "knowledge.export", true},
-		{ProfileOperator, "knowledge.import", true},
-
-		// ProfileOperator: exact agent matches
+		{ProfileOperator, "knowledge.promote", true},
+		{ProfileOperator, "benchmark.run", true},
+		{ProfileOperator, "benchmark.list", true},
 		{ProfileOperator, "agent.ask", true},
-		{ProfileOperator, "agent.guide", true},
 		{ProfileOperator, "agent.status", true},
+		{ProfileOperator, "agent.rollback", true},
 
 		// ProfileOperator: excluded tools
-		{ProfileOperator, "knowledge.compare", false},
-		{ProfileOperator, "knowledge.similar", false},
-		{ProfileOperator, "knowledge.lineage", false},
-		{ProfileOperator, "knowledge.gaps", false},
-		{ProfileOperator, "knowledge.aggregate", false},
-		{ProfileOperator, "knowledge.sync_push", false},
-		{ProfileOperator, "knowledge.promote", false},
-		{ProfileOperator, "agent.patrol_status", false},
-		{ProfileOperator, "agent.alerts", false},
-		{ProfileOperator, "agent.rollback", false},
-		{ProfileOperator, "explore.start", false},
-		{ProfileOperator, "tuning.start", false},
-		{ProfileOperator, "benchmark.run", false},
-		{ProfileOperator, "device.power_history", true},
-		{ProfileOperator, "app.register", false},
-		{ProfileOperator, "shell.exec", false},
+		{ProfileOperator, "knowledge.analytics", false},
+		{ProfileOperator, "knowledge.save", false},
+		{ProfileOperator, "knowledge.evaluate", false},
+		{ProfileOperator, "catalog.override", false},
+		{ProfileOperator, "patrol", false},
+		{ProfileOperator, "explore", false},
+		{ProfileOperator, "tuning", false},
+		{ProfileOperator, "explorer", false},
+		{ProfileOperator, "central.sync", false},
+		{ProfileOperator, "data.export", false},
 
 		// ProfilePatrol: included
 		{ProfilePatrol, "hardware.metrics", true},
@@ -746,35 +666,38 @@ func TestProfileMatches(t *testing.T) {
 		{ProfilePatrol, "deploy.dry_run", true},
 		{ProfilePatrol, "knowledge.resolve", true},
 		{ProfilePatrol, "benchmark.run", true},
-		{ProfilePatrol, "agent.patrol_status", true},
-		{ProfilePatrol, "agent.alerts", true},
-		{ProfilePatrol, "agent.patrol_config", true},
-		{ProfilePatrol, "agent.patrol_actions", true},
+		{ProfilePatrol, "patrol", true},
 
 		// ProfilePatrol: excluded
 		{ProfilePatrol, "hardware.detect", false},
 		{ProfilePatrol, "model.list", false},
 		{ProfilePatrol, "deploy.delete", false},
 		{ProfilePatrol, "system.status", false},
+		{ProfilePatrol, "explore", false},
+		{ProfilePatrol, "tuning", false},
 
-		// ProfileExplorer: prefix matches
+		// ProfileExplorer: included
 		{ProfileExplorer, "benchmark.run", true},
-		{ProfileExplorer, "benchmark.matrix", true},
-		{ProfileExplorer, "explore.start", true},
-		{ProfileExplorer, "tuning.start", true},
-		{ProfileExplorer, "tuning.results", true},
+		{ProfileExplorer, "benchmark.record", true},
+		{ProfileExplorer, "benchmark.list", true},
+		{ProfileExplorer, "explore", true},
+		{ProfileExplorer, "tuning", true},
+		{ProfileExplorer, "explorer", true},
 		{ProfileExplorer, "deploy.apply", true},
 		{ProfileExplorer, "deploy.approve", true},
+		{ProfileExplorer, "deploy.delete", true},
 		{ProfileExplorer, "hardware.detect", true},
 		{ProfileExplorer, "knowledge.resolve", true},
-		{ProfileExplorer, "knowledge.search_configs", true},
+		{ProfileExplorer, "knowledge.search", true},
 		{ProfileExplorer, "knowledge.promote", true},
 		{ProfileExplorer, "knowledge.save", true},
+		{ProfileExplorer, "central.advise", true},
 
 		// ProfileExplorer: excluded
 		{ProfileExplorer, "model.list", false},
 		{ProfileExplorer, "agent.ask", false},
-		{ProfileExplorer, "fleet.list_devices", false},
+		{ProfileExplorer, "fleet.info", false},
+		{ProfileExplorer, "system.status", false},
 
 		// Unknown profile matches everything (backward compat)
 		{Profile("unknown"), "anything", true},

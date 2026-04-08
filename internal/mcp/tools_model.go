@@ -147,20 +147,4 @@ func registerModelTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// download.list
-	s.RegisterTool(&Tool{
-		Name:        "download.list",
-		Description: "List active and recently completed download tasks (engine and model pulls). Returns an array of download progress objects with phase, downloaded bytes, total bytes, speed, and status.",
-		InputSchema: noParamsSchema(),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.ListDownloads == nil {
-				return TextResult("[]"), nil
-			}
-			data, err := deps.ListDownloads(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("list downloads: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
 }

@@ -30,29 +30,29 @@ func registerStackTools(s *Server, deps *ToolDeps) {
 			if p.Tier == "" {
 				p.Tier = "docker"
 			}
-			switch p.Action {
-			case "status":
-				if deps.StackStatus == nil {
-					return ErrorResult("stack.status not implemented"), nil
-				}
+				switch p.Action {
+				case "status":
+					if deps.StackStatus == nil {
+						return ErrorResult("stack action=status not implemented"), nil
+					}
 				data, err := deps.StackStatus(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("stack status: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "preflight":
-				if deps.StackPreflight == nil {
-					return ErrorResult("stack.preflight not implemented"), nil
-				}
+				case "preflight":
+					if deps.StackPreflight == nil {
+						return ErrorResult("stack action=preflight not implemented"), nil
+					}
 				data, err := deps.StackPreflight(ctx, p.Tier)
 				if err != nil {
 					return nil, fmt.Errorf("stack preflight: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "init":
-				if deps.StackInit == nil {
-					return ErrorResult("stack.init not implemented"), nil
-				}
+				case "init":
+					if deps.StackInit == nil {
+						return ErrorResult("stack action=init not implemented"), nil
+					}
 				data, err := deps.StackInit(ctx, p.Tier, p.AllowDownload)
 				if err != nil {
 					return nil, fmt.Errorf("stack init: %w", err)

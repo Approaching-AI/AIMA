@@ -56,10 +56,10 @@ func registerFleetTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// fleet.exec — renamed from fleet.exec_tool, handler unchanged
+	// fleet.exec — execute any MCP tool on a remote fleet device
 	s.RegisterTool(&Tool{
 		Name:        "fleet.exec",
-		Description: "Execute any MCP tool on a remote fleet device. Agent guardrails apply to the inner tool_name.",
+		Description: "Execute any MCP tool on a remote fleet device. Nested fleet.exec calls are blocked; when invoked by the Agent, the adapter applies the same inner-tool guardrails as local calls.",
 		InputSchema: schema(
 			`"device_id":{"type":"string","description":"Device ID from fleet.info, e.g. 'gb10', 'linux-1'. Call fleet.info first if unsure."},`+
 				`"tool_name":{"type":"string","description":"MCP tool name to execute remotely, e.g. 'hardware.detect', 'model.list', 'deploy.status'. Call fleet.info with device_id to see available tools."},`+

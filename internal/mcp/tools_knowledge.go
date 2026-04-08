@@ -167,29 +167,29 @@ func registerKnowledgeTools(s *Server, deps *ToolDeps) {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-			switch p.Query {
-			case "compare":
-				if deps.CompareConfigs == nil {
-					return ErrorResult("knowledge.compare not implemented"), nil
-				}
+				switch p.Query {
+				case "compare":
+					if deps.CompareConfigs == nil {
+						return ErrorResult("knowledge.analytics query=compare not implemented"), nil
+					}
 				data, err := deps.CompareConfigs(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("compare configs: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "similar":
-				if deps.SimilarConfigs == nil {
-					return ErrorResult("knowledge.similar not implemented"), nil
-				}
+				case "similar":
+					if deps.SimilarConfigs == nil {
+						return ErrorResult("knowledge.analytics query=similar not implemented"), nil
+					}
 				data, err := deps.SimilarConfigs(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("similar configs: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "lineage":
-				if deps.LineageConfigs == nil {
-					return ErrorResult("knowledge.lineage not implemented"), nil
-				}
+				case "lineage":
+					if deps.LineageConfigs == nil {
+						return ErrorResult("knowledge.analytics query=lineage not implemented"), nil
+					}
 				var pl struct {
 					ConfigID string `json:"config_id"`
 				}
@@ -204,19 +204,19 @@ func registerKnowledgeTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("lineage %s: %w", pl.ConfigID, err)
 				}
 				return TextResult(string(data)), nil
-			case "gaps":
-				if deps.GapsKnowledge == nil {
-					return ErrorResult("knowledge.gaps not implemented"), nil
-				}
+				case "gaps":
+					if deps.GapsKnowledge == nil {
+						return ErrorResult("knowledge.analytics query=gaps not implemented"), nil
+					}
 				data, err := deps.GapsKnowledge(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("knowledge gaps: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "aggregate":
-				if deps.AggregateKnowledge == nil {
-					return ErrorResult("knowledge.aggregate not implemented"), nil
-				}
+				case "aggregate":
+					if deps.AggregateKnowledge == nil {
+						return ErrorResult("knowledge.analytics query=aggregate not implemented"), nil
+					}
 				data, err := deps.AggregateKnowledge(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("knowledge aggregate: %w", err)

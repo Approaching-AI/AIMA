@@ -2503,25 +2503,10 @@ body {
       <!-- Models Panel -->
       <div class="panel">
         <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
-        <template x-if="models.length === 0 && !downloads.some(d => d.type === 'model')">
+        <template x-if="models.length === 0">
           <div class="empty" x-text="t('no_models')"></div>
         </template>
         <ul class="panel-list">
-          <template x-for="dl in downloads.filter(d => d.type === 'model' && d.phase !== 'complete')" :key="dl.id">
-            <li>
-              <span class="dot dot-orange"></span>
-              <div style="flex:1;overflow:hidden">
-                <div x-text="dl.name" style="text-overflow:ellipsis;overflow:hidden"></div>
-                <div class="deploy-progress" style="margin-top:4px">
-                  <div class="deploy-progress-fill starting" :style="'width:' + dlPercent(dl) + '%'"></div>
-                </div>
-                <div class="deploy-phase-text">
-                  <span><span class="deploy-phase-icon">&#x25D0;</span> <span x-text="dl.message || dl.phase"></span></span>
-                  <span class="deploy-eta" x-text="dlDetail(dl)"></span>
-                </div>
-              </div>
-            </li>
-          </template>
           <template x-for="(m, mi) in models" :key="m.name || mi">
             <li class="model-list-item">
               <span class="dot" :class="modelDotClass(m.name)"></span>
@@ -2548,25 +2533,10 @@ body {
       <!-- Engines Panel -->
       <div class="panel">
         <div class="panel-title">&#x25B6; <span x-text="t('engines')"></span></div>
-        <template x-if="engines.length === 0 && !downloads.some(d => d.type === 'engine')">
+        <template x-if="engines.length === 0">
           <div class="empty" x-text="t('no_engines')"></div>
         </template>
         <ul class="panel-list">
-          <template x-for="dl in downloads.filter(d => d.type === 'engine' && d.phase !== 'complete')" :key="dl.id">
-            <li>
-              <span class="dot dot-orange"></span>
-              <div style="flex:1;overflow:hidden">
-                <div x-text="dl.name" style="text-overflow:ellipsis;overflow:hidden"></div>
-                <div class="deploy-progress" style="margin-top:4px">
-                  <div class="deploy-progress-fill starting" :style="'width:' + dlPercent(dl) + '%'"></div>
-                </div>
-                <div class="deploy-phase-text">
-                  <span><span class="deploy-phase-icon">&#x25D0;</span> <span x-text="dl.message || dl.phase"></span></span>
-                  <span class="deploy-eta" x-text="dlDetail(dl)"></span>
-                </div>
-              </div>
-            </li>
-          </template>
           <template x-for="(e, ei) in engines" :key="e.id || ei">
             <li>
               <span class="dot" :class="e.available ? 'dot-green' : 'dot-dim'"></span>
@@ -3083,7 +3053,6 @@ body {
         <div class="panel">
           <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
           <ul class="panel-list">
-            <template x-for="dl in downloads.filter(d => d.type === 'model' && d.phase !== 'complete')" :key="dl.id"><li><span class="dot dot-orange"></span><div style="flex:1;min-width:0"><div x-text="dl.name"></div><div class="deploy-progress" style="margin-top:2px"><div class="deploy-progress-fill starting" :style="'width:' + dlPercent(dl) + '%'"></div></div></div></li></template>
             <template x-for="(m, mi) in models" :key="m.name || mi">
               <li class="model-list-item">
                 <span class="dot" :class="modelDotClass(m.name)"></span>
@@ -3109,7 +3078,6 @@ body {
         <div class="panel">
           <div class="panel-title">&#x25B6; <span x-text="t('engines')"></span></div>
           <ul class="panel-list">
-            <template x-for="dl in downloads.filter(d => d.type === 'engine' && d.phase !== 'complete')" :key="dl.id"><li><span class="dot dot-orange"></span><div style="flex:1;min-width:0"><div x-text="dl.name"></div><div class="deploy-progress" style="margin-top:2px"><div class="deploy-progress-fill starting" :style="'width:' + dlPercent(dl) + '%'"></div></div></div></li></template>
             <template x-for="(e, ei) in engines" :key="e.id || ei"><li><span class="dot" :class="e.available ? 'dot-green' : 'dot-dim'"></span><span x-text="e.type"></span></li></template>
           </ul>
         </div>
@@ -4239,9 +4207,6 @@ function aimaApp() {
     selfIp: '',
     engines: [],
     models: [],
-    downloads: [],
-    _downloadTimer: null,
-    _downloadPollMs: 15000,
     deployments: [],
     modelDeploying: {},
     fleet: [],
@@ -4324,7 +4289,6 @@ function aimaApp() {
       this.pollSystemStatus();
       this.pollEngines();
       this.pollModels();
-      this.pollDownloads();
       this.pollDeployments();
       this.pollFleet();
       this.pollAgentInfo();
@@ -4333,7 +4297,6 @@ function aimaApp() {
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
-      this._downloadTimer = setInterval(() => this.pollDownloads(), this._downloadPollMs);
       this._deployPollMs = 1000;
       this._deployTimer = setInterval(() => this.pollDeployments(), 1000);
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
@@ -4347,7 +4310,6 @@ function aimaApp() {
     destroy() {
       this._timers.forEach(t => clearInterval(t));
       this._timers = [];
-      if (this._downloadTimer) clearInterval(this._downloadTimer);
       if (this._deployTimer) clearInterval(this._deployTimer);
     },
 
@@ -4819,7 +4781,7 @@ function aimaApp() {
       this.openclawClaiming = true;
       this.openclawClaimError = '';
       try {
-        const claim = await this.callTool('openclaw.claim', {});
+        const claim = await this.callTool('openclaw', { action: 'claim' });
         if (claim._err) {
           this.openclawClaimError = claim._err;
           return;
@@ -4830,7 +4792,7 @@ function aimaApp() {
           this.openclawClaimError = issues.join(' | ') || 'openclaw claim failed';
           return;
         }
-        const sync = await this.callTool('openclaw.sync', {});
+        const sync = await this.callTool('openclaw', { action: 'sync' });
         if (sync._err) {
           this.openclawClaimError = sync._err;
           return;
@@ -5497,45 +5459,6 @@ function aimaApp() {
       }
     },
 
-    async pollDownloads() {
-      const data = await this.callTool('download.list');
-      if (!data || data._err) return;
-      const list = Array.isArray(data) ? data : [];
-      const hadActive = this.downloads.some(d => d.phase !== 'complete' && d.phase !== 'failed');
-      this.downloads = list;
-      const hasActive = list.some(d => d.phase !== 'complete' && d.phase !== 'failed');
-      this._adjustDownloadPoll(hasActive);
-      if (!hasActive && hadActive) {
-        this.pollEngines();
-        this.pollModels();
-      }
-    },
-
-    _adjustDownloadPoll(fast) {
-      const targetMs = fast ? 2000 : 15000;
-      if (this._downloadTimer && this._downloadPollMs === targetMs) return;
-      if (this._downloadTimer) {
-        clearInterval(this._downloadTimer);
-      }
-      this._downloadPollMs = targetMs;
-      this._downloadTimer = setInterval(() => this.pollDownloads(), targetMs);
-    },
-
-    dlPercent(dl) {
-      if (dl.total > 0) return Math.max(2, Math.min(95, Math.round(dl.downloaded * 100 / dl.total)));
-      if (dl.phase === 'complete') return 100;
-      return 50; // indeterminate
-    },
-
-    dlDetail(dl) {
-      if (dl.speed > 0 && dl.total > 0) {
-        const pct = Math.round(dl.downloaded * 100 / dl.total);
-        return pct + '%  ' + (dl.speed / 1048576).toFixed(1) + ' MB/s';
-      }
-      if (dl.speed > 0) return (dl.speed / 1048576).toFixed(1) + ' MB/s';
-      return dl.phase;
-    },
-
     async pollDeployments() {
       const data = await this.callTool('deploy.list');
       if (!data || data._err) return;
@@ -5576,7 +5499,7 @@ function aimaApp() {
     },
 
     async pollFleet() {
-      const data = await this.callTool('fleet.list_devices');
+      const data = await this.callTool('fleet.info');
       if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       this.fleet = list.map(d => ({
@@ -5794,7 +5717,7 @@ function aimaApp() {
 
       this.messages.push({
         role: 'tool',
-        toolName: 'support.askforhelp',
+        toolName: 'support',
         args: params,
         status: 'running',
         expanded: false,
@@ -5802,7 +5725,7 @@ function aimaApp() {
       });
       this.scrollChat();
 
-      const data = await this.callTool('support.askforhelp', params);
+      const data = await this.callTool('support', params);
       const duration = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
       if (data._err) {
         const errLower = (data._err || '').toLowerCase();
@@ -5889,7 +5812,7 @@ function aimaApp() {
       const startTime = Date.now();
       this.messages.push({
         role: 'tool',
-        toolName: 'support.askforhelp',
+        toolName: 'support',
         args: params,
         status: 'running',
         expanded: false,
@@ -5897,7 +5820,7 @@ function aimaApp() {
       });
       this.scrollChat();
 
-      const data = await this.callTool('support.askforhelp', params);
+      const data = await this.callTool('support', params);
       const duration = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
       if (data._err) {
         this.messages.splice(toolIndex, 1, {
@@ -5955,7 +5878,7 @@ function aimaApp() {
       this.supportPageAwaitingDescription = false;
       this.appendSupportPageMessage(this.t('support_connecting'), 'info');
 
-      const data = await this.callTool('support.askforhelp', {});
+      const data = await this.callTool('support', {});
 
       if (data._err) {
         const errLower = (data._err || '').toLowerCase();
@@ -6006,7 +5929,7 @@ function aimaApp() {
         params.invite_code = this.supportPageCode.trim();
       }
 
-      const data = await this.callTool('support.askforhelp', params);
+      const data = await this.callTool('support', params);
       this.supportPageConnecting = false;
 
       if (data._err) {
@@ -6064,7 +5987,7 @@ function aimaApp() {
       this.appendSupportPageMessage(description, 'choice');
       this.supportPageConnecting = true;
       this.supportPageError = '';
-      const data = await this.callTool('support.askforhelp', { description: description });
+      const data = await this.callTool('support', { description: description });
       this.supportPageConnecting = false;
       if (data._err) {
         this.supportPageError = data._err;
@@ -6240,8 +6163,8 @@ function aimaApp() {
         'engines': 'engine.list',
         'deployments': 'deploy.list',
         'deploys': 'deploy.list',
-        'fleet': 'fleet.list_devices',
-        'devices': 'fleet.list_devices'
+        'fleet': 'fleet.info',
+        'devices': 'fleet.info'
       };
 
       const lower = text.toLowerCase().trim();
@@ -6344,7 +6267,6 @@ function aimaApp() {
             this.pollSystemStatus();
             this.pollEngines();
             this.pollModels();
-            this.pollDownloads();
             this.pollDeployments();
           }
         }

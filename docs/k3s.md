@@ -62,7 +62,7 @@ k3s server \
 
 ### Pod YAML 生成
 
-Pod YAML 由 knowledge.generate_pod 从知识资产模板生成：
+Pod YAML 由 `deploy.dry_run(output=pod_yaml)` 通过当前有效配置生成，底层仍复用统一的 Pod 模板渲染逻辑：
 
 ```go
 func GeneratePod(engine Asset, model Asset, slot Slot) ([]byte, error) {

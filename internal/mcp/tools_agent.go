@@ -7,7 +7,7 @@ import (
 )
 
 func registerAgentTools(s *Server, deps *ToolDeps) {
-	// support — renamed from support.askforhelp
+	// support — connect the device to the support service and optionally create a help task
 	s.RegisterTool(&Tool{
 		Name:        "support",
 		Description: "Connect this AIMA instance to the support service (https://aimaserver.com/platform) as a device, and optionally create a remote help task from a natural-language description.",

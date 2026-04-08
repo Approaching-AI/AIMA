@@ -559,6 +559,110 @@ func TestToolsCall_HardwareDetect(t *testing.T) {
 	}
 }
 
+func TestCatalogListPartitions(t *testing.T) {
+	s := NewServer()
+	deps := &ToolDeps{
+		ListPartitionStrategies: func(ctx context.Context) (json.RawMessage, error) {
+			return json.RawMessage(`[{"metadata":{"name":"primary"},"slots":[{"name":"default"}]}]`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"catalog.list","arguments":{"kind":"partitions"}}}`
+	resp, err := s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var r jsonrpcResponse
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if r.Error != nil {
+		t.Fatalf("unexpected error: %+v", r.Error)
+	}
+
+	raw, _ := json.Marshal(r.Result)
+	var tr ToolResult
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if tr.IsError {
+		t.Fatalf("catalog.list partitions returned error: %+v", tr)
+	}
+	if !strings.Contains(tr.Content[0].Text, `"name":"primary"`) {
+		t.Fatalf("unexpected partitions payload: %s", tr.Content[0].Text)
+	}
+
+	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"catalog.list","arguments":{"kind":"all"}}}`
+	resp, err = s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage(all): %v", err)
+	}
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response(all): %v", err)
+	}
+	raw, _ = json.Marshal(r.Result)
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result(all): %v", err)
+	}
+	if !strings.Contains(tr.Content[0].Text, `"partitions"`) {
+		t.Fatalf("catalog.list all missing partitions payload: %s", tr.Content[0].Text)
+	}
+}
+
+func TestDeployDryRunPodYamlUsesEffectiveOverrides(t *testing.T) {
+	s := NewServer()
+	var gotModel, gotEngine, gotSlot string
+	var gotConfig map[string]any
+	deps := &ToolDeps{
+		GeneratePod: func(ctx context.Context, model, engine, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			gotModel, gotEngine, gotSlot = model, engine, slot
+			gotConfig = make(map[string]any, len(configOverrides))
+			for k, v := range configOverrides {
+				gotConfig[k] = v
+			}
+			return json.RawMessage(`pod-yaml`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deploy.dry_run","arguments":{"model":"qwen3-0.6b","engine":"vllm","slot":"slot-1","config":{"gpu_memory_utilization":0.8},"max_cold_start_s":55,"output":"pod_yaml"}}}`
+	resp, err := s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var r jsonrpcResponse
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if r.Error != nil {
+		t.Fatalf("unexpected error: %+v", r.Error)
+	}
+
+	raw, _ := json.Marshal(r.Result)
+	var tr ToolResult
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if tr.IsError {
+		t.Fatalf("deploy.dry_run pod_yaml returned error: %+v", tr)
+	}
+	if tr.Content[0].Text != "pod-yaml" {
+		t.Fatalf("unexpected pod yaml payload: %s", tr.Content[0].Text)
+	}
+	if gotModel != "qwen3-0.6b" || gotEngine != "vllm" || gotSlot != "slot-1" {
+		t.Fatalf("GeneratePod args = %q/%q/%q, want qwen3-0.6b/vllm/slot-1", gotModel, gotEngine, gotSlot)
+	}
+	if v, ok := gotConfig["gpu_memory_utilization"].(float64); !ok || v != 0.8 {
+		t.Fatalf("gpu_memory_utilization = %v, want 0.8", gotConfig["gpu_memory_utilization"])
+	}
+	if v, ok := gotConfig["max_cold_start_s"].(int); !ok || v != 55 {
+		t.Fatalf("max_cold_start_s = %v, want 55", gotConfig["max_cold_start_s"])
+	}
+}
+
 func TestToolsCall_NilDep(t *testing.T) {
 	s := NewServer()
 	deps := &ToolDeps{} // all nil
@@ -707,8 +811,8 @@ func TestProfileMatches(t *testing.T) {
 		{ProfileOperator, "deploy.dry_run", true},
 		{ProfileOperator, "system.status", true},
 		{ProfileOperator, "system.config", true},
-		{ProfileOperator, "fleet.info", true},  // fleet. prefix
-		{ProfileOperator, "fleet.exec", true},  // fleet. prefix
+		{ProfileOperator, "fleet.info", true}, // fleet. prefix
+		{ProfileOperator, "fleet.exec", true}, // fleet. prefix
 		{ProfileOperator, "scenario.apply", true},
 		{ProfileOperator, "scenario.show", true},
 
@@ -805,9 +909,9 @@ func TestListToolsIgnoresProfile(t *testing.T) {
 		"hardware.detect", "hardware.metrics",
 		"model.list", "model.scan",
 		"deploy.apply", "deploy.list",
-		"knowledge.resolve", "knowledge.compare", "knowledge.gaps",
-		"agent.ask", "agent.patrol_status",
-		"benchmark.run", "explore.start", "tuning.start",
+		"knowledge.resolve", "knowledge.analytics", "knowledge.evaluate",
+		"agent.ask", "patrol",
+		"benchmark.run", "explore", "tuning",
 	}
 	for _, name := range toolNames {
 		s.RegisterTool(&Tool{
@@ -851,35 +955,35 @@ func TestListToolsIgnoresProfile(t *testing.T) {
 func TestExecuteToolIgnoresProfile(t *testing.T) {
 	s := NewServer()
 	s.RegisterTool(&Tool{
-		Name:        "knowledge.gaps",
+		Name:        "knowledge.analytics",
 		Description: "test",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			return TextResult("gaps result"), nil
+			return TextResult("analytics result"), nil
 		},
 	})
 
-	// Set operator profile — knowledge.gaps is NOT in this profile
+	// Set operator profile — knowledge.analytics is NOT in this profile
 	s.SetProfile(ProfileOperator)
 
 	// Internal ListTools should still include it.
 	defs := s.ListTools()
 	found := false
 	for _, d := range defs {
-		if d.Name == "knowledge.gaps" {
+		if d.Name == "knowledge.analytics" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("knowledge.gaps should still be visible to internal ListTools callers")
+		t.Error("knowledge.analytics should still be visible to internal ListTools callers")
 	}
 
 	// But ExecuteTool should still work
-	result, err := s.ExecuteTool(context.Background(), "knowledge.gaps", json.RawMessage(`{}`))
+	result, err := s.ExecuteTool(context.Background(), "knowledge.analytics", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
 	}
-	if result.Content[0].Text != "gaps result" {
+	if result.Content[0].Text != "analytics result" {
 		t.Errorf("unexpected result: %s", result.Content[0].Text)
 	}
 }
@@ -895,7 +999,7 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		},
 	})
 	s.RegisterTool(&Tool{
-		Name:        "tuning.start",
+		Name:        "tuning",
 		Description: "tune",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -903,7 +1007,7 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		},
 	})
 
-	// Set operator profile — tuning.start should be hidden
+	// Set operator profile — tuning should be hidden
 	s.SetProfile(ProfileOperator)
 
 	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
@@ -925,8 +1029,8 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		t.Errorf("expected deploy.apply, got %s", tool["name"])
 	}
 
-	// But tuning.start can still be called
-	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tuning.start","arguments":{}}}`
+	// But tuning can still be called
+	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tuning","arguments":{"action":"status"}}}`
 	resp, err = s.HandleMessage(context.Background(), []byte(callMsg))
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)

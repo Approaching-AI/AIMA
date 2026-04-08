@@ -16,7 +16,7 @@ Use AIMA MCP tools for local inference operations on this device.
 - `deploy.list`, `deploy.status`, `deploy.apply`, `deploy.delete`, and `deploy.logs` for deployment work
 - `knowledge.resolve` before changing engine/model combinations
 - `benchmark.run` after major deployment changes
-- `openclaw.status` and `openclaw.sync` for OpenClaw integration drift
+- `openclaw` with `action=status|sync|claim` for OpenClaw integration drift
 
 ## Operating rules
 

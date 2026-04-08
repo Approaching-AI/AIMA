@@ -953,7 +953,7 @@ type modelData struct {
 
 // sanitizeToolName converts MCP dot-separated names to LLM-compatible names.
 // "deploy.apply" → "deploy__apply" (double underscore to avoid collision with
-// names that naturally contain single underscores like "fleet.list_devices").
+// names that naturally contain single underscores after sanitization).
 func sanitizeToolName(name string) string {
 	if !strings.Contains(name, ".") {
 		return name

@@ -18,8 +18,8 @@ import (
 	state "github.com/jguan/aima/internal"
 )
 
-// buildEngineDeps wires engine.scan, engine.list, engine.info, engine.pull,
-// engine.import, engine.remove, engine.plan, and download.list tools.
+// buildEngineDeps wires the current engine management surface:
+// engine.scan, engine.list, engine.info, engine.pull, engine.import, and engine.remove.
 func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 	scanEnginesCore func(ctx context.Context, runtimeFilter string, autoImport bool) (json.RawMessage, error),
 	dlTracker *DownloadTracker,

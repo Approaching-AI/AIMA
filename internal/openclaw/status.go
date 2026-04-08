@@ -105,12 +105,12 @@ func Inspect(ctx context.Context, deps *Deps) (*Status, error) {
 	mcpReady := status.MCPServer == nil || status.MCPServer.Registered
 	status.SyncReady = summariesEqual(status.Expected, status.Configured) && mcpReady && pluginReady
 	if status.ClaimNeeded {
-		status.Issues = append(status.Issues, "legacy OpenClaw config points to the AIMA proxy but is not yet claimed; run openclaw.claim")
+		status.Issues = append(status.Issues, "legacy OpenClaw config points to the AIMA proxy but is not yet claimed; run openclaw with action=claim")
 	}
 	if status.MCPServer != nil {
 		switch {
 		case !status.ConfigExists:
-			status.Issues = append(status.Issues, "openclaw.json not found; run openclaw.sync to register the AIMA MCP server")
+			status.Issues = append(status.Issues, "openclaw.json not found; run openclaw with action=sync to register the AIMA MCP server")
 		case !status.MCPServer.Registered:
 			status.Issues = append(status.Issues, "mcp.servers.aima is missing from openclaw.json")
 		case !status.MCPServer.Managed:
@@ -120,7 +120,7 @@ func Inspect(ctx context.Context, deps *Deps) (*Status, error) {
 	if summaryCount(status.Expected) > 0 {
 		switch {
 		case !status.ConfigExists:
-			status.Issues = append(status.Issues, "openclaw.json not found; run openclaw.sync to export AIMA providers")
+			status.Issues = append(status.Issues, "openclaw.json not found; run openclaw with action=sync to export AIMA providers")
 		case !status.AIMAConfigured && !status.ClaimNeeded:
 			status.Issues = append(status.Issues, "AIMA providers are not present in openclaw.json")
 		case !status.SyncReady:

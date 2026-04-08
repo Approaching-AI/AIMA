@@ -40,13 +40,14 @@ type ToolDeps struct {
 	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
 
 	// Knowledge
-	ResolveConfig    func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
-	SearchKnowledge  func(ctx context.Context, filter map[string]string) (json.RawMessage, error)
-	SaveKnowledge    func(ctx context.Context, note json.RawMessage) error
-	GeneratePod      func(ctx context.Context, model, engine, slot string) (json.RawMessage, error)
-	ListProfiles     func(ctx context.Context) (json.RawMessage, error)
-	ListEngineAssets func(ctx context.Context) (json.RawMessage, error)
-	ListModelAssets  func(ctx context.Context) (json.RawMessage, error)
+	ResolveConfig           func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
+	SearchKnowledge         func(ctx context.Context, filter map[string]string) (json.RawMessage, error)
+	SaveKnowledge           func(ctx context.Context, note json.RawMessage) error
+	GeneratePod             func(ctx context.Context, model, engine, slot string, configOverrides map[string]any) (json.RawMessage, error)
+	ListProfiles            func(ctx context.Context) (json.RawMessage, error)
+	ListEngineAssets        func(ctx context.Context) (json.RawMessage, error)
+	ListModelAssets         func(ctx context.Context) (json.RawMessage, error)
+	ListPartitionStrategies func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
 	RecordBenchmark    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)

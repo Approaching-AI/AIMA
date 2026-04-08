@@ -20,6 +20,8 @@ func NewLLMPlanner(agent *Agent) *LLMPlanner {
 
 func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, error) {
 	prompt := buildPlannerPrompt(input)
+	// The planner emits a pure JSON plan and does not request tool calls.
+	// It intentionally bypasses profile-filtered tool discovery.
 	resp, err := p.agent.llm.ChatCompletion(ctx, []Message{
 		{Role: "system", Content: llmPlannerSystemPrompt},
 		{Role: "user", Content: prompt},

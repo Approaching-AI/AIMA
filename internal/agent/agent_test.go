@@ -1068,18 +1068,24 @@ func TestTunerStartDerivesDefaultParametersFromResolvedEngine(t *testing.T) {
 
 func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
 	var deployArgs []map[string]any
+	var benchmarkArgs []map[string]any
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 			switch name {
-			case "deploy.apply":
+			case "deploy.run":
 				var payload map[string]any
 				if err := json.Unmarshal(arguments, &payload); err != nil {
 					t.Fatalf("unmarshal deploy args: %v", err)
 				}
 				deployArgs = append(deployArgs, payload)
-				return &ToolResult{Content: `{"status":"ok"}`}, nil
+				return &ToolResult{Content: `{"status":"ready","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
 			case "benchmark.run":
+				var payload map[string]any
+				if err := json.Unmarshal(arguments, &payload); err != nil {
+					t.Fatalf("unmarshal benchmark args: %v", err)
+				}
+				benchmarkArgs = append(benchmarkArgs, payload)
 				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
 			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
@@ -1124,15 +1130,27 @@ func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
 		t.Fatalf("ttft_p95 = %v, want 123.4", session.Results[0].TTFTP95Ms)
 	}
 	if len(deployArgs) != 2 {
-		t.Fatalf("deploy.apply calls = %d, want 2", len(deployArgs))
+		t.Fatalf("deploy.run calls = %d, want 2", len(deployArgs))
 	}
 	for _, payload := range deployArgs {
 		if _, ok := payload["config"]; !ok {
 			t.Fatalf("deploy payload missing config field: %#v", payload)
 		}
+		if payload["no_pull"] != true {
+			t.Fatalf("deploy no_pull = %#v, want true", payload["no_pull"])
+		}
 		if _, ok := payload["config_overrides"]; ok {
 			t.Fatalf("deploy payload still uses config_overrides: %#v", payload)
 		}
+	}
+	if len(benchmarkArgs) != 1 {
+		t.Fatalf("benchmark.run calls = %d, want 1", len(benchmarkArgs))
+	}
+	if benchmarkArgs[0]["endpoint"] != "http://127.0.0.1:30000/v1/chat/completions" {
+		t.Fatalf("benchmark endpoint = %#v, want direct deployment endpoint", benchmarkArgs[0]["endpoint"])
+	}
+	if _, ok := benchmarkArgs[0]["deploy_config"]; !ok {
+		t.Fatalf("benchmark args missing deploy_config: %#v", benchmarkArgs[0])
 	}
 }
 
@@ -1147,8 +1165,8 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 			switch name {
-			case "deploy.apply":
-				return &ToolResult{Content: `{"status":"ok"}`}, nil
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
 			case "benchmark.run":
 				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
 			default:
@@ -1168,6 +1186,10 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 		},
 		SearchSpace: map[string][]any{
 			"gpu_memory_utilization": {0.8},
+		},
+		Benchmark: ExplorationBenchmarkProfile{
+			Concurrency: 2,
+			Rounds:      3,
 		},
 		Constraints: ExplorationConstraints{
 			MaxCandidates: 1,
@@ -1199,6 +1221,26 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 	if len(status.Events) < 2 {
 		t.Fatalf("events = %d, want at least 2", len(status.Events))
 	}
+	var tuningEvent *state.ExplorationEvent
+	for _, event := range status.Events {
+		if event.ToolName == "tuning" && event.Status == "running" {
+			tuningEvent = event
+			break
+		}
+	}
+	if tuningEvent == nil {
+		t.Fatalf("expected tuning running event, got %#v", status.Events)
+	}
+	var request map[string]any
+	if err := json.Unmarshal([]byte(tuningEvent.RequestJSON), &request); err != nil {
+		t.Fatalf("Unmarshal tuning request: %v", err)
+	}
+	if got := request["concurrency"]; got != float64(2) {
+		t.Fatalf("tuning request concurrency = %v, want 2", got)
+	}
+	if got := request["rounds"]; got != float64(3) {
+		t.Fatalf("tuning request rounds = %v, want 3", got)
+	}
 }
 
 func TestExplorationManagerValidatePersistsRun(t *testing.T) {
@@ -1211,23 +1253,33 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
-			if name != "benchmark.run" {
+			switch name {
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","name":"qwen3-8b-vllm","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
+			case "benchmark.run":
+				var args map[string]any
+				if err := json.Unmarshal(arguments, &args); err != nil {
+					t.Fatalf("Unmarshal benchmark args: %v", err)
+				}
+				if args["model"] != "qwen3-8b" {
+					t.Fatalf("model = %v, want qwen3-8b", args["model"])
+				}
+				if args["hardware"] != "nvidia-gb10-arm64" {
+					t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
+				}
+				if args["engine"] != "vllm" {
+					t.Fatalf("engine = %v, want vllm", args["engine"])
+				}
+				if args["endpoint"] != "http://127.0.0.1:30000/v1/chat/completions" {
+					t.Fatalf("endpoint = %v, want direct deployment endpoint", args["endpoint"])
+				}
+				if _, ok := args["deploy_config"]; !ok {
+					t.Fatalf("deploy_config missing from benchmark args: %#v", args)
+				}
+				return &ToolResult{Content: `{"result":{"throughput_tps":51.2},"saved":true,"benchmark_id":"bench-001","config_id":"cfg-001"}`}, nil
+			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
 			}
-			var args map[string]any
-			if err := json.Unmarshal(arguments, &args); err != nil {
-				t.Fatalf("Unmarshal benchmark args: %v", err)
-			}
-			if args["model"] != "qwen3-8b" {
-				t.Fatalf("model = %v, want qwen3-8b", args["model"])
-			}
-			if args["hardware"] != "nvidia-gb10-arm64" {
-				t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
-			}
-			if args["engine"] != "vllm" {
-				t.Fatalf("engine = %v, want vllm", args["engine"])
-			}
-			return &ToolResult{Content: `{"result":{"throughput_tps":51.2},"saved":true,"benchmark_id":"bench-001","config_id":"cfg-001"}`}, nil
 		},
 	}
 
@@ -1267,14 +1319,17 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 	if status.Run.SummaryJSON == "" {
 		t.Fatal("expected summary_json to be populated")
 	}
-	if len(status.Events) != 2 {
-		t.Fatalf("events = %d, want 2", len(status.Events))
+	if len(status.Events) != 4 {
+		t.Fatalf("events = %d, want 4", len(status.Events))
 	}
-	if status.Events[1].ToolName != "benchmark.run" {
-		t.Fatalf("tool name = %q, want benchmark.run", status.Events[1].ToolName)
+	if status.Events[1].ToolName != "deploy.run" {
+		t.Fatalf("tool name = %q, want deploy.run", status.Events[1].ToolName)
 	}
-	if status.Events[1].ArtifactID != "bench-001" {
-		t.Fatalf("artifact_id = %q, want bench-001", status.Events[1].ArtifactID)
+	if status.Events[3].ToolName != "benchmark.run" {
+		t.Fatalf("tool name = %q, want benchmark.run", status.Events[3].ToolName)
+	}
+	if status.Events[3].ArtifactID != "bench-001" {
+		t.Fatalf("artifact_id = %q, want bench-001", status.Events[3].ArtifactID)
 	}
 }
 
@@ -1292,10 +1347,14 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
-			if name != "benchmark.run" {
+			switch name {
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","name":"qwen3-8b-vllm","address":"127.0.0.1:30001","config":{"gpu_memory_utilization":0.82}}`}, nil
+			case "benchmark.run":
+				return &ToolResult{Content: `{"result":{"throughput_tps":48.9},"saved":true,"benchmark_id":"bench-oq-001","config_id":"cfg-oq-001"}`}, nil
+			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
 			}
-			return &ToolResult{Content: `{"result":{"throughput_tps":48.9},"saved":true,"benchmark_id":"bench-oq-001","config_id":"cfg-oq-001"}`}, nil
 		},
 	}
 
@@ -1343,11 +1402,11 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 	if !strings.Contains(question.ActualResult, `"benchmark_id":"bench-oq-001"`) {
 		t.Fatalf("actual_result = %q, want benchmark reference", question.ActualResult)
 	}
-	if len(status.Events) != 3 {
-		t.Fatalf("events = %d, want 3", len(status.Events))
+	if len(status.Events) != 5 {
+		t.Fatalf("events = %d, want 5", len(status.Events))
 	}
-	if status.Events[2].ToolName != "knowledge.open_questions" {
-		t.Fatalf("tool name = %q, want knowledge.open_questions", status.Events[2].ToolName)
+	if status.Events[4].ToolName != "knowledge.open_questions" {
+		t.Fatalf("tool name = %q, want knowledge.open_questions", status.Events[4].ToolName)
 	}
 }
 

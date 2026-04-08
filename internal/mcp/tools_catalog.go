@@ -10,9 +10,9 @@ func registerCatalogTools(s *Server, deps *ToolDeps) {
 	// catalog.list — kind param dispatches to different listing functions
 	s.RegisterTool(&Tool{
 		Name:        "catalog.list",
-		Description: "List catalog assets. kind=profiles: hardware profiles with GPU/CPU/RAM vectors. kind=engines: engine assets with hardware requirements. kind=models: model assets with variants and sources. kind=scenarios: deployment scenario recipes. kind=summary: counts of all asset types. kind=status: factory vs overlay asset counts. kind=all: all of the above combined.",
+		Description: "List catalog assets. kind=profiles: hardware profiles with GPU/CPU/RAM vectors. kind=engines: engine assets with hardware requirements. kind=models: model assets with variants and sources. kind=partitions: partition strategies. kind=scenarios: deployment scenario recipes. kind=summary: counts of all asset types. kind=status: factory vs overlay asset counts. kind=all: all of the above combined.",
 		InputSchema: schema(
-			`"kind":{"type":"string","enum":["profiles","engines","models","scenarios","summary","status","all"],"description":"Asset kind to list"}`,
+			`"kind":{"type":"string","enum":["profiles","engines","models","partitions","scenarios","summary","status","all"],"description":"Asset kind to list"}`,
 			"kind"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			var p struct {
@@ -53,6 +53,16 @@ func registerCatalogTools(s *Server, deps *ToolDeps) {
 				data, err := deps.ListModelAssets(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("list model assets: %w", err)
+				}
+				return TextResult(string(data)), nil
+
+			case "partitions":
+				if deps.ListPartitionStrategies == nil {
+					return ErrorResult("catalog.list partitions not implemented"), nil
+				}
+				data, err := deps.ListPartitionStrategies(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("list partition strategies: %w", err)
 				}
 				return TextResult(string(data)), nil
 
@@ -103,6 +113,11 @@ func registerCatalogTools(s *Server, deps *ToolDeps) {
 						result["models"] = data
 					}
 				}
+				if deps.ListPartitionStrategies != nil {
+					if data, err := deps.ListPartitionStrategies(ctx); err == nil {
+						result["partitions"] = data
+					}
+				}
 				if deps.ScenarioList != nil {
 					if data, err := deps.ScenarioList(ctx); err == nil {
 						result["scenarios"] = data
@@ -122,7 +137,7 @@ func registerCatalogTools(s *Server, deps *ToolDeps) {
 				return TextResult(string(out)), nil
 
 			default:
-				return ErrorResult(fmt.Sprintf("unknown kind %q; supported: profiles, engines, models, scenarios, summary, status, all", p.Kind)), nil
+				return ErrorResult(fmt.Sprintf("unknown kind %q; supported: profiles, engines, models, partitions, scenarios, summary, status, all", p.Kind)), nil
 			}
 		},
 	})

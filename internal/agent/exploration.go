@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,14 @@ type benchmarkStepResult struct {
 	ResponseJSON string
 	BenchmarkID  string
 	ConfigID     string
+}
+
+type deploymentStepResult struct {
+	RequestJSON  string
+	ResponseJSON string
+	Address      string
+	Endpoint     string
+	Config       map[string]any
 }
 
 type ExplorationStart struct {
@@ -245,13 +254,23 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 		MaxConfigs:  plan.Constraints.MaxCandidates,
 	}
 
-	requestJSON, _ := json.Marshal(tuningConfig)
+	requestJSON, _ := json.Marshal(map[string]any{
+		"action":      "start",
+		"model":       tuningConfig.Model,
+		"hardware":    tuningConfig.Hardware,
+		"engine":      tuningConfig.Engine,
+		"endpoint":    tuningConfig.Endpoint,
+		"parameters":  tuningConfig.Parameters,
+		"concurrency": tuningConfig.Concurrency,
+		"rounds":      tuningConfig.Rounds,
+		"max_configs": tuningConfig.MaxConfigs,
+	})
 	_ = m.db.InsertExplorationEvent(context.Background(), &state.ExplorationEvent{
 		RunID:       run.ID,
 		StepIndex:   0,
 		StepKind:    "tune",
 		Status:      "running",
-		ToolName:    "tuning.start",
+		ToolName:    "tuning",
 		RequestJSON: string(requestJSON),
 	})
 
@@ -267,7 +286,7 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 			StepIndex:    0,
 			StepKind:     "tune",
 			Status:       "failed",
-			ToolName:     "tuning.start",
+			ToolName:     "tuning",
 			ResponseJSON: string(responseJSON),
 		})
 		return
@@ -301,7 +320,7 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 				StepIndex:    0,
 				StepKind:     "tune",
 				Status:       "completed",
-				ToolName:     "tuning.start",
+				ToolName:     "tuning",
 				ResponseJSON: string(summaryJSON),
 				ArtifactType: "tuning_session",
 				ArtifactID:   session.ID,
@@ -316,7 +335,7 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 				StepIndex:    0,
 				StepKind:     "tune",
 				Status:       "cancelled",
-				ToolName:     "tuning.start",
+				ToolName:     "tuning",
 				ResponseJSON: string(summaryJSON),
 				ArtifactType: "tuning_session",
 				ArtifactID:   session.ID,
@@ -332,7 +351,7 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 				StepIndex:    0,
 				StepKind:     "tune",
 				Status:       "failed",
-				ToolName:     "tuning.start",
+				ToolName:     "tuning",
 				ResponseJSON: string(summaryJSON),
 				ArtifactType: "tuning_session",
 				ArtifactID:   session.ID,
@@ -564,6 +583,14 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 }
 
 func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*benchmarkStepResult, error) {
+	var deployStep *deploymentStepResult
+	if strings.TrimSpace(plan.BenchmarkProfile.Endpoint) == "" {
+		var err error
+		deployStep, err = m.executeDeployStep(ctx, run, plan, stepKind, stepIndex)
+		if err != nil {
+			return nil, err
+		}
+	}
 	benchArgs := map[string]any{
 		"model":       plan.Target.Model,
 		"concurrency": plan.BenchmarkProfile.Concurrency,
@@ -571,6 +598,8 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 	}
 	if plan.BenchmarkProfile.Endpoint != "" {
 		benchArgs["endpoint"] = plan.BenchmarkProfile.Endpoint
+	} else if deployStep != nil && deployStep.Endpoint != "" {
+		benchArgs["endpoint"] = deployStep.Endpoint
 	}
 	if plan.Target.Hardware != "" {
 		benchArgs["hardware"] = plan.Target.Hardware
@@ -578,6 +607,9 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 	}
 	if plan.Target.Engine != "" {
 		benchArgs["engine"] = plan.Target.Engine
+	}
+	if deployStep != nil && len(deployStep.Config) > 0 {
+		benchArgs["deploy_config"] = deployStep.Config
 	}
 	if _, ok := benchArgs["save"]; !ok {
 		benchArgs["save"] = false
@@ -643,6 +675,75 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 	}, nil
 }
 
+func (m *ExplorationManager) executeDeployStep(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*deploymentStepResult, error) {
+	deployArgs := map[string]any{
+		"model":   plan.Target.Model,
+		"no_pull": true,
+	}
+	if plan.Target.Engine != "" {
+		deployArgs["engine"] = plan.Target.Engine
+	}
+
+	requestJSON, _ := json.Marshal(deployArgs)
+	_ = m.db.InsertExplorationEvent(context.Background(), &state.ExplorationEvent{
+		RunID:       run.ID,
+		StepIndex:   stepIndex,
+		StepKind:    stepKind,
+		Status:      "running",
+		ToolName:    "deploy.run",
+		RequestJSON: string(requestJSON),
+	})
+
+	result, err := m.tools.ExecuteTool(ctx, "deploy.run", requestJSON)
+	if err == nil {
+		err = toolResultError(result)
+	}
+	if err != nil {
+		responseJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+		_ = m.db.InsertExplorationEvent(context.Background(), &state.ExplorationEvent{
+			RunID:        run.ID,
+			StepIndex:    stepIndex,
+			StepKind:     stepKind,
+			Status:       "failed",
+			ToolName:     "deploy.run",
+			RequestJSON:  string(requestJSON),
+			ResponseJSON: string(responseJSON),
+		})
+		return nil, err
+	}
+
+	var summary struct {
+		Name    string         `json:"name"`
+		Address string         `json:"address"`
+		Config  map[string]any `json:"config"`
+	}
+	_ = json.Unmarshal([]byte(result.Content), &summary)
+	endpoint := openAIChatCompletionsEndpoint(summary.Address)
+	if endpoint == "" {
+		return nil, fmt.Errorf("deploy.run did not return a ready address")
+	}
+
+	_ = m.db.InsertExplorationEvent(context.Background(), &state.ExplorationEvent{
+		RunID:        run.ID,
+		StepIndex:    stepIndex,
+		StepKind:     stepKind,
+		Status:       "completed",
+		ToolName:     "deploy.run",
+		RequestJSON:  string(requestJSON),
+		ResponseJSON: result.Content,
+		ArtifactType: "deployment",
+		ArtifactID:   summary.Name,
+	})
+
+	return &deploymentStepResult{
+		RequestJSON:  string(requestJSON),
+		ResponseJSON: result.Content,
+		Address:      summary.Address,
+		Endpoint:     endpoint,
+		Config:       summary.Config,
+	}, nil
+}
+
 func buildOpenQuestionActualResult(question *state.OpenQuestion, plan ExplorationPlan, stepResult *benchmarkStepResult) string {
 	payload := map[string]any{
 		"question_id":  question.ID,
@@ -670,6 +771,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func openAIChatCompletionsEndpoint(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		address = "http://" + address
+	}
+	return strings.TrimRight(address, "/") + "/v1/chat/completions"
 }
 
 func buildTuningParams(searchSpace map[string][]any) []TunableParam {

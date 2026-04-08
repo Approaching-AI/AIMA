@@ -117,20 +117,20 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-			switch p.Action {
-			case "start":
-				if deps.ExploreStart == nil {
-					return ErrorResult("explore.start not implemented"), nil
-				}
+				switch p.Action {
+				case "start":
+					if deps.ExploreStart == nil {
+						return ErrorResult("explore action=start not implemented"), nil
+					}
 				data, err := deps.ExploreStart(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("explore start: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "status":
-				if deps.ExploreStatus == nil {
-					return ErrorResult("explore.status not implemented"), nil
-				}
+				case "status":
+					if deps.ExploreStatus == nil {
+						return ErrorResult("explore action=status not implemented"), nil
+					}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=status"), nil
 				}
@@ -139,10 +139,10 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explore status: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "stop":
-				if deps.ExploreStop == nil {
-					return ErrorResult("explore.stop not implemented"), nil
-				}
+				case "stop":
+					if deps.ExploreStop == nil {
+						return ErrorResult("explore action=stop not implemented"), nil
+					}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=stop"), nil
 				}
@@ -151,10 +151,10 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explore stop: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "result":
-				if deps.ExploreResult == nil {
-					return ErrorResult("explore.result not implemented"), nil
-				}
+				case "result":
+					if deps.ExploreResult == nil {
+						return ErrorResult("explore action=result not implemented"), nil
+					}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=result"), nil
 				}
@@ -249,20 +249,20 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-			switch p.Action {
-			case "status":
-				if deps.ExplorerStatus == nil {
-					return ErrorResult("explorer.status not implemented"), nil
-				}
+				switch p.Action {
+				case "status":
+					if deps.ExplorerStatus == nil {
+						return ErrorResult("explorer action=status not implemented"), nil
+					}
 				data, err := deps.ExplorerStatus(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("explorer status: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "config":
-				if deps.ExplorerConfig == nil {
-					return ErrorResult("explorer.config not implemented"), nil
-				}
+				case "config":
+					if deps.ExplorerConfig == nil {
+						return ErrorResult("explorer action=config not implemented"), nil
+					}
 				// Remap config_action → action for the underlying dep
 				var rawP map[string]json.RawMessage
 				if err := json.Unmarshal(params, &rawP); err != nil {
@@ -286,10 +286,10 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explorer config: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "trigger":
-				if deps.ExplorerTrigger == nil {
-					return ErrorResult("explorer.trigger not implemented"), nil
-				}
+				case "trigger":
+					if deps.ExplorerTrigger == nil {
+						return ErrorResult("explorer action=trigger not implemented"), nil
+					}
 				data, err := deps.ExplorerTrigger(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("explorer trigger: %w", err)

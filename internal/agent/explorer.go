@@ -582,7 +582,7 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 		}
 	}
 
-	// Gather gaps via knowledge.gaps tool
+		// Gather gaps via the consolidated knowledge analytics path.
 	if e.gatherGaps != nil {
 		gaps, err := e.gatherGaps(ctx)
 		if err == nil {

@@ -54,9 +54,12 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 		return db.InsertNote(ctx, &n)
 	}
-	deps.GeneratePod = func(ctx context.Context, modelName, engineType, slot string) (json.RawMessage, error) {
+	deps.GeneratePod = func(ctx context.Context, modelName, engineType, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-		overrides := map[string]any{}
+		overrides := make(map[string]any, len(configOverrides)+1)
+		for k, v := range configOverrides {
+			overrides[k] = v
+		}
 		if slot != "" {
 			overrides["slot"] = slot
 		}
@@ -89,6 +92,9 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 	deps.ListModelAssets = func(ctx context.Context) (json.RawMessage, error) {
 		return json.Marshal(cat.ModelAssets)
+	}
+	deps.ListPartitionStrategies = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(cat.PartitionStrategies)
 	}
 
 	// Knowledge query (enhanced -- SQLite relational queries)
@@ -254,9 +260,9 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		var envelope struct {
 			SchemaVersion int `json:"schema_version"`
 			Data          struct {
-				Configurations   []*state.Configuration  `json:"configurations"`
+				Configurations   []*state.Configuration   `json:"configurations"`
 				BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
-				KnowledgeNotes   []*state.KnowledgeNote  `json:"knowledge_notes"`
+				KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
@@ -426,9 +432,10 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 
 		summary := map[string]any{
-			"hardware_profiles": len(profiles),
-			"engine_assets":     len(engines),
-			"model_assets":      len(models),
+			"hardware_profiles":    len(profiles),
+			"engine_assets":        len(engines),
+			"model_assets":         len(models),
+			"partition_strategies": len(cat.PartitionStrategies),
 		}
 
 		profileNames := make([]string, 0, len(profiles))
@@ -470,6 +477,12 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 			}
 		}
 		summary["models"] = modelNames
+
+		partitionNames := make([]string, 0, len(cat.PartitionStrategies))
+		for _, ps := range cat.PartitionStrategies {
+			partitionNames = append(partitionNames, ps.Metadata.Name)
+		}
+		summary["partitions"] = partitionNames
 
 		scenarioNames := make([]string, 0, len(cat.DeploymentScenarios))
 		for _, ds := range cat.DeploymentScenarios {

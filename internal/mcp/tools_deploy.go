@@ -128,12 +128,12 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
 
-			// output=pod_yaml: call GeneratePod instead of DeployDryRun
+			// output=pod_yaml: call the pod generator with the same effective overrides.
 			if p.Output == "pod_yaml" {
 				if deps.GeneratePod == nil {
 					return ErrorResult("deploy.dry_run pod_yaml not implemented"), nil
 				}
-				data, err := deps.GeneratePod(ctx, p.Model, p.Engine, p.Slot)
+				data, err := deps.GeneratePod(ctx, p.Model, p.Engine, p.Slot, p.Config)
 				if err != nil {
 					return nil, fmt.Errorf("generate pod for %s/%s: %w", p.Model, p.Engine, err)
 				}

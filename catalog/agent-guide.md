@@ -186,7 +186,7 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 **Model statuses**: `registered` → `downloading` → `imported` | `failed`
 
-> **Tip**: `model.list` = what's in the local database (downloaded/imported). `model.scan` = rescan the filesystem for new files. `knowledge.list_models` = browse the YAML catalog of all supported models. If the user asks "what models can I run", start with `model.list`; if they ask "what models does AIMA support", use `knowledge.list_models`.
+> **Tip**: `model.list` = what's in the local database (downloaded/imported). `model.scan` = rescan the filesystem for new files. `catalog.list(kind=models)` = browse the YAML catalog of all supported models. If the user asks "what models can I run", start with `model.list`; if they ask "what models does AIMA support", use `catalog.list(kind=models)`.
 
 ### engine — Engine Management
 
@@ -201,7 +201,7 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 **Engine runtime types**: `container` (K3S/Docker image) | `native` (local binary)
 
-> **Tip**: `engine.list` = engines registered locally. `engine.scan` = rescan for new container images/binaries. `knowledge.list_engines` = browse the YAML catalog of all supported engines. Same pattern as the model tools above.
+> **Tip**: `engine.list` = engines registered locally. `engine.scan` = rescan for new container images/binaries. `catalog.list(kind=engines)` = browse the YAML catalog of all supported engines. Same pattern as the model tools above.
 
 ### deploy — Deployment Lifecycle
 
@@ -243,25 +243,24 @@ deploy.apply("qwen3-0.6b")
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
 | `knowledge.resolve` | `model`, `engine?`, `overrides?` | ResolvedConfig | Find optimal config for model |
-| `knowledge.search` | `hardware?`, `model?`, `engine?` | matching notes | Search knowledge notes |
-| `knowledge.save` | `title`, `content`, `tags`, etc. | note record | Store knowledge note |
-| `knowledge.generate_pod` | (resolved config fields) | Pod YAML | Generate K3S Pod manifest |
-| `knowledge.list_profiles` | (none) | hardware profiles | List all hardware profiles |
-| `knowledge.list_engines` | (none) | engine assets | List all engine definitions |
-| `knowledge.list_models` | (none) | model assets | List all model definitions |
+| `knowledge.search` | `scope`, filters | notes or configurations | Search notes, tested configs, or both |
+| `knowledge.analytics` | `query`, query-specific fields | analysis result | Compare, similarity, lineage, gaps, aggregate |
+| `knowledge.promote` | `config_id`, `status` | updated config | Promote config to golden/experiment/archived |
+| `knowledge.save` | `note` | note record | Store knowledge note |
+| `knowledge.evaluate` | `action`, action-specific fields | evaluation result | Validate predictions, switch cost, open questions |
 
-> **Tip**: `knowledge.search` = search Agent exploration notes (free-text with hardware/model/engine filter). `knowledge.search_configs` = query tested configurations with performance data (SQL multi-dimensional). Use `search` for "what has the agent tried before?", use `search_configs` for "what config gave the best throughput?".
+> **Tip**: `knowledge.search(scope=notes)` = search Agent exploration notes. `knowledge.search(scope=configs)` = query tested configurations with performance data. `catalog.list(kind=profiles|engines|models|partitions)` = browse static catalog assets. `deploy.dry_run(output=pod_yaml)` = generate Pod YAML from the current effective deployment inputs.
 
 ### knowledge (advanced) — Analytics & Comparison
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `knowledge.search_configs` | filters (hardware, model, engine, status) | configurations | Multi-dimensional config search |
-| `knowledge.compare` | `config_ids` | side-by-side | Compare configurations |
-| `knowledge.similar` | `config_id` | similar configs | Vector similarity (cross-hardware) |
-| `knowledge.lineage` | `config_id` | parent chain | Performance evolution history |
-| `knowledge.gaps` | (none) | untested combos | Identify benchmark coverage gaps |
-| `knowledge.aggregate` | `group_by`, `metric` | grouped stats | Aggregate benchmark statistics |
+| `knowledge.search(scope=configs)` | filters (hardware, model, engine, status) | configurations | Multi-dimensional config search |
+| `knowledge.analytics(query=compare)` | `config_ids` | side-by-side | Compare configurations |
+| `knowledge.analytics(query=similar)` | `config_id` | similar configs | Vector similarity (cross-hardware) |
+| `knowledge.analytics(query=lineage)` | `config_id` | parent chain | Performance evolution history |
+| `knowledge.analytics(query=gaps)` | filters | untested combos | Identify benchmark coverage gaps |
+| `knowledge.analytics(query=aggregate)` | `group_by`, filters | grouped stats | Aggregate benchmark statistics |
 
 ### benchmark — Performance Recording
 
@@ -277,42 +276,30 @@ deploy.apply("qwen3-0.6b")
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
 | `system.status` | (none) | full system state | Hardware + deployments + models + engines |
-| `system.exec` | `command` | output | Execute whitelisted shell command |
 | `system.config` (get) | `key` | value | Read persistent config (`api_key`/`llm.api_key` masked) |
 | `system.config` (set) | `key`, `value` | success | Write persistent config (`api_key` hot-reloads auth; `llm.*` hot-swaps Agent LLM client) |
-| `catalog.override` | `type`, `name`, `content` | success | Override YAML asset at runtime |
+| `catalog.override` | `kind`, `name`, `content` | success | Override YAML asset at runtime |
+| `catalog.validate` | (none) | validation result | Validate engine catalog quality |
 
 > **Tip**: `system.status` = combined overview of everything (hardware + deployments + models + engines). `hardware.detect` = detailed hardware capability vector only. `hardware.metrics` = real-time GPU utilization and temperature. For a quick "what's going on?" question, use `system.status`. For deployment decisions, use `hardware.detect`. For monitoring GPU load, use `hardware.metrics`.
-
-**Whitelisted commands** for `system.exec`:
-`nvidia-smi`, `df`, `free`, `uname`, `kubectl get/describe/logs/top/version`
 
 ### stack — Infrastructure
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `stack.preflight` | (none) | download checklist | Check what needs downloading |
-| `stack.init` | `components` | install progress | Install K3S + HAMi |
+| `stack` | `action=status|preflight|init`, `tier?`, `allow_download?` | stack status or progress | Inspect or initialize the infrastructure stack |
 
-### discovery — LAN Service Discovery
-
-| Tool | Parameters | Returns | Description |
-|------|-----------|---------|-------------|
-| `discovery.lan` | `timeout?` | found services | Scan LAN for AIMA instances via mDNS |
-
-> **Tip**: `discovery.lan` = low-level mDNS scan returning raw service records. `fleet.list_devices` = higher-level tool that auto-discovers via mDNS and returns structured device list. Prefer `fleet.list_devices` for most use cases.
+> **Tip**: use `stack(action=preflight)` before `stack(action=init)` if you need to know what assets must be downloaded first.
 
 ### fleet — Multi-Device Management
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `fleet.list_devices` | (none) | device list | All discovered AIMA devices |
-| `fleet.device_info` | `id` | device details | Hardware + models of remote device |
-| `fleet.device_tools` | `id` | tool list | Available MCP tools on remote device |
-| `fleet.exec_tool` | `id`, `tool`, `params` | tool result | Execute MCP tool on remote device |
+| `fleet.info` | `device_id?` | device list or device details + tools | List discovered devices or inspect one device |
+| `fleet.exec` | `device_id`, `tool_name`, `params?` | tool result | Execute MCP tool on remote device |
 
 **Fleet enables**: one Agent managing multiple edge devices, each running AIMA.
-`fleet.exec_tool` applies the same agent safety guardrails (blocked/confirmable) to the inner `tool_name` as local calls — the Agent cannot bypass restrictions by routing through fleet.
+`fleet.exec` is a high-privilege transport tool. For Agent-initiated calls, the adapter applies the same blocked/confirmable guardrails to the inner `tool_name` as local calls, so the Agent cannot bypass restrictions by routing through fleet. Direct CLI usage remains equivalent to invoking that tool on the remote device itself, except nested `fleet.exec` daisy-chains are blocked.
 
 ### agent — AI Agent
 
@@ -320,7 +307,7 @@ deploy.apply("qwen3-0.6b")
 |------|-----------|---------|-------------|
 | `agent.ask` | `query`, `dangerously_skip_permissions?`, `session_id?` | response | Route query to Go Agent (L3a) |
 | `agent.status` | (none) | availability | Check agent layer availability |
-| `agent.guide` | (none) | full reference | Get complete agent usage guide |
+| `agent.rollback` | `action=list|restore`, `id?` | snapshots or restore result | Inspect or restore rollback snapshots |
 
 **Intelligence levels**:
 | Level | Name | What it does |
@@ -486,8 +473,8 @@ catalog/
 1. deploy.apply(model)       → deploy model
 2. POST /v1/chat/completions → run inference requests
 3. benchmark.record(...)     → store results
-4. knowledge.search_configs  → compare with other configs
-5. knowledge.similar(id)     → find similar setups
+4. knowledge.search(scope=configs)       → compare with other configs
+5. knowledge.analytics(query=similar)    → find similar setups
 ```
 
 ### Workflow 3: Fleet-wide model deployment
@@ -496,20 +483,20 @@ Fleet MCP tools include built-in mDNS discovery — no need for `serve --discove
 A cloud-based Agent can manage LAN devices directly via MCP.
 
 ```
-1. fleet.list_devices        → mDNS scan + list all devices (always fresh)
-2. fleet.device_info(id)     → check each device's hardware
-3. fleet.exec_tool(id, "knowledge.resolve", {model})  → resolve per-device
-4. fleet.exec_tool(id, "deploy.apply", {model})        → deploy per-device
-5. fleet.exec_tool(id, "deploy.status", {name})        → verify each
+1. fleet.info                → mDNS scan + list all devices (always fresh)
+2. fleet.info(device_id)     → check each device's hardware and tool list
+3. fleet.exec(id, "knowledge.resolve", {model})  → resolve per-device
+4. fleet.exec(id, "deploy.apply", {model})       → deploy per-device
+5. fleet.exec(id, "deploy.status", {name})       → verify each
 ```
 
 ### Workflow 4: Find and fix performance gaps
 
 ```
-1. knowledge.gaps            → identify untested combos
-2. knowledge.aggregate(...)  → summarize existing data
+1. knowledge.analytics(query=gaps)       → identify untested combos
+2. knowledge.analytics(query=aggregate)  → summarize existing data
 3. deploy + benchmark        → fill the gaps
-4. knowledge.compare(ids)    → compare results
+4. knowledge.analytics(query=compare, ...) → compare results
 5. knowledge.save(...)       → record findings
 ```
 
@@ -537,7 +524,6 @@ POST http://coordinator:6188/v1/chat/completions
 | **Blocked tools** | `model.remove`, `engine.remove`, `deploy.delete` completely blocked for agents |
 | **Deployment approval** | `deploy.apply` requires user approval — returns plan + approval ID; call `deploy.approve(id)` after user confirms. Use `dangerously_skip_permissions` to bypass |
 | **Rollback snapshots** | Auto-snapshot before destructive operations |
-| **Whitelisted shell** | `system.exec` only allows safe commands |
 | **Auth middleware** | Bearer token on all non-health endpoints |
 | **Dry-run** | `deploy.dry_run` previews without side effects |
 | **Graceful degradation** | Missing GPU/K3S/network → fallback, not crash |

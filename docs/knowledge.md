@@ -20,18 +20,14 @@
 
 | 工具 | JSON-RPC 方法 | 功能 |
 |------|---------------|------|
-| `knowledge.search` | `knowledge.search` | 搜索知识 |
-| `knowledge.save` | `knowledge.save` | 保存 Knowledge Note |
 | `knowledge.resolve` | `knowledge.resolve` | 解析最优配置 |
-| `knowledge.list_engines` | `knowledge.list_engines` | 列出可用引擎定义 |
-| `knowledge.list_profiles` | `knowledge.list_profiles` | 列出硬件 Profile |
-| `knowledge.generate_pod` | `knowledge.generate_pod` | 从知识资产生成 Pod YAML |
-| `knowledge.search_configs` | `knowledge.search_configs` | 多维配置搜索 |
-| `knowledge.compare` | `knowledge.compare` | 对比配置性能 |
-| `knowledge.similar` | `knowledge.similar` | 基于性能向量找相似配置 |
-| `knowledge.lineage` | `knowledge.lineage` | 查询配置演化链 |
-| `knowledge.gaps` | `knowledge.gaps` | 发现知识空白 |
-| `knowledge.aggregate` | `knowledge.aggregate` | 分组聚合统计 |
+| `knowledge.search` | `knowledge.search` | 搜索知识记录与测试配置 |
+| `knowledge.analytics` | `knowledge.analytics` | 对比、相似、演化链、空白、聚合分析 |
+| `knowledge.promote` | `knowledge.promote` | 提升配置状态 |
+| `knowledge.save` | `knowledge.save` | 保存 Knowledge Note |
+| `knowledge.evaluate` | `knowledge.evaluate` | 校验知识、引擎切换成本、开放问题 |
+
+静态资产浏览已并入 `catalog.list(kind=profiles|engines|models|scenarios|summary|status|all)`；Pod YAML 生成已并入 `deploy.dry_run(output=pod_yaml)`。
 
 ---
 
@@ -318,7 +314,7 @@ cat.Resolve(model) → "not found in catalog"
 
 ## 知识查询引擎
 
-### 配置搜索 (knowledge.search_configs)
+### 配置搜索 (knowledge.search, scope=configs)
 
 支持多维过滤、排序、聚合：
 
@@ -333,7 +329,7 @@ ORDER BY pv.avg_throughput DESC
 LIMIT 10
 ```
 
-### 性能对比 (knowledge.compare)
+### 知识分析 (knowledge.analytics, query=compare)
 
 对比 N 个配置的多维性能：
 
@@ -345,7 +341,7 @@ WHERE c.id IN (?, ?, ?)
 ORDER BY br.concurrency, br.input_len_bucket
 ```
 
-### 相似度检索 (knowledge.similar)
+### 知识分析 (knowledge.analytics, query=similar)
 
 基于 6 维归一化性能向量找相似配置：
 
@@ -355,7 +351,7 @@ ORDER BY br.concurrency, br.input_len_bucket
 
 使用加权欧氏距离计算，支持跨硬件配置迁移推荐。
 
-### 演化链查询 (knowledge.lineage)
+### 知识分析 (knowledge.analytics, query=lineage)
 
 使用 `WITH RECURSIVE` 查询配置演化历史：
 
@@ -369,6 +365,14 @@ WITH RECURSIVE lineage(id, derived_from, level) AS (
 )
 SELECT * FROM lineage ORDER BY level;
 ```
+
+### 知识评估 (knowledge.evaluate)
+
+`knowledge.evaluate` 将多个评估动作收拢到一个工具里：
+
+- `action=validate` -> 校验预测与实测偏差
+- `action=engine_switch_cost` -> 评估引擎切换成本
+- `action=open_questions` -> 列出、处理或执行开放问题
 
 ---
 
@@ -396,7 +400,7 @@ Agent 探索 (L3a)
 2. 产出 Configuration (gpu_mem_util=0.80) + BenchmarkResult (21.2 tps)
 3. 上报到中心端 / 导出到 USB
 4. 设备 B (同型硬件) 拉取/导入
-5. 设备 B 的 Agent 通过 `knowledge.search_configs` 查到这个配置
+5. 设备 B 的 Agent 通过 `knowledge.search(scope=configs)` 查到这个配置
 6. **直接从 0.80 开始微调**，发现 0.82 更好 → 产出新 Configuration (derived_from=原配置)
 7. 反哺社区
 
@@ -414,4 +418,4 @@ Agent 探索 (L3a)
 
 ---
 
-*最后更新：2026-03-20*
+*最后更新：2026-04-08*

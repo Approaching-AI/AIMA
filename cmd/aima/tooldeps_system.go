@@ -13,9 +13,8 @@ import (
 	"github.com/jguan/aima/internal/stack"
 )
 
-// buildSystemDeps wires hal.detect, hal.metrics,
-// stack.preflight/init/status, system.config (get/set),
-// and system.status tools.
+// buildSystemDeps wires hal.detect, hal.metrics, stack(action=*),
+// system.config (get/set), and system.status tools.
 func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 	cat := ac.cat
 	db := ac.db

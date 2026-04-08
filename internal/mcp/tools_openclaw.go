@@ -25,29 +25,29 @@ func registerOpenClawTools(s *Server, deps *ToolDeps) {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-			switch p.Action {
-			case "sync":
-				if deps.OpenClawSync == nil {
-					return ErrorResult("openclaw.sync not available"), nil
-				}
+				switch p.Action {
+				case "sync":
+					if deps.OpenClawSync == nil {
+						return ErrorResult("openclaw action=sync not available"), nil
+					}
 				data, err := deps.OpenClawSync(ctx, p.DryRun)
 				if err != nil {
 					return nil, fmt.Errorf("openclaw sync: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "status":
-				if deps.OpenClawStatus == nil {
-					return ErrorResult("openclaw.status not available"), nil
-				}
+				case "status":
+					if deps.OpenClawStatus == nil {
+						return ErrorResult("openclaw action=status not available"), nil
+					}
 				data, err := deps.OpenClawStatus(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("openclaw status: %w", err)
 				}
 				return TextResult(string(data)), nil
-			case "claim":
-				if deps.OpenClawClaim == nil {
-					return ErrorResult("openclaw.claim not available"), nil
-				}
+				case "claim":
+					if deps.OpenClawClaim == nil {
+						return ErrorResult("openclaw action=claim not available"), nil
+					}
 				data, err := deps.OpenClawClaim(ctx, p.Sections, p.DryRun)
 				if err != nil {
 					return nil, fmt.Errorf("openclaw claim: %w", err)

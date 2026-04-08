@@ -71,4 +71,4 @@ integrations:
 open_questions:
   - question: "OpenClaw 在 AIBook 上挂 GPU ASR + 本地 TTS 时，是否仍能稳定消费 AIMA 管理的 providers？"
     hypothesis: "可以。MoOER 提供更符合“尽量走 GPU”的 ASR 路径，而 LiteTTS 继续作为当前唯一可纳管的本地 TTS。"
-    test_method: "真机执行 openclaw.status / openclaw.sync，并通过 /v1/audio/transcriptions 与 /v1/audio/speech 端到端验证。"
+    test_method: "真机执行 openclaw(action=status) / openclaw(action=sync)，并通过 /v1/audio/transcriptions 与 /v1/audio/speech 端到端验证。"

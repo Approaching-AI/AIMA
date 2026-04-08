@@ -65,6 +65,72 @@
 - `config` - AIMA 配置
 - `audit_log` - 操作审计日志
 
+### Benchmark-Backed Knowledge Contract
+
+从 v0.4 开始，AIMA 里的“知识”不能只有一段 note 文本。凡是 Explorer/Harvester 认定为成功探索的结果，必须同时带上可追溯的 benchmark 证据，并至少满足下面这些字段。
+
+**身份上下文**
+- `hardware_profile` / `gpu_arch`
+- `model`
+- `engine`（asset ID）
+- `engine_version`，以及容器引擎的 `engine_image`（若可得）
+- `benchmark_id` / `config_id`
+
+**部署配置**
+- `configurations.config` 必须是真实 deploy config，不能退化成 benchmark profile
+- 必须保留高级参数，例如 `tp_size`、`mem_fraction_static`、`max_running_requests`
+- 对异构引擎必须保留 offload 参数，例如 `kt_cpuinfer`、`kt_num_gpu_experts`、`kt_threadpool_count`、`n_gpu_layers`
+
+**Benchmark Profile**
+- `concurrency`
+- `num_requests`
+- `warmup_count`
+- `rounds`
+- `input_tokens`
+- `max_tokens`
+- `avg_input_tokens`
+- `avg_output_tokens`
+
+**性能指标**
+- `ttft_p50_ms` / `ttft_p95_ms` / `ttft_p99_ms`
+- `tpot_p50_ms` / `tpot_p95_ms`
+- `throughput_tps`
+- `qps`
+- `error_rate`
+- `sample_count`
+- `duration_s`
+- `stability`
+
+**资源观测**
+- `vram_usage_mib`
+- `ram_usage_mib`
+- `gpu_utilization_pct`
+- `cpu_usage_pct`
+- `power_draw_watts`
+
+**资源观测口径**
+- `vram_usage_mib` / `ram_usage_mib` 记录 benchmark 窗口内的峰值，而不是结束瞬间快照
+- `gpu_utilization_pct` / `cpu_usage_pct` / `power_draw_watts` 记录 benchmark 窗口内的均值
+- `resource_usage`、`benchmark_results`、perf observation、overlay、knowledge note 必须使用同一口径，不能一层写峰值、一层写快照
+
+**异构引擎补充要求**
+- 对 KTransformers、`sglang-kt`、`llama.cpp` offload 这类 CPU+GPU 混合路径，知识里必须显式记录 CPU 与 RAM 是否参与推理
+- overlay 的 `expected_performance` 应同时保留平铺字段，以及 `benchmark_profile`、`resource_usage`、`heterogeneous_observation`
+- `heterogeneous_observation` 优先基于 catalog / `engine_hardware_compat` 的 `cpu_offload` / `ssd_offload` / `npu_offload` 事实生成；catalog 缺失时，才允许根据 deploy config + benchmark 资源证据做保守推断
+- `knowledge_notes` 是解释层，必须引用 benchmark / deploy artifact，不能脱离结构化事实自由发挥
+
+### v0.4 E2E 验证点
+
+端到端验收不再只看“有没有跑起来”，而是至少要同时满足下面这些检查点：
+
+1. 云端 LLM 连通性和流式状态可观测，能区分未连通、reasoning、中间 content、超时截断。
+2. 计划生成基于本机真实可执行的模型和引擎，不持续生成明显不 fit 的任务。
+3. 执行链路能真实进入 `deploy.apply`、`benchmark.run`、`tuning.start`，并正确处理复用 ready deployment 与 `deploy.delete` 的失败。
+4. `configurations` 与 `benchmark_results` 同时落库，且 `configurations.config` 记录的是真实部署配置。
+5. overlay 的 `expected_performance` 保留完整 benchmark profile、延迟/吞吐、资源观测、引擎版本，以及异构引擎的 CPU/RAM 参与信息。
+6. `knowledge_notes` 以 benchmark / deploy artifact 为依据，不能用空想的失败原因替代结构化事实。
+7. validate 成功后，Explorer 能继续进入下一条高价值任务，而不是只计划不执行。
+
 ---
 
 ## 知识资产类型

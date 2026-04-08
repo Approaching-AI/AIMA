@@ -11,10 +11,24 @@ func TestHarvester_TemplateNote(t *testing.T) {
 	note, _ := h.generateNote(context.Background(), HarvestInput{
 		Task: PlanTask{Model: "qwen3-8b", Engine: "vllm"},
 		Result: HarvestResult{
-			Success:    true,
-			Throughput: 45.2,
-			TTFTP95:    280.0,
-			Config:     map[string]any{"gpu_memory_utilization": 0.85},
+			Success:         true,
+			BenchmarkID:     "bench-001",
+			ConfigID:        "cfg-001",
+			ExecutionPath:   "gpu+cpu",
+			Throughput:      45.2,
+			QPS:             0.18,
+			TTFTP95:         280.0,
+			TPOTP95:         21.7,
+			Concurrency:     2,
+			InputTokens:     512,
+			MaxTokens:       256,
+			AvgInputTokens:  530,
+			AvgOutputTokens: 240,
+			VRAMMiB:         32768,
+			RAMMiB:          8192,
+			CPUUsagePct:     64.5,
+			GPUUtilPct:      88.0,
+			Config:          map[string]any{"gpu_memory_utilization": 0.85},
 		},
 	})
 	if note == "" {
@@ -26,6 +40,21 @@ func TestHarvester_TemplateNote(t *testing.T) {
 	}
 	if !strings.Contains(note, "45.2") {
 		t.Error("note missing throughput")
+	}
+	if !strings.Contains(note, "conc=2") {
+		t.Error("note missing concurrency")
+	}
+	if !strings.Contains(note, "TPOT P95") {
+		t.Error("note missing TPOT")
+	}
+	if !strings.Contains(note, "CPU 64.5%") {
+		t.Error("note missing CPU usage")
+	}
+	if !strings.Contains(note, "benchmark_id=bench-001") || !strings.Contains(note, "config_id=cfg-001") {
+		t.Error("note missing artifact ids")
+	}
+	if !strings.Contains(note, "path gpu+cpu") {
+		t.Error("note missing execution path")
 	}
 }
 
@@ -72,9 +101,12 @@ func TestHarvester_SaveNoteIncludesHardware(t *testing.T) {
 			Engine:   "vllm",
 		},
 		Result: HarvestResult{
-			Success:    true,
-			Throughput: 42,
-			TTFTP95:    200,
+			Success:     true,
+			Throughput:  42,
+			TTFTP95:     200,
+			CPUUsagePct: 55,
+			RAMMiB:      4096,
+			Config:      map[string]any{"kt_cpuinfer": 40},
 		},
 	})
 

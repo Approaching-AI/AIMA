@@ -10,13 +10,160 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	benchpkg "github.com/jguan/aima/internal/benchmark"
+	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
 
 	state "github.com/jguan/aima/internal"
 )
+
+type benchmarkSystemMetrics struct {
+	VRAMUsageMiB      int
+	RAMUsageMiB       int
+	PowerDrawWatts    float64
+	GPUUtilizationPct float64
+	CPUUsagePct       float64
+}
+
+type benchmarkMetricsWindow struct {
+	mu           sync.Mutex
+	peakVRAMMiB  int
+	peakRAMMiB   int
+	cpuTotalPct  float64
+	cpuSamples   int
+	gpuTotalPct  float64
+	gpuSamples   int
+	powerTotalW  float64
+	powerSamples int
+}
+
+var benchmarkMetricsSampleInterval = time.Second
+var executeBenchmarkRun = benchpkg.Run
+
+var collectBenchmarkSystemMetrics = func(ctx context.Context) benchmarkSystemMetrics {
+	var metrics benchmarkSystemMetrics
+
+	if current, err := hal.CollectMetrics(ctx); err == nil {
+		metrics.RAMUsageMiB = current.RAM.UsedMiB
+		metrics.CPUUsagePct = current.CPU.UsagePercent
+		if current.GPU != nil {
+			metrics.VRAMUsageMiB = current.GPU.MemoryUsedMiB
+			metrics.PowerDrawWatts = current.GPU.PowerDrawWatts
+			metrics.GPUUtilizationPct = float64(current.GPU.UtilizationPercent)
+		}
+	}
+
+	if metrics.RAMUsageMiB == 0 {
+		if hw, err := hal.Detect(ctx); err == nil {
+			if hw.RAM.TotalMiB > 0 && hw.RAM.AvailableMiB >= 0 {
+				metrics.RAMUsageMiB = max(hw.RAM.TotalMiB-hw.RAM.AvailableMiB, 0)
+			}
+		}
+	}
+	return metrics
+}
+
+func (w *benchmarkMetricsWindow) observe(metrics benchmarkSystemMetrics) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if metrics.VRAMUsageMiB > w.peakVRAMMiB {
+		w.peakVRAMMiB = metrics.VRAMUsageMiB
+	}
+	if metrics.RAMUsageMiB > w.peakRAMMiB {
+		w.peakRAMMiB = metrics.RAMUsageMiB
+	}
+
+	w.cpuTotalPct += metrics.CPUUsagePct
+	w.cpuSamples++
+
+	if metrics.VRAMUsageMiB > 0 || metrics.GPUUtilizationPct > 0 || metrics.PowerDrawWatts > 0 {
+		w.gpuTotalPct += metrics.GPUUtilizationPct
+		w.gpuSamples++
+		w.powerTotalW += metrics.PowerDrawWatts
+		w.powerSamples++
+	}
+}
+
+func (w *benchmarkMetricsWindow) snapshot() benchmarkSystemMetrics {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	metrics := benchmarkSystemMetrics{
+		VRAMUsageMiB: w.peakVRAMMiB,
+		RAMUsageMiB:  w.peakRAMMiB,
+	}
+	if w.cpuSamples > 0 {
+		metrics.CPUUsagePct = w.cpuTotalPct / float64(w.cpuSamples)
+	}
+	if w.gpuSamples > 0 {
+		metrics.GPUUtilizationPct = w.gpuTotalPct / float64(w.gpuSamples)
+	}
+	if w.powerSamples > 0 {
+		metrics.PowerDrawWatts = w.powerTotalW / float64(w.powerSamples)
+	}
+	return metrics
+}
+
+func runBenchmarkWithMetrics(ctx context.Context, cfg benchpkg.RunConfig) (*benchpkg.RunResult, benchmarkSystemMetrics, error) {
+	window := &benchmarkMetricsWindow{}
+	sampleCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		window.observe(collectBenchmarkSystemMetrics(sampleCtx))
+		ticker := time.NewTicker(benchmarkMetricsSampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-sampleCtx.Done():
+				return
+			case <-ticker.C:
+				window.observe(collectBenchmarkSystemMetrics(sampleCtx))
+			}
+		}
+	}()
+
+	result, err := executeBenchmarkRun(ctx, cfg)
+	window.observe(collectBenchmarkSystemMetrics(ctx))
+	cancel()
+	wg.Wait()
+
+	metrics := window.snapshot()
+	if metrics == (benchmarkSystemMetrics{}) {
+		metrics = collectBenchmarkSystemMetrics(ctx)
+	}
+	return result, metrics, err
+}
+
+func resourceUsageMap(metrics benchmarkSystemMetrics) map[string]any {
+	resourceUsage := map[string]any{
+		"vram_usage_mib":      metrics.VRAMUsageMiB,
+		"ram_usage_mib":       metrics.RAMUsageMiB,
+		"cpu_usage_pct":       metrics.CPUUsagePct,
+		"gpu_utilization_pct": metrics.GPUUtilizationPct,
+		"power_draw_watts":    metrics.PowerDrawWatts,
+	}
+	for key, value := range resourceUsage {
+		switch v := value.(type) {
+		case int:
+			if v <= 0 {
+				delete(resourceUsage, key)
+			}
+		case float64:
+			if v <= 0 {
+				delete(resourceUsage, key)
+			}
+		}
+	}
+	return resourceUsage
+}
 
 func postProcessBenchmarkSave(ctx context.Context, db *state.DB, kStore *knowledge.Store, benchmarkID, configID, hardware, engine, model string, throughputTPS float64) {
 	if err := writeBenchmarkValidation(ctx, db, benchmarkID, configID, hardware, engine, model, throughputTPS); err != nil {
@@ -140,26 +287,28 @@ func refreshPerfVectors(ctx context.Context, kStore *knowledge.Store) {
 }
 
 // saveBenchmarkResult saves a benchmark result and its configuration to the DB.
-// Returns (benchmarkID, configID) or error.
+// Returns (benchmarkID, configID, saved benchmark row) or error.
 // B12: Skip saving when throughput is zero — indicates no real inference happened.
 func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
-	result *benchpkg.RunResult, concurrency, inputTokens, maxTokens int, notes string) (string, string, error) {
-
+	result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency, inputTokens, maxTokens int, notes string) (string, string, *state.BenchmarkResult, error) {
 	if result.ThroughputTPS <= 0 {
-		return "", "", fmt.Errorf("zero throughput — no inference service responded; benchmark not saved")
+		return "", "", nil, fmt.Errorf("zero throughput — no inference service responded; benchmark not saved")
 	}
-
-	configJSON, _ := json.Marshal(map[string]any{
-		"concurrency":  concurrency,
-		"max_tokens":   maxTokens,
-		"input_tokens": inputTokens,
-	})
+	config := deployConfig
+	if len(config) == 0 {
+		config = map[string]any{
+			"concurrency":  concurrency,
+			"max_tokens":   maxTokens,
+			"input_tokens": inputTokens,
+		}
+	}
+	configJSON, _ := json.Marshal(config)
 	configHash := fmt.Sprintf("%x", sha256.Sum256(
 		[]byte(hardware+"|"+engineID+"|"+model+"|"+string(configJSON))))
 
 	existingCfg, err := db.FindConfigByHash(ctx, configHash)
 	if err != nil {
-		return "", "", fmt.Errorf("find config: %w", err)
+		return "", "", nil, fmt.Errorf("find config: %w", err)
 	}
 	if existingCfg == nil {
 		existingCfg = &state.Configuration{
@@ -169,13 +318,16 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 			Status: "experiment", Source: "benchmark",
 		}
 		if err := db.InsertConfiguration(ctx, existingCfg); err != nil {
-			return "", "", fmt.Errorf("create configuration: %w", err)
+			return "", "", nil, fmt.Errorf("create configuration: %w", err)
 		}
 	}
 
 	benchmarkID := fmt.Sprintf("%x", sha256.Sum256(
 		[]byte(existingCfg.ID+"|"+fmt.Sprintf("%d", time.Now().UnixNano()))))[:16]
 
+	if metrics == (benchmarkSystemMetrics{}) {
+		metrics = collectBenchmarkSystemMetrics(ctx)
+	}
 	br := &state.BenchmarkResult{
 		ID: benchmarkID, ConfigID: existingCfg.ID, Concurrency: concurrency,
 		InputLenBucket:  tokenBucket(result.AvgInputTokens),
@@ -184,15 +336,22 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		TTFTP50ms:       result.TTFTP50ms, TTFTP95ms: result.TTFTP95ms, TTFTP99ms: result.TTFTP99ms,
 		TPOTP50ms: result.TPOTP50ms, TPOTP95ms: result.TPOTP95ms,
 		ThroughputTPS: result.ThroughputTPS, QPS: result.QPS,
-		ErrorRate: result.ErrorRate, SampleCount: result.TotalRequests,
-		DurationS: int(result.DurationMs / 1000), TestedAt: time.Now(),
-		Stability: stabilityFromCV(result.TTFTCVPct),
-		Notes:     notes,
+		VRAMUsageMiB:   metrics.VRAMUsageMiB,
+		RAMUsageMiB:    metrics.RAMUsageMiB,
+		PowerDrawWatts: metrics.PowerDrawWatts,
+		GPUUtilPct:     metrics.GPUUtilizationPct,
+		CPUUsagePct:    metrics.CPUUsagePct,
+		ErrorRate:      result.ErrorRate,
+		SampleCount:    result.TotalRequests,
+		DurationS:      int(result.DurationMs / 1000),
+		TestedAt:       time.Now(),
+		Stability:      stabilityFromCV(result.TTFTCVPct),
+		Notes:          notes,
 	}
 	if err := db.InsertBenchmarkResult(ctx, br); err != nil {
-		return "", "", fmt.Errorf("save benchmark result: %w", err)
+		return "", "", nil, fmt.Errorf("save benchmark result: %w", err)
 	}
-	return benchmarkID, existingCfg.ID, nil
+	return benchmarkID, existingCfg.ID, br, nil
 }
 
 // maybeAutoPromote promotes a config to golden if its benchmark throughput beats
@@ -247,7 +406,7 @@ func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, new
 // updatePerfOverlay writes benchmark observations outside the catalog merge path.
 // Runtime overlays must not masquerade as model assets because same-name assets
 // replace the embedded catalog on restart.
-func updatePerfOverlay(dataDir, model, hardware, engine string, result *benchpkg.RunResult) {
+func updatePerfOverlay(dataDir, model, hardware, engine string, result *benchpkg.RunResult, saved *state.BenchmarkResult, engineVersion, engineImage string, heterogeneousObservation any) {
 	observationsDir := filepath.Join(dataDir, "observations", "models")
 	if err := os.MkdirAll(observationsDir, 0o755); err != nil {
 		slog.Warn("perf observations: mkdir failed", "error", err)
@@ -266,9 +425,39 @@ func updatePerfOverlay(dataDir, model, hardware, engine string, result *benchpkg
 		"throughput_tps": result.ThroughputTPS,
 		"ttft_p50_ms":    result.TTFTP50ms,
 		"ttft_p95_ms":    result.TTFTP95ms,
+		"ttft_p99_ms":    result.TTFTP99ms,
 		"tpot_p50_ms":    result.TPOTP50ms,
+		"tpot_p95_ms":    result.TPOTP95ms,
 		"qps":            result.QPS,
-		"updated_at":     time.Now().UTC().Format(time.RFC3339),
+		"benchmark_profile": map[string]any{
+			"concurrency":       result.Config.Concurrency,
+			"num_requests":      result.Config.NumRequests,
+			"warmup_count":      result.Config.WarmupCount,
+			"rounds":            result.Config.Rounds,
+			"input_tokens":      result.Config.InputTokens,
+			"max_tokens":        result.Config.MaxTokens,
+			"avg_input_tokens":  result.AvgInputTokens,
+			"avg_output_tokens": result.AvgOutputTokens,
+		},
+		"updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if engineVersion != "" {
+		observation["engine_version"] = engineVersion
+	}
+	if engineImage != "" {
+		observation["engine_image"] = engineImage
+	}
+	if saved != nil {
+		observation["resource_usage"] = resourceUsageMap(benchmarkSystemMetrics{
+			VRAMUsageMiB:      saved.VRAMUsageMiB,
+			RAMUsageMiB:       saved.RAMUsageMiB,
+			CPUUsagePct:       saved.CPUUsagePct,
+			GPUUtilizationPct: saved.GPUUtilPct,
+			PowerDrawWatts:    saved.PowerDrawWatts,
+		})
+	}
+	if hetero, ok := heterogeneousObservation.(map[string]any); ok && len(hetero) > 0 {
+		observation["heterogeneous_observation"] = hetero
 	}
 	data, err := json.MarshalIndent(observation, "", "  ")
 	if err != nil {

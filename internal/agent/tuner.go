@@ -57,15 +57,16 @@ type TuningSession struct {
 
 // Tuner orchestrates parameter search + benchmark loops.
 type Tuner struct {
-	tools   ToolExecutor
-	mu      sync.Mutex
-	session *TuningSession
-	cancel  context.CancelFunc
+	tools           ToolExecutor
+	mu              sync.Mutex
+	session         *TuningSession
+	cancel          context.CancelFunc
+	gpuReleaseSleep time.Duration // grace period after deploy.delete; 0 in tests
 }
 
 // NewTuner creates a tuner.
 func NewTuner(tools ToolExecutor) *Tuner {
-	return &Tuner{tools: tools}
+	return &Tuner{tools: tools, gpuReleaseSleep: gpuReleaseGrace}
 }
 
 // Start kicks off a tuning session. Returns immediately with the session ID.
@@ -169,7 +170,7 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		if _, delErr := t.tools.ExecuteTool(ctx, "deploy.delete", deleteArgs); delErr != nil {
 			slog.Debug("tuning: pre-delete (may not exist)", "model", session.Config.Model, "error", delErr)
 		}
-		time.Sleep(3 * time.Second) // GPU memory release grace period
+		waitForGPURelease(ctx, t.tools, session.Config.Model, t.gpuReleaseSleep)
 
 		// Deploy with this config and benchmark the ready endpoint returned by deploy.run.
 		deployArgs, _ := json.Marshal(map[string]any{

@@ -13,7 +13,10 @@ import (
 	"time"
 
 	state "github.com/jguan/aima/internal"
+	"gopkg.in/yaml.v3"
 )
+
+const gpuReleaseGrace = 3 * time.Second // grace period for GPU memory to fully release from driver
 
 type ExplorationTarget struct {
 	Hardware string `json:"hardware,omitempty"`
@@ -81,10 +84,9 @@ type ExplorationManager struct {
 	tuner *Tuner
 	tools ToolExecutor
 
-	mu           sync.Mutex
-	activeRuns   map[string]context.CancelFunc
-	tuneRunID    string
-	lastDeployCfg map[string]any // captured from deploy.apply response for overlay YAML
+	mu         sync.Mutex
+	activeRuns map[string]context.CancelFunc
+	tuneRunID  string
 }
 
 func NewExplorationManager(db *state.DB, tuner *Tuner, tools ToolExecutor) *ExplorationManager {
@@ -394,7 +396,8 @@ func (m *ExplorationManager) executeValidate(ctx context.Context, run *state.Exp
 
 	// Pre-flight: ensure the model is deployed before benchmarking.
 	// Without this, benchmark.run hits an empty endpoint and gets 0 tok/s.
-	if err := m.ensureDeployed(ctx, run, plan); err != nil {
+	deployCfg, err := m.ensureDeployed(ctx, run, plan)
+	if err != nil {
 		run.Status = "failed"
 		run.Error = fmt.Sprintf("pre-flight deploy: %s", err)
 		run.CompletedAt = time.Now()
@@ -426,15 +429,16 @@ func (m *ExplorationManager) executeValidate(ctx context.Context, run *state.Exp
 	_ = m.db.UpdateExplorationRun(context.Background(), run)
 
 	// Task #13: After successful benchmark, write discovered knowledge as overlay YAML.
-	m.maybeCreateKnowledge(ctx, run, plan, stepResult)
+	m.maybeCreateKnowledge(ctx, run, plan, stepResult, deployCfg)
 }
 
 // ensureDeployed deploys the target model+engine with config if not already running.
+// Returns the resolved deployment config (for overlay YAML creation).
 // B17: checks deploy.status first — if already ready, skip deploy; if starting, wait;
 // only call deploy.apply when no existing deployment or previous one failed.
-func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan) error {
+func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan) (map[string]any, error) {
 	if m.tools == nil {
-		return fmt.Errorf("no tool executor")
+		return nil, fmt.Errorf("no tool executor")
 	}
 
 	// B17: Pre-check — avoid "already starting" errors by inspecting current state.
@@ -442,15 +446,15 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 	if ready {
 		slog.Info("exploration: model already deployed and ready, skipping deploy",
 			"model", plan.Target.Model, "engine", plan.Target.Engine)
-		return nil
+		return nil, nil
 	}
 	if phase == "starting" || phase == "pulling" {
 		slog.Info("exploration: model already deploying, waiting for ready",
 			"model", plan.Target.Model, "phase", phase)
 		if err := m.waitForReady(ctx, plan.Target.Model); err != nil {
-			return fmt.Errorf("wait for in-progress deploy %s: %w", plan.Target.Model, err)
+			return nil, fmt.Errorf("wait for in-progress deploy %s: %w", plan.Target.Model, err)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// B25: stop any OTHER running native deployment to free the single native slot.
@@ -499,7 +503,7 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 			RequestJSON:  string(deployArgs),
 			ResponseJSON: string(responseJSON),
 		})
-		return fmt.Errorf("deploy %s on %s: %w", plan.Target.Model, plan.Target.Engine, err)
+		return nil, fmt.Errorf("deploy %s on %s: %w", plan.Target.Model, plan.Target.Engine, err)
 	}
 
 	responseJSON := ""
@@ -515,8 +519,8 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		ResponseJSON: responseJSON,
 	})
 
-	// Capture resolved config from deploy.apply response for overlay YAML.
-	m.captureDeployConfig(responseJSON)
+	// Extract resolved config from deploy.apply response for overlay YAML.
+	deployCfg := parseDeployConfig(responseJSON)
 
 	slog.Info("exploration: model deployed for validation",
 		"model", plan.Target.Model, "engine", plan.Target.Engine)
@@ -526,7 +530,7 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		slog.Warn("exploration: readiness check failed, proceeding anyway",
 			"model", plan.Target.Model, "error", err)
 	}
-	return nil
+	return deployCfg, nil
 }
 
 // checkDeployStatus returns the current phase and readiness of a deployment.
@@ -567,10 +571,9 @@ func (m *ExplorationManager) stopConflictingDeploy(ctx context.Context, targetMo
 		if d.Name == targetModel {
 			continue
 		}
-		// Only delete deployments that are actually holding GPU resources.
-		// "failed" deployments already released GPU memory — just clean up metadata.
-		needsGPUWait := d.Phase == "running" || d.Phase == "starting"
-		if !needsGPUWait && d.Phase != "failed" {
+		// Only delete deployments that are actively holding GPU resources.
+		// Failed/stopped deployments already released GPU — skip entirely.
+		if d.Phase != "running" && d.Phase != "starting" {
 			continue
 		}
 		slog.Info("exploration: deleting conflicting deployment to free slot",
@@ -579,31 +582,35 @@ func (m *ExplorationManager) stopConflictingDeploy(ctx context.Context, targetMo
 		if _, err := m.tools.ExecuteTool(ctx, "deploy.delete", deleteArgs); err != nil {
 			slog.Warn("exploration: failed to delete conflicting deployment", "name", d.Name, "error", err)
 		}
-		// Only wait for GPU memory release if the deployment was actually running.
-		if needsGPUWait {
-			m.waitForDeleteComplete(ctx, d.Name)
-		}
+		m.waitForDeleteComplete(ctx, d.Name)
 	}
 }
 
-// waitForDeleteComplete polls deploy.status until the deployment is no longer running,
-// confirming GPU memory has been freed. Falls back to a fixed delay on timeout.
+// waitForDeleteComplete polls deploy.status until the deployment is no longer running.
 func (m *ExplorationManager) waitForDeleteComplete(ctx context.Context, name string) {
+	waitForGPURelease(ctx, m.tools, name, gpuReleaseGrace)
+}
+
+// waitForGPURelease polls deploy.status until the named deployment is no longer active,
+// then sleeps for gracePeriod to let the GPU driver fully reclaim memory.
+// Shared by ExplorationManager and Tuner.
+func waitForGPURelease(ctx context.Context, tools ToolExecutor, name string, gracePeriod time.Duration) {
 	const (
 		pollInterval = 2 * time.Second
 		maxWait      = 30 * time.Second
 	)
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
-		phase, _ := m.checkDeployStatus(ctx, name)
-		// Gone or terminal phase = GPU memory released
-		if phase == "" || phase == "failed" || phase == "stopped" || phase == "exited" {
-			slog.Info("exploration: deleted deployment no longer holding GPU", "name", name, "phase", phase)
-			// Grace period for GPU memory to fully release from driver
-			time.Sleep(3 * time.Second)
+		phase := checkDeployPhase(ctx, tools, name)
+		// Use negative logic: only keep waiting if the process is still active.
+		if phase != "running" && phase != "starting" && phase != "pulling" {
+			slog.Info("waitForGPURelease: deployment no longer holding GPU", "name", name, "phase", phase)
+			if gracePeriod > 0 {
+				time.Sleep(gracePeriod)
+			}
 			return
 		}
-		slog.Info("exploration: waiting for deleted deployment to release GPU",
+		slog.Info("waitForGPURelease: waiting for deployment to release GPU",
 			"name", name, "phase", phase)
 		select {
 		case <-ctx.Done():
@@ -611,8 +618,24 @@ func (m *ExplorationManager) waitForDeleteComplete(ctx context.Context, name str
 		case <-time.After(pollInterval):
 		}
 	}
-	slog.Warn("exploration: timeout waiting for deployment to release GPU, proceeding anyway",
+	slog.Warn("waitForGPURelease: timeout waiting for deployment to release GPU, proceeding anyway",
 		"name", name, "waited", maxWait)
+}
+
+// checkDeployPhase returns the current phase of a deployment, or "" if unknown/gone.
+func checkDeployPhase(ctx context.Context, tools ToolExecutor, name string) string {
+	statusArgs, _ := json.Marshal(map[string]string{"name": name})
+	result, err := tools.ExecuteTool(ctx, "deploy.status", statusArgs)
+	if err != nil || result == nil {
+		return ""
+	}
+	var status struct {
+		Phase string `json:"phase"`
+	}
+	if json.Unmarshal([]byte(result.Content), &status) != nil {
+		return ""
+	}
+	return status.Phase
 }
 
 // waitForReady polls deploy.status until the deployment reports ready, or timeout.
@@ -675,9 +698,10 @@ func (m *ExplorationManager) resolveDeployEndpoint(ctx context.Context, model st
 }
 
 // maybeCreateKnowledge writes a model YAML overlay when Explorer successfully
-// benchmarks a model+engine combo. This is the core value of autonomous exploration:
+// benchmarks a model+engine combo. deployCfg is the resolved config from deploy.apply.
+// This is the core value of autonomous exploration:
 // discovered working configs become permanent catalog knowledge for future resolves.
-func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, result *benchmarkStepResult) {
+func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, result *benchmarkStepResult, deployCfg map[string]any) {
 	if m.tools == nil || result == nil {
 		return
 	}
@@ -717,8 +741,11 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		return
 	}
 
-	// Collect deployment config from the running deploy's labels
-	deployConfig := m.getDeployConfig(ctx, plan.Target.Model)
+	// Start with the deploy config passed from ensureDeployed.
+	deployConfig := make(map[string]any)
+	for k, v := range deployCfg {
+		deployConfig[k] = v
+	}
 
 	// Also merge SearchSpace entries (from tune tasks)
 	for k, vals := range plan.SearchSpace {
@@ -747,84 +774,68 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		ttftHigh = ttftLow
 	}
 
-	// Build YAML
-	yaml := fmt.Sprintf(`kind: model_asset
-metadata:
-  name: %s
-  type: llm
-  family: explorer-discovered
-  parameter_count: unknown
-  notes: "Auto-discovered by Explorer on %s"
-storage:
-  formats: [safetensors, gguf]
-variants:
-  - name: %s
-    hardware:
-      gpu_arch: "%s"
-      vram_min_mib: 0
-    engine: %s
-    format: safetensors
-    default_config:
-`,
-		plan.Target.Model,
-		time.Now().Format("2006-01-02"),
-		variantName,
-		gpuArch,
-		plan.Target.Engine,
-	)
-
-	// Append deployment config entries — skip internal keys (starting with '.')
-	// and nil values that would produce invalid YAML.
+	// Build default_config — filter internal keys (starting with '.') and nil values.
+	defaultConfig := make(map[string]any)
 	for k, v := range deployConfig {
 		if strings.HasPrefix(k, ".") || v == nil {
 			continue
 		}
-		switch val := v.(type) {
-		case float64:
-			if val == float64(int(val)) {
-				yaml += fmt.Sprintf("      %s: %d\n", k, int(val))
-			} else {
-				yaml += fmt.Sprintf("      %s: %v\n", k, val)
-			}
-		case bool:
-			yaml += fmt.Sprintf("      %s: %v\n", k, val)
-		case string:
-			yaml += fmt.Sprintf("      %s: \"%s\"\n", k, val)
-		default:
-			yaml += fmt.Sprintf("      %s: %v\n", k, v)
-		}
+		defaultConfig[k] = v
 	}
 
-	// Rich performance data from benchmark
-	yaml += fmt.Sprintf(`    expected_performance:
-      tokens_per_second: [%d, %d]
-      latency_first_token_ms: [%d, %d]
-      throughput_tps: %.1f
-      qps: %.2f
-      ttft_p50_ms: %.1f
-      ttft_p95_ms: %.1f
-      ttft_p99_ms: %.1f
-      tpot_p50_ms: %.1f
-      tpot_p95_ms: %.1f
-      concurrency: %d
-      avg_input_tokens: %d
-      avg_output_tokens: %d
-      error_rate: %.3f
-      notes: "Explorer auto-discovered %s. Benchmark ID: %s"
-`, tpsLow, tpsHigh, ttftLow, ttftHigh,
-		bench.ThroughputTPS, bench.QPS,
-		bench.TTFTP50ms, bench.TTFTP95ms, bench.TTFTP99ms,
-		bench.TPOTP50ms, bench.TPOTP95ms,
-		bench.Config.Concurrency,
-		bench.AvgInputTokens, bench.AvgOutputTokens,
-		bench.ErrorRate,
-		time.Now().Format("2006-01-02T15:04:05Z"), result.BenchmarkID)
+	// Build structured overlay as a map and marshal to YAML.
+	overlay := map[string]any{
+		"kind": "model_asset",
+		"metadata": map[string]any{
+			"name":            plan.Target.Model,
+			"type":            "llm",
+			"family":          "explorer-discovered",
+			"parameter_count": "unknown",
+			"notes":           fmt.Sprintf("Auto-discovered by Explorer on %s", time.Now().Format("2006-01-02")),
+		},
+		"storage": map[string]any{
+			"formats": []string{"safetensors", "gguf"},
+		},
+		"variants": []map[string]any{{
+			"name": variantName,
+			"hardware": map[string]any{
+				"gpu_arch":     gpuArch,
+				"vram_min_mib": 0,
+			},
+			"engine":         plan.Target.Engine,
+			"format":         "safetensors",
+			"default_config": defaultConfig,
+			"expected_performance": map[string]any{
+				"tokens_per_second":       []int{tpsLow, tpsHigh},
+				"latency_first_token_ms":  []int{ttftLow, ttftHigh},
+				"throughput_tps":          bench.ThroughputTPS,
+				"qps":                     bench.QPS,
+				"ttft_p50_ms":             bench.TTFTP50ms,
+				"ttft_p95_ms":             bench.TTFTP95ms,
+				"ttft_p99_ms":             bench.TTFTP99ms,
+				"tpot_p50_ms":             bench.TPOTP50ms,
+				"tpot_p95_ms":             bench.TPOTP95ms,
+				"concurrency":             bench.Config.Concurrency,
+				"avg_input_tokens":        bench.AvgInputTokens,
+				"avg_output_tokens":       bench.AvgOutputTokens,
+				"error_rate":              bench.ErrorRate,
+				"notes": fmt.Sprintf("Explorer auto-discovered %s. Benchmark ID: %s",
+					time.Now().Format("2006-01-02T15:04:05Z"), result.BenchmarkID),
+			},
+		}},
+	}
+
+	yamlBytes, err := yaml.Marshal(overlay)
+	if err != nil {
+		slog.Warn("exploration: failed to marshal knowledge overlay YAML", "error", err)
+		return
+	}
 
 	// Write via catalog.override MCP tool
 	overrideArgs, _ := json.Marshal(map[string]string{
 		"kind":    "model_asset",
 		"name":    plan.Target.Model,
-		"content": yaml,
+		"content": string(yamlBytes),
 	})
 
 	overrideResult, err := m.tools.ExecuteTool(ctx, "catalog.override", overrideArgs)
@@ -852,40 +863,19 @@ variants:
 	})
 }
 
-// captureDeployConfig parses the config map from a deploy.apply JSON response
-// and stores it for later use by maybeCreateKnowledge.
-func (m *ExplorationManager) captureDeployConfig(responseJSON string) {
+// parseDeployConfig extracts the config map from a deploy.apply JSON response.
+func parseDeployConfig(responseJSON string) map[string]any {
 	if responseJSON == "" {
-		return
+		return nil
 	}
 	var resp struct {
 		Config map[string]any `json:"config"`
 	}
 	if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil || len(resp.Config) == 0 {
-		return
+		return nil
 	}
-	m.mu.Lock()
-	m.lastDeployCfg = resp.Config
-	m.mu.Unlock()
-	slog.Info("exploration: captured deploy config for overlay YAML",
-		"keys", len(resp.Config))
-}
-
-// getDeployConfig returns the resolved config captured from deploy.apply.
-// For validate tasks this contains the engine defaults (tp_size, mem_fraction_static, etc.);
-// for tune tasks, SearchSpace overrides are merged on top by maybeCreateKnowledge.
-func (m *ExplorationManager) getDeployConfig(_ context.Context, _ string) map[string]any {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.lastDeployCfg == nil {
-		return make(map[string]any)
-	}
-	// Return a copy to avoid mutation
-	cfg := make(map[string]any, len(m.lastDeployCfg))
-	for k, v := range m.lastDeployCfg {
-		cfg[k] = v
-	}
-	return cfg
+	slog.Info("exploration: parsed deploy config for overlay YAML", "keys", len(resp.Config))
+	return resp.Config
 }
 
 func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state.ExplorationRun) {
@@ -934,7 +924,7 @@ func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state
 	_ = m.db.UpdateExplorationRun(context.Background(), run)
 
 	// Pre-flight: ensure the model is deployed before benchmarking.
-	if err := m.ensureDeployed(ctx, run, plan); err != nil {
+	if _, err := m.ensureDeployed(ctx, run, plan); err != nil {
 		run.Status = "failed"
 		run.Error = fmt.Sprintf("pre-flight deploy: %s", err)
 		run.CompletedAt = time.Now()

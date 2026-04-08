@@ -3,9 +3,9 @@ metadata:
   name: flux2-dev
   type: image_gen
   family: flux
-  parameter_count: "12B"
+  parameter_count: "32B"
 storage:
-  formats: [safetensors]
+  formats: [safetensors, diffusers]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
@@ -14,16 +14,15 @@ storage:
     - type: local_path
       path: ""
 variants:
-  # --- AMD W7900D RDNA3 (diffusers + PyTorch ROCm, BF16) ---
-  # FLUX.2-dev: Flux2Transformer2DModel 61GB + Mistral 3 text encoder 45GB + VAE 0.3GB = 106GB
-  # 4 GPU device_map="balanced" → ~26GB/GPU, fits in 48GB/GPU
-  # AOTriton experimental flash attention enabled
-  # Validated 2026-04-02: 20 steps @ 1024×1024 = 6m19s (~18s/step steady-state)
-  - name: flux2-dev-rdna3-diffusers-bf16
+  # --- AMD W7900D RDNA3 — NF4 量化, 单卡 CPU offload (最大吞吐) ---
+  # Transformer 61GB→18.1GB NF4 + Text Encoder 45GB→15.5GB NF4 + VAE 0.3GB BF16
+  # 单卡 34.3GB peak, 8卡并行 multiprocessing 隔离
+  # Validated 2026-04-07: 1280×720, 30 steps, single=3.5min, 8-parallel=5.3min/8img
+  - name: flux2-dev-rdna3-nf4-single
     hardware:
       gpu_arch: RDNA3
-      vram_min_mib: 40960
-      gpu_count_min: 4
+      vram_min_mib: 36864
+      gpu_count_min: 1
       unified_memory: false
     engine: z-image-diffusers
     format: safetensors
@@ -32,14 +31,63 @@ variants:
       repo: black-forest-labs/FLUX.2-dev
     default_config:
       dtype: bfloat16
-      num_inference_steps: 20
-      height: 1024
-      width: 1024
+      quantization: nf4
+      quantization_library: bitsandbytes
+      num_inference_steps: 30
+      height: 720
+      width: 1280
+      guidance_scale: 4.0
+      cpu_offload: true
     expected_performance:
-      seconds_per_step: [17.8, 20.0]
-      total_time_s: [360, 400]
-      vram_mib: 106496
-      notes: "Validated 2026-04-02 on 4× W7900D 48GB RDNA3. diffusers Flux2Pipeline, BF16, device_map=balanced. Mistral 3 text encoder (45GB) + Flux2Transformer (61GB). 18s/step steady-state (first step 42s for AOTriton JIT). 20 steps 1024x1024 = 6m19s total. TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 required."
+      seconds_per_step: [5.5, 5.8]
+      total_time_s: [200, 220]
+      vram_mib: 35123
+      notes: >-
+        Validated 2026-04-07 on W7900D 48GB RDNA3. diffusers Flux2Pipeline,
+        Transformer NF4 (diffusers.BitsAndBytesConfig) + Text Encoder NF4
+        (transformers.BitsAndBytesConfig) + VAE BF16.
+        enable_model_cpu_offload() auto-swaps text encoder ↔ transformer.
+        5.6s/step, 30 steps 1280×720 = 3.5min.
+        8-GPU parallel via multiprocessing + HIP_VISIBLE_DEVICES = 5.3min/8img (1.5 img/min).
+        Docker: vllm-test (PyTorch 2.10 + ROCm 7.2). HSA_OVERRIDE_GFX_VERSION=11.0.0.
+
+  # --- AMD W7900D RDNA3 — BF16 全精度, 2卡 staged loading (最佳画质) ---
+  # Stage 1: text encoder device_map="balanced" 2GPU → encode prompt → release
+  # Stage 2: transformer device_map="balanced" 2GPU → denoise → VAE decode
+  # 38.7+32.7 GB peak per pair, 3对并行 (GPU 2-7, skip 0-1 OOM)
+  # Validated 2026-04-08: 1280×720, 30 steps, single=3.9min, 3-parallel=4.0min/3img
+  - name: flux2-dev-rdna3-bf16-staged-2gpu
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 2
+      unified_memory: false
+    engine: z-image-diffusers
+    format: safetensors
+    source:
+      type: huggingface
+      repo: black-forest-labs/FLUX.2-dev
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 30
+      height: 720
+      width: 1280
+      guidance_scale: 4.0
+      device_map: balanced
+      max_memory_per_gpu_gib: 35
+      staged_loading: true
+    expected_performance:
+      seconds_per_step: [4.9, 5.1]
+      total_time_s: [230, 250]
+      vram_mib: 73113
+      notes: >-
+        Validated 2026-04-08 on W7900D 48GB RDNA3. BF16 full precision staged loading:
+        text encoder (45GB) balanced across 2 GPU → encode prompt to CPU →
+        release → transformer (61GB) balanced across 2 GPU → denoise → VAE.
+        5.0s/step, 30 steps 1280×720 = 3.9min per image, peak 38.7+32.7 GB per pair.
+        3-pair parallel (GPU 2-7) = 4.0min/3img (0.75 img/min).
+        GPU 0-1 has persistent OOM (suspected NUMA topology on dual EPYC 9334).
+        Docker: vllm-test (PyTorch 2.10 + ROCm 7.2). HSA_OVERRIDE_GFX_VERSION=11.0.0.
 
   # --- GB10 Blackwell (diffusers, BF16, unified memory) ---
   # 106GB model on 128GB unified → gpu_memory tight but feasible

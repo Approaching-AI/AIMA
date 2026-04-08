@@ -1,0 +1,47 @@
+kind: model_asset
+metadata:
+  name: wan22-i2v-a14b
+  type: video_gen
+  family: wan
+  parameter_count: "27B"
+storage:
+  formats: [safetensors, diffusers]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Wan-AI/Wan2.2-I2V-A14B
+      format: safetensors
+    - type: huggingface
+      repo: Wan-AI/Wan2.2-I2V-A14B-Diffusers
+      format: diffusers
+variants:
+  # --- AMD W7900D RDNA3 (xDiT + FSDP + DistVAE, 8-GPU, BF16) ---
+  # Same architecture as T2V but with image cross-attention (significantly slower per step)
+  # Input: 1 image (auto-resized to target resolution) + text prompt
+  # Validated 2026-04-05: 832×480, 81 frames, 20 steps → 1069s total
+  - name: wan22-i2v-a14b-rdna3-xdit-fsdp8-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 8
+      unified_memory: false
+    engine: xdit-wan22-rocm
+    format: diffusers
+    source:
+      type: huggingface
+      repo: Wan-AI/Wan2.2-I2V-A14B-Diffusers
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      num_frames: 81
+      height: 480
+      width: 832
+      guidance_scale: 5.0
+      ulysses_degree: 8
+      fully_shard_degree: 8
+      use_parallel_vae: true
+      shard_dit: true
+      shard_t5_encoder: true
+    expected_performance:
+      total_time_s: [1000, 1100]
+      notes: "Validated 2026-04-05 on 8× W7900D 48GB RDNA3. xDiT 0.4.5 + DistVAE. I2V ~4.2× slower than T2V per step due to image cross-attention computation. 832×480, 81 frames, 20 steps → 1069s. Quality good: preserves input image composition with smooth motion. Docker image: wan22-xdit-8gpu:v1.0-rdna3."

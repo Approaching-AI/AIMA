@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,15 +14,14 @@ import (
 	"time"
 
 	"github.com/jguan/aima/internal/agent"
-	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 
 	state "github.com/jguan/aima/internal"
 )
 
-// buildIntegrationDeps wires scenario, app, sync, power, openclaw questions,
-// engine switch cost, validation, and power history tools.
+// buildIntegrationDeps wires scenario, sync, openclaw questions,
+// engine switch cost, and validation tools.
 func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	cat := ac.cat
 	db := ac.db
@@ -99,137 +97,6 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return applyScenario(ctx, cat, ac.rt.Name(), deps, name, dryRun)
 	}
 
-	// App management (D4)
-	deps.AppRegister = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-		var p struct {
-			Name            string          `json:"name"`
-			InferenceNeeds  json.RawMessage `json:"inference_needs"`
-			ResourceBudget  json.RawMessage `json:"resource_budget"`
-			TimeConstraints json.RawMessage `json:"time_constraints"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		if p.Name == "" {
-			return nil, fmt.Errorf("name required")
-		}
-		id := fmt.Sprintf("%x", sha256.Sum256([]byte(p.Name)))[:16]
-		specBytes, _ := json.Marshal(map[string]any{
-			"name":             p.Name,
-			"inference_needs":  json.RawMessage(p.InferenceNeeds),
-			"resource_budget":  json.RawMessage(p.ResourceBudget),
-			"time_constraints": json.RawMessage(p.TimeConstraints),
-		})
-		if err := db.InsertApp(ctx, id, p.Name, string(specBytes)); err != nil {
-			return nil, err
-		}
-
-		// Parse inference needs and record dependencies
-		var needs []struct {
-			Type        string `json:"type"`
-			Model       string `json:"model"`
-			Required    bool   `json:"required"`
-			Performance string `json:"performance"`
-		}
-		if p.InferenceNeeds != nil {
-			_ = json.Unmarshal(p.InferenceNeeds, &needs)
-		}
-		for _, need := range needs {
-			_ = db.UpsertAppDependency(ctx, id, need.Type, need.Model, "", false)
-		}
-
-		return json.Marshal(map[string]any{"id": id, "name": p.Name, "status": "registered", "dependencies": len(needs)})
-	}
-
-	deps.AppProvision = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-		var p struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		apps, err := db.ListApps(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// Find the app
-		var appSpec map[string]any
-		var appID string
-		for _, a := range apps {
-			if a["name"] == p.Name {
-				appID, _ = a["id"].(string)
-				if specRaw, ok := a["spec"].(json.RawMessage); ok {
-					_ = json.Unmarshal(specRaw, &appSpec)
-				}
-				break
-			}
-		}
-		if appID == "" {
-			return nil, fmt.Errorf("app %q not found", p.Name)
-		}
-
-		// Parse inference needs from spec
-		var needs []struct {
-			Type        string `json:"type"`
-			Model       string `json:"model"`
-			Required    bool   `json:"required"`
-			Performance string `json:"performance"`
-		}
-		if needsRaw, ok := appSpec["inference_needs"]; ok {
-			needsBytes, _ := json.Marshal(needsRaw)
-			_ = json.Unmarshal(needsBytes, &needs)
-		}
-
-		// Check existing deployments
-		deploys, _ := deps.DeployList(ctx)
-		var deployList []map[string]any
-		_ = json.Unmarshal(deploys, &deployList)
-
-		report := make([]map[string]any, 0, len(needs))
-		allSatisfied := true
-		for _, need := range needs {
-			satisfied := false
-			deployName := ""
-			// Check if already deployed
-			for _, d := range deployList {
-				dModel, _ := d["model"].(string)
-				if need.Model != "" && strings.Contains(dModel, need.Model) {
-					satisfied = true
-					deployName, _ = d["name"].(string)
-					break
-				}
-			}
-			_ = db.UpsertAppDependency(ctx, appID, need.Type, need.Model, deployName, satisfied)
-			if !satisfied && need.Required {
-				allSatisfied = false
-			}
-			report = append(report, map[string]any{
-				"type": need.Type, "model": need.Model, "satisfied": satisfied,
-				"deploy_name": deployName, "required": need.Required,
-			})
-		}
-
-		status := "provisioned"
-		if !allSatisfied {
-			status = "partial"
-		}
-		_ = db.UpdateAppStatus(ctx, appID, status)
-
-		return json.Marshal(map[string]any{
-			"app": p.Name, "status": status, "dependencies": report,
-		})
-	}
-
-	deps.AppList = func(ctx context.Context) (json.RawMessage, error) {
-		apps, err := db.ListApps(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if apps == nil {
-			apps = []map[string]any{}
-		}
-		return json.Marshal(apps)
-	}
 
 	// Knowledge sync (K6)
 	syncHTTPClient := &http.Client{Timeout: 30 * time.Second}
@@ -670,65 +537,6 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(items)
 	}
 
-	// Power mode (S3)
-	deps.PowerMode = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-		var p struct {
-			Action string `json:"action"`
-			Mode   string `json:"mode"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		hw, err := hal.Detect(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// Look up power modes from hardware profile
-		var powerModes []int
-		var tdpWatts int
-		gpuArch := ""
-		if hw.GPU != nil {
-			gpuArch = hw.GPU.Arch
-		}
-		for _, hp := range cat.HardwareProfiles {
-			if hp.Hardware.GPU.Arch == gpuArch {
-				powerModes = hp.Constraints.PowerModes
-				tdpWatts = hp.Constraints.TDPWatts
-				break
-			}
-		}
-		result := map[string]any{
-			"gpu_arch":    gpuArch,
-			"tdp_watts":   tdpWatts,
-			"power_modes": powerModes,
-		}
-		if hw.GPU != nil {
-			result["current_power_draw_watts"] = hw.GPU.PowerDrawWatts
-			result["power_limit_watts"] = hw.GPU.PowerLimitWatts
-		}
-		return json.Marshal(result)
-	}
-
-	deps.PowerHistory = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-		var p struct {
-			From string `json:"from"`
-			To   string `json:"to"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		if p.From == "" {
-			p.From = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-		}
-		if p.To == "" {
-			p.To = time.Now().UTC().Format(time.RFC3339)
-		}
-		results, err := db.QueryPowerHistory(ctx, p.From, p.To, 60)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(results)
-	}
 
 	deps.ValidateKnowledge = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {

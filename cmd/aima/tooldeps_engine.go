@@ -275,64 +275,6 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		return db.DeleteEngine(ctx, name)
 	}
 
-	deps.EnginePlan = func(ctx context.Context) (json.RawMessage, error) {
-		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-		_, _ = scanEnginesCore(ctx, "auto", false)
-
-		// Get all installed engines from DB
-		allInstalled, _ := db.ListEngines(ctx)
-
-		type engineEntry struct {
-			Name                  string   `json:"name"`
-			Type                  string   `json:"type"`
-			RuntimeType           string   `json:"runtime_type"` // recommended runtime on this host
-			SizeMB                int      `json:"size_mb,omitempty"`
-			Installed             bool     `json:"installed"`
-			InstalledRuntimeTypes []string `json:"installed_runtime_types,omitempty"`
-		}
-
-		var compatible []engineEntry
-
-		for i := range cat.EngineAssets {
-			ea := &cat.EngineAssets[i]
-			if !engineCompatibleWithHost(ea, hwInfo) {
-				continue
-			}
-			rtType := preferredEngineRuntimeType(ea, hwInfo.Platform)
-			installedRuntimeTypes := installedRuntimeTypesForEngine(allInstalled, ea.Metadata.Name, ea.Metadata.Type)
-			installed := stringInSliceFold(installedRuntimeTypes, rtType)
-			sizeMB := ea.Image.SizeApproxMB
-			if rtType == "native" {
-				// Native sources don't track size in catalog; use 0
-				sizeMB = 0
-			}
-
-			entry := engineEntry{
-				Name:                  ea.Metadata.Name,
-				Type:                  ea.Metadata.Type,
-				RuntimeType:           rtType,
-				SizeMB:                sizeMB,
-				Installed:             installed,
-				InstalledRuntimeTypes: installedRuntimeTypes,
-			}
-			compatible = append(compatible, entry)
-		}
-
-		result := map[string]any{
-			"hardware": map[string]any{
-				"gpu_arch":  hwInfo.GPUArch,
-				"gpu_model": hwInfo.GPUModel,
-				"vram_mib":  hwInfo.GPUVRAMMiB,
-				"cpu_arch":  hwInfo.CPUArch,
-			},
-			"compatible_engines": compatible,
-		}
-		return json.Marshal(result)
-	}
-
-	deps.ListDownloads = func(ctx context.Context) (json.RawMessage, error) {
-		return json.Marshal(dlTracker.List())
-	}
 }
 
 // suppress "imported and not used" for packages only used in type literals

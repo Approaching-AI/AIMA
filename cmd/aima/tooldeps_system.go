@@ -5,20 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/jguan/aima/internal/buildinfo"
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/mcp"
-	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 	"github.com/jguan/aima/internal/stack"
 )
 
-// buildSystemDeps wires hal.detect, hal.metrics, discover.lan,
-// stack.preflight/init/status, shell.exec, system.config (get/set),
+// buildSystemDeps wires hal.detect, hal.metrics,
+// stack.preflight/init/status, system.config (get/set),
 // and system.status tools.
 func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 	cat := ac.cat
@@ -44,14 +40,6 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(m)
 	}
 
-	// Discovery
-	deps.DiscoverLAN = func(ctx context.Context, timeoutS int) (json.RawMessage, error) {
-		services, err := proxy.Discover(ctx, time.Duration(timeoutS)*time.Second)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(services)
-	}
 
 	// Stack management
 	deps.StackPreflight = func(ctx context.Context, tier string) (json.RawMessage, error) {
@@ -93,29 +81,6 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(result)
 	}
 
-	// System
-	deps.ExecShell = func(ctx context.Context, command string) (json.RawMessage, error) {
-		parts := strings.Fields(command)
-		if len(parts) == 0 {
-			return nil, fmt.Errorf("empty command")
-		}
-		// Enforce a 60-second timeout to prevent indefinite hangs.
-		execCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-		out, err := exec.CommandContext(execCtx, parts[0], parts[1:]...).CombinedOutput()
-		// Cap output to 1MB to prevent OOM on large outputs.
-		const maxOutput = 1 << 20
-		if len(out) > maxOutput {
-			out = append(out[:maxOutput], []byte("\n... (output truncated)")...)
-		}
-		if err != nil {
-			return json.Marshal(map[string]string{
-				"output": string(out),
-				"error":  err.Error(),
-			})
-		}
-		return json.Marshal(map[string]string{"output": string(out)})
-	}
 	deps.GetConfig = func(ctx context.Context, key string) (string, error) {
 		return db.GetConfig(ctx, key)
 	}

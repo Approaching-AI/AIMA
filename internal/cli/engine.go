@@ -23,7 +23,6 @@ func newEngineCmd(app *App) *cobra.Command {
 		newEnginePullCmd(app),
 		newEngineImportCmd(app),
 		newEngineRemoveCmd(app),
-		newEnginePlanCmd(app),
 	)
 
 	return cmd
@@ -250,25 +249,6 @@ func formatDuration(seconds float64) string {
 	m := int(seconds) / 60
 	s := int(seconds) % 60
 	return fmt.Sprintf("%dm%02ds", m, s)
-}
-
-func newEnginePlanCmd(app *App) *cobra.Command {
-	return &cobra.Command{
-		Use:   "plan",
-		Short: "Show compatible engines for current hardware with install status",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.EnginePlan == nil {
-				return fmt.Errorf("engine.plan not implemented")
-			}
-			data, err := app.ToolDeps.EnginePlan(cmd.Context())
-			if err != nil {
-				return fmt.Errorf("engine plan: %w", err)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
-			return nil
-		},
-	}
 }
 
 func newEngineImportCmd(app *App) *cobra.Command {

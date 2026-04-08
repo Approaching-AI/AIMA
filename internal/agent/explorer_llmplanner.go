@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 )
@@ -14,6 +15,11 @@ import (
 type LLMPlanner struct {
 	agent *Agent
 }
+
+// llmPlannerIdleTimeout is the maximum silence (no streaming tokens) before
+// the planner gives up.  As long as the LLM keeps producing tokens (content or
+// reasoning), the deadline keeps sliding forward.
+var llmPlannerIdleTimeout = 30 * time.Second
 
 func NewLLMPlanner(agent *Agent) *LLMPlanner {
 	return &LLMPlanner{agent: agent}
@@ -28,10 +34,50 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 	// It intentionally bypasses profile-filtered tool discovery.
 	prompt := buildPlannerPrompt(filtered)
 	slog.Info("explorer: LLM planner calling ChatCompletion", "prompt_len", len(prompt))
-	resp, err := p.agent.llm.ChatCompletion(ctx, []Message{
+	planCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Idle timer: cancels the context only when the stream stops producing
+	// tokens for llmPlannerIdleTimeout.  Every delta resets the timer.
+	idleTimer := time.AfterFunc(llmPlannerIdleTimeout, cancel)
+	defer idleTimer.Stop()
+	messages := []Message{
 		{Role: "system", Content: llmPlannerSystemPrompt},
 		{Role: "user", Content: prompt},
-	}, nil)
+	}
+	var (
+		resp             *Response
+		err              error
+		firstDeltaLogged bool
+		streamContentLen int
+		streamReasonLen  int
+		lastProgressLog  time.Time
+		startedAt        = time.Now()
+	)
+	if streamer, ok := p.agent.llm.(StreamingLLMClient); ok {
+		resp, err = streamer.ChatCompletionStream(planCtx, messages, nil, func(delta CompletionDelta) {
+			idleTimer.Reset(llmPlannerIdleTimeout)
+			streamContentLen += len(delta.Content)
+			streamReasonLen += len(delta.ReasoningContent)
+			if !firstDeltaLogged {
+				firstDeltaLogged = true
+				slog.Info("explorer: LLM planner first stream delta",
+					"after", time.Since(startedAt),
+					"content_len", len(delta.Content),
+					"reasoning_len", len(delta.ReasoningContent))
+				lastProgressLog = time.Now()
+				return
+			}
+			if lastProgressLog.IsZero() || time.Since(lastProgressLog) >= 2*time.Second {
+				lastProgressLog = time.Now()
+				slog.Info("explorer: LLM planner streaming",
+					"elapsed", time.Since(startedAt),
+					"content_len", streamContentLen,
+					"reasoning_len", streamReasonLen)
+			}
+		})
+	} else {
+		resp, err = p.agent.llm.ChatCompletion(planCtx, messages, nil)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("LLM plan generation: %w", err)
 	}
@@ -69,9 +115,9 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, 
 }
 
 const (
-	maxLLMGaps         = 20
+	maxLLMGaps          = 20
 	maxLLMOpenQuestions = 10
-	maxLLMHistory      = 5
+	maxLLMHistory       = 5
 )
 
 // filterPlanInput reduces PlanInput to a size suitable for LLM prompts.
@@ -129,7 +175,7 @@ func filterPlanInput(input PlanInput) PlanInput {
 		ActiveDeploys: input.ActiveDeploys,
 		Advisories:    input.Advisories,
 		History:       hist,
-		OpenQuestions:  oq,
+		OpenQuestions: oq,
 		LocalModels:   input.LocalModels,
 		LocalEngines:  input.LocalEngines,
 		Event:         input.Event,
@@ -158,29 +204,153 @@ Engine metadata:
 - For tune tasks, choose parameters from tunable_params and suggest specific values based on the hardware (VRAM, GPU count, CPU cores).
 - Pay attention to engine "features" and "notes" — they describe the engine's architecture (e.g., CPU+GPU hybrid means some params control CPU offloading).
 
+Strategy — BREADTH FIRST:
+- First priority: validate tasks for DIFFERENT models to cover as many gaps as possible. Spread across distinct model+engine combos rather than repeating the same model.
+- Second priority: tune tasks ONLY for models that already have a completed validate baseline in "history". Never tune a model that hasn't been validated yet.
+- Third priority: open_question tasks to test hypotheses.
+
 Rules:
-- Prioritize deployed models without benchmarks (kind=validate)
 - For tune tasks, suggest specific parameter values (not ranges) from the engine's tunable_params
 - Consider central advisories and validate them
 - Max 5 tasks per plan
 - Only use task kinds listed above
 - Skip model+engine combos that already appear in "history" with status "completed" unless you have a specific new config to test
-- Be specific about WHY each task matters`
+- Be specific about WHY each task matters
+- Keep your reasoning concise. Focus on selecting the right tasks, not exhaustive analysis.`
 
 func buildPlannerPrompt(input PlanInput) string {
+	type promptHistory struct {
+		Kind      string `json:"kind"`
+		Model     string `json:"model,omitempty"`
+		Engine    string `json:"engine,omitempty"`
+		Status    string `json:"status"`
+		Goal      string `json:"goal,omitempty"`
+		SourceRef string `json:"source_ref,omitempty"`
+		Error     string `json:"error,omitempty"`
+		Summary   string `json:"summary,omitempty"`
+	}
+	type promptQuestion struct {
+		ID       string `json:"id"`
+		Hardware string `json:"hardware,omitempty"`
+		Model    string `json:"model,omitempty"`
+		Engine   string `json:"engine,omitempty"`
+		Status   string `json:"status"`
+		Question string `json:"question"`
+	}
+	type promptAdvisory struct {
+		ID         string         `json:"id"`
+		Type       string         `json:"type"`
+		Hardware   string         `json:"hardware,omitempty"`
+		Model      string         `json:"model,omitempty"`
+		Engine     string         `json:"engine,omitempty"`
+		Config     map[string]any `json:"config,omitempty"`
+		Confidence string         `json:"confidence,omitempty"`
+		Reasoning  string         `json:"reasoning,omitempty"`
+	}
+	type promptModel struct {
+		Name    string `json:"name"`
+		Format  string `json:"format"`
+		Type    string `json:"type"`
+		SizeGiB int64  `json:"size_gib"`
+	}
+	type promptEngine struct {
+		Type          string   `json:"type"`
+		Runtime       string   `json:"runtime"`
+		Features      []string `json:"features,omitempty"`
+		Notes         string   `json:"notes,omitempty"`
+		TunableParams []string `json:"tunable_params,omitempty"`
+	}
+
+	history := make([]promptHistory, 0, len(input.History))
+	for _, item := range input.History {
+		history = append(history, promptHistory{
+			Kind:      item.Kind,
+			Model:     item.ModelID,
+			Engine:    item.EngineID,
+			Status:    item.Status,
+			Goal:      truncatePromptText(item.Goal, 120),
+			SourceRef: item.SourceRef,
+			Error:     truncatePromptText(item.Error, 120),
+			Summary:   truncatePromptText(item.SummaryJSON, 160),
+		})
+	}
+
+	openQuestions := make([]promptQuestion, 0, len(input.OpenQuestions))
+	for _, item := range input.OpenQuestions {
+		openQuestions = append(openQuestions, promptQuestion{
+			ID:       item.ID,
+			Hardware: item.Hardware,
+			Model:    item.Model,
+			Engine:   item.Engine,
+			Status:   item.Status,
+			Question: truncatePromptText(item.Question, 160),
+		})
+	}
+
+	advisories := make([]promptAdvisory, 0, len(input.Advisories))
+	for _, item := range input.Advisories {
+		advisories = append(advisories, promptAdvisory{
+			ID:         item.ID,
+			Type:       item.Type,
+			Hardware:   item.TargetHardware,
+			Model:      item.TargetModel,
+			Engine:     item.TargetEngine,
+			Config:     item.Config,
+			Confidence: item.Confidence,
+			Reasoning:  truncatePromptText(item.Reasoning, 160),
+		})
+	}
+
+	localModels := make([]promptModel, 0, len(input.LocalModels))
+	for _, item := range input.LocalModels {
+		localModels = append(localModels, promptModel{
+			Name:    item.Name,
+			Format:  item.Format,
+			Type:    item.Type,
+			SizeGiB: item.SizeBytes / (1024 * 1024 * 1024),
+		})
+	}
+
+	localEngines := make([]promptEngine, 0, len(input.LocalEngines))
+	for _, item := range input.LocalEngines {
+		keys := make([]string, 0, len(item.TunableParams))
+		for key := range item.TunableParams {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		localEngines = append(localEngines, promptEngine{
+			Type:          item.Type,
+			Runtime:       item.Runtime,
+			Features:      item.Features,
+			Notes:         truncatePromptText(item.Notes, 120),
+			TunableParams: keys,
+		})
+	}
+
 	promptData := map[string]any{
 		"hardware":       input.Hardware,
 		"gaps":           input.Gaps,
 		"active_deploys": input.ActiveDeploys,
-		"advisories":     input.Advisories,
-		"open_questions": input.OpenQuestions,
-		"local_models":   input.LocalModels,
-		"local_engines":  input.LocalEngines,
-		"history":        input.History,
+		"advisories":     advisories,
+		"open_questions": openQuestions,
+		"local_models":   localModels,
+		"local_engines":  localEngines,
+		"history":        history,
 		"event":          input.Event,
 	}
-	data, _ := json.MarshalIndent(promptData, "", "  ")
+	data, _ := json.Marshal(promptData)
 	return string(data)
+}
+
+func truncatePromptText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
 
 func parsePlanResponse(content string) (*ExplorerPlan, error) {

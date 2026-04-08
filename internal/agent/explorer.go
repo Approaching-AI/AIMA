@@ -466,6 +466,9 @@ func (e *Explorer) sendAdvisoryFeedback(ctx context.Context, advisoryID, status,
 
 func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 	harvester := e.currentHarvester()
+	// Track deploy-level failures so we can skip doomed tasks within the same plan.
+	// Key: "model|engine", only set for deploy crashes (not benchmark/param failures).
+	deployFailures := make(map[string]string) // key → error message
 	for i := range plan.Tasks {
 		task := &plan.Tasks[i]
 		select {
@@ -474,12 +477,55 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 		default:
 		}
 
+		// Intra-plan feedback: skip tasks whose model+engine already crashed
+		// during deployment in this plan (e.g., OOM, exit crash). Tune failures
+		// are param-specific and don't block other param combinations.
+		taskKey := task.Model + "|" + task.Engine
+		if prevErr, blocked := deployFailures[taskKey]; blocked {
+			slog.Info("explorer: skipping task (prior deploy failure in this plan)",
+				"kind", task.Kind, "model", task.Model, "engine", task.Engine,
+				"prior_error", prevErr)
+			task.Status = "skipped"
+			// Still harvest so the skip is recorded as knowledge
+			skipResult := HarvestResult{Success: false, Error: fmt.Sprintf("skipped: prior deploy failure — %s", prevErr)}
+			if len(task.Params) > 0 {
+				skipResult.Config = make(map[string]any, len(task.Params))
+				for k, v := range task.Params {
+					skipResult.Config[k] = v
+				}
+			}
+			actions := harvester.Harvest(ctx, HarvestInput{Task: *task, Result: skipResult})
+			for _, a := range actions {
+				slog.Info("explorer: harvest action", "type", a.Type, "detail", a.Detail)
+			}
+			continue
+		}
+
 		slog.Info("explorer: executing task",
 			"kind", task.Kind, "model", task.Model, "engine", task.Engine,
 			"progress", fmt.Sprintf("%d/%d", i+1, len(plan.Tasks)))
 
+		taskStart := time.Now()
 		result := e.executeTask(ctx, *task)
-		task.Status = "completed"
+		taskElapsed := time.Since(taskStart)
+
+		// Log task duration — especially valuable for tune tasks where each
+		// iteration incurs a full cold-start (kill → deploy → health check).
+		slog.Info("explorer: task finished",
+			"kind", task.Kind, "model", task.Model, "engine", task.Engine,
+			"success", result.Success, "elapsed", taskElapsed,
+			"throughput", result.Throughput)
+
+		if result.Success {
+			task.Status = "completed"
+		} else {
+			task.Status = "failed"
+			// Track deploy-level failures for intra-plan feedback
+			errClass := classifyError(result.Error)
+			if errClass == "deploy_crash" || errClass == "OOM" || errClass == "timeout" {
+				deployFailures[taskKey] = result.Error
+			}
+		}
 
 		// Harvest results
 		actions := harvester.Harvest(ctx, HarvestInput{Task: *task, Result: result})

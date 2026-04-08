@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestLLMPlanner_ParsesStructuredResponse(t *testing.T) {
@@ -35,5 +37,32 @@ func TestLLMPlanner_FallbackOnInvalidJSON(t *testing.T) {
 	_, err := p.Plan(context.Background(), PlanInput{})
 	if err == nil {
 		t.Fatal("expected error for non-JSON response")
+	}
+}
+
+type blockingPlannerLLM struct{}
+
+func (blockingPlannerLLM) ChatCompletion(ctx context.Context, _ []Message, _ []ToolDefinition) (*Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestLLMPlanner_TimesOut(t *testing.T) {
+	oldTimeout := llmPlannerIdleTimeout
+	llmPlannerIdleTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { llmPlannerIdleTimeout = oldTimeout })
+
+	p := NewLLMPlanner(NewAgent(blockingPlannerLLM{}, &mockTools{}))
+	start := time.Now()
+	_, err := p.Plan(context.Background(), PlanInput{})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	// Idle timeout fires via context.WithCancel, so the error is context.Canceled.
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("planner idle timeout took too long: %v", elapsed)
 	}
 }

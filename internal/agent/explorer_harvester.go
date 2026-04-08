@@ -84,10 +84,11 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 	var actions []HarvestAction
 
 	if !input.Result.Success {
-		note := fmt.Sprintf("%s on %s: FAILED -- %s", input.Task.Model, input.Task.Engine, input.Result.Error)
+		note := generateFailureNote(input)
 		actions = append(actions, HarvestAction{Type: "note", Detail: note})
 		if h.saveNote != nil {
-			_ = h.saveNote(ctx, "exploration failed", note, input.Task.Hardware, input.Task.Model, input.Task.Engine)
+			title := fmt.Sprintf("%s on %s: %s", input.Task.Model, input.Task.Engine, classifyError(input.Result.Error))
+			_ = h.saveNote(ctx, title, note, input.Task.Hardware, input.Task.Model, input.Task.Engine)
 		}
 		return actions
 	}
@@ -266,4 +267,42 @@ func benchmarkArtifactSummary(result HarvestResult) string {
 		parts = append(parts, fmt.Sprintf("config_id=%s", result.ConfigID))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// classifyError categorizes an error string into a high-level failure class.
+func classifyError(errMsg string) string {
+	lower := strings.ToLower(errMsg)
+	switch {
+	case strings.Contains(lower, "oom") || strings.Contains(lower, "out of memory") || strings.Contains(lower, "cuda out of memory"):
+		return "OOM"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") || strings.Contains(lower, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(lower, "health check") || strings.Contains(lower, "not ready"):
+		return "deploy_crash"
+	case strings.Contains(lower, "connection refused") || strings.Contains(lower, "connection reset"):
+		return "deploy_crash"
+	case strings.Contains(lower, "exit status") || strings.Contains(lower, "signal: killed"):
+		return "deploy_crash"
+	default:
+		return "error"
+	}
+}
+
+// generateFailureNote creates a structured failure note with config evidence.
+func generateFailureNote(input HarvestInput) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("%s on %s: FAILED [%s].", input.Task.Model, input.Task.Engine, classifyError(input.Result.Error)))
+	parts = append(parts, fmt.Sprintf("Error: %s.", input.Result.Error))
+	if len(input.Result.Config) > 0 {
+		parts = append(parts, fmt.Sprintf("Config tried: %v.", input.Result.Config))
+	} else if len(input.Task.Params) > 0 {
+		parts = append(parts, fmt.Sprintf("Config tried: %v.", input.Task.Params))
+	}
+	if input.Task.Kind != "" {
+		parts = append(parts, fmt.Sprintf("Task kind: %s.", input.Task.Kind))
+	}
+	if input.Task.Reason != "" {
+		parts = append(parts, fmt.Sprintf("Reason: %s.", input.Task.Reason))
+	}
+	return strings.Join(parts, " ")
 }

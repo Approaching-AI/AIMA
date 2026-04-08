@@ -101,6 +101,20 @@ func newServeCmd(app *App) *cobra.Command {
 				go openclaw.StartSyncLoop(ctx, app.OpenClaw, 10*time.Second)
 			}
 
+			// Auto-scan engines on startup so Explorer and other tools see
+			// locally available engines even before a manual engine.scan call.
+			if app.ToolDeps != nil && app.ToolDeps.ScanEngines != nil {
+				go func() {
+					scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
+					defer scanCancel()
+					if _, err := app.ToolDeps.ScanEngines(scanCtx, "auto", false); err != nil {
+						slog.Warn("startup engine scan failed (non-fatal)", "error", err)
+					} else {
+						slog.Info("startup engine scan completed")
+					}
+				}()
+			}
+
 			if app.Support != nil {
 				go func() {
 					if err := app.Support.RunBackground(ctx); err != nil && !errors.Is(err, context.Canceled) {

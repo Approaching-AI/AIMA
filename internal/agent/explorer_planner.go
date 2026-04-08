@@ -108,7 +108,7 @@ type PlanTask struct {
 	Reason    string         `json:"reason"`
 	Priority  int            `json:"priority"`
 	DependsOn string         `json:"depends_on,omitempty"`
-	Status    string         `json:"status,omitempty"` // "", "completed", "skipped_tier_degraded"
+	Status    string         `json:"status,omitempty"` // "", "completed", "failed", "skipped", "skipped_tier_degraded"
 }
 
 // RulePlanner generates plans using fixed priority rules (Tier 1).

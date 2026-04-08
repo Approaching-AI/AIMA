@@ -273,8 +273,8 @@ Focus: OpenClaw full-stack integration, smart agent routing, Engine Profile syst
 | Central knowledge server (SQLite + REST) | K9 | **DONE** | `internal/central/server.go`, `cmd/central/main.go` |
 | Knowledge sync push/pull/status MCP tools | K6 | **DONE** | `mcp/tools.go`, `cmd/aima/main.go` |
 | Open questions resolution from YAML | I6 | **DONE** | `mcp/tools.go`, `cmd/aima/main.go` |
-| App register/provision/list MCP tools | D4 | **DONE** | `mcp/tools.go`, `cli/app.go` |
-| Power mode query MCP tool | S3 | **DONE** | `mcp/tools.go`, `cmd/aima/main.go` |
+| App register/provision/list MCP tools | D4 | **REMOVED** (v0.4 consolidation — unused, no external consumers) | ~~`mcp/tools.go`, `cli/app.go`~~ |
+| Power mode/history query MCP tools | S3, F4 | **REMOVED** (v0.4 consolidation — subsumed by hardware.metrics + REST /api/v1/power) | ~~`mcp/tools.go`~~ |
 | ResourceSlot abstraction (4 backends) | S5 | **DONE** | `internal/runtime/slot.go` |
 | Expand catalog: more model YAMLs for modalities | Product metrics | TODO | `catalog/models/` |
 

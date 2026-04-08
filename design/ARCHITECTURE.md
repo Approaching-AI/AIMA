@@ -190,7 +190,8 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
 所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `config`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
 Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.list_devices` 每次自动扫描，其余 fleet 工具懒发现），CLI 和 MCP Agent 走完全相同的代码路径。
-当前共 94 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 7 + Deploy 8 + Knowledge 23 + Benchmark 4 + Stack 3 + Catalog 3 + System 2 + Discover 1 + Agent 9 + Fleet 4 + Shell 1 + Tuning 4 + Device 2 + App 3 + OpenClaw 3 + Scenario 3 + Explore 4 + Support 1 + Download 1)。
+当前共 56 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 5 + Deploy 5 + Knowledge 6 + Benchmark 4 + Catalog 3 + Central 3 + Data 2 + System 2 + Agent 4 + Automation 4 + Fleet 2 + Scenario 2 + OpenClaw 1 + Stack 1 + Support 1)。
+工具通过 4 个 Profile 按场景过滤可见性：Full(56), Operator(39), Patrol(10), Explorer(20)。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
 

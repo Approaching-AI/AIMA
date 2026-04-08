@@ -143,15 +143,16 @@ type pendingApproval struct {
 }
 
 func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
-	// Gap 1: Block high-risk operations from the Agent.
-	if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
-		msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
-		a.audit(ctx, name, string(arguments), "BLOCKED")
-		return &agent.ToolResult{Content: msg, IsError: true}, nil
-	}
-
-	// Gap 1b: Confirmable tools require user approval (unless --dangerously-skip-permissions).
 	skipPerms, _ := ctx.Value(ctxKeySkipPerms).(bool)
+
+	// Gap 1: Block high-risk operations from the Agent (unless internal automation).
+	if !skipPerms {
+		if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
+			msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
+			a.audit(ctx, name, string(arguments), "BLOCKED")
+			return &agent.ToolResult{Content: msg, IsError: true}, nil
+		}
+	}
 
 	// fleet.exec_tool wrapping a confirmable inner tool → needs approval too
 	if name == "fleet.exec_tool" && !skipPerms {

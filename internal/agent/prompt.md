@@ -16,7 +16,6 @@
 - deploy.dry_run  -> 预览配置和适配报告，不执行。output=pod_yaml 生成 K3S YAML
 - deploy.list     -> 所有部署
 - deploy.logs     -> 部署日志
-- deploy.delete   -> 删除部署
 
 ## 管理模型和引擎
 - model.list / engine.list           -> 本地已有（数据库）
@@ -25,7 +24,6 @@
 - model.pull / engine.pull           -> 下载
 - model.info / engine.info           -> 详情
 - model.import / engine.import       -> 从本地路径导入
-- model.remove / engine.remove       -> 删除
 
 ## 搜索知识库
 - knowledge.search(scope=configs) -> 已测试的配置和性能数据
@@ -47,6 +45,11 @@
 ## 集成
 - openclaw(action=sync|status|claim) -> OpenClaw 集成管理
 - support                            -> 连接支持平台
+
+## 回滚与状态
+- agent.rollback(action=list)    -> 查看可用的回滚快照
+- agent.rollback(action=restore) -> 恢复到指定快照
+- agent.status                   -> 查看 Agent 和巡逻状态
 
 ## 规则
 - 一次调一个工具，读完结果再决定下一步

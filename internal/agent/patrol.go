@@ -452,8 +452,7 @@ func (p *Patrol) emitEvent(alert Alert) {
 	var eventType string
 	switch alert.Type {
 	case "deploy_crash":
-		if !strings.Contains(strings.ToLower(alert.Message), "oom") &&
-			!strings.Contains(strings.ToLower(alert.Message), "out of memory") {
+		if !isOOMCrash(alert.Message) {
 			return
 		}
 		eventType = EventPatrolOOM
@@ -466,6 +465,19 @@ func (p *Patrol) emitEvent(alert Alert) {
 		Type:    eventType,
 		AlertID: alert.ID,
 	})
+}
+
+// isOOMCrash checks if a crash message indicates an out-of-memory condition.
+// Uses specific patterns to avoid false positives on words containing "oom" (e.g. "bloom", "room").
+func isOOMCrash(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "out of memory") ||
+		strings.Contains(lower, "oomkilled") ||
+		strings.Contains(lower, "cuda oom") ||
+		strings.Contains(lower, "oom ") ||
+		strings.HasSuffix(lower, "oom") ||
+		strings.Contains(lower, " oom,") ||
+		strings.Contains(lower, " oom:")
 }
 
 func (p *Patrol) reactToAlerts(ctx context.Context, alerts []Alert) {

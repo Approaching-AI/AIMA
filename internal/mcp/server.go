@@ -350,6 +350,26 @@ func (s *Server) ListTools() []ToolDefinition {
 	return defs
 }
 
+// ListToolsForProfile returns tool definitions filtered by the given profile.
+// Used by Agent to limit which tools the LLM sees.
+func (s *Server) ListToolsForProfile(p Profile) []ToolDefinition {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	defs := make([]ToolDefinition, 0, len(s.tools))
+	for _, t := range s.tools {
+		if !ProfileMatches(p, t.Name) {
+			continue
+		}
+		defs = append(defs, ToolDefinition{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return defs
+}
+
 // ToolDefinition is a serializable tool description (no handler).
 type ToolDefinition struct {
 	Name        string          `json:"name"`

@@ -404,6 +404,87 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListToolsForProfile(t *testing.T) {
+	s := NewServer()
+	// Register representative tools spanning multiple profiles.
+	toolNames := []string{
+		"hardware.detect",
+		"hardware.metrics",
+		"patrol",
+		"deploy.list",
+		"knowledge.resolve",
+	}
+	for _, name := range toolNames {
+		name := name
+		s.RegisterTool(&Tool{
+			Name:        name,
+			Description: "test tool " + name,
+			InputSchema: noParamsSchema(),
+			Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+				return TextResult("ok"), nil
+			},
+		})
+	}
+
+	namesOf := func(defs []ToolDefinition) map[string]bool {
+		m := make(map[string]bool, len(defs))
+		for _, d := range defs {
+			m[d.Name] = true
+		}
+		return m
+	}
+
+	// ProfileFull returns all tools.
+	t.Run("ProfileFull", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfileFull)
+		if len(defs) != len(toolNames) {
+			t.Errorf("ProfileFull: got %d tools, want %d", len(defs), len(toolNames))
+		}
+	})
+
+	// ProfilePatrol: includes hardware.metrics, patrol, deploy.list, knowledge.resolve
+	// but excludes hardware.detect.
+	t.Run("ProfilePatrol", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfilePatrol)
+		names := namesOf(defs)
+
+		included := []string{"hardware.metrics", "patrol", "deploy.list", "knowledge.resolve"}
+		for _, name := range included {
+			if !names[name] {
+				t.Errorf("ProfilePatrol should include %q", name)
+			}
+		}
+
+		excluded := []string{"hardware.detect"}
+		for _, name := range excluded {
+			if names[name] {
+				t.Errorf("ProfilePatrol should exclude %q", name)
+			}
+		}
+	})
+
+	// ProfileOperator: includes hardware.detect, hardware.metrics, knowledge.resolve, deploy.list
+	// but excludes patrol.
+	t.Run("ProfileOperator", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfileOperator)
+		names := namesOf(defs)
+
+		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list"}
+		for _, name := range included {
+			if !names[name] {
+				t.Errorf("ProfileOperator should include %q", name)
+			}
+		}
+
+		excluded := []string{"patrol"}
+		for _, name := range excluded {
+			if names[name] {
+				t.Errorf("ProfileOperator should exclude %q", name)
+			}
+		}
+	})
+}
+
 func TestRegisterAllTools(t *testing.T) {
 	s := NewServer()
 	deps := &ToolDeps{

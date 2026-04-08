@@ -164,13 +164,14 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 
 		slog.Info("tuning: testing config", "progress", fmt.Sprintf("%d/%d", i+1, session.Total), "config", candidate)
 
-		// Deploy with this config
+		// Deploy with this config and benchmark the ready endpoint returned by deploy.run.
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":  session.Config.Model,
-			"engine": session.Config.Engine,
-			"config": candidate,
+			"model":   session.Config.Model,
+			"engine":  session.Config.Engine,
+			"config":  candidate,
+			"no_pull": true,
 		})
-		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.run", deployArgs)
 		if err == nil {
 			err = toolResultError(deployResult)
 		}
@@ -178,15 +179,36 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 			slog.Warn("tuning: deploy failed, skipping config", "error", err)
 			continue
 		}
+		var deploySummary struct {
+			Address string         `json:"address"`
+			Config  map[string]any `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(deployResult.Content), &deploySummary); err != nil {
+			slog.Warn("tuning: deploy result parse failed, skipping config", "error", err)
+			continue
+		}
 
 		// Benchmark
+		endpoint := session.Config.Endpoint
+		if endpoint == "" {
+			endpoint = openAIChatCompletionsEndpoint(deploySummary.Address)
+		}
+		if endpoint == "" {
+			slog.Warn("tuning: deploy result missing ready endpoint, skipping config")
+			continue
+		}
+		deployConfig := deploySummary.Config
+		if len(deployConfig) == 0 {
+			deployConfig = candidate
+		}
 		benchArgs, _ := json.Marshal(map[string]any{
-			"model":       session.Config.Model,
-			"endpoint":    session.Config.Endpoint,
-			"concurrency": session.Config.Concurrency,
-			"rounds":      session.Config.Rounds,
-			"hardware":    session.Config.Hardware,
-			"engine":      session.Config.Engine,
+			"model":         session.Config.Model,
+			"endpoint":      endpoint,
+			"concurrency":   session.Config.Concurrency,
+			"rounds":        session.Config.Rounds,
+			"hardware":      session.Config.Hardware,
+			"engine":        session.Config.Engine,
+			"deploy_config": deployConfig,
 		})
 		result, err := t.tools.ExecuteTool(ctx, "benchmark.run", benchArgs)
 		if err == nil {
@@ -241,11 +263,12 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 	// Redeploy best config as final state
 	if session.BestConfig != nil {
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":  session.Config.Model,
-			"engine": session.Config.Engine,
-			"config": session.BestConfig,
+			"model":   session.Config.Model,
+			"engine":  session.Config.Engine,
+			"config":  session.BestConfig,
+			"no_pull": true,
 		})
-		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.run", deployArgs)
 		if err == nil {
 			err = toolResultError(deployResult)
 		}

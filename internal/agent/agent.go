@@ -44,6 +44,12 @@ type ToolExecutor interface {
 	ListTools() []ToolDefinition
 }
 
+// ProfiledToolExecutor extends ToolExecutor with profile-based tool filtering.
+type ProfiledToolExecutor interface {
+	ToolExecutor
+	ListToolsForProfile(profile string) []ToolDefinition
+}
+
 // ToolResult is the outcome of a tool execution.
 type ToolResult struct {
 	Content string `json:"content"`
@@ -110,10 +116,11 @@ type Agent struct {
 	tools    ToolExecutor
 	maxTurns int
 	sessions *SessionStore
+	profile  string
 
-	mu              sync.RWMutex
-	mode            toolMode
-	modeDetectedAt  time.Time
+	mu             sync.RWMutex
+	mode           toolMode
+	modeDetectedAt time.Time
 }
 
 // AgentOption configures the Agent.
@@ -130,6 +137,13 @@ func WithMaxTurns(n int) AgentOption {
 func WithSessions(s *SessionStore) AgentOption {
 	return func(a *Agent) {
 		a.sessions = s
+	}
+}
+
+// WithProfile sets the tool profile for the agent, limiting which tools are visible to the LLM.
+func WithProfile(p string) AgentOption {
+	return func(a *Agent) {
+		a.profile = p
 	}
 }
 
@@ -229,7 +243,16 @@ func (a *Agent) AskStream(ctx context.Context, sessionID, query string, cb Strea
 	}
 	messages = append(messages, Message{Role: "user", Content: query})
 
-	allTools := a.tools.ListTools()
+	var allTools []ToolDefinition
+	if a.profile != "" {
+		if pt, ok := a.tools.(ProfiledToolExecutor); ok {
+			allTools = pt.ListToolsForProfile(a.profile)
+		} else {
+			allTools = a.tools.ListTools()
+		}
+	} else {
+		allTools = a.tools.ListTools()
+	}
 	useTools := len(allTools) > 0 && a.toolsActive()
 	var allToolCalls []ToolCallInfo
 

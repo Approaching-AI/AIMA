@@ -330,6 +330,19 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 	return defs
 }
 
+func (a *mcpToolAdapter) ListToolsForProfile(profile string) []agent.ToolDefinition {
+	mcpDefs := a.server.ListToolsForProfile(mcp.Profile(profile))
+	defs := make([]agent.ToolDefinition, len(mcpDefs))
+	for i, d := range mcpDefs {
+		defs[i] = agent.ToolDefinition{
+			Name:        d.Name,
+			Description: d.Description,
+			InputSchema: d.InputSchema,
+		}
+	}
+	return defs
+}
+
 type automationToolAdapter struct {
 	base *mcpToolAdapter
 }
@@ -341,6 +354,10 @@ func (a *automationToolAdapter) ExecuteTool(ctx context.Context, name string, ar
 
 func (a *automationToolAdapter) ListTools() []agent.ToolDefinition {
 	return a.base.ListTools()
+}
+
+func (a *automationToolAdapter) ListToolsForProfile(profile string) []agent.ToolDefinition {
+	return a.base.ListToolsForProfile(profile)
 }
 
 // fleetMCPAdapter bridges mcp.Server to fleet.MCPExecutor interface.

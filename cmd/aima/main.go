@@ -134,7 +134,7 @@ func run() error {
 	var explorationMgr *agent.ExplorationManager
 	llmClient := buildLLMClient(ctx, db)
 	sessionStore := agent.NewSessionStore()
-	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
+	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore), agent.WithProfile("operator"))
 	dispatcher := agent.NewDispatcher(goAgent)
 
 	// 9b. Wire agent-related ToolDeps (dispatcher created after buildToolDeps)

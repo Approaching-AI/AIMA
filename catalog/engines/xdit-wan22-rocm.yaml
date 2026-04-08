@@ -1,0 +1,133 @@
+kind: engine_asset
+metadata:
+  name: xdit-wan22-rocm
+  type: xdit-wan22
+  version: "1.0"
+image:
+  # 8× AMD W7900D RDNA3 视频生成镜像
+  # xDiT 0.4.5 (source) + DistVAE (source) + diffusers 0.37.1 + PyTorch 2.10.0-rocm
+  # Ulysses-8 sequence parallelism + FSDP + DistVAE parallel VAE decode
+  name: wan22-xdit-8gpu
+  tag: "v1.0-rdna3"
+  size_approx_mb: 25600
+  platforms: [linux/amd64]
+  distribution: local
+patterns:
+  - "^xdit-wan22"
+  - "xdit.*wan"
+  - "wan.*xdit"
+hardware:
+  gpu_arch: RDNA3
+  vram_min_mib: 40960
+  gpu_count_min: 8
+startup:
+  # torchrun 启动 8 进程，每卡 1 进程
+  command: ["torchrun", "--nproc_per_node=8"]
+  env:
+    HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+    HIP_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  default_args:
+    ulysses_degree: 8
+    ring_degree: 1
+    fully_shard_degree: 8
+    use_parallel_vae: true
+    shard_dit: true
+    shard_t5_encoder: true
+    num_inference_steps: 20
+    guidance_scale: 5.0
+  health_check:
+    path: null
+    timeout_s: 600
+  warmup:
+    enabled: false
+  log_patterns:
+    phases:
+      - name: loading_model
+        pattern: "Loading model pipeline|Sharding.*FSDP"
+        progress: 30
+      - name: fsdp_complete
+        pattern: "Parallel VAE decoder enabled"
+        progress: 60
+      - name: inference
+        pattern: "Running model"
+        progress: 70
+      - name: done
+        pattern: "DONE!"
+        progress: 100
+    errors:
+      - pattern: "OutOfMemoryError|HIP out of memory"
+        message: "GPU OOM — check fully_shard_degree is set"
+      - pattern: "WanDecoderAdapter"
+        message: "DistVAE outdated — install from source"
+api:
+  protocol: custom
+  base_path: null
+amplifier:
+  features:
+    - multi_gpu_inference
+    - fsdp_model_sharding
+    - ulysses_sequence_parallelism
+    - distvae_parallel_vae_decode
+    - video_generation
+  performance_gain: "8-GPU FSDP+Ulysses parallel: 255s for 81 frames 480x832 (vs single-GPU impossible due to OOM)"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+  performance_multiplier: 8.0
+  extends_resource_boundary: true
+  effective_vram_multiplier: 8.0
+partition_hints:
+  min_gpu_memory_mib: 40960
+  min_gpu_count: 8
+  recommended_gpu_cores_percent: 100
+time_constraints:
+  cold_start_s: [120, 180]
+  generation_per_81_frames_s: [240, 300]
+power_constraints:
+  typical_draw_watts: [200, 300]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/amd64: "container"
+dependencies:
+  packages:
+    - name: xfuser
+      version: "0.4.5"
+      source: "https://github.com/xdit-project/xDiT (source install)"
+    - name: distvae
+      version: "0.0.0b5"
+      source: "https://github.com/xdit-project/DistVAE (source install, WanDecoderAdapter required)"
+    - name: diffusers
+      version: "0.37.1"
+    - name: torch
+      version: "2.10.0+rocm"
+    - name: transformers
+      version: "5.5.0"
+  models:
+    - name: Wan2.2-T2V-A14B-Diffusers
+      size_gb: 118
+      format: diffusers
+      source: "Wan-AI/Wan2.2-T2V-A14B-Diffusers (ModelScope or HuggingFace)"
+    - name: Wan2.2-I2V-A14B-Diffusers
+      size_gb: 118
+      format: diffusers
+      source: "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+notes: |
+  xDiT 统一多 GPU 加速框架，专为 Wan2.2 MoE 双 UNET 架构优化。
+  核心技术栈：
+  - FSDP (fully_shard_degree=8): 每张 GPU 仅持有 1/8 transformer 参数 (~6.6GB/卡)
+  - Ulysses-8 序列并行: attention 通过 all-to-all 分布到 8 卡
+  - DistVAE 并行 VAE 解码: 空间 patch 并行沿 H 维度切分，避免 rank0 单卡 OOM
+  - 双 transformer (high_noise + low_noise) 均通过 FSDP 分片
+
+  关键注意事项：
+  - PyPI 的 xDiT 包过旧，必须从 GitHub 源码安装
+  - DistVAE 必须从 GitHub 源码安装（PyPI 版缺少 WanDecoderAdapter）
+  - fully_shard_degree 必须 > 1，否则会尝试将完整 53GB transformer 加载到单卡
+  - 模型必须是 diffusers 格式（非 native Wan2.2 checkpoint）
+  - guidance_scale_2 必须显式传入（即使为 None）
+
+  验证记录 2026-04-05:
+  - 832×480, 81帧, 20步, guidance 5.0 → 255s (4.25分钟)
+  - 8卡 GPU 利用率 100%, 显存占用 9-25% (FSDP 分片后)
+  - 输出: H.264 MP4, 16fps, 5.06秒视频

@@ -3,6 +3,25 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [v0.3.4] - 2026-04-09
+
+### Added
+
+- **Explorer Agent Planner** — replaced single-shot JSON LLM planner with document-driven PDCA agent workflow (`ExplorerAgentPlanner`). LLM operates as a research agent reading/writing documents in `~/.aima/explorer/` workspace via 7 bash-like tools (cat/ls/write/append/grep/query/done), with three-phase Chinese system prompts (Plan/Check/Act)
+- **Explorer Workspace** — `ExplorerWorkspace` manages fact documents (device-profile.md, available-combos.md, knowledge-base.md), analysis documents (plan.md, summary.md), and experiment results (experiments/*.md) with read-only guards and path safety
+- **Knowledge query tool** — `query` tool wired to SQLite knowledge store (search/compare/gaps/aggregate), enabling LLM to query historical benchmark data during planning
+- **Enriched experiment results** — benchmark entries now include concurrency, input/max tokens, and latency metrics from `HarvestResult`, giving the Check phase richer data for analysis
+
+### Changed
+
+- **Engine discovery decoupled** — removed `installedEnginesContainResolvedAsset` gate from `WithGatherLocalEngines`; all locally installed engines are now visible to Explorer regardless of catalog match. Catalog YAML only enriches metadata (Features, TunableParams)
+- **AnalyzablePlanner interface** — extends existing `Planner` interface with `Analyze()` method for PDCA Check+Act phases without breaking `RulePlanner`
+
+### Removed
+
+- **LLMPlanner** — deleted `explorer_llmplanner.go` and `explorer_llmplanner_test.go` (replaced by `ExplorerAgentPlanner`)
+- **Dead code** — removed unused `installedEnginesContainResolvedAsset` from `engine_match.go`
+
 ## [v0.3.3] - 2026-04-09
 
 ### Fixed

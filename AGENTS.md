@@ -172,7 +172,7 @@ internal/
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
   mcp/                        # MCP server + RegisterAllTools + tools_*.go implementations
-  agent/                      # Go Agent loop (L3a) + Dispatcher
+  agent/                      # Go Agent (L3a) + Dispatcher + Explorer (PDCA agent planner, workspace, tools, harvester)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
 catalog/                      # Knowledge assets (go:embed, compiled in)

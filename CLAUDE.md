@@ -249,6 +249,7 @@ Embedded Web UI with per-card GPU metrics, collapsible panels, multi-socket CPU 
 Central knowledge server (`cmd/central`). TUI dashboard (Bubble Tea). ResourceSlot abstraction.
 Knowledge query engine complete (6 query types). Agent: patrol + self-healing with auto-diagnosis/recovery.
 L2c golden config injection in resolve chain. Time constraint engine filtering.
+Explorer Agent Planner: 文档驱动 PDCA 工作流（ExplorerWorkspace + 7 bash 风格工具 + 知识库查询），替代单次 JSON prompt。Engine discovery 从 catalog 匹配解耦。
 
 ### v0.3.0 Completed — "Edge Intelligence"
 
@@ -334,7 +335,7 @@ internal/
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
   mcp/                        # MCP server + 56 tool implementations
-  agent/                      # Go Agent loop (L3a) + Dispatcher
+  agent/                      # Go Agent (L3a) + Dispatcher + Explorer (PDCA agent planner, workspace, tools, harvester)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
   tui/                        # Terminal dashboard (Bubble Tea, lipgloss)

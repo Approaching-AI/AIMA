@@ -24,7 +24,7 @@ variants:
       vram_min_mib: 36864
       gpu_count_min: 1
       unified_memory: false
-    engine: z-image-diffusers
+    engine: z-image-diffusers-rocm
     format: safetensors
     source:
       type: huggingface
@@ -62,7 +62,7 @@ variants:
       vram_min_mib: 40960
       gpu_count_min: 2
       unified_memory: false
-    engine: z-image-diffusers
+    engine: z-image-diffusers-rocm
     format: safetensors
     source:
       type: huggingface
@@ -89,19 +89,75 @@ variants:
         GPU 0-1 has persistent OOM (suspected NUMA topology on dual EPYC 9334).
         Docker: vllm-test (PyTorch 2.10 + ROCm 7.2). HSA_OVERRIDE_GFX_VERSION=11.0.0.
 
-  # --- GB10 Blackwell (diffusers, BF16, unified memory) ---
-  # 106GB model on 128GB unified → gpu_memory tight but feasible
+  # --- GB10 Blackwell — BF16 全精度, diffusers baseline ---
+  # 106GB model on 128.5GB unified → 112.6GB GPU mem, fits without offload
+  # Validated 2026-04-09: 512×512 20steps=43.5s, torch.compile=37.3s (1.17x)
   - name: flux2-dev-blackwell-diffusers-bf16
     hardware:
       gpu_arch: Blackwell
-      vram_min_mib: 65536
+      vram_min_mib: 115712
       unified_memory: true
     engine: z-image-diffusers
     format: safetensors
+    source:
+      type: modelscope
+      repo: black-forest-labs/FLUX.2-dev
     default_config:
       dtype: bfloat16
       num_inference_steps: 20
-      height: 1024
-      width: 1024
+      height: 512
+      width: 512
+      guidance_scale: 3.5
     expected_performance:
-      notes: "Estimated. FLUX.2-dev 106GB BF16 on GB10 128GB unified memory. Tight fit — may need sequential offload or reduced resolution."
+      seconds_per_step: [2.1, 2.2]
+      total_time_s: [43, 44]
+      vram_mib: 115302
+      notes: >-
+        Validated 2026-04-09 on GB10 DGX Spark (SM121, CC12.1, 128.5GB unified).
+        diffusers 0.37.1, Flux2Pipeline BF16. Resolution scaling (20 steps, baseline):
+        512×512=44s, 768×768=84s, 1024×1024=131s, 1280×720=131s, 1280×1280=232s.
+        Linear with pixel count (~140s/Mpx).
+        torch.compile max-autotune: 1.17x but 234s compile overhead +
+        "Not enough SMs for autotune_gemm" warning on SM121.
+        channels_last: no benefit (0.97x).
+        Container: lmsysorg/sglang:dev-arm64-cu13.
+
+  # --- GB10 Blackwell — BF16, TeaCache 优化 (推荐) ---
+  # TeaCache: 训练无关的 DiT 去噪步骤缓存, CVPR 2025 Highlight
+  # Monkey-patch Flux2Transformer2DModel.forward, 跳过相似步骤的 transformer blocks
+  # Validated 2026-04-09: thresh=0.4 → 22.3s (1.95x), thresh=0.6 → 15.8s (2.75x)
+  - name: flux2-dev-blackwell-teacache-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 115712
+      unified_memory: true
+    engine: z-image-diffusers
+    format: safetensors
+    source:
+      type: modelscope
+      repo: black-forest-labs/FLUX.2-dev
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      height: 512
+      width: 512
+      guidance_scale: 3.5
+      teacache_enabled: true
+      teacache_rel_l1_thresh: 0.4
+    expected_performance:
+      seconds_per_step: [1.1, 1.2]
+      total_time_s: [22, 23]
+      vram_mib: 115302
+      notes: >-
+        Validated 2026-04-09 on GB10 DGX Spark. TeaCache (arXiv:2411.19108) monkey-patch
+        on Flux2Transformer2DModel — FLUX.2 adapted (Flux2Modulation.split for modulated input,
+        FLUX.1 polynomial coefficients [498.65, -283.78, 55.86, -3.82, 0.264] verified compatible).
+        Threshold sweep: 0.25=24.4s/1.79x (9/20 cached, near-lossless),
+        0.4=22.3s/1.95x (10/20, recommended default),
+        0.6=15.8s/2.75x (13/20, preview quality),
+        0.8=13.7s/3.17x (14/20, visible degradation).
+        Zero overhead — no training, compilation, or extra memory needed.
+        Resolution scaling (thresh=0.4): 512×512=23s, 768×768=42s, 1024×1024=68s,
+        1280×720=66s, 1280×1280=118s. Speedup ~1.95-1.98x stable across all resolutions.
+        TeaCache + torch.compile stackable: estimated ~2.3x combined at thresh=0.4.
+        Full benchmark report: docs/flux2-gb10-benchmark-report-2026-04.md.

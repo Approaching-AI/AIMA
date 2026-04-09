@@ -252,6 +252,96 @@ func TestWorkspacePathEscape(t *testing.T) {
 	}
 }
 
+func TestWriteExperimentResult(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	task := TaskSpec{
+		Kind:   "validate",
+		Model:  "gemma-4-31B-it",
+		Engine: "vllm",
+		EngineParams: map[string]any{
+			"gpu_memory_utilization": 0.90,
+			"tensor_parallel_size":   2,
+		},
+	}
+	result := ExperimentResult{
+		Status:     "completed",
+		StartedAt:  "2026-04-09T20:15:03Z",
+		DurationS:  342,
+		ColdStartS: 45,
+		Benchmarks: []BenchmarkEntry{
+			{Concurrency: 1, InputTokens: 128, MaxTokens: 256,
+				ThroughputTPS: 95.2, LatencyP50Ms: 42, LatencyP99Ms: 118},
+		},
+	}
+
+	path, err := ws.WriteExperimentResult(1, task, result)
+	if err != nil {
+		t.Fatalf("WriteExperimentResult: %v", err)
+	}
+
+	content, _ := ws.ReadFile(path)
+	if !strings.Contains(content, "gemma-4-31B-it") {
+		t.Error("experiment missing model name")
+	}
+	if !strings.Contains(content, "completed") {
+		t.Error("experiment missing status")
+	}
+	if !strings.Contains(content, "95.2") {
+		t.Error("experiment missing throughput")
+	}
+}
+
+func TestParsePlanFromWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	planMD := "# Exploration Plan\n\n## Strategy\nTest.\n\n## Tasks\n```yaml\n- kind: validate\n  model: test-model\n  engine: vllm\n  engine_params:\n    gpu_memory_utilization: 0.90\n  benchmark:\n    concurrency: [1]\n    input_tokens: [128]\n    max_tokens: [256]\n    requests_per_combo: 3\n  reason: \"test\"\n```\n"
+
+	_ = ws.WriteFile("plan.md", planMD)
+	tasks, err := ws.ParsePlan()
+	if err != nil {
+		t.Fatalf("ParsePlan: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Model != "test-model" {
+		t.Errorf("ParsePlan: got %+v", tasks)
+	}
+}
+
+func TestExtractRecommendations(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	summaryMD := "# Exploration Summary\n\n## Key Findings\n- vllm works\n\n## Recommended Configurations\n```yaml\n- model: test-model\n  engine: vllm\n  hardware: nvidia-rtx4090-x86\n  engine_params:\n    gpu_memory_utilization: 0.90\n  performance:\n    throughput_tps: 95.2\n    latency_p50_ms: 42\n  confidence: validated\n  note: \"first test\"\n```\n"
+
+	_ = ws.WriteFile("summary.md", summaryMD)
+	configs, err := ws.ExtractRecommendations()
+	if err != nil {
+		t.Fatalf("ExtractRecommendations: %v", err)
+	}
+	if len(configs) != 1 || configs[0].Model != "test-model" {
+		t.Errorf("got %+v", configs)
+	}
+}
+
+func TestExtractRecommendations_NoSummary(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+	// summary.md doesn't exist yet
+	configs, err := ws.ExtractRecommendations()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if configs != nil {
+		t.Errorf("expected nil configs, got %+v", configs)
+	}
+}
+
 func TestRefreshFactDocuments(t *testing.T) {
 	dir := t.TempDir()
 	ws := NewExplorerWorkspace(dir)

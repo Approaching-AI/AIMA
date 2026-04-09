@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -467,6 +468,91 @@ func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) s
 	}
 
 	return sb.String()
+}
+
+// ExperimentResult records the outcome of a single experiment task.
+type ExperimentResult struct {
+	Status     string           `yaml:"status"`
+	StartedAt  string           `yaml:"started_at"`
+	DurationS  float64          `yaml:"duration_s"`
+	ColdStartS float64          `yaml:"cold_start_s,omitempty"`
+	Error      string           `yaml:"error,omitempty"`
+	Benchmarks []BenchmarkEntry `yaml:"benchmarks,omitempty"`
+}
+
+// BenchmarkEntry records a single benchmark data point.
+type BenchmarkEntry struct {
+	Concurrency   int     `yaml:"concurrency"`
+	InputTokens   int     `yaml:"input_tokens"`
+	MaxTokens     int     `yaml:"max_tokens"`
+	ThroughputTPS float64 `yaml:"throughput_tps"`
+	LatencyP50Ms  float64 `yaml:"latency_p50_ms"`
+	LatencyP99Ms  float64 `yaml:"latency_p99_ms"`
+}
+
+// WriteExperimentResult writes experiments/NNN-model-engine.md for the given task and result.
+// Uses writeFactDocument to bypass the read-only guard (experiments/ is AIMA-owned).
+// Returns the relative path written.
+func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, result ExperimentResult) (string, error) {
+	taskYAML, err := yaml.Marshal(task)
+	if err != nil {
+		return "", fmt.Errorf("marshal task: %w", err)
+	}
+	resultYAML, err := yaml.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Experiment %03d: %s / %s\n\n", index, task.Model, task.Engine)
+
+	fmt.Fprintf(&sb, "## Task\n\n```yaml\n%s```\n\n", string(taskYAML))
+	fmt.Fprintf(&sb, "## Result\n\n```yaml\n%s```\n\n", string(resultYAML))
+
+	// Benchmark matrix table
+	fmt.Fprintf(&sb, "## Benchmark Matrix\n\n")
+	if len(result.Benchmarks) == 0 {
+		fmt.Fprintf(&sb, "_No benchmark data_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Concurrency | Input Tokens | Max Tokens | Throughput (TPS) | P50 Latency (ms) | P99 Latency (ms) |\n")
+		fmt.Fprintf(&sb, "|-------------|--------------|------------|-----------------|-----------------|------------------|\n")
+		for _, b := range result.Benchmarks {
+			fmt.Fprintf(&sb, "| %d | %d | %d | %.1f | %.0f | %.0f |\n",
+				b.Concurrency, b.InputTokens, b.MaxTokens,
+				b.ThroughputTPS, b.LatencyP50Ms, b.LatencyP99Ms)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "## Agent Notes\n\n_To be filled by agent after analysis._\n")
+
+	rel := fmt.Sprintf("experiments/%03d-%s-%s.md", index, task.Model, task.Engine)
+	if err := w.writeFactDocument(rel, sb.String()); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+// ParsePlan reads plan.md and returns the task list.
+func (w *ExplorerWorkspace) ParsePlan() ([]TaskSpec, error) {
+	md, err := w.ReadFile("plan.md")
+	if err != nil {
+		return nil, fmt.Errorf("read plan.md: %w", err)
+	}
+	return parsePlanTasks(md)
+}
+
+// ExtractRecommendations reads summary.md and returns the recommended configurations.
+// Returns nil, nil if summary.md does not exist yet (normal early-session state).
+func (w *ExplorerWorkspace) ExtractRecommendations() ([]RecommendedConfig, error) {
+	md, err := w.ReadFile("summary.md")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read summary.md: %w", err)
+	}
+	return parseRecommendedConfigs(md)
 }
 
 // extractSection returns the content from a markdown heading until the next

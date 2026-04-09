@@ -747,6 +747,8 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 		"max_rounds",
 		"max_plan_duration",
 		"max_tokens_per_day",
+		"max_cycles",
+		"max_tasks",
 	} {
 		value, err := db.GetConfig(ctx, explorerConfigStorageKey(key))
 		if err != nil || strings.TrimSpace(value) == "" {
@@ -820,6 +822,18 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 			} else {
 				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
 			}
+		case "max_cycles":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxCycles = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_tasks":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxTasks = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
 		}
 	}
 	return config
@@ -841,6 +855,8 @@ func explorerConfigResponse(explorer *agent.Explorer) map[string]any {
 		"rounds_used":         status.RoundsUsed,
 		"max_tokens_per_day":  status.MaxTokensPerDay,
 		"tokens_used_today":   status.TokensUsedToday,
+		"max_cycles":          status.MaxCycles,
+		"max_tasks":           status.MaxTasks,
 	}
 }
 

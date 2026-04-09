@@ -41,6 +41,8 @@ type ExplorerStatus struct {
 	MaxRounds       int            `json:"max_rounds"`
 	TokensUsedToday int            `json:"tokens_used_today"`
 	MaxTokensPerDay int            `json:"max_tokens_per_day"`
+	MaxCycles       int            `json:"max_cycles"`
+	MaxTasks        int            `json:"max_tasks"`
 	LastPlanMetrics *PlanMetrics   `json:"last_plan_metrics,omitempty"`
 }
 
@@ -313,7 +315,9 @@ func (e *Explorer) Status() ExplorerStatus {
 		MaxRounds:       e.config.MaxRounds,
 		TokensUsedToday: e.tokensUsedToday,
 		MaxTokensPerDay: e.config.MaxTokensPerDay,
-		LastPlanMetrics:  e.lastPlanMetrics,
+		MaxCycles:       e.config.MaxCycles,
+		MaxTasks:        e.config.MaxTasks,
+		LastPlanMetrics: e.lastPlanMetrics,
 	}
 }
 
@@ -1138,8 +1142,8 @@ func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration,
 
 func (e *Explorer) refreshTier(ctx context.Context) bool {
 	// O4: If agent is available but tool mode is still unknown, probe it.
-	// This resolves the Tier 1→2 self-upgrade deadlock: LLMPlanner calls
-	// llm.ChatCompletion directly (not Agent.Ask), so tool mode detection
+	// This resolves the Tier 1→2 self-upgrade deadlock: ExplorerAgentPlanner
+	// calls llm.ChatCompletion directly (not Agent.Ask), so tool mode detection
 	// that normally happens inside Ask() never triggers.
 	if e.agent != nil && e.agent.Available() && e.agent.ToolMode() == "unknown" {
 		e.agent.ProbeToolMode(ctx)

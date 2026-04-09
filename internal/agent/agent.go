@@ -223,7 +223,7 @@ func (a *Agent) setToolMode(m toolMode) {
 // ProbeToolMode performs a lightweight LLM call with a dummy tool to detect
 // whether the backend supports tool calling. This resolves the Tier 1→2
 // upgrade deadlock where Explorer cannot self-detect tool mode because
-// LLMPlanner bypasses Agent.Ask() which is the normal detection path.
+// ExplorerAgentPlanner bypasses Agent.Ask() which is the normal detection path.
 func (a *Agent) ProbeToolMode(ctx context.Context) {
 	if a.llm == nil {
 		return

@@ -20,7 +20,7 @@ const (
 	ConfigInviteCode = "support.invite_code"
 	ConfigWorkerCode = "support.worker_code"
 
-	DefaultEndpoint   = "https://aimaserver.com/platform"
+	DefaultEndpoint   = "https://aimaserver.com"
 	DefaultInviteCode = "channel-aima"
 
 	configStateDeviceID             = "support.state.device_id"

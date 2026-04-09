@@ -48,7 +48,7 @@ func newAskForHelpCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "askforhelp [request]",
 		Short: "Connect to the support service and optionally create a remote help task",
-		Long:  "Register this AIMA instance as a support device (https://aimaserver.com/platform), then optionally create a help task from a natural-language request.",
+		Long:  "Register this AIMA instance as a support device (https://aimaserver.com), then optionally create a help task from a natural-language request.",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps == nil || app.ToolDeps.SupportAskForHelp == nil {

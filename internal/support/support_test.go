@@ -439,6 +439,24 @@ func TestServiceGoUXManifestJSON(t *testing.T) {
 	}
 }
 
+func TestServiceDefaultEndpointUsesRootAPIBase(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newMemoryStore()
+	svc := NewService(store)
+
+	if err := svc.persistOverrides(ctx, AskRequest{}); err != nil {
+		t.Fatalf("persistOverrides: %v", err)
+	}
+	if got := store.mustGet(ConfigEndpoint); got != DefaultEndpoint {
+		t.Fatalf("stored default endpoint = %q, want %q", got, DefaultEndpoint)
+	}
+	if got := svc.endpointFromConfig(ctx); got != "https://aimaserver.com/api/v1" {
+		t.Fatalf("normalized endpoint = %q, want %q", got, "https://aimaserver.com/api/v1")
+	}
+}
+
 type memoryStore struct {
 	mu     sync.Mutex
 	values map[string]string

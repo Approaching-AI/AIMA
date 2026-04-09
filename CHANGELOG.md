@@ -3,6 +3,13 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [v0.3.3] - 2026-04-09
+
+### Fixed
+
+- **Support service default endpoint** — changed the built-in support base URL from `https://aimaserver.com/platform` to `https://aimaserver.com`, restoring default `aima askforhelp` and `support.askforhelp` connectivity to the live `/api/v1` support API
+- **Support docs** — updated CLI and MCP documentation to describe the corrected default support endpoint and `support.endpoint` override behavior
+
 ## [v0.3.0] - 2026-04-03 — "Edge Intelligence"
 
 94 commits, 333 files changed, 45,468 insertions, 15,350 deletions since v0.2.0.

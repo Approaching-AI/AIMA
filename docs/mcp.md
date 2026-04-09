@@ -85,6 +85,9 @@ Go Agent (直接调用)，保证行为一致。
 
 Profile filtering is advisory. `tools/list` uses the server profile for discovery, and `ListToolsForProfile()` feeds the Go Agent's `agent.ask` path. The Explorer planner is a pure-text planner and does not request a filtered tool list.
 
+`support.askforhelp` 默认连接 `https://aimaserver.com`，AIMA 会在运行时自动补齐 `/api/v1`。
+如需覆盖默认地址，可传入 `endpoint` 参数，或提前配置 `support.endpoint` / `AIMA_SUPPORT_ENDPOINT`。
+
 ---
 
 ## 工具定义示例

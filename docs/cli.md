@@ -88,6 +88,9 @@ aima openclaw sync                        # 同步已部署模型到 OpenClaw
 aima askforhelp [request]                 # 请求远程协助/支持服务
 ```
 
+`aima askforhelp` 默认连接 `https://aimaserver.com`，运行时自动归一化为 `/api/v1` 支持接口。
+如需覆盖，可使用 `--endpoint`，或通过 `aima config set support.endpoint <url>` / `AIMA_SUPPORT_ENDPOINT` 持久化配置。
+
 ### 集成与运维
 
 ```bash

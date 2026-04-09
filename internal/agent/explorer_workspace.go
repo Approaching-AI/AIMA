@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -247,6 +248,225 @@ func parseRecommendedConfigs(md string) ([]RecommendedConfig, error) {
 		return nil, fmt.Errorf("parse recommendations yaml: %w", err)
 	}
 	return configs, nil
+}
+
+// RefreshFactDocuments regenerates all AIMA fact documents from current PlanInput.
+// Uses writeFactDocument to bypass the read-only guard (these are AIMA-owned files).
+func (w *ExplorerWorkspace) RefreshFactDocuments(input PlanInput) error {
+	now := time.Now().Format("2006-01-02 15:04:05")
+	docs := map[string]string{
+		"device-profile.md":  w.generateDeviceProfile(input, now),
+		"available-combos.md": w.generateAvailableCombos(input, now),
+		"knowledge-base.md":  w.generateKnowledgeBase(input, now),
+	}
+	for name, content := range docs {
+		if err := w.writeFactDocument(name, content); err != nil {
+			return fmt.Errorf("refresh %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// generateDeviceProfile produces device-profile.md with hardware, models, engines, and active deployments.
+func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) string {
+	hw := input.Hardware
+	totalVRAM := hw.VRAMMiB * hw.GPUCount
+	if hw.GPUCount <= 1 {
+		totalVRAM = hw.VRAMMiB
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Device Profile\n\n_Generated: %s_\n\n", now)
+
+	// Hardware section
+	fmt.Fprintf(&sb, "## Hardware\n\n")
+	fmt.Fprintf(&sb, "| Field | Value |\n|-------|-------|\n")
+	fmt.Fprintf(&sb, "| Profile | %s |\n", hw.Profile)
+	fmt.Fprintf(&sb, "| GPU Arch | %s |\n", hw.GPUArch)
+	fmt.Fprintf(&sb, "| GPU Count | %d |\n", hw.GPUCount)
+	fmt.Fprintf(&sb, "| VRAM per GPU (MiB) | %d |\n", hw.VRAMMiB)
+	fmt.Fprintf(&sb, "| Total VRAM (MiB) | %d |\n\n", totalVRAM)
+
+	// Models table
+	fmt.Fprintf(&sb, "## Local Models\n\n")
+	fmt.Fprintf(&sb, "| Name | Format | Type | Size (GiB) | Fits VRAM |\n")
+	fmt.Fprintf(&sb, "|------|--------|------|------------|----------|\n")
+	for _, m := range input.LocalModels {
+		sizeGiB := float64(m.SizeBytes) / (1024 * 1024 * 1024)
+		fits := "✅"
+		reason := ""
+		if !modelFitsVRAM(m.Name, input.LocalModels, totalVRAM) {
+			fits = "❌"
+			reason = " (VRAM overflow)"
+		}
+		fmt.Fprintf(&sb, "| %s | %s | %s | %.2f | %s%s |\n", m.Name, m.Format, m.Type, sizeGiB, fits, reason)
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	// Engines table
+	fmt.Fprintf(&sb, "## Local Engines\n\n")
+	fmt.Fprintf(&sb, "| Type | Runtime | Features | Tunable Params |\n")
+	fmt.Fprintf(&sb, "|------|---------|----------|----------------|\n")
+	for _, e := range input.LocalEngines {
+		features := strings.Join(e.Features, ", ")
+		paramKeys := make([]string, 0, len(e.TunableParams))
+		for k := range e.TunableParams {
+			paramKeys = append(paramKeys, k)
+		}
+		params := strings.Join(paramKeys, ", ")
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n", e.Type, e.Runtime, features, params)
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	// Active deployments
+	fmt.Fprintf(&sb, "## Active Deployments\n\n")
+	if len(input.ActiveDeploys) == 0 {
+		fmt.Fprintf(&sb, "_None_\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Engine | Status |\n|-------|--------|--------|\n")
+		for _, d := range input.ActiveDeploys {
+			fmt.Fprintf(&sb, "| %s | %s | %s |\n", d.Model, d.Engine, d.Status)
+		}
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	return sb.String()
+}
+
+// generateAvailableCombos produces available-combos.md classifying all model×engine pairs.
+func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string) string {
+	hw := input.Hardware
+	totalVRAM := hw.VRAMMiB * hw.GPUCount
+	if hw.GPUCount <= 1 {
+		totalVRAM = hw.VRAMMiB
+	}
+
+	// Build skip set for quick lookup
+	skipSet := make(map[string]string) // "model|engine" → reason
+	for _, s := range input.SkipCombos {
+		skipSet[s.Model+"|"+s.Engine] = s.Reason
+	}
+
+	type comboRow struct {
+		model, engine, reason string
+	}
+	var unexplored, explored, incompatible []comboRow
+
+	for _, m := range input.LocalModels {
+		for _, e := range input.LocalEngines {
+			key := m.Name + "|" + e.Type
+
+			// Check incompatibility
+			var incompat string
+			if !engineFormatCompatible(e.Type, m.Format) {
+				incompat = fmt.Sprintf("format mismatch (%s vs %s)", e.Type, m.Format)
+			} else if !engineSupportsModelType(e.Type, m.Type) {
+				incompat = fmt.Sprintf("type mismatch (%s does not support %s)", e.Type, m.Type)
+			} else if !modelFitsVRAM(m.Name, input.LocalModels, totalVRAM) {
+				incompat = "VRAM overflow"
+			}
+
+			if incompat != "" {
+				incompatible = append(incompatible, comboRow{m.Name, e.Type, incompat})
+				continue
+			}
+
+			if reason, ok := skipSet[key]; ok {
+				explored = append(explored, comboRow{m.Name, e.Type, reason})
+				continue
+			}
+
+			unexplored = append(unexplored, comboRow{m.Name, e.Type, ""})
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s_\n\n", now)
+
+	fmt.Fprintf(&sb, "## Unexplored\n\n")
+	if len(unexplored) == 0 {
+		fmt.Fprintf(&sb, "_None_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Engine |\n|-------|--------|\n")
+		for _, r := range unexplored {
+			fmt.Fprintf(&sb, "| %s | %s |\n", r.model, r.engine)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "## Already Explored\n\n")
+	if len(explored) == 0 {
+		fmt.Fprintf(&sb, "_None_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Engine | Reason |\n|-------|--------|--------|\n")
+		for _, r := range explored {
+			fmt.Fprintf(&sb, "| %s | %s | %s |\n", r.model, r.engine, r.reason)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "## Incompatible\n\n")
+	if len(incompatible) == 0 {
+		fmt.Fprintf(&sb, "_None_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Engine | Reason |\n|-------|--------|--------|\n")
+		for _, r := range incompatible {
+			fmt.Fprintf(&sb, "| %s | %s | %s |\n", r.model, r.engine, r.reason)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	return sb.String()
+}
+
+// generateKnowledgeBase produces knowledge-base.md with advisories, history, and engine catalog capabilities.
+func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Knowledge Base\n\n_Generated: %s_\n\n", now)
+
+	// Advisories
+	fmt.Fprintf(&sb, "## Advisories\n\n")
+	if len(input.Advisories) == 0 {
+		fmt.Fprintf(&sb, "_No advisories_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| ID | Type | Model | Engine | Confidence | Reasoning |\n")
+		fmt.Fprintf(&sb, "|----|------|-------|--------|------------|----------|\n")
+		for _, a := range input.Advisories {
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+				a.ID, a.Type, a.TargetModel, a.TargetEngine, a.Confidence, a.Reasoning)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	// Recent History
+	fmt.Fprintf(&sb, "## Recent History\n\n")
+	if len(input.History) == 0 {
+		fmt.Fprintf(&sb, "_No history_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Engine | Kind | Status | Goal |\n")
+		fmt.Fprintf(&sb, "|-------|--------|------|--------|------|\n")
+		for _, h := range input.History {
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
+				h.ModelID, h.EngineID, h.Kind, h.Status, h.Goal)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	// Catalog Engine Capabilities
+	fmt.Fprintf(&sb, "## Catalog Engine Capabilities\n\n")
+	if len(input.LocalEngines) == 0 {
+		fmt.Fprintf(&sb, "_No engines_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Engine | Runtime | Features | Notes |\n")
+		fmt.Fprintf(&sb, "|--------|---------|----------|-------|\n")
+		for _, e := range input.LocalEngines {
+			features := strings.Join(e.Features, ", ")
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n", e.Type, e.Runtime, features, e.Notes)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	return sb.String()
 }
 
 // extractSection returns the content from a markdown heading until the next

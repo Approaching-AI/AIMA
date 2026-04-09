@@ -251,3 +251,62 @@ func TestWorkspacePathEscape(t *testing.T) {
 		t.Error("path escape should fail")
 	}
 }
+
+func TestRefreshFactDocuments(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	input := PlanInput{
+		Hardware: HardwareInfo{
+			Profile:  "nvidia-rtx4090-x86",
+			GPUArch:  "Ada",
+			GPUCount: 2,
+			VRAMMiB:  49140,
+		},
+		LocalModels: []LocalModel{
+			{Name: "qwen3-4b", Format: "safetensors", Type: "llm", SizeBytes: 7_500_000_000},
+			{Name: "bge-m3", Format: "pytorch", Type: "embedding", SizeBytes: 2_000_000_000},
+		},
+		LocalEngines: []LocalEngine{
+			{Name: "sglang-kt", Type: "sglang-kt", Runtime: "native", Features: []string{"cpu_gpu_hybrid_moe"},
+				TunableParams: map[string]any{"gpu_memory_utilization": 0.90}},
+			{Name: "vllm", Type: "vllm", Runtime: "container"},
+		},
+		ActiveDeploys: []DeployStatus{{Model: "qwen3-4b", Engine: "sglang-kt", Status: "running"}},
+		SkipCombos: []SkipCombo{
+			{Model: "qwen3-4b", Engine: "sglang-kt", Reason: "completed"},
+		},
+	}
+
+	if err := ws.RefreshFactDocuments(input); err != nil {
+		t.Fatalf("RefreshFactDocuments: %v", err)
+	}
+
+	// Check device-profile.md exists and has hardware info
+	dp, _ := ws.ReadFile("device-profile.md")
+	if !strings.Contains(dp, "49140") {
+		t.Error("device-profile missing VRAM")
+	}
+	if !strings.Contains(dp, "qwen3-4b") {
+		t.Error("device-profile missing model")
+	}
+	if !strings.Contains(dp, "sglang-kt") {
+		t.Error("device-profile missing engine")
+	}
+
+	// Check available-combos.md
+	ac, _ := ws.ReadFile("available-combos.md")
+	if !strings.Contains(ac, "Already Explored") {
+		t.Error("available-combos missing Already Explored section")
+	}
+	if !strings.Contains(ac, "bge-m3") {
+		t.Error("available-combos missing bge-m3 in Incompatible")
+	}
+
+	// Check knowledge-base.md exists
+	kb, _ := ws.ReadFile("knowledge-base.md")
+	if !strings.Contains(kb, "Knowledge Base") {
+		t.Error("knowledge-base.md missing header")
+	}
+}

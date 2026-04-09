@@ -531,7 +531,7 @@ func (e *Explorer) handleAdvisory(ctx context.Context, ev ExplorerEvent) {
 
 	harvester := e.currentHarvester()
 	go func() {
-		result := e.executeTask(ctx, task)
+		result := e.executeTask(ctx, task, "") // advisory tasks aren't from plans
 
 		if result.Success {
 			reason := fmt.Sprintf("validated: %.1f tok/s, TTFT P95 %.0fms", result.Throughput, result.TTFTP95)
@@ -648,7 +648,7 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 			"progress", fmt.Sprintf("%d/%d", i+1, len(plan.Tasks)))
 
 		taskStart := time.Now()
-		result := e.executeTask(ctx, *task)
+		result := e.executeTask(ctx, *task, plan.ID)
 		taskElapsed := time.Since(taskStart)
 
 		// Log task duration — especially valuable for tune tasks where each
@@ -719,7 +719,7 @@ func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
 	}
 }
 
-func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult {
+func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string) HarvestResult {
 	if e.explMgr == nil {
 		return HarvestResult{Success: false, Error: "no exploration manager"}
 	}
@@ -735,6 +735,7 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult
 
 	req := ExplorationStart{
 		Kind:      task.Kind,
+		PlanID:    planID, // D3: plan-to-run traceability
 		SourceRef: task.SourceRef,
 		Target: ExplorationTarget{
 			Hardware: task.Hardware,
@@ -742,6 +743,11 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult
 			Model:    task.Model,
 			Engine:   task.Engine,
 		},
+	}
+	if planID != "" {
+		req.Goal = fmt.Sprintf("[plan:%s] %s %s on %s", planID, task.Kind, task.Model, task.Engine)
+	} else {
+		req.Goal = fmt.Sprintf("%s %s on %s", task.Kind, task.Model, task.Engine)
 	}
 	if searchSpace != nil {
 		req.SearchSpace = searchSpace

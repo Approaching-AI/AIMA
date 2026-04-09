@@ -63,6 +63,7 @@ type deploymentStepResult struct {
 type ExplorationStart struct {
 	Kind         string                      `json:"kind"`
 	Goal         string                      `json:"goal"`
+	PlanID       string                      `json:"plan_id,omitempty"` // D3: links run to explorer plan
 	Target       ExplorationTarget           `json:"target"`
 	Executor     string                      `json:"executor,omitempty"`
 	RequestedBy  string                      `json:"requested_by,omitempty"`
@@ -852,12 +853,21 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		return
 	}
 
-	// Write via catalog.override MCP tool
-	overrideArgs, _ := json.Marshal(map[string]string{
+	// Write via catalog.override MCP tool.
+	// D4: only allow auto-promote when benchmark metadata is complete.
+	overrideMap := map[string]any{
 		"kind":    "model_asset",
 		"name":    plan.Target.Model,
 		"content": string(yamlBytes),
-	})
+	}
+	if benchmarkMetadataComplete(bench.Config.Concurrency, bench.Config.Rounds, bench.TotalRequests) {
+		overrideMap["auto_promote"] = true
+	} else {
+		slog.Info("exploration: overlay created but auto-promote skipped (incomplete benchmark metadata)",
+			"concurrency", bench.Config.Concurrency, "rounds", bench.Config.Rounds,
+			"requests", bench.TotalRequests)
+	}
+	overrideArgs, _ := json.Marshal(overrideMap)
 
 	overrideResult, err := m.tools.ExecuteTool(ctx, "catalog.override", overrideArgs)
 	if err != nil {
@@ -882,6 +892,12 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		ArtifactType: "model_asset_overlay",
 		ArtifactID:   plan.Target.Model,
 	})
+}
+
+// benchmarkMetadataComplete returns true if benchmark was run with meaningful parameters.
+// D4: prevents auto-promotion of configs tested with zero concurrency/rounds.
+func benchmarkMetadataComplete(concurrency, rounds, totalRequests int) bool {
+	return concurrency > 0 && rounds > 0 && totalRequests > 0
 }
 
 // parseDeployConfig extracts the config map from a deploy.apply JSON response.

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,9 @@ type ExplorerConfig struct {
 	MaxRounds       int           // budget mode: max plans to execute (0=unlimited)
 	MaxPlanDuration time.Duration // per-plan time budget (default 30min)
 	MaxTokensPerDay int           // daily LLM token cap (0=unlimited)
+	MaxCycles       int           // PDCA max iterations per round (default 3)
+	MaxTasks        int           // max tasks per plan (default 5)
+	WorkspaceDir    string        // workspace root (default ~/.aima/explorer/)
 }
 
 // ExplorerStatus reports the Explorer's current state.
@@ -36,6 +41,8 @@ type ExplorerStatus struct {
 	MaxRounds       int            `json:"max_rounds"`
 	TokensUsedToday int            `json:"tokens_used_today"`
 	MaxTokensPerDay int            `json:"max_tokens_per_day"`
+	MaxCycles       int            `json:"max_cycles"`
+	MaxTasks        int            `json:"max_tasks"`
 	LastPlanMetrics *PlanMetrics   `json:"last_plan_metrics,omitempty"`
 }
 
@@ -65,6 +72,7 @@ type Explorer struct {
 	bus       *EventBus
 	scheduler *Scheduler
 	planner   Planner
+	workspace *ExplorerWorkspace // PDCA document workspace
 	harvester *Harvester
 
 	// Data gathering functions, wired via options or buildToolDeps.
@@ -82,6 +90,9 @@ type Explorer struct {
 
 	// Advisory feedback callback, wired via WithAdvisoryFeedback.
 	advisoryFeedback func(ctx context.Context, advisoryID, status, reason string) error
+
+	// Knowledge query function, wired via WithExplorerQueryFunc for agent planner.
+	queryFn QueryFunc
 
 	// Benchmark profile resolver from catalog YAML, wired via WithBenchmarkProfiles.
 	benchmarkProfilesFn func(totalVRAMMiB int) []ExplorationBenchmarkProfile
@@ -156,6 +167,11 @@ func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reaso
 	return func(e *Explorer) { e.advisoryFeedback = fn }
 }
 
+// WithExplorerQueryFunc sets the knowledge base query function for agent planner.
+func WithExplorerQueryFunc(fn QueryFunc) ExplorerOption {
+	return func(e *Explorer) { e.queryFn = fn }
+}
+
 // WithBenchmarkProfiles sets the function to resolve VRAM-tiered benchmark profiles from catalog.
 func WithBenchmarkProfiles(fn func(totalVRAMMiB int) []ExplorationBenchmarkProfile) ExplorerOption {
 	return func(e *Explorer) { e.benchmarkProfilesFn = fn }
@@ -167,6 +183,12 @@ func WithRoundsUsed(n int) ExplorerOption {
 }
 
 func NewExplorer(config ExplorerConfig, agent *Agent, explMgr *ExplorationManager, db *state.DB, bus *EventBus, opts ...ExplorerOption) *Explorer {
+	if config.MaxCycles <= 0 {
+		config.MaxCycles = 3
+	}
+	if config.MaxTasks <= 0 {
+		config.MaxTasks = 5
+	}
 	e := &Explorer{
 		config:  config,
 		agent:   agent,
@@ -199,7 +221,20 @@ func (e *Explorer) detectTier() int {
 
 func (e *Explorer) setupPlannerLocked() {
 	if e.tier >= 2 && e.agent != nil {
-		e.planner = NewLLMPlanner(e.agent)
+		wsDir := e.config.WorkspaceDir
+		if wsDir == "" {
+			home, _ := os.UserHomeDir()
+			wsDir = filepath.Join(home, ".aima", "explorer")
+		}
+		e.workspace = NewExplorerWorkspace(wsDir)
+		opts := []ExplorerAgentPlannerOption{
+			WithAgentMaxCycles(e.config.MaxCycles),
+			WithAgentMaxTasks(e.config.MaxTasks),
+		}
+		if e.queryFn != nil {
+			opts = append(opts, WithAgentQueryFunc(e.queryFn))
+		}
+		e.planner = NewExplorerAgentPlanner(e.agent.llm, e.workspace, opts...)
 	} else {
 		e.planner = &RulePlanner{}
 	}
@@ -290,7 +325,9 @@ func (e *Explorer) Status() ExplorerStatus {
 		MaxRounds:       e.config.MaxRounds,
 		TokensUsedToday: e.tokensUsedToday,
 		MaxTokensPerDay: e.config.MaxTokensPerDay,
-		LastPlanMetrics:  e.lastPlanMetrics,
+		MaxCycles:       e.config.MaxCycles,
+		MaxTasks:        e.config.MaxTasks,
+		LastPlanMetrics: e.lastPlanMetrics,
 	}
 }
 
@@ -496,6 +533,53 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 
 	planStart := time.Now()
 	e.executePlan(planCtx, plan)
+
+	// PDCA Check+Act loop (only for AnalyzablePlanner, i.e., Tier 2 agent planner)
+	maxCycles := e.config.MaxCycles
+	if maxCycles <= 0 {
+		maxCycles = 3
+	}
+	if ap, ok := e.planner.(AnalyzablePlanner); ok {
+		for cycle := 0; cycle < maxCycles; cycle++ {
+			select {
+			case <-planCtx.Done():
+				slog.Info("explorer: PDCA timeout", "cycle", cycle)
+				goto pdcaDone
+			default:
+			}
+
+			slog.Info("explorer: PDCA Check phase", "cycle", cycle+1)
+			verdict, extraTasks, analyzeTokens, err := ap.Analyze(planCtx)
+			if analyzeTokens > 0 {
+				e.mu.Lock()
+				e.tokensUsedToday += analyzeTokens
+				e.mu.Unlock()
+			}
+			if err != nil {
+				slog.Warn("explorer: PDCA analyze failed", "error", err, "cycle", cycle+1)
+				break
+			}
+			slog.Info("explorer: PDCA verdict", "verdict", verdict, "extra_tasks", len(extraTasks), "cycle", cycle+1)
+
+			if verdict != "continue" || len(extraTasks) == 0 {
+				break
+			}
+
+			extraPlanTasks := make([]PlanTask, len(extraTasks))
+			for i, ts := range extraTasks {
+				extraPlanTasks[i] = taskSpecToPlanTask(ts, plan.Tasks[0].Hardware)
+			}
+			extraPlan := &ExplorerPlan{
+				ID:        plan.ID + fmt.Sprintf("-c%d", cycle+1),
+				Tier:      2,
+				Tasks:     extraPlanTasks,
+				Reasoning: fmt.Sprintf("PDCA Act cycle %d", cycle+1),
+			}
+			slog.Info("explorer: PDCA Do phase", "tasks", len(extraPlanTasks), "cycle", cycle+1)
+			e.executePlan(planCtx, extraPlan)
+		}
+	}
+pdcaDone:
 	planCancel()
 	elapsed := time.Since(planStart)
 
@@ -690,6 +774,21 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 		actions := harvester.Harvest(ctx, HarvestInput{Task: *task, Result: result})
 		for _, a := range actions {
 			slog.Info("explorer: harvest action", "type", a.Type, "detail", a.Detail)
+		}
+
+		// Write experiment result to workspace (for PDCA Check phase)
+		if e.workspace != nil {
+			expResult := harvestToExperimentResult(task.Status, taskStart, taskElapsed, result)
+			expTask := TaskSpec{
+				Kind:         task.Kind,
+				Model:        task.Model,
+				Engine:       task.Engine,
+				EngineParams: task.Params,
+				Reason:       task.Reason,
+			}
+			if _, werr := e.workspace.WriteExperimentResult(i+1, expTask, expResult); werr != nil {
+				slog.Debug("explorer: write experiment result failed", "error", werr)
+			}
 		}
 
 		// Update plan progress
@@ -1041,8 +1140,8 @@ func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration,
 
 func (e *Explorer) refreshTier(ctx context.Context) bool {
 	// O4: If agent is available but tool mode is still unknown, probe it.
-	// This resolves the Tier 1→2 self-upgrade deadlock: LLMPlanner calls
-	// llm.ChatCompletion directly (not Agent.Ask), so tool mode detection
+	// This resolves the Tier 1→2 self-upgrade deadlock: ExplorerAgentPlanner
+	// calls llm.ChatCompletion directly (not Agent.Ask), so tool mode detection
 	// that normally happens inside Ask() never triggers.
 	if e.agent != nil && e.agent.Available() && e.agent.ToolMode() == "unknown" {
 		e.agent.ProbeToolMode(ctx)
@@ -1266,6 +1365,28 @@ func firstNonEmptyJSON(payload map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func harvestToExperimentResult(status string, start time.Time, elapsed time.Duration, r HarvestResult) ExperimentResult {
+	exp := ExperimentResult{
+		Status:    status,
+		StartedAt: start.UTC().Format(time.RFC3339),
+		DurationS: elapsed.Seconds(),
+	}
+	if !r.Success {
+		exp.Error = r.Error
+	}
+	if r.Throughput > 0 || r.Concurrency > 0 {
+		exp.Benchmarks = []BenchmarkEntry{{
+			Concurrency:   r.Concurrency,
+			InputTokens:   r.InputTokens,
+			MaxTokens:     r.MaxTokens,
+			ThroughputTPS: r.Throughput,
+			LatencyP50Ms:  r.TTFTP95, // best available latency metric
+			LatencyP99Ms:  r.TPOTP95,
+		}}
+	}
+	return exp
 }
 
 func readBenchmarkMetrics(summary map[string]any, result *HarvestResult) {

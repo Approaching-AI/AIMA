@@ -622,24 +622,8 @@ func run() error {
 				if seen[engineType] {
 					continue
 				}
-
-				if deps.GetEngineInfo != nil {
-					infoData, infoErr := deps.GetEngineInfo(ctx, engineType)
-					if infoErr != nil {
-						slog.Debug("explorer: skip local engine with missing info", "engine", engineType, "error", infoErr)
-						continue
-					}
-					var info struct {
-						Asset     *knowledge.EngineAsset `json:"asset"`
-						Installed []*state.Engine        `json:"installed"`
-					}
-					if json.Unmarshal(infoData, &info) != nil || !installedEnginesContainResolvedAsset(info.Asset, info.Installed, hwInfo.Platform) {
-						slog.Debug("explorer: skip non-executable local engine", "engine", engineType, "platform", hwInfo.Platform)
-						continue
-					}
-				}
-
 				seen[engineType] = true
+
 				le := agent.LocalEngine{
 					Name:    e.Name,
 					Type:    engineType,
@@ -657,6 +641,42 @@ func run() error {
 				result = append(result, le)
 			}
 			return result, nil
+		}),
+		agent.WithExplorerQueryFunc(func(qType string, filter map[string]any, limit int) (string, error) {
+			filterJSON, _ := json.Marshal(filter)
+			if limit <= 0 {
+				limit = 10
+			}
+			var result any
+			var err error
+			switch qType {
+			case "search":
+				var p knowledge.SearchParams
+				_ = json.Unmarshal(filterJSON, &p)
+				if p.Limit == 0 {
+					p.Limit = limit
+				}
+				result, err = knowledgeStore.Search(ctx, p)
+			case "compare":
+				var p knowledge.CompareParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Compare(ctx, p)
+			case "gaps":
+				var p knowledge.GapsParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Gaps(ctx, p)
+			case "aggregate":
+				var p knowledge.AggregateParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Aggregate(ctx, p)
+			default:
+				return "", fmt.Errorf("unknown query type: %s (supported: search, compare, gaps, aggregate)", qType)
+			}
+			if err != nil {
+				return "", err
+			}
+			out, _ := json.MarshalIndent(result, "", "  ")
+			return string(out), nil
 		}),
 		agent.WithBenchmarkProfiles(func(totalVRAMMiB int) []agent.ExplorationBenchmarkProfile {
 			catalogProfiles := cat.BenchmarkProfilesForVRAM(totalVRAMMiB)
@@ -763,6 +783,8 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 		"max_rounds",
 		"max_plan_duration",
 		"max_tokens_per_day",
+		"max_cycles",
+		"max_tasks",
 	} {
 		value, err := db.GetConfig(ctx, explorerConfigStorageKey(key))
 		if err != nil || strings.TrimSpace(value) == "" {
@@ -836,6 +858,18 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 			} else {
 				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
 			}
+		case "max_cycles":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxCycles = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_tasks":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxTasks = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
 		}
 	}
 	return config
@@ -857,6 +891,8 @@ func explorerConfigResponse(explorer *agent.Explorer) map[string]any {
 		"rounds_used":         status.RoundsUsed,
 		"max_tokens_per_day":  status.MaxTokensPerDay,
 		"tokens_used_today":   status.TokensUsedToday,
+		"max_cycles":          status.MaxCycles,
+		"max_tasks":           status.MaxTasks,
 	}
 }
 

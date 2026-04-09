@@ -124,42 +124,6 @@ func installedRuntimeTypesForEngine(installed []*state.Engine, engineName, engin
 	return runtimeTypes
 }
 
-func installedEnginesContainResolvedAsset(ea *knowledge.EngineAsset, installed []*state.Engine, platform string) bool {
-	if ea == nil {
-		return false
-	}
-	switch preferredEngineRuntimeType(ea, platform) {
-	case "native":
-		if ea.Source == nil || (platform != "" && !ea.Source.Supports(platform)) {
-			return false
-		}
-		for _, engine := range installed {
-			if engine == nil || !engine.Available {
-				continue
-			}
-			if engine.RuntimeType == "native" && strings.TrimSpace(engine.BinaryPath) != "" {
-				return true
-			}
-		}
-	case "container":
-		if ea.Image.Name == "" {
-			return false
-		}
-		for _, engine := range installed {
-			if engine == nil || !engine.Available {
-				continue
-			}
-			if engine.RuntimeType == "native" {
-				continue
-			}
-			if strings.EqualFold(engine.Image, ea.Image.Name) && strings.EqualFold(engine.Tag, ea.Image.Tag) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func defaultEngineAsset(cat *knowledge.Catalog, hw knowledge.HardwareInfo) *knowledge.EngineAsset {
 	if cat == nil {
 		return nil

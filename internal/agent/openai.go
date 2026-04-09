@@ -240,6 +240,7 @@ func (c *OpenAIClient) prepareChatRequest(ctx context.Context, messages []Messag
 	}
 	if stream {
 		reqBody["stream"] = true
+		reqBody["stream_options"] = map[string]any{"include_usage": true}
 	}
 
 	wireToOrig := make(map[string]string, len(tools))
@@ -374,12 +375,12 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		return nil, err
 	}
 
-	// Streaming: disable client-level timeout so the connection stays open.
+	// Streaming: use a shallow copy with no timeout so the connection stays open.
+	// The copy shares the underlying transport (connection pool) but has its own timeout.
 	// Context-based cancellation still applies.
-	savedTimeout := c.httpClient.Timeout
-	c.httpClient.Timeout = 0
-	httpResp, err := c.httpClient.Do(httpReq)
-	c.httpClient.Timeout = savedTimeout
+	streamClient := *c.httpClient
+	streamClient.Timeout = 0
+	httpResp, err := streamClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}

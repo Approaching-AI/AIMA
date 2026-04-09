@@ -10,7 +10,7 @@ func registerAgentTools(s *Server, deps *ToolDeps) {
 	// support.askforhelp
 	s.RegisterTool(&Tool{
 		Name:        "support.askforhelp",
-		Description: "Connect this AIMA instance to the support service (https://aimaserver.com/platform) as a device, and optionally create a remote help task from a natural-language description.",
+		Description: "Connect this AIMA instance to the support service (https://aimaserver.com) as a device, and optionally create a remote help task from a natural-language description.",
 		InputSchema: schema(
 			`"description":{"type":"string","description":"Optional natural-language request to create a support task immediately"},` +
 				`"endpoint":{"type":"string","description":"Optional override for support.endpoint; persisted when provided"},` +

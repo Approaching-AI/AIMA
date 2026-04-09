@@ -52,6 +52,10 @@ type PlanMetrics struct {
 	TokensUsed       int     `json:"tokens_used"`
 }
 
+// maxExplorationFailures is the threshold after which a model+engine combo
+// is considered permanently broken and excluded from future plans.
+const maxExplorationFailures = 2
+
 // Explorer orchestrates autonomous knowledge discovery on edge devices.
 type Explorer struct {
 	config    ExplorerConfig
@@ -430,7 +434,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				continue
 			}
 			failCount, _ := e.db.CountFailedExplorations(ctx, t.Model, t.Engine)
-			if failCount >= 2 {
+			if failCount >= maxExplorationFailures {
 				slog.Info("explorer: dedup skipped (too many failures)", "model", t.Model, "engine", t.Engine, "fails", failCount)
 				continue
 			}
@@ -875,7 +879,7 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 				input.SkipCombos = append(input.SkipCombos, SkipCombo{
 					Model: c.Model, Engine: c.Engine, Reason: "completed",
 				})
-			} else if c.FailCount >= 2 {
+			} else if c.FailCount >= maxExplorationFailures {
 				input.SkipCombos = append(input.SkipCombos, SkipCombo{
 					Model:  c.Model,
 					Engine: c.Engine,

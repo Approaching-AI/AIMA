@@ -97,3 +97,69 @@ Focus on engine comparison.
 		t.Errorf("config 0 throughput=%f", configs[0].Performance.ThroughputTPS)
 	}
 }
+
+func TestExtractSection(t *testing.T) {
+	tests := []struct {
+		name    string
+		md      string
+		heading string
+		want    string
+	}{
+		{
+			name: "section at end of document (no trailing heading)",
+			md: `# Main
+## Details
+Content here
+with multiple lines`,
+			heading: "## Details",
+			want:    "\nContent here\nwith multiple lines",
+		},
+		{
+			name: "section followed by same-level heading",
+			md: `## Section A
+Content A
+
+## Section B
+Content B`,
+			heading: "## Section A",
+			want:    "\nContent A\n\n",
+		},
+		{
+			name: "section followed by higher-level heading (h1 after h2)",
+			md: `# Title
+## Subsection
+Body text
+# Next Top Level
+More text`,
+			heading: "## Subsection",
+			want:    "\nBody text\n",
+		},
+		{
+			name: "heading with embedded hash symbols (C# Results)",
+			md: `## C# Results
+Performance data here
+
+## Conclusion
+Final notes`,
+			heading: "## C# Results",
+			want:    "\nPerformance data here\n\n",
+		},
+		{
+			name: "heading not found",
+			md: `# Page
+## Section A
+Content`,
+			heading: "## Missing",
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractSection(tt.md, tt.heading)
+			if got != tt.want {
+				t.Errorf("extractSection(%q, %q) = %q, want %q", tt.md, tt.heading, got, tt.want)
+			}
+		})
+	}
+}

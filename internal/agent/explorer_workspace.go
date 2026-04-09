@@ -50,7 +50,7 @@ func parseRecommendedConfigs(md string) ([]RecommendedConfig, error) {
 // extractSection returns the content from a markdown heading until the next
 // heading of equal or higher level (or end of document).
 func extractSection(md, heading string) string {
-	level := strings.Count(strings.TrimRight(heading, " "), "#")
+	level := len(heading) - len(strings.TrimLeft(heading, "#"))
 	idx := strings.Index(md, heading)
 	if idx == -1 {
 		return ""

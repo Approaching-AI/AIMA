@@ -19,10 +19,11 @@ import (
 const gpuReleaseGrace = 3 * time.Second // grace period for GPU memory to fully release from driver
 
 type ExplorationTarget struct {
-	Hardware string `json:"hardware,omitempty"`
-	GPUArch  string `json:"gpu_arch,omitempty"` // e.g. "Ada" — for overlay YAML, not resolution
-	Model    string `json:"model"`
-	Engine   string `json:"engine,omitempty"`
+	Hardware  string `json:"hardware,omitempty"`
+	GPUArch   string `json:"gpu_arch,omitempty"`  // e.g. "Ada" — for overlay YAML, not resolution
+	Model     string `json:"model"`
+	Engine    string `json:"engine,omitempty"`
+	ModelType string `json:"model_type,omitempty"` // e.g. "llm", "asr", "tts", "embedding"
 }
 
 type ExplorationConstraints struct {
@@ -758,9 +759,30 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 			} `json:"config"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal([]byte(result.ResponseJSON), &envelope); err != nil {
-		slog.Warn("exploration: cannot parse benchmark for knowledge creation", "error", err)
-		return
+
+	if result.TotalCells > 0 {
+		// Matrix benchmark — extract representative cell for overlay
+		repCell, ok := extractRepresentativeCell(result.ResponseJSON)
+		if !ok {
+			slog.Info("exploration: no representative cell found in matrix")
+			return
+		}
+		repResult, _ := repCell["result"].(map[string]any)
+		if repResult == nil {
+			return
+		}
+		// Marshal the representative cell's result and re-parse into envelope
+		wrapped, _ := json.Marshal(map[string]any{"result": repResult})
+		if err := json.Unmarshal(wrapped, &envelope); err != nil {
+			slog.Warn("exploration: cannot parse representative cell", "error", err)
+			return
+		}
+	} else {
+		// Single-point benchmark (tune tasks) — existing logic
+		if err := json.Unmarshal([]byte(result.ResponseJSON), &envelope); err != nil {
+			slog.Warn("exploration: cannot parse benchmark for knowledge creation", "error", err)
+			return
+		}
 	}
 	bench := envelope.Result
 
@@ -810,7 +832,15 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		if strings.HasPrefix(k, ".") || v == nil {
 			continue
 		}
+		if internalEngineParam(k) {
+			continue
+		}
 		defaultConfig[k] = v
+	}
+
+	modelType := plan.Target.ModelType
+	if modelType == "" {
+		modelType = "llm"
 	}
 
 	// Build structured overlay as a map and marshal to YAML.
@@ -818,7 +848,7 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		"kind": "model_asset",
 		"metadata": map[string]any{
 			"name":            plan.Target.Model,
-			"type":            "llm",
+			"type":            modelType,
 			"family":          "explorer-discovered",
 			"parameter_count": "unknown",
 			"notes":           fmt.Sprintf("Auto-discovered by Explorer on %s", time.Now().Format("2006-01-02")),
@@ -868,7 +898,12 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		"name":    plan.Target.Model,
 		"content": string(yamlBytes),
 	}
-	if benchmarkMetadataComplete(bench.Config.Concurrency, bench.Config.Rounds, bench.TotalRequests) {
+	if result.TotalCells > 0 {
+		// Matrix benchmark — auto-promote if at least half the cells succeeded
+		if result.SuccessCells >= result.TotalCells/2 {
+			overrideMap["auto_promote"] = true
+		}
+	} else if benchmarkMetadataComplete(bench.Config.Concurrency, bench.Config.Rounds, bench.TotalRequests) {
 		overrideMap["auto_promote"] = true
 	} else {
 		slog.Info("exploration: overlay created but auto-promote skipped (incomplete benchmark metadata)",
@@ -906,6 +941,77 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 // D4: prevents auto-promotion of configs tested with zero concurrency/rounds.
 func benchmarkMetadataComplete(concurrency, rounds, totalRequests int) bool {
 	return concurrency > 0 && rounds > 0 && totalRequests > 0
+}
+
+// extractRepresentativeCell picks the most representative benchmark cell for overlay YAML.
+// Preference: concurrency=1, input closest to 1024, output closest to 1024.
+func extractRepresentativeCell(matrixJSON string) (map[string]any, bool) {
+	var resp struct {
+		MatrixProfiles []json.RawMessage `json:"matrix_profiles"`
+	}
+	if err := json.Unmarshal([]byte(matrixJSON), &resp); err != nil {
+		return nil, false
+	}
+
+	type candidate struct {
+		cell  map[string]any
+		score int // lower = better
+	}
+	var best *candidate
+	for _, profileJSON := range resp.MatrixProfiles {
+		var profile struct {
+			Cells []struct {
+				Concurrency int            `json:"concurrency"`
+				InputTokens int            `json:"input_tokens"`
+				MaxTokens   int            `json:"max_tokens"`
+				Result      map[string]any `json:"result"`
+				Error       string         `json:"error"`
+			} `json:"cells"`
+		}
+		if json.Unmarshal(profileJSON, &profile) != nil {
+			continue
+		}
+		for _, c := range profile.Cells {
+			if c.Error != "" || c.Result == nil {
+				continue
+			}
+			score := c.Concurrency * 1000
+			if d := c.InputTokens - 1024; d < 0 {
+				score -= d
+			} else {
+				score += d
+			}
+			if d := c.MaxTokens - 1024; d < 0 {
+				score -= d
+			} else {
+				score += d
+			}
+			cellMap := map[string]any{
+				"concurrency":  c.Concurrency,
+				"input_tokens": c.InputTokens,
+				"max_tokens":   c.MaxTokens,
+				"result":       c.Result,
+			}
+			if best == nil || score < best.score {
+				best = &candidate{cell: cellMap, score: score}
+			}
+		}
+	}
+	if best == nil {
+		return nil, false
+	}
+	return best.cell, true
+}
+
+// internalEngineParam returns true for engine parameters that should not be written
+// into model overlay YAML (they are implementation details, not user-facing config).
+func internalEngineParam(key string) bool {
+	switch key {
+	case "port", "watchdog_timeout", "kt_weight_path",
+		"enable_p2p_check", "disable_shared_experts_fusion":
+		return true
+	}
+	return false
 }
 
 // parseDeployConfig extracts the config map from a deploy.apply JSON response.

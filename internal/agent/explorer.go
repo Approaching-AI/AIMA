@@ -813,6 +813,18 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 		req.SearchSpace = searchSpace
 	}
 
+	// Populate model type from local inventory for accurate overlay YAML
+	if e.gatherLocalModels != nil {
+		if models, err := e.gatherLocalModels(ctx); err == nil {
+			for _, m := range models {
+				if m.Name == task.Model {
+					req.Target.ModelType = m.Type
+					break
+				}
+			}
+		}
+	}
+
 	// D6: set benchmark profile from hardware defaults
 	if e.gatherHardware != nil {
 		if hw, err := e.gatherHardware(ctx); err == nil {

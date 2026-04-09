@@ -414,7 +414,13 @@ func run() error {
 	)
 
 	// 9h. Explorer subsystem (v0.4) with advisory feedback bridge
-	explorer := agent.NewExplorer(loadExplorerConfig(ctx, db), goAgent, explorationMgr, db, eventBus,
+	explorerOpts := []agent.ExplorerOption{}
+	if roundsStr, err := db.GetConfig(ctx, explorerConfigStorageKey("rounds_used")); err == nil && roundsStr != "" {
+		if n, parseErr := strconv.Atoi(roundsStr); parseErr == nil && n > 0 {
+			explorerOpts = append(explorerOpts, agent.WithRoundsUsed(n))
+		}
+	}
+	explorerOpts = append(explorerOpts,
 		agent.WithGatherHardware(func(ctx context.Context) (agent.HardwareInfo, error) {
 			hw := buildHardwareInfo(ctx, cat, rt.Name())
 			return agent.HardwareInfo{
@@ -646,12 +652,32 @@ func run() error {
 					le.Features = asset.Amplifier.Features
 					le.Notes = asset.Amplifier.PerformanceGain
 					le.TunableParams = asset.Startup.DefaultArgs
+					le.InternalArgs = asset.Startup.InternalArgs
 				}
 				result = append(result, le)
 			}
 			return result, nil
 		}),
+		agent.WithBenchmarkProfiles(func(totalVRAMMiB int) []agent.ExplorationBenchmarkProfile {
+			catalogProfiles := cat.BenchmarkProfilesForVRAM(totalVRAMMiB)
+			if len(catalogProfiles) == 0 {
+				return nil // fall back to Go defaults
+			}
+			profiles := make([]agent.ExplorationBenchmarkProfile, len(catalogProfiles))
+			for i, cp := range catalogProfiles {
+				profiles[i] = agent.ExplorationBenchmarkProfile{
+					Label:             cp.Label,
+					ConcurrencyLevels: cp.ConcurrencyLevels,
+					InputTokenLevels:  cp.InputTokenLevels,
+					MaxTokenLevels:    cp.MaxTokenLevels,
+					RequestsPerCombo:  cp.RequestsPerCombo,
+					Rounds:            cp.Rounds,
+				}
+			}
+			return profiles
+		}),
 	)
+	explorer := agent.NewExplorer(loadExplorerConfig(ctx, db), goAgent, explorationMgr, db, eventBus, explorerOpts...)
 	go explorer.Start(context.Background())
 
 	// Wire explorer MCP tools

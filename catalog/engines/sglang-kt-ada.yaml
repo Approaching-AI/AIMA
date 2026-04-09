@@ -57,6 +57,8 @@ startup:
     chunked_prefill_size: 32768
     max_running_requests: 16
     watchdog_timeout: 3000
+  # Parameters that are engine-internal and should not leak into model overlay YAML.
+  internal_args: [port, watchdog_timeout, kt_weight_path, enable_p2p_check, disable_shared_experts_fusion]
   health_check:
     timeout_s: 600
   warmup:

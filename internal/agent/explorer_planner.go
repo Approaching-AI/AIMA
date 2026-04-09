@@ -55,6 +55,7 @@ type LocalEngine struct {
 	Features      []string       `json:"features,omitempty"`
 	Notes         string         `json:"notes,omitempty"`         // e.g. "CPU+GPU hybrid MoE inference"
 	TunableParams map[string]any `json:"tunable_params,omitempty"` // startup.default_args from engine YAML
+	InternalArgs  []string       `json:"internal_args,omitempty"`  // startup.internal_args from engine YAML
 }
 
 type HardwareInfo struct {

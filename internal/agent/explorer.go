@@ -83,6 +83,9 @@ type Explorer struct {
 	// Advisory feedback callback, wired via WithAdvisoryFeedback.
 	advisoryFeedback func(ctx context.Context, advisoryID, status, reason string) error
 
+	// Benchmark profile resolver from catalog YAML, wired via WithBenchmarkProfiles.
+	benchmarkProfilesFn func(totalVRAMMiB int) []ExplorationBenchmarkProfile
+
 	mu               sync.RWMutex
 	running          bool
 	tier             int
@@ -151,6 +154,11 @@ func WithGatherLocalEngines(fn func(ctx context.Context) ([]LocalEngine, error))
 // WithAdvisoryFeedback sets the callback for sending advisory feedback to central.
 func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reason string) error) ExplorerOption {
 	return func(e *Explorer) { e.advisoryFeedback = fn }
+}
+
+// WithBenchmarkProfiles sets the function to resolve VRAM-tiered benchmark profiles from catalog.
+func WithBenchmarkProfiles(fn func(totalVRAMMiB int) []ExplorationBenchmarkProfile) ExplorerOption {
+	return func(e *Explorer) { e.benchmarkProfilesFn = fn }
 }
 
 // WithRoundsUsed restores the rounds counter from persisted state on restart.
@@ -711,6 +719,20 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 	}
 }
 
+// resolveBenchmarkProfiles returns matrix profiles from catalog YAML, falling back to Go defaults.
+func (e *Explorer) resolveBenchmarkProfiles(hw HardwareInfo) []ExplorationBenchmarkProfile {
+	totalVRAM := hw.VRAMMiB * hw.GPUCount
+	if totalVRAM == 0 {
+		totalVRAM = hw.VRAMMiB
+	}
+	if e.benchmarkProfilesFn != nil {
+		if profiles := e.benchmarkProfilesFn(totalVRAM); len(profiles) > 0 {
+			return profiles
+		}
+	}
+	return defaultBenchmarkProfiles(hw)
+}
+
 // defaultBenchmarkProfile returns sensible benchmark parameters based on hardware capability.
 // D6: Explorer decides "how to test" (tactical), Planner decides "what to test" (strategic).
 func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
@@ -830,13 +852,28 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 		}
 	}
 
-	// D6: set benchmark profile from hardware defaults
+	// Populate internal args from engine YAML (INV-1: engine behavior = YAML)
+	if e.gatherLocalEngines != nil {
+		if engines, err := e.gatherLocalEngines(ctx); err == nil {
+			for _, eng := range engines {
+				if eng.Name == task.Engine || eng.Type == task.Engine {
+					req.Target.InternalArgs = eng.InternalArgs
+					break
+				}
+			}
+		}
+	}
+
+	// D6: set benchmark profile from hardware (catalog YAML → Go fallback)
 	if e.gatherHardware != nil {
 		if hw, err := e.gatherHardware(ctx); err == nil {
 			if task.Kind == "validate" {
-				req.BenchmarkProfiles = defaultBenchmarkProfiles(hw)
+				req.BenchmarkProfiles = e.resolveBenchmarkProfiles(hw)
+			} else {
+				// Tune tasks get a single-point profile (no matrix levels)
+				bp := defaultBenchmarkProfile(hw)
+				req.BenchmarkProfiles = []ExplorationBenchmarkProfile{bp}
 			}
-			req.Benchmark = defaultBenchmarkProfile(hw)
 		}
 	}
 

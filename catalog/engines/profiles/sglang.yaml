@@ -8,6 +8,7 @@ startup:
   compatibility_probe: transformers_autoconfig
   default_args:
     port: 30000
+  internal_args: [port]
   health_check:
     path: /health
     timeout_s: 300

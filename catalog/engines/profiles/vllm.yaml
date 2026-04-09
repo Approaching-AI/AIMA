@@ -9,6 +9,7 @@ startup:
   default_args:
     port: 8000
     served_model_name: "{{.ModelName}}"
+  internal_args: [port]
   health_check:
     path: /health
     timeout_s: 300

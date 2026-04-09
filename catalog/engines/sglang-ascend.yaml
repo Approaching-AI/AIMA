@@ -32,6 +32,7 @@ startup:
     context_length: 8192
     disable_radix_cache: true
     watchdog_timeout: 9000
+  internal_args: [port, watchdog_timeout]
   health_check:
     timeout_s: 900
   warmup:

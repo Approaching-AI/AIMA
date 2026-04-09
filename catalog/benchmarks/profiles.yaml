@@ -1,0 +1,48 @@
+kind: benchmark_profiles
+
+# VRAM-tiered benchmark profiles for Explorer.
+# Each tier defines latency and/or throughput profiles with matrix dimensions.
+# Explorer selects the appropriate tier based on total available VRAM.
+
+tiers:
+  - name: high
+    min_vram_mib: 40000
+    profiles:
+      - label: latency
+        concurrency_levels: [1]
+        input_token_levels: [128, 512, 1024, 2048, 4096, 8192]
+        max_token_levels: [256, 1024]
+        requests_per_combo: 5
+        rounds: 1
+      - label: throughput
+        concurrency_levels: [1, 2, 4, 8]
+        input_token_levels: [512, 2048, 8192]
+        max_token_levels: [1024]
+        requests_per_combo: 5
+        rounds: 1
+
+  - name: medium
+    min_vram_mib: 16000
+    profiles:
+      - label: latency
+        concurrency_levels: [1]
+        input_token_levels: [128, 512, 1024, 2048, 4096, 8192]
+        max_token_levels: [256, 1024]
+        requests_per_combo: 5
+        rounds: 1
+      - label: throughput
+        concurrency_levels: [1, 2, 4]
+        input_token_levels: [512, 2048]
+        max_token_levels: [1024]
+        requests_per_combo: 5
+        rounds: 1
+
+  - name: low
+    min_vram_mib: 0
+    profiles:
+      - label: latency
+        concurrency_levels: [1]
+        input_token_levels: [128, 512, 1024, 2048]
+        max_token_levels: [256]
+        requests_per_combo: 5
+        rounds: 1

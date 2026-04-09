@@ -19,11 +19,12 @@ import (
 const gpuReleaseGrace = 3 * time.Second // grace period for GPU memory to fully release from driver
 
 type ExplorationTarget struct {
-	Hardware  string `json:"hardware,omitempty"`
-	GPUArch   string `json:"gpu_arch,omitempty"`  // e.g. "Ada" — for overlay YAML, not resolution
-	Model     string `json:"model"`
-	Engine    string `json:"engine,omitempty"`
-	ModelType string `json:"model_type,omitempty"` // e.g. "llm", "asr", "tts", "embedding"
+	Hardware     string   `json:"hardware,omitempty"`
+	GPUArch      string   `json:"gpu_arch,omitempty"`      // e.g. "Ada" — for overlay YAML, not resolution
+	Model        string   `json:"model"`
+	Engine       string   `json:"engine,omitempty"`
+	ModelType    string   `json:"model_type,omitempty"`    // e.g. "llm", "asr", "tts", "embedding"
+	InternalArgs []string `json:"internal_args,omitempty"` // engine params to exclude from overlay YAML
 }
 
 type ExplorationConstraints struct {
@@ -48,8 +49,25 @@ type ExplorationPlan struct {
 	SourceRef         string                       `json:"source_ref,omitempty"`
 	SearchSpace       map[string][]any             `json:"search_space,omitempty"`
 	Constraints       ExplorationConstraints       `json:"constraints,omitempty"`
-	BenchmarkProfile  ExplorationBenchmarkProfile  `json:"benchmark_profile,omitempty"`
 	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
+}
+
+// isMatrixBenchmark returns true if any profile has matrix-level fields set.
+func isMatrixBenchmark(profiles []ExplorationBenchmarkProfile) bool {
+	for _, p := range profiles {
+		if len(p.ConcurrencyLevels) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// firstProfile returns the first benchmark profile, or a zero value if none.
+func firstProfile(profiles []ExplorationBenchmarkProfile) ExplorationBenchmarkProfile {
+	if len(profiles) > 0 {
+		return profiles[0]
+	}
+	return ExplorationBenchmarkProfile{}
 }
 
 type benchmarkStepResult struct {
@@ -80,7 +98,6 @@ type ExplorationStart struct {
 	SourceRef         string                        `json:"source_ref,omitempty"`
 	SearchSpace       map[string][]any              `json:"search_space,omitempty"`
 	Constraints       ExplorationConstraints        `json:"constraints,omitempty"`
-	Benchmark         ExplorationBenchmarkProfile   `json:"benchmark_profile,omitempty"`
 	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
 }
 
@@ -259,14 +276,15 @@ func (m *ExplorationManager) executeTune(ctx context.Context, run *state.Explora
 	run.StartedAt = time.Now()
 	_ = m.db.UpdateExplorationRun(context.Background(), run)
 
+	bp := firstProfile(plan.BenchmarkProfiles)
 	tuningConfig := TuningConfig{
 		Model:       plan.Target.Model,
 		Hardware:    plan.Target.Hardware,
 		Engine:      plan.Target.Engine,
-		Endpoint:    plan.BenchmarkProfile.Endpoint,
+		Endpoint:    bp.Endpoint,
 		Parameters:  buildTuningParams(plan.SearchSpace),
-		Concurrency: plan.BenchmarkProfile.Concurrency,
-		Rounds:      plan.BenchmarkProfile.Rounds,
+		Concurrency: bp.Concurrency,
+		Rounds:      bp.Rounds,
 		MaxConfigs:  plan.Constraints.MaxCandidates,
 	}
 
@@ -417,9 +435,11 @@ func (m *ExplorationManager) executeValidate(ctx context.Context, run *state.Exp
 	}
 
 	// Resolve actual endpoint from deploy.status — the model may be on a non-default port.
-	if plan.BenchmarkProfile.Endpoint == "" {
+	if firstProfile(plan.BenchmarkProfiles).Endpoint == "" {
 		if addr := m.resolveDeployEndpoint(ctx, plan.Target.Model); addr != "" {
-			plan.BenchmarkProfile.Endpoint = addr
+			for i := range plan.BenchmarkProfiles {
+				plan.BenchmarkProfiles[i].Endpoint = addr
+			}
 			slog.Info("exploration: resolved benchmark endpoint from deployment",
 				"model", plan.Target.Model, "endpoint", addr)
 		}
@@ -828,12 +848,17 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 	}
 
 	// Build default_config — filter internal keys (starting with '.') and nil values.
+	// INV-1: internal args list comes from engine YAML, not hardcoded Go.
+	internalSet := make(map[string]bool, len(plan.Target.InternalArgs))
+	for _, k := range plan.Target.InternalArgs {
+		internalSet[k] = true
+	}
 	defaultConfig := make(map[string]any)
 	for k, v := range deployConfig {
 		if strings.HasPrefix(k, ".") || v == nil {
 			continue
 		}
-		if internalEngineParam(k) {
+		if internalSet[k] {
 			continue
 		}
 		defaultConfig[k] = v
@@ -1010,19 +1035,6 @@ func extractRepresentativeCell(matrixJSON string) (map[string]any, bool) {
 	return best.cell, true
 }
 
-// internalEngineParam returns true for engine parameters that should not be written
-// into model overlay YAML (they are implementation details, not user-facing config).
-// TODO: migrate this list into engine YAML (e.g. `internal_params` field) so adding
-// a new engine doesn't require Go code changes (INV-1 compliance).
-func internalEngineParam(key string) bool {
-	switch key {
-	case "port", "watchdog_timeout", "kt_weight_path",
-		"enable_p2p_check", "disable_shared_experts_fusion":
-		return true
-	}
-	return false
-}
-
 // parseDeployConfig extracts the config map from a deploy.apply JSON response.
 func parseDeployConfig(responseJSON string) map[string]any {
 	if responseJSON == "" {
@@ -1197,7 +1209,6 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 		Target:            req.Target,
 		SearchSpace:       req.SearchSpace,
 		Constraints:       req.Constraints,
-		BenchmarkProfile:  req.Benchmark,
 		BenchmarkProfiles: req.BenchmarkProfiles,
 	}
 	if plan.Target.Model == "" {
@@ -1227,11 +1238,12 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 }
 
 func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*benchmarkStepResult, error) {
-	if len(plan.BenchmarkProfiles) > 0 {
+	if isMatrixBenchmark(plan.BenchmarkProfiles) {
 		return m.executeBenchmarkMatrix(ctx, run, plan, stepKind, stepIndex)
 	}
+	bp := firstProfile(plan.BenchmarkProfiles)
 	var deployStep *deploymentStepResult
-	if strings.TrimSpace(plan.BenchmarkProfile.Endpoint) == "" {
+	if strings.TrimSpace(bp.Endpoint) == "" {
 		var err error
 		deployStep, err = m.executeDeployStep(ctx, run, plan, stepKind, stepIndex)
 		if err != nil {
@@ -1240,11 +1252,11 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 	}
 	benchArgs := map[string]any{
 		"model":       plan.Target.Model,
-		"concurrency": plan.BenchmarkProfile.Concurrency,
-		"rounds":      plan.BenchmarkProfile.Rounds,
+		"concurrency": bp.Concurrency,
+		"rounds":      bp.Rounds,
 	}
-	if plan.BenchmarkProfile.Endpoint != "" {
-		benchArgs["endpoint"] = plan.BenchmarkProfile.Endpoint
+	if bp.Endpoint != "" {
+		benchArgs["endpoint"] = bp.Endpoint
 	} else if deployStep != nil && deployStep.Endpoint != "" {
 		benchArgs["endpoint"] = deployStep.Endpoint
 	}
@@ -1261,10 +1273,10 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 	if _, ok := benchArgs["save"]; !ok {
 		benchArgs["save"] = false
 	}
-	if plan.BenchmarkProfile.Concurrency <= 0 {
+	if bp.Concurrency <= 0 {
 		benchArgs["concurrency"] = 1
 	}
-	if plan.BenchmarkProfile.Rounds <= 0 {
+	if bp.Rounds <= 0 {
 		benchArgs["rounds"] = 1
 	}
 
@@ -1323,7 +1335,7 @@ func (m *ExplorationManager) executeBenchmarkStep(ctx context.Context, run *stat
 }
 
 func (m *ExplorationManager) executeBenchmarkMatrix(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*benchmarkStepResult, error) {
-	endpoint := plan.BenchmarkProfile.Endpoint // resolved by executeValidate
+	endpoint := firstProfile(plan.BenchmarkProfiles).Endpoint // resolved by executeValidate
 
 	var allCellsJSON []json.RawMessage
 	totalCells, successCells := 0, 0

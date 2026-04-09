@@ -18,15 +18,16 @@ import (
 
 // Catalog holds all knowledge assets loaded from embedded YAML files.
 type Catalog struct {
-	mu                  sync.Mutex
-	HardwareProfiles    []HardwareProfile
-	PartitionStrategies []PartitionStrategy
-	EngineAssets        []EngineAsset
-	RawEngineAssets     []EngineAsset // unresolved engine assets before profile inheritance/template expansion
-	ModelAssets         []ModelAsset
-	StackComponents     []StackComponent
-	DeploymentScenarios []DeploymentScenario
-	EngineProfiles      map[string]*EngineProfile // name -> profile (loaded from engines/profiles/)
+	mu                     sync.Mutex
+	HardwareProfiles       []HardwareProfile
+	PartitionStrategies    []PartitionStrategy
+	EngineAssets           []EngineAsset
+	RawEngineAssets        []EngineAsset // unresolved engine assets before profile inheritance/template expansion
+	ModelAssets            []ModelAsset
+	StackComponents        []StackComponent
+	DeploymentScenarios    []DeploymentScenario
+	EngineProfiles         map[string]*EngineProfile // name -> profile (loaded from engines/profiles/)
+	BenchmarkProfileTiers  []BenchmarkProfileTier    // VRAM-tiered benchmark profiles for Explorer
 }
 
 // EngineProfile captures the shared identity of an engine type.
@@ -223,6 +224,7 @@ type EngineStartup struct {
 	WorkDir            string              `yaml:"work_dir,omitempty"               json:"work_dir,omitempty"`
 	Ports              []StartupPort       `yaml:"ports,omitempty"                  json:"ports,omitempty"`
 	DefaultArgs        map[string]any      `yaml:"default_args"                     json:"default_args"`
+	InternalArgs       []string            `yaml:"internal_args,omitempty"          json:"internal_args,omitempty"`
 	HealthCheck        HealthCheck         `yaml:"health_check"                     json:"health_check"`
 	Warmup             WarmupConfig        `yaml:"warmup"                           json:"warmup"`
 	ExtraVolumes       []ContainerVolume   `yaml:"extra_volumes,omitempty"          json:"extra_volumes,omitempty"`
@@ -609,6 +611,39 @@ type ScenarioAlternative struct {
 	Replace     []ScenarioDeployment `yaml:"replace"`
 }
 
+// BenchmarkProfileTier defines benchmark matrix dimensions for a VRAM tier.
+type BenchmarkProfileTier struct {
+	Name       string             `yaml:"name"        json:"name"`
+	MinVRAMMiB int                `yaml:"min_vram_mib" json:"min_vram_mib"`
+	Profiles   []BenchmarkProfile `yaml:"profiles"    json:"profiles"`
+}
+
+// BenchmarkProfile defines a single benchmark matrix profile (latency or throughput).
+type BenchmarkProfile struct {
+	Label             string `yaml:"label"              json:"label"`
+	ConcurrencyLevels []int  `yaml:"concurrency_levels" json:"concurrency_levels"`
+	InputTokenLevels  []int  `yaml:"input_token_levels" json:"input_token_levels"`
+	MaxTokenLevels    []int  `yaml:"max_token_levels"   json:"max_token_levels"`
+	RequestsPerCombo  int    `yaml:"requests_per_combo" json:"requests_per_combo"`
+	Rounds            int    `yaml:"rounds"             json:"rounds"`
+}
+
+// BenchmarkProfilesForVRAM returns the benchmark profiles for the highest tier
+// whose min_vram_mib is <= totalVRAM. Tiers are sorted descending in the YAML.
+func (cat *Catalog) BenchmarkProfilesForVRAM(totalVRAMMiB int) []BenchmarkProfile {
+	var best *BenchmarkProfileTier
+	for i := range cat.BenchmarkProfileTiers {
+		t := &cat.BenchmarkProfileTiers[i]
+		if totalVRAMMiB >= t.MinVRAMMiB && (best == nil || t.MinVRAMMiB > best.MinVRAMMiB) {
+			best = t
+		}
+	}
+	if best != nil {
+		return best.Profiles
+	}
+	return nil
+}
+
 // LoadCatalog loads and parses all YAML knowledge assets from an fs.FS.
 func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	cat := &Catalog{
@@ -641,7 +676,7 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	}
 
 	// Phase 2: Load all assets (profiles subdir already handled, skip it)
-	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios"}
+	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios", "benchmarks"}
 	for _, dir := range dirs {
 		entries, err := fs.ReadDir(fsys, dir)
 		if err != nil {
@@ -771,6 +806,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	if dst.LogPatterns == nil {
 		dst.LogPatterns = src.LogPatterns
 	}
+	if len(dst.InternalArgs) == 0 {
+		dst.InternalArgs = src.InternalArgs
+	}
 }
 
 func mergeAmplifier(dst, src *EngineAmplifier) {
@@ -872,6 +910,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst.Startup.InitCommands = append([]string(nil), src.Startup.InitCommands...)
 	dst.Startup.Env = cloneStringMap(src.Startup.Env)
 	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
+	dst.Startup.InternalArgs = append([]string(nil), src.Startup.InternalArgs...)
 	dst.Startup.ExtraVolumes = append([]ContainerVolume(nil), src.Startup.ExtraVolumes...)
 	if src.Startup.LogPatterns != nil {
 		logPatterns := *src.Startup.LogPatterns
@@ -1051,6 +1090,14 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 			ds.Deployments[i].Config = normalizeMap(ds.Deployments[i].Config)
 		}
 		cat.DeploymentScenarios = append(cat.DeploymentScenarios, ds)
+	case "benchmark_profiles":
+		var bp struct {
+			Tiers []BenchmarkProfileTier `yaml:"tiers"`
+		}
+		if err := yaml.Unmarshal(data, &bp); err != nil {
+			return fmt.Errorf("parse benchmark profiles %s: %w", path, err)
+		}
+		cat.BenchmarkProfileTiers = bp.Tiers
 	default:
 		// Unknown kind: skip silently
 	}
@@ -1131,7 +1178,7 @@ func LoadCatalogLenient(fsys fs.FS) (*Catalog, []string) {
 	}
 
 	// Phase 2: Load all assets
-	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios"}
+	dirs := []string{"hardware", "engines", "models", "partitions", "stack", "scenarios", "benchmarks"}
 	for _, dir := range dirs {
 		entries, err := fs.ReadDir(fsys, dir)
 		if err != nil {

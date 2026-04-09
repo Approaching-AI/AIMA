@@ -1194,10 +1194,10 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 		SearchSpace: map[string][]any{
 			"gpu_memory_utilization": {0.8},
 		},
-		Benchmark: ExplorationBenchmarkProfile{
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
 			Concurrency: 2,
 			Rounds:      3,
-		},
+		}},
 		Constraints: ExplorationConstraints{
 			MaxCandidates: 1,
 		},
@@ -1300,10 +1300,10 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 			Model:    "qwen3-8b",
 			Engine:   "vllm",
 		},
-		Benchmark: ExplorationBenchmarkProfile{
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
 			Concurrency: 2,
 			Rounds:      3,
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1385,10 +1385,10 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 			Model:    "qwen3-8b",
 			Engine:   "vllm",
 		},
-		Benchmark: ExplorationBenchmarkProfile{
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
 			Concurrency: 2,
 			Rounds:      1,
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

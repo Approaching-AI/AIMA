@@ -114,3 +114,42 @@ func TestHarvester_SaveNoteIncludesHardware(t *testing.T) {
 		t.Fatalf("hardware = %q, want nvidia-gb10-arm64", gotHardware)
 	}
 }
+
+func TestHarvester_ValidateUsesTemplate_TuneUsesLLM(t *testing.T) {
+	llm := &mockLLM{
+		responses: []*Response{{Content: "LLM analysis: good throughput", TotalTokens: 50}},
+	}
+
+	h := NewHarvester(2, WithHarvesterLLM(llm))
+	ctx := context.Background()
+
+	// Test 1: validate task at tier 2 with LLM available → template, LLM NOT called
+	note, insightPending := h.generateNote(ctx, HarvestInput{
+		Task:   PlanTask{Kind: "validate", Model: "qwen3-8b", Engine: "vllm"},
+		Result: HarvestResult{Success: true, Throughput: 42, Config: map[string]any{"gmu": 0.9}},
+	})
+	if llm.calls != 0 {
+		t.Fatalf("validate: LLM was called (%d times), expected 0", llm.calls)
+	}
+	if !strings.Contains(note, "42") {
+		t.Error("validate: template note missing throughput")
+	}
+	if insightPending {
+		t.Error("validate: insightPending should be false for template-by-design")
+	}
+
+	// Test 2: tune task at tier 2 with LLM available → LLM called
+	note, insightPending = h.generateNote(ctx, HarvestInput{
+		Task:   PlanTask{Kind: "tune", Model: "qwen3-8b", Engine: "vllm"},
+		Result: HarvestResult{Success: true, Throughput: 55, Config: map[string]any{"gmu": 0.85}},
+	})
+	if llm.calls != 1 {
+		t.Fatalf("tune: LLM call count = %d, expected 1", llm.calls)
+	}
+	if note != "LLM analysis: good throughput" {
+		t.Errorf("tune: note = %q, want LLM response", note)
+	}
+	if insightPending {
+		t.Error("tune: insightPending should be false when LLM succeeds")
+	}
+}

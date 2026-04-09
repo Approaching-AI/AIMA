@@ -133,7 +133,9 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 }
 
 func (h *Harvester) generateNote(ctx context.Context, input HarvestInput) (string, bool) {
-	if h.tier >= 2 && h.llm != nil {
+	// D7: only use LLM for tune tasks where multi-config comparison analysis adds value.
+	// Validate tasks are single-point measurements — template note is sufficient.
+	if h.tier >= 2 && h.llm != nil && input.Task.Kind == "tune" {
 		note, err := h.generateLLMNote(ctx, input)
 		if err == nil {
 			return note, false

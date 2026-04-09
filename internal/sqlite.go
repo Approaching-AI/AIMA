@@ -2644,6 +2644,40 @@ func (d *DB) CountFailedExplorations(ctx context.Context, modelID, engineID stri
 	return count, nil
 }
 
+// ExploredCombo summarizes the exploration status of a model+engine pair.
+type ExploredCombo struct {
+	Model     string
+	Engine    string
+	Completed bool
+	FailCount int
+}
+
+// ListExploredCombos returns all model+engine pairs that have been explored,
+// with their completion status and failure count, in a single query.
+func (d *DB) ListExploredCombos(ctx context.Context) ([]ExploredCombo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT model_id, engine_id,
+			MAX(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS fail_count
+		FROM exploration_runs
+		GROUP BY model_id, engine_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var combos []ExploredCombo
+	for rows.Next() {
+		var c ExploredCombo
+		var completed int
+		if err := rows.Scan(&c.Model, &c.Engine, &completed, &c.FailCount); err != nil {
+			return nil, err
+		}
+		c.Completed = completed == 1
+		combos = append(combos, c)
+	}
+	return combos, rows.Err()
+}
+
 func (d *DB) InsertExplorationEvent(ctx context.Context, event *ExplorationEvent) error {
 	if event == nil {
 		return fmt.Errorf("exploration event is nil")

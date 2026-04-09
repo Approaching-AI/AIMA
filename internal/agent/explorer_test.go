@@ -131,6 +131,53 @@ func (p *countingPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerP
 	}, 0, nil
 }
 
+// emptyPlanner always returns 0-task plans (simulates all tasks deduped post-hoc).
+type emptyPlanner struct {
+	calls *int
+}
+
+func (p *emptyPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, int, error) {
+	*p.calls++
+	return &ExplorerPlan{ID: fmt.Sprintf("empty-%d", *p.calls), Tier: 2, Tasks: nil}, 100, nil
+}
+
+func TestExplorer_EmptyPlanCountsAsBudgetRound(t *testing.T) {
+	bus := NewEventBus()
+	calls := 0
+	agent := NewAgent(&mockLLM{}, &mockTools{})
+	agent.mode = toolModeContextOnly
+	e := NewExplorer(ExplorerConfig{
+		Schedule:  DefaultScheduleConfig(),
+		Enabled:   true,
+		Mode:      "budget",
+		MaxRounds: 2,
+	}, agent, nil, nil, bus,
+		WithGatherHardware(func(ctx context.Context) (HardwareInfo, error) {
+			return HardwareInfo{Profile: "test-hw", GPUArch: "test"}, nil
+		}),
+	)
+	e.planner = &emptyPlanner{calls: &calls}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go e.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Fire 5 events — empty plans should still count toward budget
+	for i := 0; i < 5; i++ {
+		bus.Publish(ExplorerEvent{Type: EventScheduledGapScan})
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// Only 2 plans should be generated (maxRounds=2), even though they're empty
+	if calls != 2 {
+		t.Errorf("planner calls = %d, want 2 (empty plans should count toward budget)", calls)
+	}
+}
+
 func TestParseAdvisoryTaskCarriesConfigAndHardware(t *testing.T) {
 	taskInfo, task, err := parseAdvisoryTask(json.RawMessage(`{
 		"id":"adv-1",

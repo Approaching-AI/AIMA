@@ -27,6 +27,14 @@ type PlanInput struct {
 	LocalModels   []LocalModel  // models physically present on this device
 	LocalEngines  []LocalEngine // engines installed on this device
 	Event         *ExplorerEvent
+	SkipCombos    []SkipCombo // model+engine pairs already explored (prefill dedup for LLM)
+}
+
+// SkipCombo is a model+engine pair the LLM planner should not propose.
+type SkipCombo struct {
+	Model  string `json:"model"`
+	Engine string `json:"engine"`
+	Reason string `json:"reason"` // "completed" or "failed:N"
 }
 
 // LocalModel describes a model installed on this device.
@@ -241,41 +249,6 @@ func hasHistoryFor(history []ExplorationRun, model, engine string) bool {
 	return false
 }
 
-// deduplicateTasks removes tasks whose model+engine already has a completed
-// exploration run in history, OR has failed too many times (B11 + B22 fix).
-func deduplicateTasks(tasks []PlanTask, history []ExplorationRun) []PlanTask {
-	if len(history) == 0 {
-		return tasks
-	}
-	filtered := tasks[:0]
-	for _, t := range tasks {
-		// Advisories (with SourceRef) always pass — central asked us to re-validate.
-		if t.SourceRef != "" {
-			filtered = append(filtered, t)
-			continue
-		}
-		if hasHistoryFor(history, t.Model, t.Engine) {
-			continue // already completed successfully
-		}
-		// B22: stop retrying after repeated failures (≥2 failed, 0 completed)
-		if failCountFor(history, t.Model, t.Engine) >= 2 {
-			continue
-		}
-		filtered = append(filtered, t)
-	}
-	return filtered
-}
-
-// failCountFor counts how many times a model+engine has failed in history.
-func failCountFor(history []ExplorationRun, model, engine string) int {
-	n := 0
-	for _, h := range history {
-		if h.ModelID == model && h.EngineID == engine && h.Status == "failed" {
-			n++
-		}
-	}
-	return n
-}
 
 func firstTaskHardware(values ...string) string {
 	for _, value := range values {

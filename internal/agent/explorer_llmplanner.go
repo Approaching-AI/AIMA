@@ -177,6 +177,7 @@ func filterPlanInput(input PlanInput) PlanInput {
 		LocalModels:   input.LocalModels,
 		LocalEngines:  input.LocalEngines,
 		Event:         input.Event,
+		SkipCombos:    input.SkipCombos, // pass through unfiltered — compact key-value pairs
 	}
 }
 
@@ -207,12 +208,18 @@ Strategy — BREADTH FIRST:
 - Second priority: tune tasks ONLY for models that already have a completed validate baseline in "history". Never tune a model that hasn't been validated yet.
 - Third priority: open_question tasks to test hypotheses.
 
+CRITICAL — SKIP COMBOS:
+The "skip_combos" list contains model+engine pairs that have ALREADY been explored on this device.
+- "completed": validated successfully — do NOT propose validate tasks for these.
+- "failed:N": failed N times — do NOT propose these at all.
+This list is authoritative and complete. NEVER include a skip_combos entry in your plan.
+If all gaps are covered by skip_combos, return {"tasks":[]}.
+
 Rules:
 - For tune tasks, suggest specific parameter values (not ranges) from the engine's tunable_params
 - Consider central advisories and validate them
 - Max 5 tasks per plan
 - Only use task kinds listed above
-- Skip model+engine combos that already appear in "history" with status "completed" unless you have a specific new config to test
 - Be specific about WHY each task matters
 - Keep your reasoning concise. Focus on selecting the right tasks, not exhaustive analysis.`
 
@@ -335,6 +342,7 @@ func buildPlannerPrompt(input PlanInput) string {
 		"local_engines":  localEngines,
 		"history":        history,
 		"event":          input.Event,
+		"skip_combos":    input.SkipCombos,
 	}
 	data, _ := json.Marshal(promptData)
 	return string(data)

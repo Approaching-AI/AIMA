@@ -442,6 +442,11 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	slog.Info("explorer: plan generated", "tasks", len(plan.Tasks), "id", plan.ID, "tier", plan.Tier)
 	if len(plan.Tasks) == 0 {
 		slog.Info("explorer: no tasks to execute after filtering")
+		// N1: empty plan still counts as a budget round — prevents infinite
+		// LLM calls when all proposed tasks are deduped.
+		e.mu.Lock()
+		e.roundsUsed++
+		e.mu.Unlock()
 		return
 	}
 
@@ -860,6 +865,23 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 		runs, _ := e.db.ListExplorationRuns(ctx, "", 10)
 		for _, r := range runs {
 			input.History = append(input.History, *r)
+		}
+
+		// Prefill dedup: feed all explored combos to LLM so it avoids
+		// proposing already-tested tasks (cheap prefill vs expensive decode).
+		combos, _ := e.db.ListExploredCombos(ctx)
+		for _, c := range combos {
+			if c.Completed {
+				input.SkipCombos = append(input.SkipCombos, SkipCombo{
+					Model: c.Model, Engine: c.Engine, Reason: "completed",
+				})
+			} else if c.FailCount >= 2 {
+				input.SkipCombos = append(input.SkipCombos, SkipCombo{
+					Model:  c.Model,
+					Engine: c.Engine,
+					Reason: fmt.Sprintf("failed:%d", c.FailCount),
+				})
+			}
 		}
 	}
 

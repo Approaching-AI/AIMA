@@ -702,6 +702,23 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 	}
 }
 
+// defaultBenchmarkProfile returns sensible benchmark parameters based on hardware capability.
+// D6: Explorer decides "how to test" (tactical), Planner decides "what to test" (strategic).
+func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
+	totalVRAM := hw.VRAMMiB * hw.GPUCount
+	if totalVRAM == 0 {
+		totalVRAM = hw.VRAMMiB
+	}
+	switch {
+	case totalVRAM >= 40000:
+		return ExplorationBenchmarkProfile{Concurrency: 4, Rounds: 2}
+	case totalVRAM >= 16000:
+		return ExplorationBenchmarkProfile{Concurrency: 2, Rounds: 2}
+	default:
+		return ExplorationBenchmarkProfile{Concurrency: 1, Rounds: 1}
+	}
+}
+
 func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult {
 	if e.explMgr == nil {
 		return HarvestResult{Success: false, Error: "no exploration manager"}
@@ -728,6 +745,13 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask) HarvestResult
 	}
 	if searchSpace != nil {
 		req.SearchSpace = searchSpace
+	}
+
+	// D6: set benchmark profile from hardware defaults
+	if e.gatherHardware != nil {
+		if hw, err := e.gatherHardware(ctx); err == nil {
+			req.Benchmark = defaultBenchmarkProfile(hw)
+		}
 	}
 
 	status, err := e.explMgr.StartAndWait(ctx, req)

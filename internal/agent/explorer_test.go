@@ -155,3 +155,29 @@ func TestParseAdvisoryTaskCarriesConfigAndHardware(t *testing.T) {
 		t.Fatalf("source_ref = %q, want adv-1", task.SourceRef)
 	}
 }
+
+func TestDefaultBenchmarkProfile(t *testing.T) {
+	tests := []struct {
+		name       string
+		vramMiB    int
+		gpuCount   int
+		wantConc   int
+		wantRounds int
+	}{
+		{"high VRAM dual GPU", 48000, 2, 4, 2},
+		{"medium VRAM", 24000, 1, 2, 2},
+		{"low VRAM", 8000, 1, 1, 1},
+		{"zero VRAM", 0, 0, 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := defaultBenchmarkProfile(HardwareInfo{VRAMMiB: tt.vramMiB, GPUCount: tt.gpuCount})
+			if p.Concurrency != tt.wantConc {
+				t.Errorf("concurrency = %d, want %d", p.Concurrency, tt.wantConc)
+			}
+			if p.Rounds != tt.wantRounds {
+				t.Errorf("rounds = %d, want %d", p.Rounds, tt.wantRounds)
+			}
+		})
+	}
+}

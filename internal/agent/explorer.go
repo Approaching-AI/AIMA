@@ -728,6 +728,57 @@ func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
 	}
 }
 
+func defaultBenchmarkProfiles(hw HardwareInfo) []ExplorationBenchmarkProfile {
+	totalVRAM := hw.VRAMMiB * hw.GPUCount
+	if totalVRAM == 0 {
+		totalVRAM = hw.VRAMMiB
+	}
+
+	var profiles []ExplorationBenchmarkProfile
+
+	switch {
+	case totalVRAM >= 40000:
+		profiles = append(profiles, ExplorationBenchmarkProfile{
+			ConcurrencyLevels: []int{1},
+			InputTokenLevels:  []int{128, 512, 1024, 2048, 4096, 8192},
+			MaxTokenLevels:    []int{256, 1024},
+			RequestsPerCombo:  5,
+			Rounds:            1,
+		})
+		profiles = append(profiles, ExplorationBenchmarkProfile{
+			ConcurrencyLevels: []int{1, 2, 4, 8},
+			InputTokenLevels:  []int{512, 2048, 8192},
+			MaxTokenLevels:    []int{1024},
+			RequestsPerCombo:  5,
+			Rounds:            1,
+		})
+	case totalVRAM >= 16000:
+		profiles = append(profiles, ExplorationBenchmarkProfile{
+			ConcurrencyLevels: []int{1},
+			InputTokenLevels:  []int{128, 512, 1024, 2048, 4096, 8192},
+			MaxTokenLevels:    []int{256, 1024},
+			RequestsPerCombo:  5,
+			Rounds:            1,
+		})
+		profiles = append(profiles, ExplorationBenchmarkProfile{
+			ConcurrencyLevels: []int{1, 2, 4},
+			InputTokenLevels:  []int{512, 2048},
+			MaxTokenLevels:    []int{1024},
+			RequestsPerCombo:  5,
+			Rounds:            1,
+		})
+	default:
+		profiles = append(profiles, ExplorationBenchmarkProfile{
+			ConcurrencyLevels: []int{1},
+			InputTokenLevels:  []int{128, 512, 1024, 2048},
+			MaxTokenLevels:    []int{256},
+			RequestsPerCombo:  5,
+			Rounds:            1,
+		})
+	}
+	return profiles
+}
+
 func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string) HarvestResult {
 	if e.explMgr == nil {
 		return HarvestResult{Success: false, Error: "no exploration manager"}
@@ -765,6 +816,9 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	// D6: set benchmark profile from hardware defaults
 	if e.gatherHardware != nil {
 		if hw, err := e.gatherHardware(ctx); err == nil {
+			if task.Kind == "validate" {
+				req.BenchmarkProfiles = defaultBenchmarkProfiles(hw)
+			}
 			req.Benchmark = defaultBenchmarkProfile(hw)
 		}
 	}

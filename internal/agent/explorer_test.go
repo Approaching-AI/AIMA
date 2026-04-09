@@ -203,27 +203,38 @@ func TestParseAdvisoryTaskCarriesConfigAndHardware(t *testing.T) {
 	}
 }
 
-func TestDefaultBenchmarkProfile(t *testing.T) {
+func TestDefaultBenchmarkProfiles(t *testing.T) {
 	tests := []struct {
-		name       string
-		vramMiB    int
-		gpuCount   int
-		wantConc   int
-		wantRounds int
+		name             string
+		hw               HardwareInfo
+		wantLatencyCells int
+		wantThroughput   bool
+		wantMaxConc      int
 	}{
-		{"high VRAM dual GPU", 48000, 2, 4, 2},
-		{"medium VRAM", 24000, 1, 2, 2},
-		{"low VRAM", 8000, 1, 1, 1},
-		{"zero VRAM", 0, 0, 1, 1},
+		{"high_vram_98gb", HardwareInfo{VRAMMiB: 49000, GPUCount: 2}, 12, true, 8},
+		{"medium_vram_24gb", HardwareInfo{VRAMMiB: 24000, GPUCount: 1}, 12, true, 4},
+		{"low_vram_8gb", HardwareInfo{VRAMMiB: 8000, GPUCount: 1}, 4, false, 0},
+		{"zero_vram", HardwareInfo{VRAMMiB: 0, GPUCount: 0}, 4, false, 0},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := defaultBenchmarkProfile(HardwareInfo{VRAMMiB: tt.vramMiB, GPUCount: tt.gpuCount})
-			if p.Concurrency != tt.wantConc {
-				t.Errorf("concurrency = %d, want %d", p.Concurrency, tt.wantConc)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profiles := defaultBenchmarkProfiles(tc.hw)
+			if len(profiles) == 0 {
+				t.Fatal("no profiles returned")
 			}
-			if p.Rounds != tt.wantRounds {
-				t.Errorf("rounds = %d, want %d", p.Rounds, tt.wantRounds)
+			latency := profiles[0]
+			cells := len(latency.InputTokenLevels) * len(latency.MaxTokenLevels)
+			if cells != tc.wantLatencyCells {
+				t.Errorf("latency cells = %d, want %d", cells, tc.wantLatencyCells)
+			}
+			if tc.wantThroughput && len(profiles) < 2 {
+				t.Error("expected throughput profile")
+			}
+			if tc.wantThroughput {
+				maxConc := profiles[1].ConcurrencyLevels[len(profiles[1].ConcurrencyLevels)-1]
+				if maxConc != tc.wantMaxConc {
+					t.Errorf("max concurrency = %d, want %d", maxConc, tc.wantMaxConc)
+				}
 			}
 		})
 	}

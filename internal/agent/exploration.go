@@ -30,19 +30,24 @@ type ExplorationConstraints struct {
 }
 
 type ExplorationBenchmarkProfile struct {
-	Endpoint    string `json:"endpoint,omitempty"`
-	Concurrency int    `json:"concurrency,omitempty"`
-	Rounds      int    `json:"rounds,omitempty"`
+	Endpoint          string `json:"endpoint,omitempty"`
+	Concurrency       int    `json:"concurrency,omitempty"`       // legacy single-point (for tune tasks)
+	Rounds            int    `json:"rounds,omitempty"`
+	RequestsPerCombo  int    `json:"requests_per_combo,omitempty"`
+	ConcurrencyLevels []int  `json:"concurrency_levels,omitempty"`
+	InputTokenLevels  []int  `json:"input_token_levels,omitempty"`
+	MaxTokenLevels    []int  `json:"max_token_levels,omitempty"`
 }
 
 type ExplorationPlan struct {
-	Kind             string                      `json:"kind"`
-	Goal             string                      `json:"goal"`
-	Target           ExplorationTarget           `json:"target"`
-	SourceRef        string                      `json:"source_ref,omitempty"`
-	SearchSpace      map[string][]any            `json:"search_space,omitempty"`
-	Constraints      ExplorationConstraints      `json:"constraints,omitempty"`
-	BenchmarkProfile ExplorationBenchmarkProfile `json:"benchmark_profile,omitempty"`
+	Kind              string                       `json:"kind"`
+	Goal              string                       `json:"goal"`
+	Target            ExplorationTarget            `json:"target"`
+	SourceRef         string                       `json:"source_ref,omitempty"`
+	SearchSpace       map[string][]any             `json:"search_space,omitempty"`
+	Constraints       ExplorationConstraints       `json:"constraints,omitempty"`
+	BenchmarkProfile  ExplorationBenchmarkProfile  `json:"benchmark_profile,omitempty"`
+	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
 }
 
 type benchmarkStepResult struct {
@@ -50,6 +55,8 @@ type benchmarkStepResult struct {
 	ResponseJSON string
 	BenchmarkID  string
 	ConfigID     string
+	TotalCells   int
+	SuccessCells int
 }
 
 type deploymentStepResult struct {
@@ -61,17 +68,18 @@ type deploymentStepResult struct {
 }
 
 type ExplorationStart struct {
-	Kind         string                      `json:"kind"`
-	Goal         string                      `json:"goal"`
-	PlanID       string                      `json:"plan_id,omitempty"` // D3: links run to explorer plan
-	Target       ExplorationTarget           `json:"target"`
-	Executor     string                      `json:"executor,omitempty"`
-	RequestedBy  string                      `json:"requested_by,omitempty"`
-	ApprovalMode string                      `json:"approval_mode,omitempty"`
-	SourceRef    string                      `json:"source_ref,omitempty"`
-	SearchSpace  map[string][]any            `json:"search_space,omitempty"`
-	Constraints  ExplorationConstraints      `json:"constraints,omitempty"`
-	Benchmark    ExplorationBenchmarkProfile `json:"benchmark_profile,omitempty"`
+	Kind              string                        `json:"kind"`
+	Goal              string                        `json:"goal"`
+	PlanID            string                        `json:"plan_id,omitempty"` // D3: links run to explorer plan
+	Target            ExplorationTarget             `json:"target"`
+	Executor          string                        `json:"executor,omitempty"`
+	RequestedBy       string                        `json:"requested_by,omitempty"`
+	ApprovalMode      string                        `json:"approval_mode,omitempty"`
+	SourceRef         string                        `json:"source_ref,omitempty"`
+	SearchSpace       map[string][]any              `json:"search_space,omitempty"`
+	Constraints       ExplorationConstraints        `json:"constraints,omitempty"`
+	Benchmark         ExplorationBenchmarkProfile   `json:"benchmark_profile,omitempty"`
+	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
 }
 
 type ExplorationStatus struct {
@@ -1068,13 +1076,14 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 	}
 
 	plan := ExplorationPlan{
-		Kind:             req.Kind,
-		Goal:             req.Goal,
-		SourceRef:        req.SourceRef,
-		Target:           req.Target,
-		SearchSpace:      req.SearchSpace,
-		Constraints:      req.Constraints,
-		BenchmarkProfile: req.Benchmark,
+		Kind:              req.Kind,
+		Goal:              req.Goal,
+		SourceRef:         req.SourceRef,
+		Target:            req.Target,
+		SearchSpace:       req.SearchSpace,
+		Constraints:       req.Constraints,
+		BenchmarkProfile:  req.Benchmark,
+		BenchmarkProfiles: req.BenchmarkProfiles,
 	}
 	if plan.Target.Model == "" {
 		return nil, fmt.Errorf("target.model is required")

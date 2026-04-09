@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -78,40 +79,56 @@ func TestExplorer_UpdateConfig(t *testing.T) {
 	}
 }
 
-func TestExplorer_ExecutionSlotRespectsMaxConcurrentRuns(t *testing.T) {
+func TestExplorer_BudgetModeLimitsRounds(t *testing.T) {
 	bus := NewEventBus()
+	plansExecuted := 0
+	// Create a minimal agent so detectTier() returns 1 (context_only)
+	agent := NewAgent(&mockLLM{}, &mockTools{})
+	agent.mode = toolModeContextOnly
 	e := NewExplorer(ExplorerConfig{
-		Schedule: ScheduleConfig{MaxConcurrentRuns: 1},
-		Enabled:  true,
-	}, nil, nil, nil, bus)
+		Schedule:  DefaultScheduleConfig(),
+		Enabled:   true,
+		Mode:      "budget",
+		MaxRounds: 2,
+	}, agent, nil, nil, bus,
+		WithGatherHardware(func(ctx context.Context) (HardwareInfo, error) {
+			return HardwareInfo{Profile: "test-hw", GPUArch: "test"}, nil
+		}),
+	)
+	// Override planner to count executions
+	e.planner = &countingPlanner{executed: &plansExecuted}
 
-	if err := e.acquireExecutionSlot(context.Background()); err != nil {
-		t.Fatalf("first acquireExecutionSlot: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go e.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Fire 5 events — only 2 should produce plan execution
+	for i := 0; i < 5; i++ {
+		bus.Publish(ExplorerEvent{Type: EventScheduledGapScan})
+		time.Sleep(10 * time.Millisecond)
 	}
+	cancel()
+	time.Sleep(20 * time.Millisecond)
 
-	done := make(chan error, 1)
-	go func() {
-		done <- e.acquireExecutionSlot(context.Background())
-	}()
-
-	select {
-	case err := <-done:
-		t.Fatalf("second acquireExecutionSlot returned early: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	if plansExecuted != 2 {
+		t.Errorf("plansExecuted = %d, want 2 (maxRounds)", plansExecuted)
 	}
+}
 
-	e.releaseExecutionSlot()
+// countingPlanner is a test planner that generates 1-task plans and counts invocations.
+type countingPlanner struct {
+	executed *int
+}
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("second acquireExecutionSlot: %v", err)
-		}
-	case <-time.After(250 * time.Millisecond):
-		t.Fatal("timed out waiting for released execution slot")
-	}
-
-	e.releaseExecutionSlot()
+func (p *countingPlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, int, error) {
+	*p.executed++
+	return &ExplorerPlan{
+		ID:    fmt.Sprintf("test-%d", *p.executed),
+		Tier:  1,
+		Tasks: []PlanTask{{Kind: "validate", Model: "m", Engine: "e", Priority: 0}},
+	}, 0, nil
 }
 
 func TestParseAdvisoryTaskCarriesConfigAndHardware(t *testing.T) {

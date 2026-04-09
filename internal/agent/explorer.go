@@ -45,6 +45,7 @@ type PlanMetrics struct {
 	Completed        int     `json:"completed"`
 	Failed           int     `json:"failed"`
 	Skipped          int     `json:"skipped"`
+	DiscoveryCount   int     `json:"discovery_count"`
 	DurationS        float64 `json:"duration_s"`
 	SuccessRate      float64 `json:"success_rate"`
 	AvgTaskDurationS float64 `json:"avg_task_duration_s"`
@@ -84,9 +85,7 @@ type Explorer struct {
 	activePlan       *ExplorerPlan
 	cachedGPUArch    string // cached from gatherHardware for overlay YAML (O13)
 	lastRun          time.Time
-	cancel           context.CancelFunc
-	activeExecutions int
-	slotWaiters      chan struct{}
+	cancel context.CancelFunc
 
 	// T2: Resource control state
 	roundsUsed      int
@@ -150,14 +149,18 @@ func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reaso
 	return func(e *Explorer) { e.advisoryFeedback = fn }
 }
 
+// WithRoundsUsed restores the rounds counter from persisted state on restart.
+func WithRoundsUsed(n int) ExplorerOption {
+	return func(e *Explorer) { e.roundsUsed = n }
+}
+
 func NewExplorer(config ExplorerConfig, agent *Agent, explMgr *ExplorationManager, db *state.DB, bus *EventBus, opts ...ExplorerOption) *Explorer {
 	e := &Explorer{
-		config:      config,
-		agent:       agent,
-		explMgr:     explMgr,
-		db:          db,
-		bus:         bus,
-		slotWaiters: make(chan struct{}),
+		config:  config,
+		agent:   agent,
+		explMgr: explMgr,
+		db:      db,
+		bus:     bus,
 	}
 	for _, o := range opts {
 		o(e)
@@ -223,9 +226,7 @@ func (e *Explorer) Start(ctx context.Context) {
 	defer func() {
 		e.mu.Lock()
 		e.running = false
-		if e.activeExecutions == 0 {
-			e.activePlan = nil
-		}
+		e.activePlan = nil
 		e.mu.Unlock()
 	}()
 
@@ -444,11 +445,6 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		return
 	}
 
-	e.mu.Lock()
-	e.activePlan = plan
-	e.lastRun = time.Now()
-	e.mu.Unlock()
-
 	// Persist plan
 	if e.db != nil {
 		planJSON, _ := json.Marshal(plan)
@@ -463,7 +459,46 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		})
 	}
 
-	go e.runPlan(ctx, plan)
+	// D1: synchronous execution — budget, dedup, and activePlan are naturally correct
+	e.mu.Lock()
+	e.activePlan = plan
+	e.lastRun = time.Now()
+	e.roundsUsed++ // increment BEFORE execution to prevent race
+	e.mu.Unlock()
+
+	// Plan time budget
+	maxDur := e.config.MaxPlanDuration
+	if maxDur <= 0 {
+		maxDur = 30 * time.Minute
+	}
+	planCtx, planCancel := context.WithTimeout(ctx, maxDur)
+
+	e.mu.RLock()
+	tokensBefore := e.tokensUsedToday
+	e.mu.RUnlock()
+
+	planStart := time.Now()
+	e.executePlan(planCtx, plan)
+	planCancel()
+	elapsed := time.Since(planStart)
+
+	// D8: refresh tier after execution (LLM may have gone offline)
+	e.refreshTier(ctx)
+
+	e.mu.Lock()
+	tokensAfter := e.tokensUsedToday
+	e.mu.Unlock()
+
+	metrics := e.computePlanMetrics(plan, elapsed, tokensAfter-tokensBefore)
+	e.mu.Lock()
+	e.lastPlanMetrics = metrics
+	e.activePlan = nil // D9: clear after execution
+	e.mu.Unlock()
+
+	// D10: log what's still deployed when budget exhausted
+	if mode == "budget" && maxRounds > 0 && e.roundsUsed >= maxRounds {
+		slog.Info("explorer: budget exhausted — any active deployments remain running")
+	}
 }
 
 // handleAdvisory processes a central advisory event: parse advisory,
@@ -496,11 +531,6 @@ func (e *Explorer) handleAdvisory(ctx context.Context, ev ExplorerEvent) {
 
 	harvester := e.currentHarvester()
 	go func() {
-		if err := e.acquireExecutionSlot(ctx); err != nil {
-			return
-		}
-		defer e.releaseExecutionSlot()
-
 		result := e.executeTask(ctx, task)
 
 		if result.Success {
@@ -806,51 +836,18 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 	return input, nil
 }
 
-func (e *Explorer) runPlan(ctx context.Context, plan *ExplorerPlan) {
-	if err := e.acquireExecutionSlot(ctx); err != nil {
-		if e.db != nil {
-			_ = e.db.UpdateExplorationPlan(ctx, &state.ExplorationPlanRow{
-				ID:     plan.ID,
-				Status: "cancelled",
-			})
-		}
-		return
-	}
-	defer e.releaseExecutionSlot()
 
-	// T5: Plan time budget
-	maxDur := e.config.MaxPlanDuration
-	if maxDur <= 0 {
-		maxDur = 30 * time.Minute
-	}
-	planCtx, cancel := context.WithTimeout(ctx, maxDur)
-	defer cancel()
-
-	planStart := time.Now()
-	e.executePlan(planCtx, plan)
-	elapsed := time.Since(planStart)
-
-	// T2: increment rounds
-	e.mu.Lock()
-	e.roundsUsed++
-	e.mu.Unlock()
-
-	// T5: compute plan metrics
-	metrics := e.computePlanMetrics(plan, elapsed)
-	e.mu.Lock()
-	e.lastPlanMetrics = metrics
-	e.mu.Unlock()
-}
-
-func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration) *PlanMetrics {
+func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration, tokensUsed int) *PlanMetrics {
 	m := &PlanMetrics{
 		TotalTasks: len(plan.Tasks),
 		DurationS:  elapsed.Seconds(),
+		TokensUsed: tokensUsed,
 	}
 	for _, t := range plan.Tasks {
 		switch {
 		case t.Status == "completed":
 			m.Completed++
+			m.DiscoveryCount++
 		case t.Status == "failed":
 			m.Failed++
 		case strings.HasPrefix(t.Status, "skipped") || t.Status == "":
@@ -864,52 +861,9 @@ func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration)
 	if executed > 0 {
 		m.AvgTaskDurationS = elapsed.Seconds() / float64(executed)
 	}
-	e.mu.RLock()
-	m.TokensUsed = e.tokensUsedToday
-	e.mu.RUnlock()
 	return m
 }
 
-func (e *Explorer) acquireExecutionSlot(ctx context.Context) error {
-	for {
-		e.mu.Lock()
-		maxRuns := e.config.Schedule.MaxConcurrentRuns
-		if maxRuns <= 0 {
-			maxRuns = 1
-		}
-		if e.activeExecutions < maxRuns {
-			e.activeExecutions++
-			e.mu.Unlock()
-			return nil
-		}
-		wait := e.slotWaiters
-		e.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-wait:
-		}
-	}
-}
-
-func (e *Explorer) releaseExecutionSlot() {
-	e.mu.Lock()
-	if e.activeExecutions > 0 {
-		e.activeExecutions--
-	}
-	if e.activeExecutions == 0 {
-		e.activePlan = nil
-	}
-	e.notifySlotWaitersLocked()
-	e.mu.Unlock()
-}
-
-func (e *Explorer) notifySlotWaitersLocked() {
-	old := e.slotWaiters
-	e.slotWaiters = make(chan struct{})
-	close(old)
-}
 
 func (e *Explorer) refreshTier(ctx context.Context) bool {
 	// O4: If agent is available but tool mode is still unknown, probe it.
@@ -1035,7 +989,6 @@ func (e *Explorer) UpdateConfig(key, value string) (string, error) {
 	e.config.Schedule = normalizeScheduleConfig(e.config.Schedule)
 	schedule := e.config.Schedule
 	normalized := e.configValueLocked(key)
-	e.notifySlotWaitersLocked()
 	e.mu.Unlock()
 
 	e.scheduler.SetConfig(schedule)

@@ -91,6 +91,9 @@ type Explorer struct {
 	// Advisory feedback callback, wired via WithAdvisoryFeedback.
 	advisoryFeedback func(ctx context.Context, advisoryID, status, reason string) error
 
+	// Knowledge query function, wired via WithExplorerQueryFunc for agent planner.
+	queryFn QueryFunc
+
 	// Benchmark profile resolver from catalog YAML, wired via WithBenchmarkProfiles.
 	benchmarkProfilesFn func(totalVRAMMiB int) []ExplorationBenchmarkProfile
 
@@ -164,6 +167,11 @@ func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reaso
 	return func(e *Explorer) { e.advisoryFeedback = fn }
 }
 
+// WithExplorerQueryFunc sets the knowledge base query function for agent planner.
+func WithExplorerQueryFunc(fn QueryFunc) ExplorerOption {
+	return func(e *Explorer) { e.queryFn = fn }
+}
+
 // WithBenchmarkProfiles sets the function to resolve VRAM-tiered benchmark profiles from catalog.
 func WithBenchmarkProfiles(fn func(totalVRAMMiB int) []ExplorationBenchmarkProfile) ExplorerOption {
 	return func(e *Explorer) { e.benchmarkProfilesFn = fn }
@@ -219,12 +227,14 @@ func (e *Explorer) setupPlannerLocked() {
 			wsDir = filepath.Join(home, ".aima", "explorer")
 		}
 		e.workspace = NewExplorerWorkspace(wsDir)
-		e.planner = NewExplorerAgentPlanner(
-			e.agent.llm,
-			e.workspace,
+		opts := []ExplorerAgentPlannerOption{
 			WithAgentMaxCycles(e.config.MaxCycles),
 			WithAgentMaxTasks(e.config.MaxTasks),
-		)
+		}
+		if e.queryFn != nil {
+			opts = append(opts, WithAgentQueryFunc(e.queryFn))
+		}
+		e.planner = NewExplorerAgentPlanner(e.agent.llm, e.workspace, opts...)
 	} else {
 		e.planner = &RulePlanner{}
 	}
@@ -768,19 +778,7 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 
 		// Write experiment result to workspace (for PDCA Check phase)
 		if e.workspace != nil {
-			expResult := ExperimentResult{
-				Status:    task.Status,
-				StartedAt: taskStart.UTC().Format(time.RFC3339),
-				DurationS: taskElapsed.Seconds(),
-			}
-			if !result.Success {
-				expResult.Error = result.Error
-			}
-			if result.Throughput > 0 {
-				expResult.Benchmarks = []BenchmarkEntry{{
-					ThroughputTPS: result.Throughput,
-				}}
-			}
+			expResult := harvestToExperimentResult(task.Status, taskStart, taskElapsed, result)
 			expTask := TaskSpec{
 				Kind:         task.Kind,
 				Model:        task.Model,
@@ -1367,6 +1365,28 @@ func firstNonEmptyJSON(payload map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func harvestToExperimentResult(status string, start time.Time, elapsed time.Duration, r HarvestResult) ExperimentResult {
+	exp := ExperimentResult{
+		Status:    status,
+		StartedAt: start.UTC().Format(time.RFC3339),
+		DurationS: elapsed.Seconds(),
+	}
+	if !r.Success {
+		exp.Error = r.Error
+	}
+	if r.Throughput > 0 || r.Concurrency > 0 {
+		exp.Benchmarks = []BenchmarkEntry{{
+			Concurrency:   r.Concurrency,
+			InputTokens:   r.InputTokens,
+			MaxTokens:     r.MaxTokens,
+			ThroughputTPS: r.Throughput,
+			LatencyP50Ms:  r.TTFTP95, // best available latency metric
+			LatencyP99Ms:  r.TPOTP95,
+		}}
+	}
+	return exp
 }
 
 func readBenchmarkMetrics(summary map[string]any, result *HarvestResult) {

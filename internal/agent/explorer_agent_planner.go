@@ -154,6 +154,10 @@ func (p *ExplorerAgentPlanner) Plan(ctx context.Context, input PlanInput) (*Expl
 		planTasks[i] = taskSpecToPlanTask(ts, input.Hardware.Profile)
 	}
 
+	if len(planTasks) == 0 {
+		return nil, tokens, fmt.Errorf("agent produced no tasks")
+	}
+
 	plan := &ExplorerPlan{
 		ID:        generatePlanID(),
 		Tier:      2,

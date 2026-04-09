@@ -642,6 +642,42 @@ func run() error {
 			}
 			return result, nil
 		}),
+		agent.WithExplorerQueryFunc(func(qType string, filter map[string]any, limit int) (string, error) {
+			filterJSON, _ := json.Marshal(filter)
+			if limit <= 0 {
+				limit = 10
+			}
+			var result any
+			var err error
+			switch qType {
+			case "search":
+				var p knowledge.SearchParams
+				_ = json.Unmarshal(filterJSON, &p)
+				if p.Limit == 0 {
+					p.Limit = limit
+				}
+				result, err = knowledgeStore.Search(ctx, p)
+			case "compare":
+				var p knowledge.CompareParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Compare(ctx, p)
+			case "gaps":
+				var p knowledge.GapsParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Gaps(ctx, p)
+			case "aggregate":
+				var p knowledge.AggregateParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Aggregate(ctx, p)
+			default:
+				return "", fmt.Errorf("unknown query type: %s (supported: search, compare, gaps, aggregate)", qType)
+			}
+			if err != nil {
+				return "", err
+			}
+			out, _ := json.MarshalIndent(result, "", "  ")
+			return string(out), nil
+		}),
 		agent.WithBenchmarkProfiles(func(totalVRAMMiB int) []agent.ExplorationBenchmarkProfile {
 			catalogProfiles := cat.BenchmarkProfilesForVRAM(totalVRAMMiB)
 			if len(catalogProfiles) == 0 {

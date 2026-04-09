@@ -95,10 +95,8 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 	if !input.Result.Success {
 		note := generateFailureNote(input)
 		actions = append(actions, HarvestAction{Type: "note", Detail: note})
-		if h.saveNote != nil {
-			title := fmt.Sprintf("%s on %s: %s", input.Task.Model, input.Task.Engine, classifyError(input.Result.Error))
-			_ = h.saveNote(ctx, title, note, input.Task.Hardware, input.Task.Model, input.Task.Engine)
-		}
+		// Don't persist failure notes to DB — failure data is already in exploration_runs.
+		// This prevents polluting central with failure notes during sync.
 		return actions
 	}
 

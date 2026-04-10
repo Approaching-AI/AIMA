@@ -9,6 +9,7 @@ startup:
     port: 8080
     n_gpu_layers: 999
     ctx_size: 4096
+  internal_args: [port]
   health_check:
     path: /health
     timeout_s: 60

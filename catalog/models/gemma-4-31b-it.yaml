@@ -21,9 +21,19 @@ variants:
   # BF16 weights ~59GB → TP=4 (~16.8 GiB/GPU) leaves ~28 GiB for KV cache
   # DP=2 runs two TP=4 replicas for 2× concurrency throughput
   # REQUIRES vLLM >= 0.19.0 (Gemma4ForConditionalGeneration/Gemma4ForCausalLM added)
-  # REQUIRES transformers >= 5.0 (gemma4 model type recognition)
+  # REQUIRES a model/runtime stack that recognizes model_type=gemma4.
+  # HF config declares transformers_version=5.5.0.dev0; public vLLM support appears in v0.19.0.
   # TRITON_ATTN required — ROCM_ATTN doesn't support head_size=512
   # Validated 2026-04-03: 26.2 tok/s decode (single), 280 tok/s at C=16
+  #
+  # --- NVIDIA GB10 / DGX Spark Blackwell (128GB unified, BF16 official weights) ---
+  # Official safetensors + BF16 should fit on GB10 unified memory:
+  #   30.7B dense text params + ~550M vision params ≈ 58.2 GiB raw weights.
+  # Practical bring-up path on GB10 today is Hugging Face Transformers with device_map=auto.
+  # For vLLM on GB10, do NOT assume old Blackwell images work:
+  #   NVIDIA NGC vLLM 26.02 bundles vLLM 0.15.1, while Gemma 4 model code appears in vLLM 0.19.0.
+  # On unified memory, start conservatively: gpu_memory_utilization ~0.70 and max_model_len 8K-16K.
+  # Do NOT assume the full 256K context window is practical on GB10 for BF16 31B.
   - name: gemma-4-31b-it-rdna3-vllm-bf16
     hardware:
       gpu_arch: RDNA3

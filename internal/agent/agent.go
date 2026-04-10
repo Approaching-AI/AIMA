@@ -15,6 +15,19 @@ type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error)
 }
 
+// StreamingLLMClient optionally exposes streamed chat completion deltas.
+// Callers should type-assert and fall back to ChatCompletion when unavailable.
+type StreamingLLMClient interface {
+	ChatCompletionStream(ctx context.Context, messages []Message, tools []ToolDefinition, onDelta func(CompletionDelta)) (*Response, error)
+}
+
+// CompletionDelta is a streamed fragment of an LLM response.
+type CompletionDelta struct {
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+}
+
 // Message represents a chat message in the conversation.
 type Message struct {
 	Role             string     `json:"role"` // system, user, assistant, tool
@@ -36,12 +49,21 @@ type Response struct {
 	Content          string     `json:"content,omitempty"`
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	PromptTokens     int        `json:"prompt_tokens,omitempty"`
+	CompletionTokens int        `json:"completion_tokens,omitempty"`
+	TotalTokens      int        `json:"total_tokens,omitempty"`
 }
 
 // ToolExecutor executes MCP tools (provided by mcp.Server).
 type ToolExecutor interface {
 	ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error)
 	ListTools() []ToolDefinition
+}
+
+// ProfiledToolExecutor extends ToolExecutor with profile-based tool filtering.
+type ProfiledToolExecutor interface {
+	ToolExecutor
+	ListToolsForProfile(profile string) []ToolDefinition
 }
 
 // ToolResult is the outcome of a tool execution.
@@ -110,10 +132,11 @@ type Agent struct {
 	tools    ToolExecutor
 	maxTurns int
 	sessions *SessionStore
+	profile  string
 
-	mu              sync.RWMutex
-	mode            toolMode
-	modeDetectedAt  time.Time
+	mu             sync.RWMutex
+	mode           toolMode
+	modeDetectedAt time.Time
 }
 
 // AgentOption configures the Agent.
@@ -130,6 +153,13 @@ func WithMaxTurns(n int) AgentOption {
 func WithSessions(s *SessionStore) AgentOption {
 	return func(a *Agent) {
 		a.sessions = s
+	}
+}
+
+// WithProfile sets the tool profile for the agent, limiting which tools are visible to the LLM.
+func WithProfile(p string) AgentOption {
+	return func(a *Agent) {
+		a.profile = p
 	}
 }
 
@@ -191,6 +221,42 @@ func (a *Agent) setToolMode(m toolMode) {
 	a.mu.Unlock()
 }
 
+// ProbeToolMode performs a lightweight LLM call with a dummy tool to detect
+// whether the backend supports tool calling. This resolves the Tier 1→2
+// upgrade deadlock where Explorer cannot self-detect tool mode because
+// ExplorerAgentPlanner bypasses Agent.Ask() which is the normal detection path.
+func (a *Agent) ProbeToolMode(ctx context.Context) {
+	if a.llm == nil {
+		return
+	}
+	a.mu.RLock()
+	mode := a.mode
+	a.mu.RUnlock()
+	if mode != toolModeUnknown {
+		return // already detected
+	}
+
+	probe := []ToolDefinition{{
+		Name:        "noop",
+		Description: "probe",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}}
+	_, err := a.llm.ChatCompletion(ctx, []Message{
+		{Role: "user", Content: "hi"},
+	}, probe)
+	if err != nil && isToolRejectionError(err) {
+		a.setToolMode(toolModeContextOnly)
+		slog.Info("tool mode probed", "result", "context_only")
+		return
+	}
+	if err == nil {
+		a.setToolMode(toolModeEnabled)
+		slog.Info("tool mode probed", "result", "enabled")
+		return
+	}
+	slog.Debug("tool mode probe inconclusive", "error", err)
+}
+
 // isToolRejectionError checks if the error is caused by the backend not
 // supporting tool calling (e.g., vLLM missing --enable-auto-tool-choice).
 func isToolRejectionError(err error) bool {
@@ -229,7 +295,16 @@ func (a *Agent) AskStream(ctx context.Context, sessionID, query string, cb Strea
 	}
 	messages = append(messages, Message{Role: "user", Content: query})
 
-	allTools := a.tools.ListTools()
+	var allTools []ToolDefinition
+	if a.profile != "" {
+		if pt, ok := a.tools.(ProfiledToolExecutor); ok {
+			allTools = pt.ListToolsForProfile(a.profile)
+		} else {
+			allTools = a.tools.ListTools()
+		}
+	} else {
+		allTools = a.tools.ListTools()
+	}
 	useTools := len(allTools) > 0 && a.toolsActive()
 	var allToolCalls []ToolCallInfo
 

@@ -46,7 +46,7 @@ func newDeployCmd(app *App) *cobra.Command {
 				return nil
 			}
 
-			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap)
+			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap, false)
 			if err != nil {
 				return fmt.Errorf("deploy %s: %w", modelName, err)
 			}

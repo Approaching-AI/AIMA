@@ -30,7 +30,7 @@ func TestExecuteLineDeployUsesRealCLIFlags(t *testing.T) {
 		gotSlot   string
 		gotConfig map[string]any
 	)
-	app.ToolDeps.DeployApply = func(ctx context.Context, engine, model, slot string, config map[string]any) (json.RawMessage, error) {
+	app.ToolDeps.DeployApply = func(ctx context.Context, engine, model, slot string, config map[string]any, noPull bool) (json.RawMessage, error) {
 		gotEngine = engine
 		gotModel = model
 		gotSlot = slot

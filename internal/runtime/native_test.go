@@ -470,6 +470,7 @@ func TestNativePersistenceAcrossInvocations(t *testing.T) {
 		Engine:  "test",
 		Command: cmd,
 		Port:    port,
+		Config:  map[string]any{"mem_fraction_static": 0.9},
 		Labels:  map[string]string{"aima.dev/engine": "test"},
 	})
 	if err != nil {
@@ -504,6 +505,9 @@ func TestNativePersistenceAcrossInvocations(t *testing.T) {
 	}
 	if s.Address != wantAddr {
 		t.Errorf("address = %q, want %q", s.Address, wantAddr)
+	}
+	if s.Config["mem_fraction_static"] != 0.9 {
+		t.Errorf("config mem_fraction_static = %#v, want 0.9", s.Config["mem_fraction_static"])
 	}
 
 	// Logs should work via persisted log path

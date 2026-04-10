@@ -282,6 +282,26 @@ deploy.list:
 
 这确保了引擎在不同 Runtime 上部署时，所有 MCP 工具都能正确操作。
 
+### 输出契约
+
+- `deploy.list` 返回轻量 overview，用于 UI、Agent、proxy 同步和人工巡检。
+  顶层字段以 `name` / `model` / `engine` / `slot` / `phase` / `status` / `ready` / `address` / `runtime` 为主，
+  以及 `startup_phase` / `startup_progress` / `startup_message` / `message` / `error_lines` 等摘要字段。
+  还包含 proxy/模型路由需要的 `served_model` / `parameter_count` / `context_window_tokens`。
+  `deploy.list` 不承诺返回 `config` 或原始 `labels`。
+- `deploy.status` 返回单个部署的完整详细状态。
+  除 overview 字段外，还保留 `config`、`labels`、重启/退出信息等 detail 字段，供诊断和自动化恢复使用。
+
+常用字段可以理解为：
+
+- `deploy.list`
+  `name`, `model`, `engine`, `slot`, `phase`, `status`, `ready`, `address`, `runtime`
+  `startup_phase`, `startup_progress`, `startup_message`, `message`, `error_lines`
+  `served_model`, `parameter_count`, `context_window_tokens`
+- `deploy.status`
+  上述 overview 字段全部可见
+  以及 `config`, `labels`, `restarts`, `exit_code`, `estimated_total_s`, `start_time`, `started_at_unix`
+
 ---
 
 ## 相关文件

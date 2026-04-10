@@ -43,8 +43,18 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	proxyServer := ac.proxy
 	dataDir := ac.dataDir
 
-	deps.DeployApply = func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+	deps.DeployApply = func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		if noPull {
+			ctx = withDeployAutoPull(ctx, false)
+		}
 		allowAutoPull := deployAutoPullAllowed(ctx)
+		// Internal flag: _auto_pull=false disables model/engine auto-download.
+		if v, ok := configOverrides["_auto_pull"]; ok {
+			if b, isBool := v.(bool); isBool && !b {
+				allowAutoPull = false
+			}
+			delete(configOverrides, "_auto_pull")
+		}
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 		rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, configOverrides, dataDir)
 		if err != nil {
@@ -191,6 +201,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					"status":  status,
 					"phase":   existing.Phase,
 					"runtime": runtimeName,
+					"config":  resolved.Config,
 				}
 				if existing.Address != "" {
 					result["address"] = existing.Address
@@ -311,6 +322,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			"model": modelName, "engine": resolved.Engine,
 			"slot": resolved.Slot, "status": "deploying",
 			"runtime": activeRt.Name(),
+			"config":  resolved.Config,
 		}
 		return json.Marshal(result)
 	}
@@ -459,90 +471,60 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	}
 
 	deps.DeployDelete = func(ctx context.Context, name string) error {
-		// Gap 3: Save rollback snapshot before deletion (capture deployment state)
-		for _, d := range listAllRuntimes(ctx, rt, nativeRt, dockerRt) {
-			if !deploymentMatchesQuery(d, name) {
+		matches := findMatchingDeployments(ctx, name, nil, rt, nativeRt, dockerRt)
+		if len(matches) == 0 {
+			return fmt.Errorf("deployment %q not found", name)
+		}
+
+		for _, match := range matches {
+			if match.Status == nil {
 				continue
 			}
-			if snap, snapErr := json.Marshal(d); snapErr == nil {
+			if snap, snapErr := json.Marshal(match.Status); snapErr == nil {
 				_ = db.SaveSnapshot(ctx, &state.RollbackSnapshot{
-					ToolName: "deploy.delete", ResourceType: "deployment", ResourceName: d.Name, Snapshot: string(snap),
+					ToolName:     "deploy.delete",
+					ResourceType: "deployment",
+					ResourceName: match.Status.Name,
+					Snapshot:     string(snap),
 				})
 			}
-			break
 		}
-		deleted := name
-		modelKey := ""
-		if existing, err := findDeploymentStatus(ctx, name, nil, rt, nativeRt, dockerRt); err == nil && existing != nil {
-			deleted = existing.Name
-			modelKey = deploymentModelKey(existing)
-		}
-		// Try exact pod name first, then fall back to searching by model label.
-		// Pod names are "<model>-<engine>" (e.g. qwen3-8b-vllm), but users
-		// often pass just the model name (e.g. qwen3-8b).
-		err := rt.Delete(ctx, name)
-		if err != nil {
-			// Exact name failed -- search deployments for this model name.
-			if deployments, listErr := rt.List(ctx); listErr == nil {
-				for _, d := range deployments {
-					if deploymentMatchesQuery(d, name) {
-						if delErr := rt.Delete(ctx, d.Name); delErr == nil {
-							deleted = d.Name
-							modelKey = d.Labels["aima.dev/model"]
-							err = nil
-							break
-						}
-					}
-				}
+
+		deletedAt := time.Now()
+		tombstoneKeys := []string{name}
+		seenKeys := map[string]struct{}{normalizeDeletedDeploymentKey(name): {}}
+		rememberKey := func(key string) {
+			norm := normalizeDeletedDeploymentKey(key)
+			if norm == "" {
+				return
 			}
-		}
-		if err != nil && nativeRt != nil && nativeRt != rt {
-			// Try exact name and model-label search on native runtime.
-			err = nativeRt.Delete(ctx, name)
-			if err != nil {
-				if nativeDeps, nErr := nativeRt.List(ctx); nErr == nil {
-					for _, d := range nativeDeps {
-						if deploymentMatchesQuery(d, name) {
-							if delErr := nativeRt.Delete(ctx, d.Name); delErr == nil {
-								deleted = d.Name
-								err = nil
-								break
-							}
-						}
-					}
-				}
-			} else {
-				deleted = name
+			if _, ok := seenKeys[norm]; ok {
+				return
 			}
+			seenKeys[norm] = struct{}{}
+			tombstoneKeys = append(tombstoneKeys, key)
 		}
-		if err != nil && dockerRt != nil && dockerRt != rt {
-			err = dockerRt.Delete(ctx, name)
-			if err != nil {
-				if dockerDeps, dErr := dockerRt.List(ctx); dErr == nil {
-					for _, d := range dockerDeps {
-						if deploymentMatchesQuery(d, name) {
-							if delErr := dockerRt.Delete(ctx, d.Name); delErr == nil {
-								deleted = d.Name
-								err = nil
-								break
-							}
-						}
-					}
-				}
-			} else {
-				deleted = name
+
+		for _, match := range matches {
+			if match.Runtime == nil || match.Status == nil {
+				continue
 			}
+			if err := match.Runtime.Delete(ctx, match.Status.Name); err != nil {
+				return fmt.Errorf("delete deployment %q on %s: %w", match.Status.Name, match.Runtime.Name(), err)
+			}
+			rememberKey(match.Status.Name)
+			rememberKey(deploymentModelKey(match.Status))
 		}
-		if err != nil {
-			return fmt.Errorf("delete deployment %q: %w", name, err)
+
+		if remaining := findMatchingDeployments(ctx, name, nil, rt, nativeRt, dockerRt); len(remaining) > 0 {
+			return fmt.Errorf("delete deployment %q: deployment still active after delete (%s)", name, summarizeMatchedDeployments(remaining))
 		}
-		if modelKey != "" {
-			proxyServer.RemoveBackend(modelKey)
+
+		for _, key := range tombstoneKeys {
+			proxyServer.RemoveBackend(key)
 		}
-		proxyServer.RemoveBackend(name)
-		proxyServer.RemoveBackend(deleted)
-		if err := markDeletedDeployments(ctx, db, time.Now(), name, deleted, modelKey); err != nil {
-			slog.Warn("record deleted deployment tombstone", "error", err, "name", name, "deleted", deleted)
+		if err := markDeletedDeployments(ctx, db, deletedAt, tombstoneKeys...); err != nil {
+			slog.Warn("record deleted deployment tombstone", "error", err, "name", name, "keys", tombstoneKeys)
 		}
 		return nil
 	}
@@ -553,6 +535,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err != nil {
 			return nil, err
 		}
+		populateDeploymentOverviewFields(s)
 		return json.Marshal(s)
 	}
 
@@ -577,7 +560,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
 		statuses = filterDeploymentStatuses(statuses, suppressRecentlyDeleted)
-		return json.Marshal(statuses)
+		overviews := make([]deploymentOverview, 0, len(statuses))
+		for _, status := range statuses {
+			overviews = append(overviews, deploymentOverviewFromStatus(status))
+		}
+		return json.Marshal(overviews)
 	}
 
 	deps.DeployRun = deployRunCore
@@ -631,6 +618,81 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func populateDeploymentOverviewFields(status *runtime.DeploymentStatus) {
+	if status == nil {
+		return
+	}
+	status.Model = firstNonEmpty(
+		status.Model,
+		status.Labels["aima.dev/model"],
+		status.Name,
+	)
+	status.Engine = firstNonEmpty(
+		status.Engine,
+		status.Labels["aima.dev/engine"],
+	)
+	status.Slot = firstNonEmpty(
+		status.Slot,
+		status.Labels["aima.dev/slot"],
+	)
+}
+
+type deploymentOverview struct {
+	Name                string `json:"name"`
+	Model               string `json:"model"`
+	Engine              string `json:"engine,omitempty"`
+	Slot                string `json:"slot,omitempty"`
+	Phase               string `json:"phase"`
+	Status              string `json:"status"`
+	Ready               bool   `json:"ready"`
+	Address             string `json:"address,omitempty"`
+	Runtime             string `json:"runtime"`
+	StartTime           string `json:"start_time,omitempty"`
+	StartedAtUnix       int64  `json:"started_at_unix,omitempty"`
+	Message             string `json:"message,omitempty"`
+	Restarts            int    `json:"restarts,omitempty"`
+	ExitCode            *int   `json:"exit_code,omitempty"`
+	StartupPhase        string `json:"startup_phase,omitempty"`
+	StartupProgress     int    `json:"startup_progress,omitempty"`
+	StartupMessage      string `json:"startup_message,omitempty"`
+	EstimatedTotalS     int    `json:"estimated_total_s,omitempty"`
+	ErrorLines          string `json:"error_lines,omitempty"`
+	ServedModel         string `json:"served_model,omitempty"`
+	ParameterCount      string `json:"parameter_count,omitempty"`
+	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+}
+
+func deploymentOverviewFromStatus(status *runtime.DeploymentStatus) deploymentOverview {
+	populateDeploymentOverviewFields(status)
+	if status == nil {
+		return deploymentOverview{}
+	}
+	return deploymentOverview{
+		Name:                status.Name,
+		Model:               status.Model,
+		Engine:              status.Engine,
+		Slot:                status.Slot,
+		Phase:               status.Phase,
+		Status:              status.Phase,
+		Ready:               status.Ready,
+		Address:             status.Address,
+		Runtime:             status.Runtime,
+		StartTime:           status.StartTime,
+		StartedAtUnix:       status.StartedAtUnix,
+		Message:             status.Message,
+		Restarts:            status.Restarts,
+		ExitCode:            status.ExitCode,
+		StartupPhase:        status.StartupPhase,
+		StartupProgress:     status.StartupProgress,
+		StartupMessage:      status.StartupMessage,
+		EstimatedTotalS:     status.EstimatedTotalS,
+		ErrorLines:          status.ErrorLines,
+		ServedModel:         deploymentUpstreamModel(status, ""),
+		ParameterCount:      firstNonEmpty(status.Labels[proxy.LabelParameterCount]),
+		ContextWindowTokens: contextWindowFromStatus(status),
+	}
 }
 
 func contextWindowFromResolvedConfig(config map[string]any) int {

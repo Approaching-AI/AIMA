@@ -20,6 +20,14 @@ import (
 func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func(explicit, model string) string) {
 	db := ac.db
 	kStore := ac.kStore
+	rt := ac.rt
+	nativeRt := ac.nativeRt
+	dockerRt := ac.dockerRt
+
+	selectDeployConfig := func(ctx context.Context, modelName, engineName string, explicit map[string]any) map[string]any {
+		matches := findMatchingDeployments(ctx, modelName, nil, rt, nativeRt, dockerRt)
+		return selectReadyDeployConfig(engineName, explicit, matches)
+	}
 
 	deps.RecordBenchmark = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
@@ -38,6 +46,10 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			ThroughputTPS   float64        `json:"throughput_tps"`
 			QPS             float64        `json:"qps"`
 			VRAMUsageMiB    int            `json:"vram_usage_mib"`
+			RAMUsageMiB     int            `json:"ram_usage_mib"`
+			PowerDrawWatts  float64        `json:"power_draw_watts"`
+			GPUUtilPct      float64        `json:"gpu_utilization_pct"`
+			CPUUsagePct     float64        `json:"cpu_usage_pct"`
 			SampleCount     int            `json:"sample_count"`
 			Stability       string         `json:"stability"`
 			Notes           string         `json:"notes"`
@@ -95,6 +107,10 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			ThroughputTPS:   p.ThroughputTPS,
 			QPS:             p.QPS,
 			VRAMUsageMiB:    p.VRAMUsageMiB,
+			RAMUsageMiB:     p.RAMUsageMiB,
+			PowerDrawWatts:  p.PowerDrawWatts,
+			GPUUtilPct:      p.GPUUtilPct,
+			CPUUsagePct:     p.CPUUsagePct,
 			SampleCount:     p.SampleCount,
 			Stability:       p.Stability,
 			TestedAt:        time.Now(),
@@ -140,20 +156,22 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 
 	deps.RunBenchmark = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
-			Model          string  `json:"model"`
-			Endpoint       string  `json:"endpoint"`
-			Concurrency    int     `json:"concurrency"`
-			NumRequests    int     `json:"num_requests"`
-			MaxTokens      int     `json:"max_tokens"`
-			InputTokens    int     `json:"input_tokens"`
-			Warmup         *int    `json:"warmup"`
-			Rounds         int     `json:"rounds"`
-			MinOutputRatio float64 `json:"min_output_ratio"`
-			MaxRetries     int     `json:"max_retries"`
-			Save           *bool   `json:"save"`
-			Hardware       string  `json:"hardware"`
-			Engine         string  `json:"engine"`
-			Notes          string  `json:"notes"`
+			Model          string         `json:"model"`
+			Endpoint       string         `json:"endpoint"`
+			Concurrency    int            `json:"concurrency"`
+			NumRequests    int            `json:"num_requests"`
+			MaxTokens      int            `json:"max_tokens"`
+			InputTokens    int            `json:"input_tokens"`
+			Warmup         *int           `json:"warmup"`
+			Rounds         int            `json:"rounds"`
+			MinOutputRatio float64        `json:"min_output_ratio"`
+			MaxRetries     int            `json:"max_retries"`
+			Save           *bool          `json:"save"`
+			Hardware       string         `json:"hardware"`
+			Engine         string         `json:"engine"`
+			Notes          string         `json:"notes"`
+			DeployConfig   map[string]any `json:"deploy_config"`
+			ResolvedConfig map[string]any `json:"resolved_config"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("parse benchmark params: %w", err)
@@ -179,18 +197,26 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			MaxRetries:     p.MaxRetries,
 		}
 
-		result, err := benchpkg.Run(ctx, cfg)
+		result, observedMetrics, err := runBenchmarkWithMetrics(ctx, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("benchmark run: %w", err)
 		}
 
 		// Save to DB unless explicitly disabled
 		save := p.Save == nil || *p.Save
-		var benchmarkID, configID string
+		var (
+			benchmarkID string
+			configID    string
+			savedBench  *state.BenchmarkResult
+		)
+		deployConfig := selectDeployConfig(ctx, p.Model, p.Engine, p.DeployConfig)
+		if len(deployConfig) == 0 {
+			deployConfig = selectDeployConfig(ctx, p.Model, p.Engine, p.ResolvedConfig)
+		}
 		if save && p.Hardware != "" && p.Engine != "" {
 			var err error
-			benchmarkID, configID, err = saveBenchmarkResult(ctx, db,
-				p.Hardware, p.Engine, p.Model, result,
+			benchmarkID, configID, savedBench, err = saveBenchmarkResult(ctx, db,
+				p.Hardware, p.Engine, p.Model, result, deployConfig, observedMetrics,
 				cfg.Concurrency, cfg.InputTokens, cfg.MaxTokens, p.Notes)
 			if err != nil {
 				return nil, err
@@ -198,13 +224,52 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			postProcessBenchmarkSave(ctx, db, kStore, benchmarkID, configID, p.Hardware, p.Engine, p.Model, result.ThroughputTPS)
 		}
 
+		engineVersion, engineImage := "", ""
+		if version, image, err := db.LookupEngineAssetMetadata(ctx, p.Engine, p.Hardware); err != nil {
+			slog.Warn("benchmark: lookup engine asset metadata failed", "engine", p.Engine, "hardware", p.Hardware, "error", err)
+		} else {
+			engineVersion, engineImage = version, image
+		}
 		resp := map[string]any{
 			"result": result,
 			"saved":  save && benchmarkID != "",
+			"benchmark_profile": map[string]any{
+				"concurrency":       result.Config.Concurrency,
+				"num_requests":      result.Config.NumRequests,
+				"warmup_count":      result.Config.WarmupCount,
+				"rounds":            result.Config.Rounds,
+				"input_tokens":      result.Config.InputTokens,
+				"max_tokens":        result.Config.MaxTokens,
+				"avg_input_tokens":  result.AvgInputTokens,
+				"avg_output_tokens": result.AvgOutputTokens,
+			},
+		}
+		if len(deployConfig) > 0 {
+			resp["deploy_config"] = deployConfig
+		}
+		if engineVersion != "" {
+			resp["engine_version"] = engineVersion
+		}
+		if engineImage != "" {
+			resp["engine_image"] = engineImage
+		}
+		resourceUsage := resourceUsageMap(observedMetrics)
+		if len(resourceUsage) > 0 {
+			resp["resource_usage"] = resourceUsage
+		}
+		if p.Hardware != "" && p.Engine != "" {
+			if hints, err := db.LookupEngineExecutionHints(ctx, p.Engine, p.Hardware); err != nil {
+				slog.Warn("benchmark: lookup engine execution hints failed", "engine", p.Engine, "hardware", p.Hardware, "error", err)
+			} else if hetero := state.BuildHeterogeneousObservation(hints, deployConfig, resourceUsage); len(hetero) > 0 {
+				resp["heterogeneous_observation"] = hetero
+			}
 		}
 		if benchmarkID != "" {
 			resp["benchmark_id"] = benchmarkID
 			resp["config_id"] = configID
+			if savedBench != nil {
+				resp["saved_benchmark"] = savedBench
+			}
 
 			// L2c auto-promote: if new benchmark beats current golden by >5%
 			if promoted, oldID := maybeAutoPromote(ctx, db, configID, result.ThroughputTPS, p.Hardware, p.Engine, p.Model); promoted {
@@ -216,7 +281,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 
 			// K5: Update runtime overlay with actual performance data
 			if p.Model != "" {
-				go updatePerfOverlay(ac.dataDir, p.Model, p.Hardware, p.Engine, result)
+				go updatePerfOverlay(ac.dataDir, p.Model, p.Hardware, p.Engine, result, savedBench, engineVersion, engineImage, resp["heterogeneous_observation"])
 			}
 		}
 		return json.Marshal(resp)
@@ -224,18 +289,19 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 
 	deps.RunBenchmarkMatrix = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
-			Model             string  `json:"model"`
-			Endpoint          string  `json:"endpoint"`
-			ConcurrencyLevels []int   `json:"concurrency_levels"`
-			InputTokenLevels  []int   `json:"input_token_levels"`
-			MaxTokenLevels    []int   `json:"max_token_levels"`
-			RequestsPerCombo  int     `json:"requests_per_combo"`
-			Rounds            int     `json:"rounds"`
-			MinOutputRatio    float64 `json:"min_output_ratio"`
-			MaxRetries        int     `json:"max_retries"`
-			Save              *bool   `json:"save"`
-			Hardware          string  `json:"hardware"`
-			Engine            string  `json:"engine"`
+			Model             string         `json:"model"`
+			Endpoint          string         `json:"endpoint"`
+			ConcurrencyLevels []int          `json:"concurrency_levels"`
+			InputTokenLevels  []int          `json:"input_token_levels"`
+			MaxTokenLevels    []int          `json:"max_token_levels"`
+			RequestsPerCombo  int            `json:"requests_per_combo"`
+			Rounds            int            `json:"rounds"`
+			MinOutputRatio    float64        `json:"min_output_ratio"`
+			MaxRetries        int            `json:"max_retries"`
+			Save              *bool          `json:"save"`
+			Hardware          string         `json:"hardware"`
+			Engine            string         `json:"engine"`
+			DeployConfig      map[string]any `json:"deploy_config"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("parse matrix params: %w", err)
@@ -254,13 +320,28 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		}
 
 		endpoint := resolveEndpoint(p.Endpoint, p.Model)
+		deployConfig := selectDeployConfig(ctx, p.Model, p.Engine, p.DeployConfig)
+		engineVersion, engineImage := "", ""
+		if p.Hardware != "" && p.Engine != "" {
+			if version, image, err := db.LookupEngineAssetMetadata(ctx, p.Engine, p.Hardware); err != nil {
+				slog.Warn("benchmark matrix: lookup engine asset metadata failed", "engine", p.Engine, "hardware", p.Hardware, "error", err)
+			} else {
+				engineVersion, engineImage = version, image
+			}
+		}
 
 		type matrixCell struct {
-			Concurrency int                 `json:"concurrency"`
-			InputTokens int                 `json:"input_tokens"`
-			MaxTokens   int                 `json:"max_tokens"`
-			Result      *benchpkg.RunResult `json:"result"`
-			Error       string              `json:"error,omitempty"`
+			Concurrency   int                 `json:"concurrency"`
+			InputTokens   int                 `json:"input_tokens"`
+			MaxTokens     int                 `json:"max_tokens"`
+			Result        *benchpkg.RunResult `json:"result"`
+			Error         string              `json:"error,omitempty"`
+			BenchmarkID   string              `json:"benchmark_id,omitempty"`
+			ConfigID      string              `json:"config_id,omitempty"`
+			EngineVersion string              `json:"engine_version,omitempty"`
+			EngineImage   string              `json:"engine_image,omitempty"`
+			ResourceUsage map[string]any      `json:"resource_usage,omitempty"`
+			DeployConfig  map[string]any      `json:"deploy_config,omitempty"`
 		}
 
 		var cells []matrixCell
@@ -280,7 +361,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						MinOutputRatio: p.MinOutputRatio,
 						MaxRetries:     p.MaxRetries,
 					}
-					result, err := benchpkg.Run(ctx, cfg)
+					result, observedMetrics, err := runBenchmarkWithMetrics(ctx, cfg)
 					cell := matrixCell{
 						Concurrency: conc,
 						InputTokens: inTok,
@@ -290,11 +371,17 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						cell.Error = err.Error()
 					} else {
 						cell.Result = result
+						cell.EngineVersion = engineVersion
+						cell.EngineImage = engineImage
+						cell.ResourceUsage = resourceUsageMap(observedMetrics)
+						if len(deployConfig) > 0 {
+							cell.DeployConfig = cloneConfigMapForBenchmark(deployConfig)
+						}
 						// Save each cell if requested
 						save := p.Save == nil || *p.Save
 						if save && p.Hardware != "" && p.Engine != "" {
 							notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
-							benchmarkID, configID, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, conc, inTok, maxTok, notes)
+							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, deployConfig, observedMetrics, conc, inTok, maxTok, notes)
 							if saveErr != nil {
 								slog.Warn("benchmark matrix: save failed", "error", saveErr, "concurrency", conc, "input_tokens", inTok, "max_tokens", maxTok)
 							} else {
@@ -302,6 +389,8 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 								if err := writeBenchmarkValidation(ctx, db, benchmarkID, configID, p.Hardware, p.Engine, p.Model, result.ThroughputTPS); err != nil {
 									slog.Warn("benchmark validation: write failed", "error", err, "benchmark_id", benchmarkID)
 								}
+								cell.BenchmarkID = benchmarkID
+								cell.ConfigID = configID
 							}
 						}
 					}
@@ -314,9 +403,10 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		}
 
 		return json.Marshal(map[string]any{
-			"model": p.Model,
-			"cells": cells,
-			"total": len(cells),
+			"model":         p.Model,
+			"cells":         cells,
+			"total":         len(cells),
+			"deploy_config": deployConfig,
 		})
 	}
 
@@ -364,6 +454,34 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			"total":   len(results),
 		})
 	}
+}
+
+func selectReadyDeployConfig(engineName string, explicit map[string]any, matches []matchedDeployment) map[string]any {
+	if len(explicit) > 0 {
+		return cloneConfigMapForBenchmark(explicit)
+	}
+	for _, match := range matches {
+		if match.Status == nil || !match.Status.Ready || len(match.Status.Config) == 0 {
+			continue
+		}
+		matchedEngine := strings.TrimSpace(match.Status.Labels["aima.dev/engine"])
+		if engineName != "" && !strings.EqualFold(matchedEngine, engineName) {
+			continue
+		}
+		return cloneConfigMapForBenchmark(match.Status.Config)
+	}
+	return nil
+}
+
+func cloneConfigMapForBenchmark(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 // suppress "imported and not used" for packages only used in type literals

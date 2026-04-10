@@ -20,6 +20,7 @@ func newKnowledgeCmd(app *App) *cobra.Command {
 		newKnowledgeImportCmd(app),
 		newKnowledgeSyncCmd(app),
 		newKnowledgeValidateCmd(app),
+		newKnowledgeAdviseCmd(app),
 	)
 
 	return cmd
@@ -179,14 +180,14 @@ func newKnowledgeSyncCmd(app *App) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("push: %w", err)
 				}
-				fmt.Println("Push:", formatJSON(data))
+				fmt.Fprintln(cmd.OutOrStdout(), "Push:", formatJSON(data))
 			}
 			if pull {
 				data, err := app.ToolDeps.SyncPull(cmd.Context())
 				if err != nil {
 					return fmt.Errorf("pull: %w", err)
 				}
-				fmt.Println("Pull:", formatJSON(data))
+				fmt.Fprintln(cmd.OutOrStdout(), "Pull:", formatJSON(data))
 			}
 			return nil
 		},
@@ -198,14 +199,11 @@ func newKnowledgeSyncCmd(app *App) *cobra.Command {
 }
 
 func newKnowledgeValidateCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	var hardware, engine, model string
+	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Compare predicted vs actual performance",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			hardware, _ := cmd.Flags().GetString("hardware")
-			engine, _ := cmd.Flags().GetString("engine")
-			model, _ := cmd.Flags().GetString("model")
-
 			params, _ := json.Marshal(map[string]string{
 				"hardware": hardware, "engine": engine, "model": model,
 			})
@@ -213,8 +211,44 @@ func newKnowledgeValidateCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Println(formatJSON(data))
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&hardware, "hardware", "", "Filter by hardware profile")
+	cmd.Flags().StringVar(&engine, "engine", "", "Filter by engine type")
+	cmd.Flags().StringVar(&model, "model", "", "Filter by model name")
+	return cmd
+}
+
+func newKnowledgeAdviseCmd(app *App) *cobra.Command {
+	var engine, intent string
+
+	cmd := &cobra.Command{
+		Use:   "advise <model>",
+		Short: "Request AI-powered recommendation from central server",
+		Long: `Request a config/engine recommendation from the central knowledge server.
+The response is normalized to the edge-facing v2 advisory shape when possible.
+Requires central.endpoint to be configured.
+
+Examples:
+  aima knowledge advise qwen3-8b
+  aima knowledge advise qwen3-8b --engine vllm --intent low-latency`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.RequestAdvise == nil {
+				return fmt.Errorf("central advise not configured — set central.endpoint first")
+			}
+			data, err := app.ToolDeps.RequestAdvise(cmd.Context(), args[0], engine, intent)
+			if err != nil {
+				return fmt.Errorf("advise for %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&engine, "engine", "", "Engine type (omit for recommendation)")
+	cmd.Flags().StringVar(&intent, "intent", "", "Optimization intent: low-latency, high-throughput, balanced")
+	return cmd
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,16 +23,10 @@ import (
 	state "github.com/jguan/aima/internal"
 )
 
-// fleetBlockedTools lists MCP tools that cannot be executed via fleet.exec_tool.
-// Destructive operations must be performed locally, not via remote fleet calls.
+// fleetBlockedTools lists MCP tools that fleet.exec must not daisy-chain remotely.
+// This is transport policy only; agent-specific policy stays in isBlockedAgentTool.
 var fleetBlockedTools = map[string]string{
-	"model.remove":   "destructive: deletes model data",
-	"engine.remove":  "destructive: deletes engine image",
-	"deploy.delete":  "destructive: stops running deployment",
-	"explore.start":  "orchestration: run-scoped approval not implemented remotely",
-	"stack.init":     "infrastructure: modifies system services",
-	"agent.rollback": "destructive: rolls back state",
-	"shell.exec":     "arbitrary command execution",
+	"fleet.exec": "recursive fleet execution blocked",
 }
 
 // confirmableTools lists MCP tools that require user confirmation when called by the Agent.
@@ -49,9 +42,7 @@ var blockedAgentTools = map[string]string{
 	"model.remove":   "destructive operation",
 	"engine.remove":  "destructive operation",
 	"deploy.delete":  "destructive operation",
-	"explore.start":  "run-scoped approval not implemented for agent-initiated exploration",
 	"shell.exec":     "arbitrary command execution",
-	"stack.init":     "infrastructure mutation",
 	"agent.ask":      "recursive agent invocation",
 	"agent.rollback": "state rollback mutation",
 }
@@ -72,30 +63,31 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 		}
 	}
 
-	// fleet.exec_tool: penetrate to inner tool_name — apply same guardrails as local calls.
-	if name == "fleet.exec_tool" {
-		if len(arguments) > 0 {
-			var raw map[string]json.RawMessage
-			if json.Unmarshal(arguments, &raw) == nil {
-				if tnRaw, ok := raw["tool_name"]; ok {
-					var innerTool string
-					if json.Unmarshal(tnRaw, &innerTool) == nil {
-						// Block fleet-recursive calls
-						if strings.HasPrefix(innerTool, "fleet.") {
-							return true, "recursive fleet call blocked"
-						}
-						// Apply same blocked/system.config/catalog.override checks to inner tool
-						var innerParams json.RawMessage
-						if paramsRaw, ok := raw["params"]; ok {
-							innerParams = paramsRaw
-						}
-						return isBlockedAgentTool(innerTool, innerParams)
-					}
-				}
-			}
+	// stack is a merged action tool: only init is destructive.
+	if name == "stack" {
+		if action, ok := jsonFieldString(arguments, "action"); ok && action == "init" {
+			return true, "stack init is infrastructure mutation"
 		}
-		// Can't parse tool_name → block as safety default
-		return true, "fleet.exec_tool: cannot determine inner tool_name"
+	}
+
+	// explore is a merged action tool: only start is blocked for the Agent.
+	if name == "explore" {
+		if action, ok := jsonFieldString(arguments, "action"); ok && action == "start" {
+			return true, "explore start is blocked for Agent-initiated calls"
+		}
+	}
+
+	// fleet.exec unwraps the inner tool_name and applies the same guardrails
+	// to the remote target before the adapter decides whether approval is needed.
+	if name == "fleet.exec" {
+		innerTool, innerParams, ok := fleetExecTarget(arguments)
+		if !ok {
+			return true, "fleet.exec: cannot determine inner tool_name"
+		}
+		if blocked, reason := isBlockedFleetExecTarget(innerTool); blocked {
+			return true, reason
+		}
+		return isBlockedAgentTool(innerTool, innerParams)
 	}
 
 	// catalog.override: allow engine_asset and model_asset (inference tuning),
@@ -121,6 +113,53 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 	return false, ""
 }
 
+func jsonFieldString(arguments json.RawMessage, key string) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(arguments, &raw); err != nil {
+		return "", false
+	}
+	value, ok := raw[key]
+	if !ok {
+		return "", false
+	}
+	var out string
+	if err := json.Unmarshal(value, &out); err != nil {
+		return "", false
+	}
+	return out, true
+}
+
+func fleetExecTarget(arguments json.RawMessage) (string, json.RawMessage, bool) {
+	if len(arguments) == 0 {
+		return "", nil, false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(arguments, &raw); err != nil {
+		return "", nil, false
+	}
+	toolNameRaw, ok := raw["tool_name"]
+	if !ok {
+		return "", nil, false
+	}
+	var innerTool string
+	if err := json.Unmarshal(toolNameRaw, &innerTool); err != nil || innerTool == "" {
+		return "", nil, false
+	}
+	innerParams, ok := raw["params"]
+	if !ok {
+		innerParams = nil
+	}
+	return innerTool, innerParams, true
+}
+
+func isBlockedFleetExecTarget(name string) (bool, string) {
+	reason, ok := fleetBlockedTools[name]
+	return ok, reason
+}
+
 type ctxKey string
 
 const ctxKeySkipPerms ctxKey = "skipPerms"
@@ -143,18 +182,19 @@ type pendingApproval struct {
 }
 
 func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments json.RawMessage) (*agent.ToolResult, error) {
-	// Gap 1: Block high-risk operations from the Agent.
-	if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
-		msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
-		a.audit(ctx, name, string(arguments), "BLOCKED")
-		return &agent.ToolResult{Content: msg, IsError: true}, nil
-	}
-
-	// Gap 1b: Confirmable tools require user approval (unless --dangerously-skip-permissions).
 	skipPerms, _ := ctx.Value(ctxKeySkipPerms).(bool)
 
-	// fleet.exec_tool wrapping a confirmable inner tool → needs approval too
-	if name == "fleet.exec_tool" && !skipPerms {
+	// Gap 1: Block high-risk operations from the Agent (unless internal automation).
+	if !skipPerms {
+		if blocked, reason := isBlockedAgentTool(name, arguments); blocked {
+			msg := fmt.Sprintf("BLOCKED: %s is blocked for Agent-initiated calls (%s). Ask the user to run it via CLI instead.", name, reason)
+			a.audit(ctx, name, string(arguments), "BLOCKED")
+			return &agent.ToolResult{Content: msg, IsError: true}, nil
+		}
+	}
+
+	// fleet.exec wrapping a confirmable inner tool → needs approval too.
+	if name == "fleet.exec" && !skipPerms {
 		if len(arguments) > 0 {
 			var raw map[string]json.RawMessage
 			if json.Unmarshal(arguments, &raw) == nil {
@@ -162,13 +202,13 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 					var innerTool string
 					if json.Unmarshal(tnRaw, &innerTool) == nil {
 						if reason, ok := confirmableTools[innerTool]; ok {
-							// Run remote dry-run via fleet.exec_tool itself
+							// Run remote dry-run via fleet.exec itself.
 							dryArgs, _ := json.Marshal(map[string]any{
 								"device_id": json.RawMessage(raw["device_id"]),
 								"tool_name": "deploy.dry_run",
 								"params":    json.RawMessage(raw["params"]),
 							})
-							dryResult, drErr := a.server.ExecuteTool(ctx, "fleet.exec_tool", dryArgs)
+							dryResult, drErr := a.server.ExecuteTool(ctx, "fleet.exec", dryArgs)
 							var planText string
 							if drErr == nil {
 								for _, c := range dryResult.Content {
@@ -330,6 +370,19 @@ func (a *mcpToolAdapter) ListTools() []agent.ToolDefinition {
 	return defs
 }
 
+func (a *mcpToolAdapter) ListToolsForProfile(profile string) []agent.ToolDefinition {
+	mcpDefs := a.server.ListToolsForProfile(mcp.Profile(profile))
+	defs := make([]agent.ToolDefinition, len(mcpDefs))
+	for i, d := range mcpDefs {
+		defs[i] = agent.ToolDefinition{
+			Name:        d.Name,
+			Description: d.Description,
+			InputSchema: d.InputSchema,
+		}
+	}
+	return defs
+}
+
 type automationToolAdapter struct {
 	base *mcpToolAdapter
 }
@@ -341,6 +394,10 @@ func (a *automationToolAdapter) ExecuteTool(ctx context.Context, name string, ar
 
 func (a *automationToolAdapter) ListTools() []agent.ToolDefinition {
 	return a.base.ListTools()
+}
+
+func (a *automationToolAdapter) ListToolsForProfile(profile string) []agent.ToolDefinition {
+	return a.base.ListToolsForProfile(profile)
 }
 
 // fleetMCPAdapter bridges mcp.Server to fleet.MCPExecutor interface.

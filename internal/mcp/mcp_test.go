@@ -404,6 +404,87 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListToolsForProfile(t *testing.T) {
+	s := NewServer()
+	// Register representative tools spanning multiple profiles.
+	toolNames := []string{
+		"hardware.detect",
+		"hardware.metrics",
+		"patrol",
+		"deploy.list",
+		"knowledge.resolve",
+	}
+	for _, name := range toolNames {
+		name := name
+		s.RegisterTool(&Tool{
+			Name:        name,
+			Description: "test tool " + name,
+			InputSchema: noParamsSchema(),
+			Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+				return TextResult("ok"), nil
+			},
+		})
+	}
+
+	namesOf := func(defs []ToolDefinition) map[string]bool {
+		m := make(map[string]bool, len(defs))
+		for _, d := range defs {
+			m[d.Name] = true
+		}
+		return m
+	}
+
+	// ProfileFull returns all tools.
+	t.Run("ProfileFull", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfileFull)
+		if len(defs) != len(toolNames) {
+			t.Errorf("ProfileFull: got %d tools, want %d", len(defs), len(toolNames))
+		}
+	})
+
+	// ProfilePatrol: includes hardware.metrics, patrol, deploy.list, knowledge.resolve
+	// but excludes hardware.detect.
+	t.Run("ProfilePatrol", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfilePatrol)
+		names := namesOf(defs)
+
+		included := []string{"hardware.metrics", "patrol", "deploy.list", "knowledge.resolve"}
+		for _, name := range included {
+			if !names[name] {
+				t.Errorf("ProfilePatrol should include %q", name)
+			}
+		}
+
+		excluded := []string{"hardware.detect"}
+		for _, name := range excluded {
+			if names[name] {
+				t.Errorf("ProfilePatrol should exclude %q", name)
+			}
+		}
+	})
+
+	// ProfileOperator: includes hardware.detect, hardware.metrics, knowledge.resolve, deploy.list
+	// but excludes patrol.
+	t.Run("ProfileOperator", func(t *testing.T) {
+		defs := s.ListToolsForProfile(ProfileOperator)
+		names := namesOf(defs)
+
+		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list"}
+		for _, name := range included {
+			if !names[name] {
+				t.Errorf("ProfileOperator should include %q", name)
+			}
+		}
+
+		excluded := []string{"patrol"}
+		for _, name := range excluded {
+			if names[name] {
+				t.Errorf("ProfileOperator should exclude %q", name)
+			}
+		}
+	})
+}
+
 func TestRegisterAllTools(t *testing.T) {
 	s := NewServer()
 	deps := &ToolDeps{
@@ -427,15 +508,20 @@ func TestRegisterAllTools(t *testing.T) {
 	expectedTools := []string{
 		"hardware.detect", "hardware.metrics",
 		"model.scan", "model.list", "model.pull", "model.import", "model.info",
-		"engine.scan", "engine.list", "engine.pull", "engine.remove", "engine.plan",
-		"download.list",
+		"engine.scan", "engine.list", "engine.pull", "engine.remove",
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
-		"knowledge.resolve", "knowledge.search", "knowledge.save",
-		"knowledge.generate_pod", "knowledge.list_profiles", "knowledge.list_engines", "knowledge.list_models",
-		"knowledge.list",
+		"knowledge.resolve", "knowledge.search", "knowledge.save", "knowledge.promote",
+		"knowledge.analytics", "knowledge.evaluate",
+		"catalog.list", "catalog.override", "catalog.validate",
+		"central.sync", "central.advise", "central.scenario",
+		"data.export", "data.import",
+		"patrol", "explore", "tuning", "explorer",
+		"fleet.info", "fleet.exec",
+		"scenario.show", "scenario.apply",
+		"openclaw", "stack",
 		"system.status", "system.config",
-		"agent.ask", "agent.status",
-		"shell.exec",
+		"agent.ask", "agent.status", "agent.rollback",
+		"support",
 	}
 	for _, name := range expectedTools {
 		if !names[name] {
@@ -473,6 +559,110 @@ func TestToolsCall_HardwareDetect(t *testing.T) {
 	}
 }
 
+func TestCatalogListPartitions(t *testing.T) {
+	s := NewServer()
+	deps := &ToolDeps{
+		ListPartitionStrategies: func(ctx context.Context) (json.RawMessage, error) {
+			return json.RawMessage(`[{"metadata":{"name":"primary"},"slots":[{"name":"default"}]}]`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"catalog.list","arguments":{"kind":"partitions"}}}`
+	resp, err := s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var r jsonrpcResponse
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if r.Error != nil {
+		t.Fatalf("unexpected error: %+v", r.Error)
+	}
+
+	raw, _ := json.Marshal(r.Result)
+	var tr ToolResult
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if tr.IsError {
+		t.Fatalf("catalog.list partitions returned error: %+v", tr)
+	}
+	if !strings.Contains(tr.Content[0].Text, `"name":"primary"`) {
+		t.Fatalf("unexpected partitions payload: %s", tr.Content[0].Text)
+	}
+
+	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"catalog.list","arguments":{"kind":"all"}}}`
+	resp, err = s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage(all): %v", err)
+	}
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response(all): %v", err)
+	}
+	raw, _ = json.Marshal(r.Result)
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result(all): %v", err)
+	}
+	if !strings.Contains(tr.Content[0].Text, `"partitions"`) {
+		t.Fatalf("catalog.list all missing partitions payload: %s", tr.Content[0].Text)
+	}
+}
+
+func TestDeployDryRunPodYamlUsesEffectiveOverrides(t *testing.T) {
+	s := NewServer()
+	var gotModel, gotEngine, gotSlot string
+	var gotConfig map[string]any
+	deps := &ToolDeps{
+		GeneratePod: func(ctx context.Context, model, engine, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			gotModel, gotEngine, gotSlot = model, engine, slot
+			gotConfig = make(map[string]any, len(configOverrides))
+			for k, v := range configOverrides {
+				gotConfig[k] = v
+			}
+			return json.RawMessage(`pod-yaml`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deploy.dry_run","arguments":{"model":"qwen3-0.6b","engine":"vllm","slot":"slot-1","config":{"gpu_memory_utilization":0.8},"max_cold_start_s":55,"output":"pod_yaml"}}}`
+	resp, err := s.HandleMessage(context.Background(), []byte(msg))
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var r jsonrpcResponse
+	if err := json.Unmarshal(resp, &r); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if r.Error != nil {
+		t.Fatalf("unexpected error: %+v", r.Error)
+	}
+
+	raw, _ := json.Marshal(r.Result)
+	var tr ToolResult
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if tr.IsError {
+		t.Fatalf("deploy.dry_run pod_yaml returned error: %+v", tr)
+	}
+	if tr.Content[0].Text != "pod-yaml" {
+		t.Fatalf("unexpected pod yaml payload: %s", tr.Content[0].Text)
+	}
+	if gotModel != "qwen3-0.6b" || gotEngine != "vllm" || gotSlot != "slot-1" {
+		t.Fatalf("GeneratePod args = %q/%q/%q, want qwen3-0.6b/vllm/slot-1", gotModel, gotEngine, gotSlot)
+	}
+	if v, ok := gotConfig["gpu_memory_utilization"].(float64); !ok || v != 0.8 {
+		t.Fatalf("gpu_memory_utilization = %v, want 0.8", gotConfig["gpu_memory_utilization"])
+	}
+	if v, ok := gotConfig["max_cold_start_s"].(int); !ok || v != 55 {
+		t.Fatalf("max_cold_start_s = %v, want 55", gotConfig["max_cold_start_s"])
+	}
+}
+
 func TestToolsCall_NilDep(t *testing.T) {
 	s := NewServer()
 	deps := &ToolDeps{} // all nil
@@ -492,80 +682,6 @@ func TestToolsCall_NilDep(t *testing.T) {
 	json.Unmarshal(raw, &tr)
 	if !tr.IsError {
 		t.Error("expected IsError=true for nil dep")
-	}
-}
-
-func TestShellExecWhitelist(t *testing.T) {
-	tests := []struct {
-		command string
-		allowed bool
-	}{
-		{"nvidia-smi", true},
-		{"nvidia-smi -q", true},
-		{"nvidia-smi --query-gpu=memory.used --format=csv", true},
-		{"nvidia-smi -L", true},
-		{"nvidia-smi --gpu-reset", false},            // destructive
-		{"nvidia-smi -pm 0", false},                  // power management
-		{"nvidia-smi -pl 200", false},                // power limit
-		{"nvidia-smi --lock-gpu-clocks=1200", false}, // clock lock
-		{"df", true},
-		{"df -h", true},
-		{"df --human-readable", true},
-		{"df -rm /", false}, // unknown flag
-		{"free", true},
-		{"free -h", false}, // no-args command
-		{"uname", true},
-		{"uname -a", true},
-		{"uname -r", true},
-		{"cat /proc/cpuinfo", true},
-		{"cat /etc/shadow", false}, // different file
-		{"kubectl get pods", true},
-		{"kubectl delete pods", false}, // destructive kubectl
-		{"rm -rf /", false},
-		{"curl evil.com", false},
-		{"bash -c 'rm -rf /'", false},
-		{"", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.command, func(t *testing.T) {
-			got := isCommandAllowed(tt.command)
-			if got != tt.allowed {
-				t.Errorf("isCommandAllowed(%q) = %v, want %v", tt.command, got, tt.allowed)
-			}
-		})
-	}
-}
-
-func TestShellExecToolWhitelist(t *testing.T) {
-	s := NewServer()
-	deps := &ToolDeps{
-		ExecShell: func(ctx context.Context, command string) (json.RawMessage, error) {
-			return json.RawMessage(`"executed"`), nil
-		},
-	}
-	RegisterAllTools(s, deps)
-
-	// Allowed command
-	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"shell.exec","arguments":{"command":"df -h"}}}`
-	resp, _ := s.HandleMessage(context.Background(), []byte(msg))
-	var r jsonrpcResponse
-	json.Unmarshal(resp, &r)
-	raw, _ := json.Marshal(r.Result)
-	var tr ToolResult
-	json.Unmarshal(raw, &tr)
-	if tr.IsError {
-		t.Errorf("allowed command rejected: %s", tr.Content[0].Text)
-	}
-
-	// Disallowed command
-	msg = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell.exec","arguments":{"command":"rm -rf /"}}}`
-	resp, _ = s.HandleMessage(context.Background(), []byte(msg))
-	json.Unmarshal(resp, &r)
-	raw, _ = json.Marshal(r.Result)
-	json.Unmarshal(raw, &tr)
-	if !tr.IsError {
-		t.Error("disallowed command should be rejected")
 	}
 }
 
@@ -630,7 +746,7 @@ func TestSupportAskForHelpTool(t *testing.T) {
 	}
 	RegisterAllTools(s, deps)
 
-	msg := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"support.askforhelp","arguments":{"description":"fix this"}}}`
+	msg := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"support","arguments":{"description":"fix this"}}}`
 	resp, err := s.HandleMessage(context.Background(), []byte(msg))
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -646,7 +762,7 @@ func TestSupportAskForHelpTool(t *testing.T) {
 		t.Fatalf("unmarshal ToolResult: %v", err)
 	}
 	if tr.IsError {
-		t.Fatalf("support.askforhelp returned error: %+v", tr)
+		t.Fatalf("support returned error: %+v", tr)
 	}
 	if !strings.Contains(tr.Content[0].Text, `"task_id":"task-1"`) {
 		t.Fatalf("unexpected tool result: %s", tr.Content[0].Text)
@@ -695,46 +811,35 @@ func TestProfileMatches(t *testing.T) {
 		{ProfileOperator, "deploy.dry_run", true},
 		{ProfileOperator, "system.status", true},
 		{ProfileOperator, "system.config", true},
-		{ProfileOperator, "fleet.list_devices", true},
+		{ProfileOperator, "fleet.info", true}, // fleet. prefix
+		{ProfileOperator, "fleet.exec", true}, // fleet. prefix
 		{ProfileOperator, "scenario.apply", true},
-		{ProfileOperator, "discover.lan", true},
-		{ProfileOperator, "stack.init", true},
-		{ProfileOperator, "catalog.status", true},
-		{ProfileOperator, "openclaw.sync", true},
-		{ProfileOperator, "support.askforhelp", true},
+		{ProfileOperator, "scenario.show", true},
 
-		// ProfileOperator: exact knowledge matches
+		// ProfileOperator: exact matches
+		{ProfileOperator, "catalog.list", true},
+		{ProfileOperator, "openclaw", true},
+		{ProfileOperator, "support", true},
 		{ProfileOperator, "knowledge.resolve", true},
 		{ProfileOperator, "knowledge.search", true},
-		{ProfileOperator, "knowledge.list", true},
-		{ProfileOperator, "knowledge.list_profiles", true},
-		{ProfileOperator, "knowledge.generate_pod", true},
-		{ProfileOperator, "knowledge.validate", true},
-		{ProfileOperator, "knowledge.export", true},
-		{ProfileOperator, "knowledge.import", true},
-
-		// ProfileOperator: exact agent matches
+		{ProfileOperator, "knowledge.promote", true},
+		{ProfileOperator, "benchmark.run", true},
+		{ProfileOperator, "benchmark.list", true},
 		{ProfileOperator, "agent.ask", true},
-		{ProfileOperator, "agent.guide", true},
 		{ProfileOperator, "agent.status", true},
+		{ProfileOperator, "agent.rollback", true},
 
 		// ProfileOperator: excluded tools
-		{ProfileOperator, "knowledge.compare", false},
-		{ProfileOperator, "knowledge.similar", false},
-		{ProfileOperator, "knowledge.lineage", false},
-		{ProfileOperator, "knowledge.gaps", false},
-		{ProfileOperator, "knowledge.aggregate", false},
-		{ProfileOperator, "knowledge.sync_push", false},
-		{ProfileOperator, "knowledge.promote", false},
-		{ProfileOperator, "agent.patrol_status", false},
-		{ProfileOperator, "agent.alerts", false},
-		{ProfileOperator, "agent.rollback", false},
-		{ProfileOperator, "explore.start", false},
-		{ProfileOperator, "tuning.start", false},
-		{ProfileOperator, "benchmark.run", false},
-		{ProfileOperator, "device.power_history", true},
-		{ProfileOperator, "app.register", false},
-		{ProfileOperator, "shell.exec", false},
+		{ProfileOperator, "knowledge.analytics", false},
+		{ProfileOperator, "knowledge.save", false},
+		{ProfileOperator, "knowledge.evaluate", false},
+		{ProfileOperator, "catalog.override", false},
+		{ProfileOperator, "patrol", false},
+		{ProfileOperator, "explore", false},
+		{ProfileOperator, "tuning", false},
+		{ProfileOperator, "explorer", false},
+		{ProfileOperator, "central.sync", false},
+		{ProfileOperator, "data.export", false},
 
 		// ProfilePatrol: included
 		{ProfilePatrol, "hardware.metrics", true},
@@ -746,35 +851,38 @@ func TestProfileMatches(t *testing.T) {
 		{ProfilePatrol, "deploy.dry_run", true},
 		{ProfilePatrol, "knowledge.resolve", true},
 		{ProfilePatrol, "benchmark.run", true},
-		{ProfilePatrol, "agent.patrol_status", true},
-		{ProfilePatrol, "agent.alerts", true},
-		{ProfilePatrol, "agent.patrol_config", true},
-		{ProfilePatrol, "agent.patrol_actions", true},
+		{ProfilePatrol, "patrol", true},
 
 		// ProfilePatrol: excluded
 		{ProfilePatrol, "hardware.detect", false},
 		{ProfilePatrol, "model.list", false},
 		{ProfilePatrol, "deploy.delete", false},
 		{ProfilePatrol, "system.status", false},
+		{ProfilePatrol, "explore", false},
+		{ProfilePatrol, "tuning", false},
 
-		// ProfileExplorer: prefix matches
+		// ProfileExplorer: included
 		{ProfileExplorer, "benchmark.run", true},
-		{ProfileExplorer, "benchmark.matrix", true},
-		{ProfileExplorer, "explore.start", true},
-		{ProfileExplorer, "tuning.start", true},
-		{ProfileExplorer, "tuning.results", true},
+		{ProfileExplorer, "benchmark.record", true},
+		{ProfileExplorer, "benchmark.list", true},
+		{ProfileExplorer, "explore", true},
+		{ProfileExplorer, "tuning", true},
+		{ProfileExplorer, "explorer", true},
 		{ProfileExplorer, "deploy.apply", true},
 		{ProfileExplorer, "deploy.approve", true},
+		{ProfileExplorer, "deploy.delete", true},
 		{ProfileExplorer, "hardware.detect", true},
 		{ProfileExplorer, "knowledge.resolve", true},
-		{ProfileExplorer, "knowledge.search_configs", true},
+		{ProfileExplorer, "knowledge.search", true},
 		{ProfileExplorer, "knowledge.promote", true},
 		{ProfileExplorer, "knowledge.save", true},
+		{ProfileExplorer, "central.advise", true},
 
 		// ProfileExplorer: excluded
 		{ProfileExplorer, "model.list", false},
 		{ProfileExplorer, "agent.ask", false},
-		{ProfileExplorer, "fleet.list_devices", false},
+		{ProfileExplorer, "fleet.info", false},
+		{ProfileExplorer, "system.status", false},
 
 		// Unknown profile matches everything (backward compat)
 		{Profile("unknown"), "anything", true},
@@ -801,9 +909,9 @@ func TestListToolsIgnoresProfile(t *testing.T) {
 		"hardware.detect", "hardware.metrics",
 		"model.list", "model.scan",
 		"deploy.apply", "deploy.list",
-		"knowledge.resolve", "knowledge.compare", "knowledge.gaps",
-		"agent.ask", "agent.patrol_status",
-		"benchmark.run", "explore.start", "tuning.start",
+		"knowledge.resolve", "knowledge.analytics", "knowledge.evaluate",
+		"agent.ask", "patrol",
+		"benchmark.run", "explore", "tuning",
 	}
 	for _, name := range toolNames {
 		s.RegisterTool(&Tool{
@@ -847,35 +955,35 @@ func TestListToolsIgnoresProfile(t *testing.T) {
 func TestExecuteToolIgnoresProfile(t *testing.T) {
 	s := NewServer()
 	s.RegisterTool(&Tool{
-		Name:        "knowledge.gaps",
+		Name:        "knowledge.analytics",
 		Description: "test",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			return TextResult("gaps result"), nil
+			return TextResult("analytics result"), nil
 		},
 	})
 
-	// Set operator profile — knowledge.gaps is NOT in this profile
+	// Set operator profile — knowledge.analytics is NOT in this profile
 	s.SetProfile(ProfileOperator)
 
 	// Internal ListTools should still include it.
 	defs := s.ListTools()
 	found := false
 	for _, d := range defs {
-		if d.Name == "knowledge.gaps" {
+		if d.Name == "knowledge.analytics" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("knowledge.gaps should still be visible to internal ListTools callers")
+		t.Error("knowledge.analytics should still be visible to internal ListTools callers")
 	}
 
 	// But ExecuteTool should still work
-	result, err := s.ExecuteTool(context.Background(), "knowledge.gaps", json.RawMessage(`{}`))
+	result, err := s.ExecuteTool(context.Background(), "knowledge.analytics", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
 	}
-	if result.Content[0].Text != "gaps result" {
+	if result.Content[0].Text != "analytics result" {
 		t.Errorf("unexpected result: %s", result.Content[0].Text)
 	}
 }
@@ -891,7 +999,7 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		},
 	})
 	s.RegisterTool(&Tool{
-		Name:        "tuning.start",
+		Name:        "tuning",
 		Description: "tune",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -899,7 +1007,7 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		},
 	})
 
-	// Set operator profile — tuning.start should be hidden
+	// Set operator profile — tuning should be hidden
 	s.SetProfile(ProfileOperator)
 
 	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
@@ -921,8 +1029,8 @@ func TestProfileFilteringViaJSONRPC(t *testing.T) {
 		t.Errorf("expected deploy.apply, got %s", tool["name"])
 	}
 
-	// But tuning.start can still be called
-	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tuning.start","arguments":{}}}`
+	// But tuning can still be called
+	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tuning","arguments":{"action":"status"}}}`
 	resp, err = s.HandleMessage(context.Background(), []byte(callMsg))
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)

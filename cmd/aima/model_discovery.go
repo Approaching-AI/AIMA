@@ -211,11 +211,13 @@ func deploymentMatchesQuery(d *runtime.DeploymentStatus, query string) bool {
 	if d.Name == query {
 		return true
 	}
-	modelName := ""
-	engineName := ""
-	if d.Labels != nil {
-		modelName = d.Labels["aima.dev/model"]
-		engineName = d.Labels["aima.dev/engine"]
+	modelName := strings.TrimSpace(d.Model)
+	engineName := strings.TrimSpace(d.Engine)
+	if modelName == "" {
+		modelName = strings.TrimSpace(d.Labels["aima.dev/model"])
+	}
+	if engineName == "" {
+		engineName = strings.TrimSpace(d.Labels["aima.dev/engine"])
 	}
 	if modelName == query {
 		return true

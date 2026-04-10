@@ -56,14 +56,13 @@ func NewRootCmd(app *App) *cobra.Command {
 		newConfigCmd(app),
 		newServeCmd(app),
 		newMCPCmd(app),
-		newDiscoverCmd(app),
 		newFleetCmd(app),
 		newTUICmd(app),
 		newExploreCmd(app),
 		newTuningCmd(app),
-		newAppCmd(app),
 		newOpenClawCmd(app),
 		newScenarioCmd(app),
+		newExplorerCmd(app),
 		newVersionCmd(),
 	)
 

@@ -145,7 +145,7 @@ func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, d
 			})
 			continue
 		}
-		data, err := deps.DeployApply(ctx, d.Engine, d.Model, d.Slot, d.Config)
+		data, err := deps.DeployApply(ctx, d.Engine, d.Model, d.Slot, d.Config, false)
 		if err != nil {
 			blockFurther = true
 			blockReason = err.Error()

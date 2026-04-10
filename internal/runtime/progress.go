@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
@@ -152,4 +153,64 @@ func formatPhaseName(name string) string {
 	words := strings.Split(name, "_")
 	words[0] = strings.ToUpper(words[0][:1]) + words[0][1:]
 	return strings.Join(words, " ") + "..."
+}
+
+// progressEntry tracks the last observed progress for a deployment.
+type progressEntry struct {
+	progress     int
+	lastChangeAt time.Time
+}
+
+// ProgressTracker detects stalled deployments by monitoring progress changes.
+// Each runtime embeds one instance. Thread-safe.
+type ProgressTracker struct {
+	mu      sync.Mutex
+	entries map[string]*progressEntry
+}
+
+// NewProgressTracker creates a ready-to-use tracker.
+func NewProgressTracker() *ProgressTracker {
+	return &ProgressTracker{entries: make(map[string]*progressEntry)}
+}
+
+// Update checks whether a deployment's startup progress has stalled.
+// Returns (stalled, lastProgressAt). stallThreshold = max(90s, min(EstimatedTotalS*0.4, 5min)).
+func (t *ProgressTracker) Update(name string, currentProgress, estimatedTotalS int) (bool, time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := time.Now()
+	entry, exists := t.entries[name]
+	if !exists {
+		t.entries[name] = &progressEntry{progress: currentProgress, lastChangeAt: now}
+		return false, now
+	}
+
+	if currentProgress > entry.progress {
+		entry.progress = currentProgress
+		entry.lastChangeAt = now
+		return false, now
+	}
+
+	// Calculate stall threshold
+	threshold := 90 * time.Second
+	if estimatedTotalS > 0 {
+		dynamic := time.Duration(float64(estimatedTotalS)*0.4) * time.Second
+		if dynamic > threshold {
+			threshold = dynamic
+		}
+		if threshold > 5*time.Minute {
+			threshold = 5 * time.Minute
+		}
+	}
+
+	stalled := now.Sub(entry.lastChangeAt) > threshold
+	return stalled, entry.lastChangeAt
+}
+
+// Remove cleans up tracking state for a deleted deployment.
+func (t *ProgressTracker) Remove(name string) {
+	t.mu.Lock()
+	delete(t.entries, name)
+	t.mu.Unlock()
 }

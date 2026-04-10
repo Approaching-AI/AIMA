@@ -24,12 +24,16 @@ func WithEngineAssets(assets []knowledge.EngineAsset) K3SOption {
 
 // K3SRuntime adapts the existing k3s.Client + knowledge.GeneratePod to the Runtime interface.
 type K3SRuntime struct {
-	client       *k3s.Client
-	engineAssets []knowledge.EngineAsset
+	client          *k3s.Client
+	engineAssets    []knowledge.EngineAsset
+	progressTracker *ProgressTracker
 }
 
 func NewK3SRuntime(client *k3s.Client, opts ...K3SOption) *K3SRuntime {
-	r := &K3SRuntime{client: client}
+	r := &K3SRuntime{
+		client:          client,
+		progressTracker: NewProgressTracker(),
+	}
 	for _, o := range opts {
 		o(r)
 	}
@@ -59,7 +63,9 @@ func (r *K3SRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 }
 
 func (r *K3SRuntime) Delete(ctx context.Context, name string) error {
-	return r.client.Delete(ctx, name)
+	err := r.client.Delete(ctx, name)
+	r.progressTracker.Remove(name)
+	return err
 }
 
 func (r *K3SRuntime) Status(ctx context.Context, name string) (*DeploymentStatus, error) {
@@ -278,6 +284,13 @@ func (r *K3SRuntime) enrichStartupProgress(ctx context.Context, pod *k3s.PodStat
 				ds.StartupMessage = errMsg
 			}
 		}
+	}
+
+	// Stall detection for starting deployments
+	if ds.Phase == "starting" || (ds.Phase == "running" && !ds.Ready) {
+		stalled, lastAt := r.progressTracker.Update(ds.Name, ds.StartupProgress, ds.EstimatedTotalS)
+		ds.Stalled = stalled
+		ds.LastProgressAt = lastAt.Unix()
 	}
 }
 

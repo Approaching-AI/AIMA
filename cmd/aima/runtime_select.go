@@ -68,15 +68,23 @@ const deletedDeploymentReuseGracePeriod = 15 * time.Second
 
 type deletedDeploymentSnapshot map[string]time.Time
 
+type matchedDeployment struct {
+	Runtime runtime.Runtime
+	Status  *runtime.DeploymentStatus
+}
+
 func normalizeDeletedDeploymentKey(key string) string {
 	return strings.ToLower(strings.TrimSpace(key))
 }
 
 func deploymentModelKey(d *runtime.DeploymentStatus) string {
-	if d == nil || d.Labels == nil {
+	if d == nil {
 		return ""
 	}
-	return d.Labels["aima.dev/model"]
+	if model := strings.TrimSpace(d.Model); model != "" {
+		return model
+	}
+	return strings.TrimSpace(d.Labels["aima.dev/model"])
 }
 
 func loadDeletedDeploymentSnapshot(ctx context.Context, db *state.DB) (deletedDeploymentSnapshot, error) {
@@ -177,22 +185,78 @@ func loadDeletedDeploymentSuppressor(ctx context.Context, db *state.DB) func(*ru
 // listAllRuntimes aggregates deployment lists from all available runtimes.
 func listAllRuntimes(ctx context.Context, rts ...runtime.Runtime) []*runtime.DeploymentStatus {
 	var all []*runtime.DeploymentStatus
-	seen := make(map[string]bool)
-	for _, r := range rts {
-		if r == nil {
-			continue
-		}
-		// Deduplicate runtimes (e.g., nativeRt == rt).
-		name := fmt.Sprintf("%p", r)
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
+	for _, r := range uniqueRuntimes(rts...) {
 		if deps, err := r.List(ctx); err == nil {
 			all = append(all, deps...)
 		}
 	}
 	return all
+}
+
+func uniqueRuntimes(rts ...runtime.Runtime) []runtime.Runtime {
+	seen := make(map[string]struct{}, len(rts))
+	unique := make([]runtime.Runtime, 0, len(rts))
+	for _, r := range rts {
+		if r == nil {
+			continue
+		}
+		key := fmt.Sprintf("%p", r)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, r)
+	}
+	return unique
+}
+
+func findMatchingDeployments(ctx context.Context, query string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) []matchedDeployment {
+	matches := make([]matchedDeployment, 0)
+	seen := make(map[string]struct{})
+	for _, rt := range uniqueRuntimes(rts...) {
+		if status, err := rt.Status(ctx, query); err == nil && status != nil && deploymentMatchesQuery(status, query) {
+			if suppress == nil || !suppress(status) {
+				key := fmt.Sprintf("%p|%s", rt, status.Name)
+				if _, ok := seen[key]; !ok {
+					seen[key] = struct{}{}
+					matches = append(matches, matchedDeployment{Runtime: rt, Status: status})
+				}
+			}
+		}
+		statuses, err := rt.List(ctx)
+		if err != nil {
+			continue
+		}
+		for _, status := range statuses {
+			if status == nil || !deploymentMatchesQuery(status, query) {
+				continue
+			}
+			if suppress != nil && suppress(status) {
+				continue
+			}
+			key := fmt.Sprintf("%p|%s", rt, status.Name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			matches = append(matches, matchedDeployment{Runtime: rt, Status: status})
+		}
+	}
+	return matches
+}
+
+func summarizeMatchedDeployments(matches []matchedDeployment) string {
+	if len(matches) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if match.Runtime == nil || match.Status == nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s/%s", match.Runtime.Name(), match.Status.Name))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func findDeploymentStatus(ctx context.Context, query string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) (*runtime.DeploymentStatus, error) {

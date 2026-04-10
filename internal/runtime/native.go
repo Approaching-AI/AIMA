@@ -25,6 +25,7 @@ type deploymentMeta struct {
 	ProcessGroupID     int               `json:"process_group_id,omitempty"`
 	Port               int               `json:"port"`
 	Engine             string            `json:"engine"`
+	Config             map[string]any    `json:"config,omitempty"`
 	Labels             map[string]string `json:"labels"`
 	LogPath            string            `json:"log_path"`
 	Command            []string          `json:"command"`
@@ -59,21 +60,23 @@ type BinaryResolveFunc func(ctx context.Context, source *engine.BinarySource) (s
 
 // NativeRuntime manages inference engines as direct OS processes.
 type NativeRuntime struct {
-	logDir        string
-	distDir       string // e.g. ~/.aima/dist/windows-amd64/
-	deployDir     string // e.g. ~/.aima/deployments/ — persisted deployment metadata
-	resolveBinary BinaryResolveFunc
-	engineAssets  []knowledge.EngineAsset
-	processes     map[string]*nativeProcess
-	mu            sync.RWMutex
+	logDir          string
+	distDir         string // e.g. ~/.aima/dist/windows-amd64/
+	deployDir       string // e.g. ~/.aima/deployments/ — persisted deployment metadata
+	resolveBinary   BinaryResolveFunc
+	engineAssets    []knowledge.EngineAsset
+	processes       map[string]*nativeProcess
+	progressTracker *ProgressTracker
+	mu              sync.RWMutex
 }
 
 func NewNativeRuntime(logDir, distDir, deployDir string, opts ...NativeOption) *NativeRuntime {
 	r := &NativeRuntime{
-		logDir:    logDir,
-		distDir:   distDir,
-		deployDir: deployDir,
-		processes: make(map[string]*nativeProcess),
+		logDir:          logDir,
+		distDir:         distDir,
+		deployDir:       deployDir,
+		processes:       make(map[string]*nativeProcess),
+		progressTracker: NewProgressTracker(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -272,6 +275,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		ProcessGroupID: procGroupID,
 		Port:           primaryPort,
 		Engine:         req.Engine,
+		Config:         req.Config,
 		Labels:         req.Labels,
 		LogPath:        logPath,
 		Command:        command,
@@ -317,21 +321,27 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 		if proc.cmd != nil {
 			// Standard Go child process. When launched detached on Unix, stop the
 			// whole process group so engine worker children do not survive the root.
+			// Use SIGTERM first to allow graceful cleanup (e.g., sglang-kt's
+			// kill_process_tree), then escalate to SIGKILL if still alive.
 			if proc.processGroupID > 0 {
-				if err := killProcessGroup(proc.processGroupID); err != nil {
-					slog.Warn("kill process group", "name", name, "pgid", proc.processGroupID, "error", err)
+				if err := terminateProcessGroup(proc.processGroupID); err != nil {
+					slog.Warn("SIGTERM process group", "name", name, "pgid", proc.processGroupID, "error", err)
 				}
 			} else {
 				proc.cancel()
 			}
 			if !waitForProcessExit(proc, 5*time.Second) {
-				slog.Warn("process did not exit within timeout; forcing kill", "name", name)
-				if proc.cmd.Process != nil {
+				slog.Warn("process did not exit after SIGTERM; sending SIGKILL", "name", name)
+				if proc.processGroupID > 0 {
+					if err := killProcessGroup(proc.processGroupID); err != nil {
+						slog.Warn("SIGKILL process group", "name", name, "pgid", proc.processGroupID, "error", err)
+					}
+				} else if proc.cmd.Process != nil {
 					if err := proc.cmd.Process.Kill(); err != nil {
 						slog.Warn("force kill process", "name", name, "error", err)
 					}
 				}
-				if !waitForProcessExit(proc, 2*time.Second) {
+				if !waitForProcessExit(proc, 5*time.Second) {
 					r.removeMeta(name)
 					return fmt.Errorf("stop deployment %q: process did not exit after force kill", name)
 				}
@@ -356,8 +366,14 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 		if meta.PID > 0 {
 			if processMatchesMeta(meta) {
 				if meta.ProcessGroupID > 0 {
+					// Graceful: SIGTERM first to allow engine cleanup (e.g.,
+					// sglang-kt kill_process_tree), then SIGKILL as fallback.
+					if err := terminateProcessGroup(meta.ProcessGroupID); err != nil {
+						slog.Warn("SIGTERM process group (meta)", "name", name, "pgid", meta.ProcessGroupID, "error", err)
+					}
+					time.Sleep(5 * time.Second)
 					if err := killProcessGroup(meta.ProcessGroupID); err != nil {
-						slog.Warn("kill process group", "name", name, "pgid", meta.ProcessGroupID, "error", err)
+						slog.Warn("SIGKILL process group (meta)", "name", name, "pgid", meta.ProcessGroupID, "error", err)
 					}
 				} else if err := killProcessByPID(meta.PID); err != nil {
 					slog.Warn("kill process", "name", name, "pid", meta.PID, "error", err)
@@ -370,10 +386,12 @@ func (r *NativeRuntime) Delete(_ context.Context, name string) error {
 	}
 
 	if !waitForPortRelease(port, nativePortReleaseTimeout) {
+		r.progressTracker.Remove(name)
 		r.removeMeta(name)
 		return fmt.Errorf("stop deployment %q: port %d is still in use after process exit", name, port)
 	}
 
+	r.progressTracker.Remove(name)
 	r.removeMeta(name)
 	return nil
 }
@@ -448,6 +466,9 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 
 	if status.StartupMessage == "" {
 		status.StartupMessage = persisted.StartupMessage
+	}
+	if len(status.Config) == 0 && len(persisted.Config) > 0 {
+		status.Config = cloneConfigForStatus(persisted.Config)
 	}
 	if status.StartupPhase == "" || persisted.StartupProgress > status.StartupProgress {
 		status.StartupPhase = persisted.StartupPhase
@@ -737,6 +758,7 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		Phase:   phase,
 		Ready:   ready,
 		Address: fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Config:  cloneConfigForStatus(meta.Config),
 		Labels:  meta.Labels,
 		Runtime: "native",
 	}
@@ -775,6 +797,17 @@ func (r *NativeRuntime) saveMeta(meta *deploymentMeta) error {
 		return fmt.Errorf("marshal deployment meta %s: %w", meta.Name, err)
 	}
 	return os.WriteFile(filepath.Join(r.deployDir, meta.Name+".json"), data, 0o644)
+}
+
+func cloneConfigForStatus(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func (r *NativeRuntime) loadMeta(name string) (*deploymentMeta, error) {

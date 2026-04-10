@@ -25,6 +25,7 @@ This UAT round focuses on three chains that must behave as one coherent system:
 - `undeploy` removes the runtime object, removes the proxy backend, and records tombstones/snapshots.
 - `agent.ask` hits the configured `llm.endpoint` with the configured `llm.model`, auth header, user-agent, and extra params.
 - UI deployment cards show `startup_phase`, `startup_progress`, `startup_message`, ETA, ready address, and distilled failure detail from `deploy.list`.
+- `deploy.list` remains an overview surface; any full deployment detail (`config`, raw labels) comes from `deploy.status`, not from list payload inflation.
 
 ## Local Automated Checks
 

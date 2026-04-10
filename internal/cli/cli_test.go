@@ -78,7 +78,7 @@ func TestNewRootCmd(t *testing.T) {
 		"run", "init", "hal",
 		"deploy", "undeploy", "status",
 		"model", "engine", "knowledge", "catalog",
-		"ask", "agent", "config", "serve", "mcp", "discover",
+		"ask", "agent", "config", "serve", "mcp",
 	}
 	cmds := make(map[string]bool)
 	for _, c := range root.Commands() {
@@ -151,7 +151,7 @@ func TestEngineSubcommands(t *testing.T) {
 		t.Fatal("engine command not found")
 	}
 
-	expected := []string{"scan", "list", "pull", "import", "remove", "plan"}
+	expected := []string{"scan", "list", "pull", "import", "remove"}
 	subs := make(map[string]bool)
 	for _, c := range engineCmd.Commands() {
 		subs[c.Name()] = true
@@ -526,6 +526,9 @@ func TestExploreStartDoesNotExposePlannerFlag(t *testing.T) {
 
 func TestDeployListCmd(t *testing.T) {
 	app := testApp(t)
+	app.ToolDeps.DeployList = func(ctx context.Context) (json.RawMessage, error) {
+		return json.RawMessage(`[{"name":"qwen3-8b-vllm","model":"qwen3-8b","engine":"vllm","phase":"running","ready":true}]`), nil
+	}
 	root := NewRootCmd(app)
 
 	var buf bytes.Buffer
@@ -538,5 +541,12 @@ func TestDeployListCmd(t *testing.T) {
 
 	if buf.Len() == 0 {
 		t.Error("deploy list output is empty")
+	}
+	output := buf.String()
+	if !strings.Contains(output, `"model": "qwen3-8b"`) {
+		t.Fatalf("deploy list output missing top-level model: %s", output)
+	}
+	if !strings.Contains(output, `"engine": "vllm"`) {
+		t.Fatalf("deploy list output missing top-level engine: %s", output)
 	}
 }

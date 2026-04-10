@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/jguan/aima/catalog"
 	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
@@ -133,7 +133,7 @@ func run() error {
 	var explorationMgr *agent.ExplorationManager
 	llmClient := buildLLMClient(ctx, db)
 	sessionStore := agent.NewSessionStore()
-	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore))
+	goAgent := agent.NewAgent(llmClient, toolAdapter, agent.WithSessions(sessionStore), agent.WithProfile("operator"))
 	dispatcher := agent.NewDispatcher(goAgent)
 
 	// 9b. Wire agent-related ToolDeps (dispatcher created after buildToolDeps)
@@ -158,14 +158,6 @@ func run() error {
 		}
 		return buildAgentStatusPayload(ctx, llmClient, goAgent.ToolMode(), activeRuns)
 	}
-	deps.AgentGuide = func(ctx context.Context) (json.RawMessage, error) {
-		guide, err := catalog.FS.ReadFile("agent-guide.md")
-		if err != nil {
-			return nil, fmt.Errorf("read agent guide: %w", err)
-		}
-		return json.Marshal(map[string]string{"guide": string(guide)})
-	}
-
 	// 9c. Wire rollback tools
 	deps.RollbackList = func(ctx context.Context) (json.RawMessage, error) {
 		snapshots, err := db.ListSnapshots(ctx)
@@ -209,7 +201,7 @@ func run() error {
 			if modelName == "" {
 				return nil, fmt.Errorf("snapshot missing model label, cannot redeploy")
 			}
-			result, err := deps.DeployApply(ctx, engineType, modelName, "", nil)
+			result, err := deps.DeployApply(ctx, engineType, modelName, "", nil, false)
 			if err != nil {
 				return nil, fmt.Errorf("redeploy %s: %w", modelName, err)
 			}
@@ -409,6 +401,8 @@ func run() error {
 	healer := agent.NewHealer(automationTools)
 	tuner := agent.NewTuner(automationTools)
 	explorationMgr = agent.NewExplorationManager(db, tuner, automationTools)
+	eventBus := agent.NewEventBus()
+	ac.eventBus = eventBus
 	patrol = agent.NewPatrol(agent.DefaultPatrolConfig(), toolAdapter, db.InsertPatrolAlert,
 		agent.WithHealer(healer),
 		agent.WithActionCallback(func(ctx context.Context, a agent.PatrolAction) {
@@ -416,12 +410,294 @@ func run() error {
 				"alert_id", a.AlertID, "type", a.Type,
 				"success", a.Success, "detail", a.Detail)
 		}),
+		agent.WithEventBus(eventBus),
 	)
+
+	// 9h. Explorer subsystem (v0.4) with advisory feedback bridge
+	explorerOpts := []agent.ExplorerOption{}
+	if roundsStr, err := db.GetConfig(ctx, explorerConfigStorageKey("rounds_used")); err == nil && roundsStr != "" {
+		if n, parseErr := strconv.Atoi(roundsStr); parseErr == nil && n > 0 {
+			explorerOpts = append(explorerOpts, agent.WithRoundsUsed(n))
+		}
+	}
+	explorerOpts = append(explorerOpts,
+		agent.WithGatherHardware(func(ctx context.Context) (agent.HardwareInfo, error) {
+			hw := buildHardwareInfo(ctx, cat, rt.Name())
+			return agent.HardwareInfo{
+				Profile:  hw.HardwareProfile,
+				GPUArch:  hw.GPUArch,
+				GPUCount: hw.GPUCount,
+				VRAMMiB:  hw.GPUVRAMMiB,
+			}, nil
+		}),
+		agent.WithGatherGaps(func(ctx context.Context) ([]agent.GapEntry, error) {
+			hw := buildHardwareInfo(ctx, cat, rt.Name())
+			if hw.HardwareProfile == "" {
+				return nil, nil
+			}
+			gaps, err := knowledgeStore.Gaps(ctx, knowledge.GapsParams{
+				Hardware:      hw.HardwareProfile,
+				MinBenchmarks: 3,
+			})
+			if err != nil {
+				return nil, err
+			}
+			entries := make([]agent.GapEntry, 0, len(gaps))
+			for _, gap := range gaps {
+				entries = append(entries, agent.GapEntry{
+					Model:          gap.ModelID,
+					Engine:         gap.EngineType,
+					Hardware:       gap.HardwareID,
+					BenchmarkCount: gap.BenchmarkCount,
+				})
+			}
+			return entries, nil
+		}),
+		agent.WithGatherDeploys(func(ctx context.Context) ([]agent.DeployStatus, error) {
+			if deps.DeployList == nil {
+				return nil, nil
+			}
+			data, err := deps.DeployList(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var deployments []runtime.DeploymentStatus
+			if err := json.Unmarshal(data, &deployments); err != nil {
+				return nil, fmt.Errorf("parse deploy list for explorer: %w", err)
+			}
+			statuses := make([]agent.DeployStatus, 0, len(deployments))
+			for _, deployment := range deployments {
+				modelName := firstNonEmpty(deployment.Model, deployment.Labels["aima.dev/model"])
+				engineType := firstNonEmpty(deployment.Engine, deployment.Labels["aima.dev/engine"])
+				if modelName == "" || engineType == "" {
+					continue
+				}
+				statuses = append(statuses, agent.DeployStatus{
+					Model:  modelName,
+					Engine: engineType,
+					Status: deployment.Phase,
+				})
+			}
+			return statuses, nil
+		}),
+		agent.WithGatherOpenQuestions(func(ctx context.Context) ([]agent.OpenQuestion, error) {
+			rows, err := db.ListOpenQuestions(ctx, "untested")
+			if err != nil {
+				return nil, err
+			}
+			questions := make([]agent.OpenQuestion, 0, len(rows))
+			for _, row := range rows {
+				modelName := firstNonEmpty(stringField(row, "model"), stringField(row, "target_model"))
+				engineType := firstNonEmpty(stringField(row, "engine"), stringField(row, "target_engine"))
+				if modelName == "" {
+					continue
+				}
+				questions = append(questions, agent.OpenQuestion{
+					ID:       stringField(row, "id"),
+					Hardware: stringField(row, "hardware"),
+					Model:    modelName,
+					Engine:   engineType,
+					Question: stringField(row, "question"),
+					Status:   firstNonEmpty(stringField(row, "status"), "untested"),
+				})
+			}
+			return questions, nil
+		}),
+		agent.WithGatherAdvisories(func(ctx context.Context) ([]agent.Advisory, error) {
+			if deps.SyncPullAdvisories == nil {
+				return nil, nil
+			}
+			data, err := deps.SyncPullAdvisories(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var items []map[string]any
+			if err := json.Unmarshal(data, &items); err != nil {
+				return nil, nil // no advisories or unparseable
+			}
+			advisories := make([]agent.Advisory, 0, len(items))
+			for _, item := range items {
+				adv := agent.Advisory{
+					ID:             stringField(item, "id"),
+					Type:           stringField(item, "type"),
+					TargetHardware: stringField(item, "target_hardware"),
+					TargetModel:    stringField(item, "target_model"),
+					TargetEngine:   stringField(item, "target_engine"),
+					Confidence:     stringField(item, "confidence"),
+					Reasoning:      stringField(item, "reasoning"),
+				}
+				if cfg, ok := item["config"].(map[string]any); ok {
+					adv.Config = cfg
+				} else if content, ok := item["content"].(map[string]any); ok {
+					adv.Config = content
+				}
+				if adv.ID != "" && adv.TargetModel != "" {
+					advisories = append(advisories, adv)
+				}
+			}
+			return advisories, nil
+		}),
+		agent.WithExplorerSaveNote(func(ctx context.Context, title, content, hardware, model, engine string) error {
+			return db.InsertNote(ctx, &state.KnowledgeNote{
+				Title:           title,
+				HardwareProfile: hardware,
+				Model:           model,
+				Engine:          engine,
+				Content:         content,
+				Confidence:      "medium",
+			})
+		}),
+		agent.WithExplorerSyncPush(func(ctx context.Context) error {
+			if deps.SyncPush == nil {
+				return nil
+			}
+			_, err := deps.SyncPush(ctx)
+			return err
+		}),
+		agent.WithAdvisoryFeedback(func(ctx context.Context, advisoryID, status, reason string) error {
+			if deps.AdvisoryFeedback == nil {
+				return nil
+			}
+			_, err := deps.AdvisoryFeedback(ctx, advisoryID, status, reason)
+			return err
+		}),
+		agent.WithGatherLocalModels(func(ctx context.Context) ([]agent.LocalModel, error) {
+			if deps.ScanModels == nil {
+				return nil, nil
+			}
+			data, err := deps.ScanModels(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var models []struct {
+				Name      string `json:"name"`
+				Format    string `json:"format"`
+				Type      string `json:"type"`
+				SizeBytes int64  `json:"size_bytes"`
+			}
+			if err := json.Unmarshal(data, &models); err != nil {
+				return nil, nil
+			}
+			result := make([]agent.LocalModel, 0, len(models))
+			for _, m := range models {
+				if m.Name != "" {
+					result = append(result, agent.LocalModel{
+						Name:      m.Name,
+						Format:    m.Format,
+						Type:      m.Type,
+						SizeBytes: m.SizeBytes,
+					})
+				}
+			}
+			return result, nil
+		}),
+		agent.WithGatherLocalEngines(func(ctx context.Context) ([]agent.LocalEngine, error) {
+			return gatherExplorerLocalEngines(ctx, cat, db, rt, nativeRt, dockerRt, k3sRt, dataDir)
+		}),
+		agent.WithGatherComboFacts(func(ctx context.Context, hardware agent.HardwareInfo, models []agent.LocalModel, engines []agent.LocalEngine) ([]agent.ComboFact, error) {
+			return gatherExplorerComboFacts(ctx, cat, db, knowledgeStore, rt, nativeRt, dockerRt, k3sRt, dataDir, hardware, models, engines)
+		}),
+		agent.WithExplorerQueryFunc(func(qType string, filter map[string]any, limit int) (string, error) {
+			filterJSON, _ := json.Marshal(filter)
+			if limit <= 0 {
+				limit = 10
+			}
+			var result any
+			var err error
+			switch qType {
+			case "search":
+				var p knowledge.SearchParams
+				_ = json.Unmarshal(filterJSON, &p)
+				if p.Limit == 0 {
+					p.Limit = limit
+				}
+				result, err = knowledgeStore.Search(ctx, p)
+			case "compare":
+				var p knowledge.CompareParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Compare(ctx, p)
+			case "gaps":
+				var p knowledge.GapsParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Gaps(ctx, p)
+			case "aggregate":
+				var p knowledge.AggregateParams
+				_ = json.Unmarshal(filterJSON, &p)
+				result, err = knowledgeStore.Aggregate(ctx, p)
+			default:
+				return "", fmt.Errorf("unknown query type: %s (supported: search, compare, gaps, aggregate)", qType)
+			}
+			if err != nil {
+				return "", err
+			}
+			out, _ := json.MarshalIndent(result, "", "  ")
+			return string(out), nil
+		}),
+		agent.WithBenchmarkProfiles(func(totalVRAMMiB int) []agent.ExplorationBenchmarkProfile {
+			catalogProfiles := cat.BenchmarkProfilesForVRAM(totalVRAMMiB)
+			if len(catalogProfiles) == 0 {
+				return nil // fall back to Go defaults
+			}
+			profiles := make([]agent.ExplorationBenchmarkProfile, len(catalogProfiles))
+			for i, cp := range catalogProfiles {
+				profiles[i] = agent.ExplorationBenchmarkProfile{
+					Label:             cp.Label,
+					ConcurrencyLevels: cp.ConcurrencyLevels,
+					InputTokenLevels:  cp.InputTokenLevels,
+					MaxTokenLevels:    cp.MaxTokenLevels,
+					RequestsPerCombo:  cp.RequestsPerCombo,
+					Rounds:            cp.Rounds,
+				}
+			}
+			return profiles
+		}),
+	)
+	explorerConfig := loadExplorerConfig(ctx, db)
+	if explorerConfig.WorkspaceDir == "" {
+		explorerConfig.WorkspaceDir = filepath.Join(dataDir, "explorer")
+	}
+	explorer := agent.NewExplorer(explorerConfig, goAgent, explorationMgr, db, eventBus, explorerOpts...)
+	go explorer.Start(context.Background())
+
+	// Wire explorer MCP tools
+	deps.ExplorerStatus = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(explorer.Status())
+	}
+	deps.ExplorerConfig = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Action string `json:"action"`
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+		}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse explorer config params: %w", err)
+			}
+		}
+		if p.Action == "get" || p.Action == "" {
+			return json.Marshal(explorerConfigResponse(explorer))
+		}
+		if p.Action != "set" {
+			return nil, fmt.Errorf("unsupported explorer config action %q", p.Action)
+		}
+		normalized, err := explorer.UpdateConfig(p.Key, p.Value)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.SetConfig(ctx, explorerConfigStorageKey(p.Key), normalized); err != nil {
+			return nil, err
+		}
+		return json.Marshal(explorerConfigResponse(explorer))
+	}
+	deps.ExplorerTrigger = func(ctx context.Context) (json.RawMessage, error) {
+		explorer.Trigger()
+		return json.Marshal(map[string]string{"status": "triggered"})
+	}
 
 	// Wire agent, patrol, tuning, exploration, and open questions tools.
 	buildAgentDeps(ac, deps, patrol, tuner, explorationMgr)
 
-	// 9h. Register all tools (after all deps are fully wired)
+	// 9i. Register all tools (after all deps are fully wired)
 	mcp.RegisterAllTools(mcpServer, deps)
 
 	// 10. Build App and run CLI
@@ -444,6 +720,143 @@ func run() error {
 		rootCmd.SetArgs(args)
 	}
 	return rootCmd.ExecuteContext(ctx)
+}
+
+func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig {
+	config := agent.ExplorerConfig{
+		Schedule: agent.DefaultScheduleConfig(),
+		Enabled:  true,
+	}
+	if db == nil {
+		return config
+	}
+	for _, key := range []string{
+		"gap_scan_interval",
+		"sync_interval",
+		"full_audit_interval",
+		"quiet_start",
+		"quiet_end",
+		"max_concurrent_runs",
+		"enabled",
+		"mode",
+		"max_rounds",
+		"max_plan_duration",
+		"max_tokens_per_day",
+		"max_cycles",
+		"max_tasks",
+	} {
+		value, err := db.GetConfig(ctx, explorerConfigStorageKey(key))
+		if err != nil || strings.TrimSpace(value) == "" {
+			continue
+		}
+		switch key {
+		case "gap_scan_interval":
+			if duration, parseErr := time.ParseDuration(value); parseErr == nil {
+				config.Schedule.GapScanInterval = duration
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "sync_interval":
+			if duration, parseErr := time.ParseDuration(value); parseErr == nil {
+				config.Schedule.SyncInterval = duration
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "full_audit_interval":
+			if duration, parseErr := time.ParseDuration(value); parseErr == nil {
+				config.Schedule.FullAuditInterval = duration
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "quiet_start":
+			if hour, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.Schedule.QuietStart = hour
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "quiet_end":
+			if hour, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.Schedule.QuietEnd = hour
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_concurrent_runs":
+			if maxRuns, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.Schedule.MaxConcurrentRuns = maxRuns
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "enabled":
+			if enabled, parseErr := strconv.ParseBool(value); parseErr == nil {
+				config.Enabled = enabled
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "mode":
+			switch value {
+			case "continuous", "once", "budget":
+				config.Mode = value
+			default:
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value)
+			}
+		case "max_rounds":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxRounds = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_plan_duration":
+			if duration, parseErr := time.ParseDuration(value); parseErr == nil {
+				config.MaxPlanDuration = duration
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_tokens_per_day":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxTokensPerDay = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_cycles":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxCycles = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		case "max_tasks":
+			if n, parseErr := strconv.Atoi(value); parseErr == nil {
+				config.MaxTasks = n
+			} else {
+				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
+			}
+		}
+	}
+	return config
+}
+
+func explorerConfigResponse(explorer *agent.Explorer) map[string]any {
+	status := explorer.Status()
+	config := status.Schedule
+	return map[string]any{
+		"enabled":             status.Enabled,
+		"gap_scan_interval":   config.GapScanInterval.String(),
+		"sync_interval":       config.SyncInterval.String(),
+		"full_audit_interval": config.FullAuditInterval.String(),
+		"quiet_start":         config.QuietStart,
+		"quiet_end":           config.QuietEnd,
+		"max_concurrent_runs": config.MaxConcurrentRuns,
+		"mode":                status.Mode,
+		"max_rounds":          status.MaxRounds,
+		"rounds_used":         status.RoundsUsed,
+		"max_tokens_per_day":  status.MaxTokensPerDay,
+		"tokens_used_today":   status.TokensUsedToday,
+		"max_cycles":          status.MaxCycles,
+		"max_tasks":           status.MaxTasks,
+	}
+}
+
+func explorerConfigStorageKey(key string) string {
+	return "explorer." + key
 }
 
 // buildToolDeps wires all ToolDeps fields to real implementations.
@@ -702,7 +1115,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			}
 		}
 
-		waitForDeployment := func(deployName, runtimeName, resolvedEngine string) (json.RawMessage, error) {
+		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any) (json.RawMessage, error) {
 			notify("waiting", deployName)
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
@@ -745,6 +1158,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 						return json.Marshal(map[string]any{
 							"name": deployName, "model": model, "engine": resolvedEngine,
 							"runtime": runtimeName, "address": status.Address, "status": "ready",
+							"config": resolvedConfig,
 						})
 					}
 					if status.Phase == "failed" {
@@ -774,8 +1188,9 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			return nil, fmt.Errorf("resolve: %w", err)
 		}
 		var plan struct {
-			Engine    string `json:"engine"`
-			Runtime   string `json:"runtime"`
+			Engine    string         `json:"engine"`
+			Runtime   string         `json:"runtime"`
+			Config    map[string]any `json:"config"`
 			FitReport struct {
 				Fit    bool     `json:"fit"`
 				Reason string   `json:"reason"`
@@ -811,6 +1226,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 					return json.Marshal(map[string]any{
 						"name": deployName, "model": model, "engine": plan.Engine,
 						"runtime": runtimeName, "address": status.Address, "status": "ready",
+						"config": plan.Config,
 					})
 				case status.Phase == "running" || status.Phase == "starting":
 					notify("reusing", deployName)
@@ -818,7 +1234,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 					if status.Runtime != "" {
 						runtimeName = status.Runtime
 					}
-					return waitForDeployment(deployName, runtimeName, plan.Engine)
+					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config)
 				}
 			}
 		}
@@ -841,11 +1257,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 
 		// Step 4: Deploy
 		notify("deploying", model)
-		deployCtx := ctx
-		if noPull {
-			deployCtx = withDeployAutoPull(ctx, false)
-		}
-		deployData, err := deps.DeployApply(deployCtx, engineType, model, slot, configOverrides)
+		deployData, err := deps.DeployApply(ctx, engineType, model, slot, configOverrides, noPull)
 		if err != nil {
 			return nil, fmt.Errorf("deploy: %w", err)
 		}
@@ -856,7 +1268,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		if err := json.Unmarshal(deployData, &deployResult); err != nil || deployResult.Name == "" {
 			return deployData, nil
 		}
-		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine)
+		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config)
 	}
 
 	deps = &mcp.ToolDeps{}

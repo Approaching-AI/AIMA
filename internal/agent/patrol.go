@@ -81,6 +81,11 @@ func WithActionCallback(fn func(ctx context.Context, action PatrolAction)) Patro
 	return func(p *Patrol) { p.onAction = fn }
 }
 
+// WithEventBus connects the patrol loop to the Explorer's event bus.
+func WithEventBus(bus *EventBus) PatrolOption {
+	return func(p *Patrol) { p.eventBus = bus }
+}
+
 // Patrol runs periodic device inspections.
 type Patrol struct {
 	config       PatrolConfig
@@ -88,6 +93,7 @@ type Patrol struct {
 	persist      AlertPersister
 	healer       *Healer
 	onAction     func(ctx context.Context, action PatrolAction)
+	eventBus     *EventBus
 	mu           sync.RWMutex
 	alerts       []Alert
 	actions      []PatrolAction
@@ -202,6 +208,11 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 		}
 	}
 
+	// Emit events to EventBus for Explorer consumption
+	for _, alert := range newAlerts {
+		p.emitEvent(alert)
+	}
+
 	// Automated response to alerts
 	if config.SelfHealEnabled {
 		p.reactToAlerts(ctx, newAlerts)
@@ -270,6 +281,7 @@ func (p *Patrol) checkDeployments(ctx context.Context) []Alert {
 
 	var deploys []struct {
 		Name   string `json:"name"`
+		Phase  string `json:"phase"`
 		Status string `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &deploys); err != nil {
@@ -278,10 +290,14 @@ func (p *Patrol) checkDeployments(ctx context.Context) []Alert {
 
 	var alerts []Alert
 	for _, d := range deploys {
-		switch d.Status {
-		case "CrashLoopBackOff", "Error", "Failed":
+		phase := d.Phase
+		if phase == "" {
+			phase = d.Status
+		}
+		switch strings.ToLower(strings.TrimSpace(phase)) {
+		case "crashloopbackoff", "error", "failed":
 			alerts = append(alerts, makeAlert("critical", "deploy_crash",
-				fmt.Sprintf("Deployment %s is in %s state", d.Name, d.Status)))
+				fmt.Sprintf("Deployment %s is in %s state", d.Name, phase)))
 		}
 	}
 	return alerts
@@ -432,6 +448,41 @@ func (p *Patrol) RecentActions(limit int) []PatrolAction {
 	result := make([]PatrolAction, limit)
 	copy(result, p.actions[start:])
 	return result
+}
+
+func (p *Patrol) emitEvent(alert Alert) {
+	if p.eventBus == nil {
+		return
+	}
+	var eventType string
+	switch alert.Type {
+	case "deploy_crash":
+		if !isOOMCrash(alert.Message) {
+			return
+		}
+		eventType = EventPatrolOOM
+	case "gpu_idle":
+		eventType = EventPatrolIdle
+	default:
+		return // not all alerts trigger exploration
+	}
+	p.eventBus.Publish(ExplorerEvent{
+		Type:    eventType,
+		AlertID: alert.ID,
+	})
+}
+
+// isOOMCrash checks if a crash message indicates an out-of-memory condition.
+// Uses specific patterns to avoid false positives on words containing "oom" (e.g. "bloom", "room").
+func isOOMCrash(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "out of memory") ||
+		strings.Contains(lower, "oomkilled") ||
+		strings.Contains(lower, "cuda oom") ||
+		strings.Contains(lower, "oom ") ||
+		strings.HasSuffix(lower, "oom") ||
+		strings.Contains(lower, " oom,") ||
+		strings.Contains(lower, " oom:")
 }
 
 func (p *Patrol) reactToAlerts(ctx context.Context, alerts []Alert) {

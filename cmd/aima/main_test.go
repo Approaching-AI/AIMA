@@ -20,8 +20,10 @@ import (
 	benchpkg "github.com/jguan/aima/internal/benchmark"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/fleet"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/proxy"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -1134,7 +1136,7 @@ func TestApplyScenarioSkipsRemainingDeploymentsAndPostDeployAfterWaitFailure(t *
 
 	deployCalls := 0
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
 			deployCalls++
 			if model != "model-a" {
 				t.Fatalf("unexpected DeployApply for %s", model)
@@ -1199,7 +1201,7 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
 			return json.RawMessage(`{"name":"model-a-engine-a"}`), nil
 		},
 		DeployStatus: func(context.Context, string) (json.RawMessage, error) {
@@ -1260,8 +1262,15 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		wantBlock bool
 	}{
 		{name: "blocked static", tool: "shell.exec", args: json.RawMessage(`{"command":"whoami"}`), wantBlock: true},
-		{name: "explore start blocked for agent", tool: "explore.start", args: json.RawMessage(`{"kind":"tune","target":{"model":"qwen3-8b"}}`), wantBlock: true},
+		{name: "stack init blocked for agent", tool: "stack", args: json.RawMessage(`{"action":"init"}`), wantBlock: true},
+		{name: "stack status allowed", tool: "stack", args: json.RawMessage(`{"action":"status"}`), wantBlock: false},
+		{name: "explore start blocked for agent", tool: "explore", args: json.RawMessage(`{"action":"start","kind":"tune","target":{"model":"qwen3-8b"}}`), wantBlock: true},
+		{name: "explore result allowed", tool: "explore", args: json.RawMessage(`{"action":"result","id":"run-1"}`), wantBlock: false},
 		{name: "allowed readonly", tool: "knowledge.resolve", args: json.RawMessage(`{"model":"qwen3-8b"}`), wantBlock: false},
+		{name: "fleet exec recursive blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.exec","params":{}}`), wantBlock: true},
+		{name: "fleet exec stack init blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"stack","params":{"action":"init"}}`), wantBlock: true},
+		{name: "fleet exec fleet info allowed", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.info","params":{}}`), wantBlock: false},
+		{name: "fleet exec deploy apply allowed", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"deploy.apply","params":{"model":"qwen3-8b"}}`), wantBlock: false},
 		{name: "system config read allowed", tool: "system.config", args: json.RawMessage(`{"key":"foo"}`), wantBlock: false},
 		{name: "system config write blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":"bar"}`), wantBlock: true},
 		{name: "system config null value blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":null}`), wantBlock: true},
@@ -1285,12 +1294,12 @@ func TestIsBlockedAgentTool(t *testing.T) {
 	}
 }
 
-func TestMCPToolAdapter_BlocksHighRiskTool(t *testing.T) {
+func TestMCPToolAdapter_BlocksMergedActionTool(t *testing.T) {
 	s := mcp.NewServer()
 	called := 0
 	s.RegisterTool(&mcp.Tool{
-		Name:        "shell.exec",
-		Description: "test shell",
+		Name:        "stack",
+		Description: "test stack",
 		InputSchema: json.RawMessage(`{"type":"object"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
 			called++
@@ -1299,7 +1308,7 @@ func TestMCPToolAdapter_BlocksHighRiskTool(t *testing.T) {
 	})
 
 	adapter := &mcpToolAdapter{server: s}
-	result, err := adapter.ExecuteTool(context.Background(), "shell.exec", json.RawMessage(`{"command":"echo hi"}`))
+	result, err := adapter.ExecuteTool(context.Background(), "stack", json.RawMessage(`{"action":"init"}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
 	}
@@ -1314,11 +1323,83 @@ func TestMCPToolAdapter_BlocksHighRiskTool(t *testing.T) {
 	}
 }
 
+func TestMCPToolAdapter_FleetExecApprovalFlow(t *testing.T) {
+	s := mcp.NewServer()
+	var calls []string
+	s.RegisterTool(&mcp.Tool{
+		Name:        "fleet.exec",
+		Description: "test fleet exec",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			var p struct {
+				ToolName string          `json:"tool_name"`
+				Params   json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			calls = append(calls, p.ToolName)
+			switch p.ToolName {
+			case "deploy.dry_run":
+				return mcp.TextResult(`{"phase":"dry-run"}`), nil
+			case "deploy.apply":
+				return mcp.TextResult(`{"phase":"applied"}`), nil
+			default:
+				return nil, fmt.Errorf("unexpected tool_name %q", p.ToolName)
+			}
+		},
+	})
+
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+	result, err := adapter.ExecuteTool(context.Background(), "fleet.exec", json.RawMessage(`{"device_id":"dev-1","tool_name":"deploy.apply","params":{"model":"qwen3-8b"}}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || !strings.Contains(result.Content, "NEEDS_APPROVAL") {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	if len(calls) != 1 || calls[0] != "deploy.dry_run" {
+		t.Fatalf("expected dry-run call first, got %#v", calls)
+	}
+
+	adapter.mu.Lock()
+	if len(adapter.pending) != 1 {
+		adapter.mu.Unlock()
+		t.Fatalf("expected 1 pending approval, got %d", len(adapter.pending))
+	}
+	var approvalID int64
+	for id := range adapter.pending {
+		approvalID = id
+	}
+	adapter.mu.Unlock()
+	if approvalID == 0 {
+		t.Fatal("expected a non-zero approval ID")
+	}
+
+	approved, err := adapter.executeApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("executeApproval: %v", err)
+	}
+	if string(approved) != `{"phase":"applied"}` {
+		t.Fatalf("approval result = %s, want applied payload", string(approved))
+	}
+	if len(calls) != 2 || calls[1] != "deploy.apply" {
+		t.Fatalf("expected approval call to execute deploy.apply, got %#v", calls)
+	}
+
+	adapter.mu.Lock()
+	pendingLeft := len(adapter.pending)
+	adapter.mu.Unlock()
+	if pendingLeft != 0 {
+		t.Fatalf("expected pending approvals to be cleared, got %d", pendingLeft)
+	}
+}
+
 func TestFleetBlockedTools(t *testing.T) {
-	// All destructive tools must be in the fleet denylist
+	// Fleet transport only blocks daisy-chained remote execution. Agent guardrails
+	// are enforced separately in isBlockedAgentTool.
 	mustBlock := []string{
-		"model.remove", "engine.remove", "deploy.delete",
-		"explore.start", "stack.init", "agent.rollback", "shell.exec",
+		"fleet.exec",
 	}
 	for _, tool := range mustBlock {
 		if _, ok := fleetBlockedTools[tool]; !ok {
@@ -1326,14 +1407,58 @@ func TestFleetBlockedTools(t *testing.T) {
 		}
 	}
 
-	// Safe tools must not be blocked
+	merged := []string{"stack", "explore"}
+	for _, tool := range merged {
+		if _, ok := fleetBlockedTools[tool]; ok {
+			t.Errorf("fleetBlockedTools should not block merged tool name %q", tool)
+		}
+	}
+
+	// Transport-safe targets must not be blocked, even if the Agent adapter
+	// applies additional policy when fleet.exec is invoked by agent.ask.
 	safe := []string{
 		"hardware.detect", "model.list", "deploy.list", "knowledge.resolve",
+		"system.config", "catalog.override", "shell.exec", "fleet.info",
 	}
 	for _, tool := range safe {
 		if _, ok := fleetBlockedTools[tool]; ok {
 			t.Errorf("fleetBlockedTools should not block %q", tool)
 		}
+	}
+}
+
+func TestFleetExecTool_AllowsCLIEquivalentRemoteMutation(t *testing.T) {
+	registry := fleet.NewRegistry(6188)
+	registry.Update([]proxy.DiscoveredService{{
+		Name:   "local._llm._tcp.local.",
+		AddrV4: "127.0.0.1",
+		Port:   6188,
+	}})
+
+	s := mcp.NewServer()
+	var gotArgs json.RawMessage
+	s.RegisterTool(&mcp.Tool{
+		Name:        "system.config",
+		Description: "test config",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			gotArgs = append(json.RawMessage(nil), params...)
+			return mcp.TextResult(`{"ok":true}`), nil
+		},
+	})
+
+	deps := &mcp.ToolDeps{}
+	buildFleetDeps(deps, registry, nil, s)
+
+	data, err := deps.FleetExecTool(context.Background(), "local", "system.config", json.RawMessage(`{"key":"foo","value":"bar"}`))
+	if err != nil {
+		t.Fatalf("FleetExecTool: %v", err)
+	}
+	if string(data) != `{"content":[{"type":"text","text":"{\"ok\":true}"}]}` {
+		t.Fatalf("unexpected result payload: %s", string(data))
+	}
+	if string(gotArgs) != `{"key":"foo","value":"bar"}` {
+		t.Fatalf("system.config args = %s, want write payload", string(gotArgs))
 	}
 }
 
@@ -1880,7 +2005,7 @@ func TestUpdatePerfOverlayWritesObservationOutsideCatalog(t *testing.T) {
 		TTFTP95ms:     20,
 		TPOTP50ms:     3,
 		QPS:           5,
-	})
+	}, nil, "", "", nil)
 
 	observationPath := filepath.Join(dir, "observations", "models", "qwen3-8b-perf.json")
 	if _, err := os.Stat(observationPath); err != nil {

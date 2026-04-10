@@ -163,20 +163,4 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// engine.plan
-	s.RegisterTool(&Tool{
-		Name:        "engine.plan",
-		Description: "Show all engines compatible with the current hardware, their install status, and a recommendation. Use before engine.pull to help the user choose.",
-		InputSchema: noParamsSchema(),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.EnginePlan == nil {
-				return ErrorResult("engine.plan not implemented"), nil
-			}
-			data, err := deps.EnginePlan(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("engine plan: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
 }

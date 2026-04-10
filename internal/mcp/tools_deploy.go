@@ -16,7 +16,9 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm', 'llamacpp'. Omit to auto-select the best engine for this hardware."},`+
 				`"slot":{"type":"string","description":"Partition slot for multi-model deployment, e.g. 'slot-0'. Omit for default full-device allocation."},`+
 				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9, \"max_model_len\": 131072, \"tensor_parallel_size\": 2}"},`+
-				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection. 0 or omitted means no constraint."}`,
+				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection. 0 or omitted means no constraint."},`+
+				`"auto_pull":{"type":"boolean","description":"Whether to auto-download missing models/engine images. Defaults to true. Set false to fail fast if resources are not locally available."},`+
+				`"no_pull":{"type":"boolean","description":"Alias for auto_pull=false. Require all model/engine assets to already exist locally."}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployApply == nil {
@@ -28,6 +30,8 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				Slot          string         `json:"slot"`
 				Config        map[string]any `json:"config"`
 				MaxColdStartS int            `json:"max_cold_start_s"`
+				AutoPull      *bool          `json:"auto_pull"`
+				NoPull        bool           `json:"no_pull"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -41,7 +45,8 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				}
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
-			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config)
+			noPull := p.NoPull || (p.AutoPull != nil && !*p.AutoPull)
+			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config, noPull)
 			if err != nil {
 				return nil, fmt.Errorf("deploy apply %s: %w", p.Model, err)
 			}
@@ -97,24 +102,23 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 	// deploy.dry_run
 	s.RegisterTool(&Tool{
 		Name:        "deploy.dry_run",
-		Description: "Preview a deployment without executing it. Returns resolved config, hardware fitness report, generated Pod YAML, and warnings. No side effects.",
+		Description: "Preview a deployment without executing it. Returns resolved config, hardware fitness report, generated Pod YAML, and warnings. No side effects. Set output=pod_yaml to get only the generated Pod YAML manifest.",
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model to deploy, e.g. 'qwen3-0.6b'"},`+
 				`"engine":{"type":"string","description":"Engine type, e.g. 'vllm', 'llamacpp'. Omit to auto-select."},`+
 				`"slot":{"type":"string","description":"Partition slot for multi-model, e.g. 'slot-0'. Omit for default."},`+
 				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9}"},`+
-				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection."}`,
+				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection."},`+
+				`"output":{"type":"string","enum":["","pod_yaml"],"description":"Output format: omit for full dry-run report, 'pod_yaml' for K3S Pod YAML manifest only"}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.DeployDryRun == nil {
-				return ErrorResult("deploy.dry_run not implemented"), nil
-			}
 			var p struct {
 				Model         string         `json:"model"`
 				Engine        string         `json:"engine"`
 				Slot          string         `json:"slot"`
 				Config        map[string]any `json:"config"`
 				MaxColdStartS int            `json:"max_cold_start_s"`
+				Output        string         `json:"output"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -127,6 +131,22 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 					p.Config = map[string]any{}
 				}
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
+			}
+
+			// output=pod_yaml: call the pod generator with the same effective overrides.
+			if p.Output == "pod_yaml" {
+				if deps.GeneratePod == nil {
+					return ErrorResult("deploy.dry_run pod_yaml not implemented"), nil
+				}
+				data, err := deps.GeneratePod(ctx, p.Model, p.Engine, p.Slot, p.Config)
+				if err != nil {
+					return nil, fmt.Errorf("generate pod for %s/%s: %w", p.Model, p.Engine, err)
+				}
+				return TextResult(string(data)), nil
+			}
+
+			if deps.DeployDryRun == nil {
+				return ErrorResult("deploy.dry_run not implemented"), nil
 			}
 			data, err := deps.DeployDryRun(ctx, p.Engine, p.Model, p.Slot, p.Config)
 			if err != nil {
@@ -190,7 +210,7 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 	// deploy.status
 	s.RegisterTool(&Tool{
 		Name:        "deploy.status",
-		Description: "Check deployment health: phase (Running/Pending/Failed), ready state, restart count, exit code. Accepts deployment name or model name.",
+		Description: "Get detailed deployment state for one deployment: model, engine, slot, runtime, ready address, config, startup progress, and failure detail. Accepts deployment name or model name.",
 		InputSchema: schema(`"name":{"type":"string","description":"Deployment name (e.g. 'aima-vllm-qwen3-0-6b') or model name (e.g. 'qwen3-0.6b'). Call deploy.list if unsure."}`, "name"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployStatus == nil {
@@ -216,7 +236,7 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 	// deploy.list
 	s.RegisterTool(&Tool{
 		Name:        "deploy.list",
-		Description: "List all active deployments on this device with names, models, engines, and statuses.",
+		Description: "List active deployment overviews on this device: name, model, engine, slot, runtime, phase/status, ready address, and startup summary. Use deploy.status for full per-deployment details.",
 		InputSchema: noParamsSchema(),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployList == nil {

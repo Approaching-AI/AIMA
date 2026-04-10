@@ -45,7 +45,7 @@ func registerModelTools(s *Server, deps *ToolDeps) {
 	s.RegisterTool(&Tool{
 		Name:        "model.pull",
 		Description: "Download a model by name from a remote source and register it in the database.",
-		InputSchema: schema(`"name":{"type":"string","description":"Model name to download, e.g. 'qwen3-0.6b', 'qwen3.5-35b-a3b'. Must match a name in the knowledge base (call knowledge.list_models to see available names)."}`, "name"),
+			InputSchema: schema(`"name":{"type":"string","description":"Model name to download, e.g. 'qwen3-0.6b', 'qwen3.5-35b-a3b'. Must match a name in the knowledge base (call catalog.list with kind=models to see available names)."}`, "name"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.PullModel == nil {
 				return ErrorResult("model.pull not implemented"), nil
@@ -147,20 +147,4 @@ func registerModelTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// download.list
-	s.RegisterTool(&Tool{
-		Name:        "download.list",
-		Description: "List active and recently completed download tasks (engine and model pulls). Returns an array of download progress objects with phase, downloaded bytes, total bytes, speed, and status.",
-		InputSchema: noParamsSchema(),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.ListDownloads == nil {
-				return TextResult("[]"), nil
-			}
-			data, err := deps.ListDownloads(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("list downloads: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
 }

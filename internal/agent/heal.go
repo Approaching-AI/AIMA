@@ -207,10 +207,10 @@ func (h *Healer) healImagePull(ctx context.Context, deployName string, action *H
 
 type deploymentMetadata struct {
 	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels"`
-	Model  string
-	Engine string
-	Slot   string
+	Model  string            `json:"model"`
+	Engine string            `json:"engine"`
+	Slot   string            `json:"slot"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func (h *Healer) lookupDeployment(ctx context.Context, deployName string) (*deploymentMetadata, error) {
@@ -229,9 +229,15 @@ func (h *Healer) lookupDeployment(ctx context.Context, deployName string) (*depl
 
 	var modelMatches []*deploymentMetadata
 	for i := range deploys {
-		deploys[i].Model = deploys[i].Labels["aima.dev/model"]
-		deploys[i].Engine = deploys[i].Labels["aima.dev/engine"]
-		deploys[i].Slot = deploys[i].Labels["aima.dev/slot"]
+		if deploys[i].Model == "" {
+			deploys[i].Model = deploys[i].Labels["aima.dev/model"]
+		}
+		if deploys[i].Engine == "" {
+			deploys[i].Engine = deploys[i].Labels["aima.dev/engine"]
+		}
+		if deploys[i].Slot == "" {
+			deploys[i].Slot = deploys[i].Labels["aima.dev/slot"]
+		}
 		if deploys[i].Name == deployName {
 			return validateDeploymentMetadata(&deploys[i], deployName)
 		}
@@ -250,7 +256,7 @@ func (h *Healer) lookupDeployment(ctx context.Context, deployName string) (*depl
 
 func validateDeploymentMetadata(deploy *deploymentMetadata, deployRef string) (*deploymentMetadata, error) {
 	if deploy.Model == "" || deploy.Engine == "" {
-		return nil, fmt.Errorf("deployment %s missing model or engine labels", deployRef)
+		return nil, fmt.Errorf("deployment %s missing model or engine metadata", deployRef)
 	}
 	return deploy, nil
 }

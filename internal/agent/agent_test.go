@@ -308,11 +308,11 @@ func TestAgent_SystemPrompt(t *testing.T) {
 	if !contains(sysPrompt, "# AIMA Agent") {
 		t.Error("system prompt missing embedded core prompt header")
 	}
-	if !contains(sysPrompt, "agent.guide") {
-		t.Error("system prompt missing agent.guide pointer")
+	if !contains(sysPrompt, "hardware.detect") {
+		t.Error("system prompt missing hardware.detect tool reference")
 	}
-	if !contains(sysPrompt, "## When to Use Which Tool") {
-		t.Error("system prompt missing tool decision boundaries section")
+	if !contains(sysPrompt, "deploy.apply") {
+		t.Error("system prompt missing deploy.apply tool reference")
 	}
 }
 
@@ -1068,18 +1068,26 @@ func TestTunerStartDerivesDefaultParametersFromResolvedEngine(t *testing.T) {
 
 func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
 	var deployArgs []map[string]any
+	var benchmarkArgs []map[string]any
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 			switch name {
-			case "deploy.apply":
+			case "deploy.delete":
+				return &ToolResult{Content: `{"status":"deleted"}`}, nil
+			case "deploy.run":
 				var payload map[string]any
 				if err := json.Unmarshal(arguments, &payload); err != nil {
 					t.Fatalf("unmarshal deploy args: %v", err)
 				}
 				deployArgs = append(deployArgs, payload)
-				return &ToolResult{Content: `{"status":"ok"}`}, nil
+				return &ToolResult{Content: `{"status":"ready","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
 			case "benchmark.run":
+				var payload map[string]any
+				if err := json.Unmarshal(arguments, &payload); err != nil {
+					t.Fatalf("unmarshal benchmark args: %v", err)
+				}
+				benchmarkArgs = append(benchmarkArgs, payload)
 				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
 			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
@@ -1088,6 +1096,7 @@ func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
 	}
 
 	tuner := NewTuner(tools)
+	tuner.gpuReleaseSleep = 0 // skip GPU release delay in tests
 	session, err := tuner.Start(context.Background(), TuningConfig{
 		Model:      "qwen3-8b",
 		Engine:     "vllm",
@@ -1123,16 +1132,29 @@ func TestTunerRunParsesBenchmarkEnvelopeAndUsesConfigField(t *testing.T) {
 	if session.Results[0].TTFTP95Ms != 123.4 {
 		t.Fatalf("ttft_p95 = %v, want 123.4", session.Results[0].TTFTP95Ms)
 	}
-	if len(deployArgs) != 2 {
-		t.Fatalf("deploy.apply calls = %d, want 2", len(deployArgs))
+	// With 1 candidate, tuner may skip final redeploy if best config is already deployed.
+	if len(deployArgs) < 1 || len(deployArgs) > 2 {
+		t.Fatalf("deploy.run calls = %d, want 1 or 2", len(deployArgs))
 	}
 	for _, payload := range deployArgs {
 		if _, ok := payload["config"]; !ok {
 			t.Fatalf("deploy payload missing config field: %#v", payload)
 		}
+		if payload["no_pull"] != true {
+			t.Fatalf("deploy no_pull = %#v, want true", payload["no_pull"])
+		}
 		if _, ok := payload["config_overrides"]; ok {
 			t.Fatalf("deploy payload still uses config_overrides: %#v", payload)
 		}
+	}
+	if len(benchmarkArgs) != 1 {
+		t.Fatalf("benchmark.run calls = %d, want 1", len(benchmarkArgs))
+	}
+	if benchmarkArgs[0]["endpoint"] != "http://127.0.0.1:30000/v1/chat/completions" {
+		t.Fatalf("benchmark endpoint = %#v, want direct deployment endpoint", benchmarkArgs[0]["endpoint"])
+	}
+	if _, ok := benchmarkArgs[0]["deploy_config"]; !ok {
+		t.Fatalf("benchmark args missing deploy_config: %#v", benchmarkArgs[0])
 	}
 }
 
@@ -1147,8 +1169,10 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 			switch name {
-			case "deploy.apply":
-				return &ToolResult{Content: `{"status":"ok"}`}, nil
+			case "deploy.delete":
+				return &ToolResult{Content: `{"status":"deleted"}`}, nil
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
 			case "benchmark.run":
 				return &ToolResult{Content: `{"result":{"throughput_tps":42.5,"ttft_p95_ms":123.4},"saved":true}`}, nil
 			default:
@@ -1158,6 +1182,7 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 	}
 
 	tuner := NewTuner(tools)
+	tuner.gpuReleaseSleep = 0
 	manager := NewExplorationManager(db, tuner, tools)
 	run, err := manager.Start(ctx, ExplorationStart{
 		Kind: "tune",
@@ -1169,6 +1194,10 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 		SearchSpace: map[string][]any{
 			"gpu_memory_utilization": {0.8},
 		},
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
+			Concurrency: 2,
+			Rounds:      3,
+		}},
 		Constraints: ExplorationConstraints{
 			MaxCandidates: 1,
 		},
@@ -1199,6 +1228,26 @@ func TestExplorationManagerTunePersistsRun(t *testing.T) {
 	if len(status.Events) < 2 {
 		t.Fatalf("events = %d, want at least 2", len(status.Events))
 	}
+	var tuningEvent *state.ExplorationEvent
+	for _, event := range status.Events {
+		if event.ToolName == "tuning" && event.Status == "running" {
+			tuningEvent = event
+			break
+		}
+	}
+	if tuningEvent == nil {
+		t.Fatalf("expected tuning running event, got %#v", status.Events)
+	}
+	var request map[string]any
+	if err := json.Unmarshal([]byte(tuningEvent.RequestJSON), &request); err != nil {
+		t.Fatalf("Unmarshal tuning request: %v", err)
+	}
+	if got := request["concurrency"]; got != float64(2) {
+		t.Fatalf("tuning request concurrency = %v, want 2", got)
+	}
+	if got := request["rounds"]; got != float64(3) {
+		t.Fatalf("tuning request rounds = %v, want 3", got)
+	}
 }
 
 func TestExplorationManagerValidatePersistsRun(t *testing.T) {
@@ -1211,23 +1260,35 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
-			if name != "benchmark.run" {
+			switch name {
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","name":"qwen3-8b-vllm","address":"127.0.0.1:30000","config":{"gpu_memory_utilization":0.8}}`}, nil
+			case "deploy.apply":
+				return &ToolResult{Content: `{"name":"qwen3-8b-vllm","config":{"gpu_memory_utilization":0.8}}`}, nil
+			case "deploy.status":
+				return &ToolResult{Content: `{"name":"qwen3-8b-vllm","phase":"running","ready":true,"address":"127.0.0.1:30000"}`}, nil
+			case "deploy.delete":
+				return &ToolResult{Content: `{"status":"deleted"}`}, nil
+			case "benchmark.run":
+				var args map[string]any
+				if err := json.Unmarshal(arguments, &args); err != nil {
+					t.Fatalf("Unmarshal benchmark args: %v", err)
+				}
+				if args["model"] != "qwen3-8b" {
+					t.Fatalf("model = %v, want qwen3-8b", args["model"])
+				}
+				if args["hardware"] != "nvidia-gb10-arm64" {
+					t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
+				}
+				if args["engine"] != "vllm" {
+					t.Fatalf("engine = %v, want vllm", args["engine"])
+				}
+				return &ToolResult{Content: `{"result":{"throughput_tps":51.2},"saved":true,"benchmark_id":"bench-001","config_id":"cfg-001"}`}, nil
+			case "catalog.override":
+				return &ToolResult{Content: `{"path":"/tmp/test.yaml","action":"created"}`}, nil
+			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
 			}
-			var args map[string]any
-			if err := json.Unmarshal(arguments, &args); err != nil {
-				t.Fatalf("Unmarshal benchmark args: %v", err)
-			}
-			if args["model"] != "qwen3-8b" {
-				t.Fatalf("model = %v, want qwen3-8b", args["model"])
-			}
-			if args["hardware"] != "nvidia-gb10-arm64" {
-				t.Fatalf("hardware = %v, want nvidia-gb10-arm64", args["hardware"])
-			}
-			if args["engine"] != "vllm" {
-				t.Fatalf("engine = %v, want vllm", args["engine"])
-			}
-			return &ToolResult{Content: `{"result":{"throughput_tps":51.2},"saved":true,"benchmark_id":"bench-001","config_id":"cfg-001"}`}, nil
 		},
 	}
 
@@ -1239,10 +1300,10 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 			Model:    "qwen3-8b",
 			Engine:   "vllm",
 		},
-		Benchmark: ExplorationBenchmarkProfile{
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
 			Concurrency: 2,
 			Rounds:      3,
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1267,14 +1328,18 @@ func TestExplorationManagerValidatePersistsRun(t *testing.T) {
 	if status.Run.SummaryJSON == "" {
 		t.Fatal("expected summary_json to be populated")
 	}
-	if len(status.Events) != 2 {
-		t.Fatalf("events = %d, want 2", len(status.Events))
+	if len(status.Events) < 2 {
+		t.Fatalf("events = %d, want >= 2", len(status.Events))
 	}
-	if status.Events[1].ToolName != "benchmark.run" {
-		t.Fatalf("tool name = %q, want benchmark.run", status.Events[1].ToolName)
+	// Verify benchmark completed somewhere in events
+	var foundBenchmark bool
+	for _, ev := range status.Events {
+		if ev.ToolName == "benchmark.run" && ev.ArtifactID == "bench-001" {
+			foundBenchmark = true
+		}
 	}
-	if status.Events[1].ArtifactID != "bench-001" {
-		t.Fatalf("artifact_id = %q, want bench-001", status.Events[1].ArtifactID)
+	if !foundBenchmark {
+		t.Fatalf("expected benchmark.run event with artifact bench-001 in events")
 	}
 }
 
@@ -1292,10 +1357,22 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 
 	tools := &mockTools{
 		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
-			if name != "benchmark.run" {
+			switch name {
+			case "deploy.run":
+				return &ToolResult{Content: `{"status":"ready","name":"qwen3-8b-vllm","address":"127.0.0.1:30001","config":{"gpu_memory_utilization":0.82}}`}, nil
+			case "deploy.apply":
+				return &ToolResult{Content: `{"name":"qwen3-8b-vllm","config":{"gpu_memory_utilization":0.82}}`}, nil
+			case "deploy.status":
+				return &ToolResult{Content: `{"name":"qwen3-8b-vllm","phase":"running","ready":true,"address":"127.0.0.1:30001"}`}, nil
+			case "deploy.delete":
+				return &ToolResult{Content: `{"status":"deleted"}`}, nil
+			case "benchmark.run":
+				return &ToolResult{Content: `{"result":{"throughput_tps":48.9},"saved":true,"benchmark_id":"bench-oq-001","config_id":"cfg-oq-001"}`}, nil
+			case "knowledge.open_questions":
+				return &ToolResult{Content: `{"status":"updated"}`}, nil
+			default:
 				return nil, fmt.Errorf("unexpected tool: %s", name)
 			}
-			return &ToolResult{Content: `{"result":{"throughput_tps":48.9},"saved":true,"benchmark_id":"bench-oq-001","config_id":"cfg-oq-001"}`}, nil
 		},
 	}
 
@@ -1308,10 +1385,10 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 			Model:    "qwen3-8b",
 			Engine:   "vllm",
 		},
-		Benchmark: ExplorationBenchmarkProfile{
+		BenchmarkProfiles: []ExplorationBenchmarkProfile{{
 			Concurrency: 2,
 			Rounds:      1,
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1343,11 +1420,17 @@ func TestExplorationManagerOpenQuestionAutoResolves(t *testing.T) {
 	if !strings.Contains(question.ActualResult, `"benchmark_id":"bench-oq-001"`) {
 		t.Fatalf("actual_result = %q, want benchmark reference", question.ActualResult)
 	}
-	if len(status.Events) != 3 {
-		t.Fatalf("events = %d, want 3", len(status.Events))
+	if len(status.Events) < 3 {
+		t.Fatalf("events = %d, want >= 3", len(status.Events))
 	}
-	if status.Events[2].ToolName != "knowledge.open_questions" {
-		t.Fatalf("tool name = %q, want knowledge.open_questions", status.Events[2].ToolName)
+	var foundOQ bool
+	for _, ev := range status.Events {
+		if ev.ToolName == "knowledge.open_questions" {
+			foundOQ = true
+		}
+	}
+	if !foundOQ {
+		t.Fatalf("expected knowledge.open_questions event in events")
 	}
 }
 

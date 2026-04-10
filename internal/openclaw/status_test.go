@@ -151,7 +151,7 @@ func TestInspectReportsClaimNeeded(t *testing.T) {
 	}
 	found := false
 	for _, issue := range status.Issues {
-		if strings.Contains(issue, "openclaw.claim") {
+		if strings.Contains(issue, "action=claim") {
 			found = true
 			break
 		}

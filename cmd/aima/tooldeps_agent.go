@@ -238,11 +238,11 @@ func buildAgentDeps(ac *appContext, deps *mcp.ToolDeps,
 				RequestedBy:  requestedBy,
 				SourceRef:    p.ID,
 				ApprovalMode: "none",
-				Benchmark: agent.ExplorationBenchmarkProfile{
+				BenchmarkProfiles: []agent.ExplorationBenchmarkProfile{{
 					Endpoint:    p.Endpoint,
 					Concurrency: p.Concurrency,
 					Rounds:      p.Rounds,
-				},
+				}},
 			})
 			if err != nil {
 				return nil, err

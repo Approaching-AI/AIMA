@@ -1034,16 +1034,10 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 			hwSpec.GPUCountMin = tp
 		}
 
-		cfg := map[string]any{"max_model_len": maxLen}
-		if gmu > 0 {
-			cfg["gpu_memory_utilization"] = gmu
-		}
-		if tp > 1 {
-			cfg["tensor_parallel_size"] = tp
-		}
+		cfg := c.buildSyntheticConfig(inferredEngineType, hw, gmu, maxLen, tp)
 		targetedHWCopy := hwSpec
 		targetedHW = &targetedHWCopy
-		targetedCfg = cfg
+		targetedCfg = map[string]any{"_gmu": gmu, "_maxLen": maxLen, "_tp": tp} // raw values for per-engine rebuild
 
 		variants = append(variants, ModelVariant{
 			Name:          meta.Name + "-" + hw.GPUArch + "-auto",
@@ -1088,10 +1082,11 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 			continue
 		}
 		if targetedHW != nil {
-			cfg := make(map[string]any, len(targetedCfg))
-			for k, v := range targetedCfg {
-				cfg[k] = v
-			}
+			// Build engine-specific config using raw values, not copied vLLM params.
+			gmuRaw, _ := targetedCfg["_gmu"].(float64)
+			maxLenRaw, _ := targetedCfg["_maxLen"].(int)
+			tpRaw, _ := targetedCfg["_tp"].(int)
+			cfg := c.buildSyntheticConfig(re, hw, gmuRaw, maxLenRaw, tpRaw)
 			hwSpec := *targetedHW
 			variants = append(variants, ModelVariant{
 				Name:          meta.Name + "-" + hw.GPUArch + "-" + re + "-auto",
@@ -1133,6 +1128,62 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	}
 }
 
+// buildSyntheticConfig generates engine-appropriate config for a synthetic
+// model variant. Instead of hardcoding vLLM param names, it checks the
+// engine's default_args to determine the correct parameter names.
+// Standard concepts: memory utilization → gpu_memory_utilization or mem_fraction_static;
+// context length → max_model_len or context_length; TP → tensor_parallel_size or tp_size.
+func (c *Catalog) buildSyntheticConfig(engineType string, hw HardwareInfo, gmu float64, maxLen, tp int) map[string]any {
+	cfg := make(map[string]any)
+
+	// Look up the engine's default_args to determine supported param names.
+	engineArgs := c.engineDefaultArgs(engineType, hw)
+
+	// Memory utilization: prefer engine's native param name.
+	if gmu > 0 {
+		if _, ok := engineArgs["mem_fraction_static"]; ok {
+			cfg["mem_fraction_static"] = gmu
+		} else {
+			cfg["gpu_memory_utilization"] = gmu
+		}
+	}
+
+	// Context / sequence length: prefer engine's native param name.
+	if maxLen > 0 {
+		if _, ok := engineArgs["context_length"]; ok {
+			cfg["context_length"] = maxLen
+		} else if _, hasMFL := engineArgs["max_model_len"]; hasMFL {
+			cfg["max_model_len"] = maxLen
+		} else if _, hasMFS := engineArgs["mem_fraction_static"]; hasMFS {
+			// sglang-kt family: no explicit context length param, engine manages it.
+			// Don't inject max_model_len which sglang-kt doesn't recognize.
+		} else {
+			cfg["max_model_len"] = maxLen // safe default for vLLM-like engines
+		}
+	}
+
+	// Tensor parallelism: prefer engine's native param name.
+	if tp > 1 {
+		if _, ok := engineArgs["tp_size"]; ok {
+			cfg["tp_size"] = tp
+		} else {
+			cfg["tensor_parallel_size"] = tp
+		}
+	}
+
+	return cfg
+}
+
+// engineDefaultArgs returns the default_args map from the best-matching engine
+// YAML for the given engine type and hardware. Returns nil if not found.
+func (c *Catalog) engineDefaultArgs(engineType string, hw HardwareInfo) map[string]any {
+	engine := c.FindEngineByName(engineType, hw)
+	if engine == nil {
+		return nil
+	}
+	return engine.Startup.DefaultArgs
+}
+
 // RegisterModel appends a ModelAsset to the catalog if no asset with the
 // same name already exists. Safe for concurrent use.
 func (c *Catalog) RegisterModel(ma ModelAsset) {
@@ -1171,7 +1222,20 @@ func (c *Catalog) UpsertSyntheticModel(ma ModelAsset) {
 			continue
 		}
 		if c.ModelAssets[i].synthetic {
+			// Fully synthetic — replace entirely.
 			c.ModelAssets[i] = ma
+			return
+		}
+		// Catalog model exists — merge synthetic variants for engines not already covered.
+		// This allows Explorer to add sglang-kt variants to a model that only has vLLM variants.
+		existingEngines := make(map[string]bool)
+		for _, v := range c.ModelAssets[i].Variants {
+			existingEngines[strings.ToLower(v.Engine)] = true
+		}
+		for _, v := range ma.Variants {
+			if !existingEngines[strings.ToLower(v.Engine)] {
+				c.ModelAssets[i].Variants = append(c.ModelAssets[i].Variants, v)
+			}
 		}
 		return
 	}

@@ -29,13 +29,9 @@ type ToolDeps struct {
 	PullEngine    func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
 	ImportEngine  func(ctx context.Context, path string) error
 	RemoveEngine  func(ctx context.Context, name string, deleteFiles bool) error
-	EnginePlan    func(ctx context.Context) (json.RawMessage, error)
-
-	// Download progress
-	ListDownloads func(ctx context.Context) (json.RawMessage, error)
 
 	// Deployment (runtime package)
-	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
+	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error)
 	DeployDryRun func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployRun    func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool, onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
@@ -44,13 +40,14 @@ type ToolDeps struct {
 	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
 
 	// Knowledge
-	ResolveConfig    func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
-	SearchKnowledge  func(ctx context.Context, filter map[string]string) (json.RawMessage, error)
-	SaveKnowledge    func(ctx context.Context, note json.RawMessage) error
-	GeneratePod      func(ctx context.Context, model, engine, slot string) (json.RawMessage, error)
-	ListProfiles     func(ctx context.Context) (json.RawMessage, error)
-	ListEngineAssets func(ctx context.Context) (json.RawMessage, error)
-	ListModelAssets  func(ctx context.Context) (json.RawMessage, error)
+	ResolveConfig           func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
+	SearchKnowledge         func(ctx context.Context, filter map[string]string) (json.RawMessage, error)
+	SaveKnowledge           func(ctx context.Context, note json.RawMessage) error
+	GeneratePod             func(ctx context.Context, model, engine, slot string, configOverrides map[string]any) (json.RawMessage, error)
+	ListProfiles            func(ctx context.Context) (json.RawMessage, error)
+	ListEngineAssets        func(ctx context.Context) (json.RawMessage, error)
+	ListModelAssets         func(ctx context.Context) (json.RawMessage, error)
+	ListPartitionStrategies func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
 	RecordBenchmark    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -72,9 +69,6 @@ type ToolDeps struct {
 	StackInit      func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error)
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
-	// Discovery
-	DiscoverLAN func(ctx context.Context, timeoutS int) (json.RawMessage, error)
-
 	// Catalog overlay
 	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
 	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
@@ -86,14 +80,12 @@ type ToolDeps struct {
 	// Agent
 	DispatchAsk       func(ctx context.Context, query string, skipPerms bool, sessionID string) (json.RawMessage, string, error)
 	AgentStatus       func(ctx context.Context) (json.RawMessage, error)
-	AgentGuide        func(ctx context.Context) (json.RawMessage, error)
 	RollbackList      func(ctx context.Context) (json.RawMessage, error)
 	RollbackRestore   func(ctx context.Context, id int64) (json.RawMessage, error)
 	SupportAskForHelp func(ctx context.Context, description, endpoint, inviteCode, workerCode, recoveryCode, referralCode string) (json.RawMessage, error)
 
 	// System
 	SystemStatus func(ctx context.Context) (json.RawMessage, error)
-	ExecShell    func(ctx context.Context, command string) (json.RawMessage, error)
 	GetConfig    func(ctx context.Context, key string) (string, error)
 	SetConfig    func(ctx context.Context, key, value string) error
 
@@ -129,9 +121,6 @@ type ToolDeps struct {
 	ExploreStop         func(ctx context.Context, runID string) (json.RawMessage, error)
 	ExploreResult       func(ctx context.Context, runID string) (json.RawMessage, error)
 
-	// Power history (F4)
-	PowerHistory func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-
 	// Validation (F5)
 	ValidateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
@@ -141,18 +130,10 @@ type ToolDeps struct {
 	// Open questions (I6)
 	OpenQuestions func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
-	// App management (D4)
-	AppRegister  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	AppProvision func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	AppList      func(ctx context.Context) (json.RawMessage, error)
-
 	// Knowledge sync (K6)
 	SyncPush   func(ctx context.Context) (json.RawMessage, error)
 	SyncPull   func(ctx context.Context) (json.RawMessage, error)
 	SyncStatus func(ctx context.Context) (json.RawMessage, error)
-
-	// Power mode (S3)
-	PowerMode func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
 
 	// OpenClaw integration
 	OpenClawSync   func(ctx context.Context, dryRun bool) (json.RawMessage, error)
@@ -163,4 +144,17 @@ type ToolDeps struct {
 	ScenarioList  func(ctx context.Context) (json.RawMessage, error)
 	ScenarioShow  func(ctx context.Context, name string) (json.RawMessage, error)
 	ScenarioApply func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error)
+
+	// Explorer
+	ExplorerStatus  func(ctx context.Context) (json.RawMessage, error)
+	ExplorerConfig  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExplorerTrigger func(ctx context.Context) (json.RawMessage, error)
+
+	// Sync v2: advisory pull/push (v0.4 integration)
+	SyncPullAdvisories   func(ctx context.Context) (json.RawMessage, error)
+	SyncPullScenarios    func(ctx context.Context) (json.RawMessage, error)
+	AdvisoryFeedback     func(ctx context.Context, advisoryID, status, reason string) (json.RawMessage, error)
+	RequestAdvise        func(ctx context.Context, model, engine, intent string) (json.RawMessage, error)
+	RequestScenario      func(ctx context.Context, hardware string, models []string, goal string) (json.RawMessage, error)
+	ListCentralScenarios func(ctx context.Context, hardware, source string) (json.RawMessage, error)
 }

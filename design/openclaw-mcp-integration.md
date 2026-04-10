@@ -159,7 +159,7 @@ device operations such as:
 - `deploy.*`
 - `knowledge.resolve`
 - `benchmark.run`
-- `openclaw.status`
+- `openclaw` (`action=status`)
 
 ## 4. Config Semantics
 

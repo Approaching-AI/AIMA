@@ -4,17 +4,17 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 94 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 56 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
 
 ## Release Flow & Version Management
 
-Current development line: **v0.2**. Latest product release: **v0.2.0** (2026-03-25).
+Current development line: **v0.3**. Latest product release: **v0.3.1**.
 
 This project uses a **develop-based release flow** with a single declared development line.
-The development line is recorded in `internal/buildinfo/series.txt`. Right now that value is `v0.2`.
+The development line is recorded in `internal/buildinfo/series.txt`. Right now that value is `v0.3`.
 
 ```
 master  ──●──── tag v0.2.0 ───────────────── tag v0.2.1 ──
@@ -27,7 +27,7 @@ develop ───●──●──●──●──feature──●──●�
 | Branch | Purpose | Merges to |
 |--------|---------|-----------|
 | `master` | Production releases only. Every product release tag is created here. | — |
-| `develop` | Main integration branch for the current development line (`v0.2`). | `master` (via `release/*`) |
+| `develop` | Main integration branch for the current development line (`v0.3`). | `master` (via `release/*`) |
 | `feat/<name>` | New feature branch from `develop`. | `develop` |
 | `fix/<name>` | Bug fix branch from `develop`. | `develop` |
 | `docs/<name>` | Documentation-only branch from `develop`. | `develop` |
@@ -37,8 +37,8 @@ develop ───●──●──●──●──feature──●──●�
 ### Version Taxonomy
 
 - **Product version** — SemVer release tag `vMAJOR.MINOR.PATCH`. Only annotated tags in this exact format count as AIMA releases.
-- **Development line** — the active train for `develop` and feature work, currently `v0.2`.
-- **Development build version** — `<development-line>-dev`, for example `v0.2-dev`. The exact commit is carried separately in build metadata.
+- **Development line** — the active train for `develop` and feature work, currently `v0.3`.
+- **Development build version** — `<development-line>-dev`, for example `v0.3-dev`. The exact commit is carried separately in build metadata.
 - **MCP protocol version** — protocol compatibility only (for example `2024-11-05`), not the AIMA release number.
 - **DB/import schema version** — internal compatibility counters (`PRAGMA user_version`, `schema_version`), never product release numbers.
 - **Catalog/component version** — upstream dependency versions stored in YAML, not AIMA release numbers.
@@ -61,9 +61,9 @@ develop ───●──●──●──●──feature──●──●�
 ### Development Line Rules
 
 - `internal/buildinfo/series.txt` is the single source of truth for the active development line.
-- As long as the team is iterating inside the current line, keep it at `v0.2`.
-- All non-tagged builds from `develop`, `feat/*`, `fix/*`, `docs/*`, and `release/*` report `v0.2-dev`.
-- When starting the next line, update `internal/buildinfo/series.txt` in `develop` first, for example `v0.2` → `v0.3`.
+- As long as the team is iterating inside the current line, keep it at `v0.3`.
+- All non-tagged builds from `develop`, `feat/*`, `fix/*`, `docs/*`, and `release/*` report `v0.3-dev`.
+- When starting the next line, update `internal/buildinfo/series.txt` in `develop` first, for example `v0.3` → `v0.4`.
 - Product releases remain exact SemVer tags such as `v0.2.1` or `v0.3.0`.
 
 ### Daily workflow
@@ -127,7 +127,7 @@ Only exact `vX.Y.Z` tags are treated as releases. Non-tagged builds report
 
 - **Never force-push to `master`.**
 - **Branch new work from `develop`, not from `master`.**
-- **Keep `internal/buildinfo/series.txt` at `v0.2` until the team explicitly starts the next line.**
+- **Keep `internal/buildinfo/series.txt` at `v0.3` until the team explicitly starts the next line.**
 - **Only `vX.Y.Z` annotated tags are product releases.**
 - **Do not invent new product-like suffix tags for assets, images, or vendor-specific bundles.**
 - **Release through `release/<ver>` and tag on `master`.**
@@ -172,7 +172,7 @@ internal/
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
   mcp/                        # MCP server + RegisterAllTools + tools_*.go implementations
-  agent/                      # Go Agent loop (L3a) + Dispatcher
+  agent/                      # Go Agent (L3a) + Dispatcher + Explorer (PDCA agent planner, workspace, tools, harvester)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)
 catalog/                      # Knowledge assets (go:embed, compiled in)

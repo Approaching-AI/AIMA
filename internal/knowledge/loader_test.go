@@ -887,3 +887,66 @@ func TestKindToDir(t *testing.T) {
 		}
 	}
 }
+
+func TestBenchmarkProfileTiers(t *testing.T) {
+	fs := fstest.MapFS{
+		"benchmarks/profiles.yaml": &fstest.MapFile{Data: []byte(`kind: benchmark_profiles
+tiers:
+  - name: high
+    min_vram_mib: 40000
+    profiles:
+      - label: latency
+        concurrency_levels: [1]
+        input_token_levels: [128, 512, 1024]
+        max_token_levels: [256]
+        requests_per_combo: 5
+        rounds: 1
+      - label: throughput
+        concurrency_levels: [1, 2, 4]
+        input_token_levels: [512]
+        max_token_levels: [1024]
+        requests_per_combo: 5
+        rounds: 1
+  - name: low
+    min_vram_mib: 0
+    profiles:
+      - label: latency
+        concurrency_levels: [1]
+        input_token_levels: [128, 512]
+        max_token_levels: [256]
+        requests_per_combo: 3
+        rounds: 1
+`)},
+	}
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.BenchmarkProfileTiers) != 2 {
+		t.Fatalf("tiers = %d, want 2", len(cat.BenchmarkProfileTiers))
+	}
+
+	// High VRAM → high tier (2 profiles)
+	profiles := cat.BenchmarkProfilesForVRAM(50000)
+	if len(profiles) != 2 {
+		t.Fatalf("50000 MiB: profiles = %d, want 2", len(profiles))
+	}
+	if profiles[0].Label != "latency" || profiles[1].Label != "throughput" {
+		t.Errorf("labels = [%s, %s], want [latency, throughput]", profiles[0].Label, profiles[1].Label)
+	}
+	if profiles[0].RequestsPerCombo != 5 {
+		t.Errorf("requests_per_combo = %d, want 5", profiles[0].RequestsPerCombo)
+	}
+
+	// Low VRAM → low tier (1 profile)
+	profiles = cat.BenchmarkProfilesForVRAM(8000)
+	if len(profiles) != 1 {
+		t.Fatalf("8000 MiB: profiles = %d, want 1", len(profiles))
+	}
+	if profiles[0].Label != "latency" {
+		t.Errorf("label = %s, want latency", profiles[0].Label)
+	}
+	if profiles[0].RequestsPerCombo != 3 {
+		t.Errorf("requests_per_combo = %d, want 3", profiles[0].RequestsPerCombo)
+	}
+}

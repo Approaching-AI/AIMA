@@ -18,11 +18,15 @@ import (
 
 // DockerRuntime manages inference engines as Docker containers.
 type DockerRuntime struct {
-	engineAssets []knowledge.EngineAsset
+	engineAssets    []knowledge.EngineAsset
+	progressTracker *ProgressTracker
 }
 
 func NewDockerRuntime(engineAssets []knowledge.EngineAsset) *DockerRuntime {
-	return &DockerRuntime{engineAssets: engineAssets}
+	return &DockerRuntime{
+		engineAssets:    engineAssets,
+		progressTracker: NewProgressTracker(),
+	}
 }
 
 func (r *DockerRuntime) Name() string { return "docker" }
@@ -258,6 +262,7 @@ func (r *DockerRuntime) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("docker rm %s: %w\n%s", name, err, string(out))
 	}
+	r.progressTracker.Remove(name)
 	return nil
 }
 
@@ -484,6 +489,13 @@ func (r *DockerRuntime) enrichDockerProgress(ctx context.Context, ds *Deployment
 			ds.StartupProgress = 5
 			ds.StartupMessage = formatPhaseName("initializing")
 		}
+	}
+
+	// Stall detection for starting deployments
+	if ds.Phase == "starting" || (ds.Phase == "running" && !ds.Ready) {
+		stalled, lastAt := r.progressTracker.Update(ds.Name, ds.StartupProgress, ds.EstimatedTotalS)
+		ds.Stalled = stalled
+		ds.LastProgressAt = lastAt.Unix()
 	}
 	return ""
 }

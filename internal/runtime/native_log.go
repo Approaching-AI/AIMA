@@ -142,6 +142,13 @@ func (r *NativeRuntime) enrichNativeProgress(ds *DeploymentStatus, logPath strin
 			ds.StartupMessage = sp.Message
 		}
 	}
+
+	// Stall detection for starting deployments
+	if ds.Phase == "starting" || (ds.Phase == "running" && !ds.Ready) {
+		stalled, lastAt := r.progressTracker.Update(ds.Name, ds.StartupProgress, ds.EstimatedTotalS)
+		ds.Stalled = stalled
+		ds.LastProgressAt = lastAt.Unix()
+	}
 	return ""
 }
 

@@ -20,18 +20,14 @@
 
 | 工具 | JSON-RPC 方法 | 功能 |
 |------|---------------|------|
-| `knowledge.search` | `knowledge.search` | 搜索知识 |
-| `knowledge.save` | `knowledge.save` | 保存 Knowledge Note |
 | `knowledge.resolve` | `knowledge.resolve` | 解析最优配置 |
-| `knowledge.list_engines` | `knowledge.list_engines` | 列出可用引擎定义 |
-| `knowledge.list_profiles` | `knowledge.list_profiles` | 列出硬件 Profile |
-| `knowledge.generate_pod` | `knowledge.generate_pod` | 从知识资产生成 Pod YAML |
-| `knowledge.search_configs` | `knowledge.search_configs` | 多维配置搜索 |
-| `knowledge.compare` | `knowledge.compare` | 对比配置性能 |
-| `knowledge.similar` | `knowledge.similar` | 基于性能向量找相似配置 |
-| `knowledge.lineage` | `knowledge.lineage` | 查询配置演化链 |
-| `knowledge.gaps` | `knowledge.gaps` | 发现知识空白 |
-| `knowledge.aggregate` | `knowledge.aggregate` | 分组聚合统计 |
+| `knowledge.search` | `knowledge.search` | 搜索知识记录与测试配置 |
+| `knowledge.analytics` | `knowledge.analytics` | 对比、相似、演化链、空白、聚合分析 |
+| `knowledge.promote` | `knowledge.promote` | 提升配置状态 |
+| `knowledge.save` | `knowledge.save` | 保存 Knowledge Note |
+| `knowledge.evaluate` | `knowledge.evaluate` | 校验知识、引擎切换成本、开放问题 |
+
+静态资产浏览已并入 `catalog.list(kind=profiles|engines|models|scenarios|summary|status|all)`；Pod YAML 生成已并入 `deploy.dry_run(output=pod_yaml)`。
 
 ---
 
@@ -68,6 +64,72 @@
 - `knowledge_notes` - Agent 探索笔记
 - `config` - AIMA 配置
 - `audit_log` - 操作审计日志
+
+### Benchmark-Backed Knowledge Contract
+
+从 v0.4 开始，AIMA 里的“知识”不能只有一段 note 文本。凡是 Explorer/Harvester 认定为成功探索的结果，必须同时带上可追溯的 benchmark 证据，并至少满足下面这些字段。
+
+**身份上下文**
+- `hardware_profile` / `gpu_arch`
+- `model`
+- `engine`（asset ID）
+- `engine_version`，以及容器引擎的 `engine_image`（若可得）
+- `benchmark_id` / `config_id`
+
+**部署配置**
+- `configurations.config` 必须是真实 deploy config，不能退化成 benchmark profile
+- 必须保留高级参数，例如 `tp_size`、`mem_fraction_static`、`max_running_requests`
+- 对异构引擎必须保留 offload 参数，例如 `kt_cpuinfer`、`kt_num_gpu_experts`、`kt_threadpool_count`、`n_gpu_layers`
+
+**Benchmark Profile**
+- `concurrency`
+- `num_requests`
+- `warmup_count`
+- `rounds`
+- `input_tokens`
+- `max_tokens`
+- `avg_input_tokens`
+- `avg_output_tokens`
+
+**性能指标**
+- `ttft_p50_ms` / `ttft_p95_ms` / `ttft_p99_ms`
+- `tpot_p50_ms` / `tpot_p95_ms`
+- `throughput_tps`
+- `qps`
+- `error_rate`
+- `sample_count`
+- `duration_s`
+- `stability`
+
+**资源观测**
+- `vram_usage_mib`
+- `ram_usage_mib`
+- `gpu_utilization_pct`
+- `cpu_usage_pct`
+- `power_draw_watts`
+
+**资源观测口径**
+- `vram_usage_mib` / `ram_usage_mib` 记录 benchmark 窗口内的峰值，而不是结束瞬间快照
+- `gpu_utilization_pct` / `cpu_usage_pct` / `power_draw_watts` 记录 benchmark 窗口内的均值
+- `resource_usage`、`benchmark_results`、perf observation、overlay、knowledge note 必须使用同一口径，不能一层写峰值、一层写快照
+
+**异构引擎补充要求**
+- 对 KTransformers、`sglang-kt`、`llama.cpp` offload 这类 CPU+GPU 混合路径，知识里必须显式记录 CPU 与 RAM 是否参与推理
+- overlay 的 `expected_performance` 应同时保留平铺字段，以及 `benchmark_profile`、`resource_usage`、`heterogeneous_observation`
+- `heterogeneous_observation` 优先基于 catalog / `engine_hardware_compat` 的 `cpu_offload` / `ssd_offload` / `npu_offload` 事实生成；catalog 缺失时，才允许根据 deploy config + benchmark 资源证据做保守推断
+- `knowledge_notes` 是解释层，必须引用 benchmark / deploy artifact，不能脱离结构化事实自由发挥
+
+### v0.4 E2E 验证点
+
+端到端验收不再只看“有没有跑起来”，而是至少要同时满足下面这些检查点：
+
+1. 云端 LLM 连通性和流式状态可观测，能区分未连通、reasoning、中间 content、超时截断。
+2. 计划生成基于本机真实可执行的模型和引擎，不持续生成明显不 fit 的任务。
+3. 执行链路能真实进入 `deploy.apply`、`benchmark.run`、`tuning.start`，并正确处理复用 ready deployment 与 `deploy.delete` 的失败。
+4. `configurations` 与 `benchmark_results` 同时落库，且 `configurations.config` 记录的是真实部署配置。
+5. overlay 的 `expected_performance` 保留完整 benchmark profile、延迟/吞吐、资源观测、引擎版本，以及异构引擎的 CPU/RAM 参与信息。
+6. `knowledge_notes` 以 benchmark / deploy artifact 为依据，不能用空想的失败原因替代结构化事实。
+7. validate 成功后，Explorer 能继续进入下一条高价值任务，而不是只计划不执行。
 
 ---
 
@@ -318,7 +380,7 @@ cat.Resolve(model) → "not found in catalog"
 
 ## 知识查询引擎
 
-### 配置搜索 (knowledge.search_configs)
+### 配置搜索 (knowledge.search, scope=configs)
 
 支持多维过滤、排序、聚合：
 
@@ -333,7 +395,7 @@ ORDER BY pv.avg_throughput DESC
 LIMIT 10
 ```
 
-### 性能对比 (knowledge.compare)
+### 知识分析 (knowledge.analytics, query=compare)
 
 对比 N 个配置的多维性能：
 
@@ -345,7 +407,7 @@ WHERE c.id IN (?, ?, ?)
 ORDER BY br.concurrency, br.input_len_bucket
 ```
 
-### 相似度检索 (knowledge.similar)
+### 知识分析 (knowledge.analytics, query=similar)
 
 基于 6 维归一化性能向量找相似配置：
 
@@ -355,7 +417,7 @@ ORDER BY br.concurrency, br.input_len_bucket
 
 使用加权欧氏距离计算，支持跨硬件配置迁移推荐。
 
-### 演化链查询 (knowledge.lineage)
+### 知识分析 (knowledge.analytics, query=lineage)
 
 使用 `WITH RECURSIVE` 查询配置演化历史：
 
@@ -369,6 +431,14 @@ WITH RECURSIVE lineage(id, derived_from, level) AS (
 )
 SELECT * FROM lineage ORDER BY level;
 ```
+
+### 知识评估 (knowledge.evaluate)
+
+`knowledge.evaluate` 将多个评估动作收拢到一个工具里：
+
+- `action=validate` -> 校验预测与实测偏差
+- `action=engine_switch_cost` -> 评估引擎切换成本
+- `action=open_questions` -> 列出、处理或执行开放问题
 
 ---
 
@@ -396,7 +466,7 @@ Agent 探索 (L3a)
 2. 产出 Configuration (gpu_mem_util=0.80) + BenchmarkResult (21.2 tps)
 3. 上报到中心端 / 导出到 USB
 4. 设备 B (同型硬件) 拉取/导入
-5. 设备 B 的 Agent 通过 `knowledge.search_configs` 查到这个配置
+5. 设备 B 的 Agent 通过 `knowledge.search(scope=configs)` 查到这个配置
 6. **直接从 0.80 开始微调**，发现 0.82 更好 → 产出新 Configuration (derived_from=原配置)
 7. 反哺社区
 
@@ -414,4 +484,4 @@ Agent 探索 (L3a)
 
 ---
 
-*最后更新：2026-03-20*
+*最后更新：2026-04-08*

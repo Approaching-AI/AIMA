@@ -25,6 +25,7 @@ type deleteTrackingRuntime struct {
 	list    []*aimaRuntime.DeploymentStatus
 	delErrs map[string]error
 	deleted []string
+	keep    map[string]bool
 }
 
 func (r *deleteTrackingRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
@@ -33,6 +34,9 @@ func (r *deleteTrackingRuntime) Delete(_ context.Context, name string) error {
 	r.deleted = append(r.deleted, name)
 	if err, ok := r.delErrs[name]; ok && err != nil {
 		return err
+	}
+	if r.keep != nil && r.keep[name] {
+		return nil
 	}
 	delete(r.status, name)
 	for i, d := range r.list {
@@ -127,8 +131,8 @@ func TestDeployDeleteRemovesProxyAndRecordsSnapshotAcrossRuntimeFallbacks(t *tes
 		t.Fatalf("DeployDelete: %v", err)
 	}
 
-	if got := dockerRt.deleted; len(got) != 2 || got[0] != "qwen3-8b" || got[1] != deploy.Name {
-		t.Fatalf("docker delete sequence = %v, want [qwen3-8b %s]", got, deploy.Name)
+	if got := dockerRt.deleted; len(got) != 1 || got[0] != deploy.Name {
+		t.Fatalf("docker delete sequence = %v, want [%s]", got, deploy.Name)
 	}
 	if backends := proxyServer.ListBackends(); len(backends) != 0 {
 		t.Fatalf("proxy backends = %v, want empty after undeploy", backends)
@@ -153,6 +157,141 @@ func TestDeployDeleteRemovesProxyAndRecordsSnapshotAcrossRuntimeFallbacks(t *tes
 		if _, ok := tombstones[key]; !ok {
 			t.Fatalf("missing deleted deployment tombstone for %q: %v", key, tombstones)
 		}
+	}
+}
+
+func TestDeployDeleteFailsWhenDeploymentStillListedAfterDelete(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	deploy := &aimaRuntime.DeploymentStatus{
+		Name:    "qwen3-4b-sglang-kt",
+		Phase:   "running",
+		Ready:   true,
+		Runtime: "native",
+		Labels: map[string]string{
+			"aima.dev/model":  "qwen3-4b",
+			"aima.dev/engine": "sglang-kt",
+		},
+	}
+	nativeRt := &deleteTrackingRuntime{
+		name:   "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{deploy.Name: deploy},
+		list:   []*aimaRuntime.DeploymentStatus{deploy},
+		keep:   map[string]bool{deploy.Name: true},
+	}
+
+	deps := &mcp.ToolDeps{}
+	buildDeployDeps(&appContext{
+		db:       db,
+		rt:       nativeRt,
+		nativeRt: nativeRt,
+		proxy:    proxy.NewServer(),
+	}, deps,
+		func(context.Context, string, func(string, string), func(int64, int64)) error { return nil },
+		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent)) (json.RawMessage, error) {
+			return nil, nil
+		},
+	)
+
+	err = deps.DeployDelete(ctx, "qwen3-4b")
+	if err == nil {
+		t.Fatal("DeployDelete error = nil, want verification failure")
+	}
+	if !strings.Contains(err.Error(), "still active after delete") {
+		t.Fatalf("DeployDelete error = %v, want still-active verification failure", err)
+	}
+
+	tombstones, err := db.ListDeletedDeploymentsSince(ctx, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("ListDeletedDeploymentsSince: %v", err)
+	}
+	if len(tombstones) != 0 {
+		t.Fatalf("deleted deployment tombstones = %v, want empty on failed delete", tombstones)
+	}
+}
+
+func TestDeployListAndStatusExposeTopLevelModelAndEngine(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	deploy := &aimaRuntime.DeploymentStatus{
+		Name:    "qwen3-8b-vllm",
+		Phase:   "running",
+		Ready:   true,
+		Address: "127.0.0.1:8000",
+		Runtime: "docker",
+		Labels: map[string]string{
+			"aima.dev/model":  "qwen3-8b",
+			"aima.dev/engine": "vllm",
+		},
+	}
+	rt := &fakeRuntime{
+		name:   "docker",
+		status: map[string]*aimaRuntime.DeploymentStatus{deploy.Name: deploy},
+		list:   []*aimaRuntime.DeploymentStatus{deploy},
+	}
+
+	deps := &mcp.ToolDeps{}
+	buildDeployDeps(&appContext{
+		db:    db,
+		rt:    rt,
+		proxy: proxy.NewServer(),
+	}, deps,
+		func(context.Context, string, func(string, string), func(int64, int64)) error { return nil },
+		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent)) (json.RawMessage, error) {
+			return nil, nil
+		},
+	)
+
+	raw, err := deps.DeployList(ctx)
+	if err != nil {
+		t.Fatalf("DeployList: %v", err)
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatalf("Unmarshal deploy list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("deploy list len = %d, want 1", len(list))
+	}
+	if got, _ := list[0]["model"].(string); got != "qwen3-8b" {
+		t.Fatalf("deploy list model = %q, want qwen3-8b", got)
+	}
+	if got, _ := list[0]["engine"].(string); got != "vllm" {
+		t.Fatalf("deploy list engine = %q, want vllm", got)
+	}
+	if got, _ := list[0]["status"].(string); got != "running" {
+		t.Fatalf("deploy list status = %q, want running alias", got)
+	}
+	if _, ok := list[0]["labels"]; ok {
+		t.Fatalf("deploy list should omit labels overview payload: %#v", list[0])
+	}
+	if _, ok := list[0]["config"]; ok {
+		t.Fatalf("deploy list should omit config overview payload: %#v", list[0])
+	}
+
+	raw, err = deps.DeployStatus(ctx, deploy.Name)
+	if err != nil {
+		t.Fatalf("DeployStatus: %v", err)
+	}
+	var status aimaRuntime.DeploymentStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		t.Fatalf("Unmarshal deploy status: %v", err)
+	}
+	if status.Model != "qwen3-8b" {
+		t.Fatalf("deploy status model = %q, want qwen3-8b", status.Model)
+	}
+	if status.Engine != "vllm" {
+		t.Fatalf("deploy status engine = %q, want vllm", status.Engine)
 	}
 }
 

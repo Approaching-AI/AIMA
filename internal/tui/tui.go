@@ -302,14 +302,17 @@ func (m Model) viewDeploys(width int) string {
 		model, _ := jsonStr(d, "model")
 		engine, _ := jsonStr(d, "engine")
 		status, _ := jsonStr(d, "status")
+		if status == "" {
+			status, _ = jsonStr(d, "phase")
+		}
 
 		statusStyle := dimStyle
-		switch status {
-		case "Running", "running":
+		switch strings.ToLower(status) {
+		case "running":
 			statusStyle = okStyle
-		case "CrashLoopBackOff", "Error", "Failed":
+		case "crashloopbackoff", "error", "failed":
 			statusStyle = errStyle
-		case "Pending", "ContainerCreating":
+		case "pending", "containercreating", "starting":
 			statusStyle = warnStyle
 		}
 

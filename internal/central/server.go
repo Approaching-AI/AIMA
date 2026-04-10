@@ -4,42 +4,63 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 // Config holds central server settings.
 type Config struct {
-	Addr   string
-	APIKey string
-	DBPath string
+	Addr     string
+	APIKey   string
+	DBPath   string // used for SQLite (backward compat)
+	DBDriver string // "sqlite" (default) or "postgres"
+	DBDSN    string // full DSN for postgres; for sqlite, falls back to DBPath
 }
 
 // Server is the central knowledge aggregation service.
 type Server struct {
-	db     *sql.DB
-	config Config
-	mux    *http.ServeMux
+	store    CentralStore
+	config   Config
+	mux      *http.ServeMux
+	advisor  interface{} // set via SetAdvisor
+	analyzer interface{} // set via SetAnalyzer
 }
 
-// New creates a central server with a SQLite database.
+// New creates a central server with the configured database backend.
 func New(cfg Config) (*Server, error) {
-	db, err := sql.Open("sqlite", cfg.DBPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	var store CentralStore
+	var err error
+
+	switch cfg.DBDriver {
+	case "postgres":
+		dsn := cfg.DBDSN
+		if dsn == "" {
+			return nil, fmt.Errorf("postgres requires DBDSN")
+		}
+		store, err = NewPostgresCentralStore(dsn)
+	default:
+		// Default to SQLite for backward compatibility
+		dbPath := cfg.DBPath
+		if dbPath == "" && cfg.DBDSN != "" {
+			dbPath = cfg.DBDSN
+		}
+		if dbPath == "" {
+			dbPath = "central.db"
+		}
+		store, err = NewSQLiteCentralStore(dbPath)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
 
-	s := &Server{db: db, config: cfg}
-	if err := s.migrate(context.Background()); err != nil {
-		db.Close()
+	s := &Server{store: store, config: cfg}
+	if err := store.Migrate(context.Background()); err != nil {
+		store.Close()
 		return nil, err
 	}
 	s.mux = http.NewServeMux()
@@ -47,11 +68,37 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// Store returns the underlying CentralStore.
+func (s *Server) Store() CentralStore {
+	return s.store
+}
+
+// SetAdvisor sets the advisor engine on the server.
+func (s *Server) SetAdvisor(a interface{}) {
+	s.advisor = a
+}
+
+// SetAnalyzer sets the analyzer on the server.
+func (s *Server) SetAnalyzer(a interface{}) {
+	s.analyzer = a
+}
+
 func (s *Server) routes() {
+	// Existing v1 routes
 	s.mux.HandleFunc("POST /api/v1/ingest", s.authMiddleware(s.handleIngest))
 	s.mux.HandleFunc("GET /api/v1/query", s.authMiddleware(s.handleQuery))
 	s.mux.HandleFunc("GET /api/v1/sync", s.authMiddleware(s.handleSync))
 	s.mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+
+	// v0.4 advisor routes
+	s.mux.HandleFunc("POST /api/v1/advise", s.authMiddleware(s.handleAdvise))
+	s.mux.HandleFunc("GET /api/v1/advisories", s.authMiddleware(s.handleListAdvisories))
+	s.mux.HandleFunc("POST /api/v1/advisory/feedback", s.authMiddleware(s.handleAdvisoryFeedback))
+	s.mux.HandleFunc("POST /api/v1/advisories/{id}/feedback", s.authMiddleware(s.handleAdvisoryFeedback))
+	s.mux.HandleFunc("POST /api/v1/scenario/generate", s.authMiddleware(s.handleScenarioGenerate))
+	s.mux.HandleFunc("POST /api/v1/scenarios/generate", s.authMiddleware(s.handleScenarioGenerate))
+	s.mux.HandleFunc("GET /api/v1/scenarios", s.authMiddleware(s.handleListScenarios))
+	s.mux.HandleFunc("GET /api/v1/analysis", s.authMiddleware(s.handleListAnalysis))
 }
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -79,117 +126,7 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) Close() error {
-	return s.db.Close()
-}
-
-func (s *Server) migrate(ctx context.Context) error {
-	ddl := `
-CREATE TABLE IF NOT EXISTS devices (
-    id TEXT PRIMARY KEY,
-    hardware_profile TEXT,
-    gpu_arch TEXT,
-    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS configurations (
-    id TEXT PRIMARY KEY,
-    device_id TEXT REFERENCES devices(id),
-    hardware TEXT NOT NULL,
-    engine_type TEXT NOT NULL,
-    engine_version TEXT,
-    model TEXT NOT NULL,
-    slot TEXT,
-    config TEXT NOT NULL,
-    config_hash TEXT NOT NULL,
-    status TEXT DEFAULT 'experiment',
-    derived_from TEXT,
-    tags TEXT,
-    source TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_config_hash ON configurations(config_hash);
-CREATE INDEX IF NOT EXISTS idx_config_hw ON configurations(hardware, engine_type, model);
-
-CREATE TABLE IF NOT EXISTS benchmark_results (
-    id TEXT PRIMARY KEY,
-    config_id TEXT NOT NULL REFERENCES configurations(id),
-    device_id TEXT REFERENCES devices(id),
-    concurrency INTEGER,
-    input_len_bucket TEXT,
-    output_len_bucket TEXT,
-    modality TEXT,
-    throughput_tps REAL,
-    ttft_p50_ms REAL,
-    ttft_p95_ms REAL,
-    ttft_p99_ms REAL,
-    tpot_p50_ms REAL,
-    tpot_p95_ms REAL,
-    qps REAL,
-    vram_usage_mib INTEGER,
-    ram_usage_mib INTEGER,
-    power_draw_watts REAL,
-    gpu_utilization_pct REAL,
-    error_rate REAL,
-    oom_occurred BOOLEAN,
-    stability TEXT,
-    duration_s INTEGER,
-    sample_count INTEGER,
-    agent_model TEXT,
-    notes TEXT,
-    tested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_bench_config ON benchmark_results(config_id);
-
-CREATE TABLE IF NOT EXISTS knowledge_notes (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    tags TEXT,
-    hardware_profile TEXT,
-    model TEXT,
-    engine TEXT,
-    content TEXT NOT NULL,
-    confidence TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    ingested_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);`
-
-	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
-		return err
-	}
-
-	alterStmts := []string{
-		`ALTER TABLE configurations ADD COLUMN slot TEXT`,
-		`ALTER TABLE configurations ADD COLUMN tags TEXT`,
-		`ALTER TABLE configurations ADD COLUMN source TEXT`,
-		`ALTER TABLE configurations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
-		`ALTER TABLE benchmark_results ADD COLUMN input_len_bucket TEXT`,
-		`ALTER TABLE benchmark_results ADD COLUMN output_len_bucket TEXT`,
-		`ALTER TABLE benchmark_results ADD COLUMN modality TEXT`,
-		`ALTER TABLE benchmark_results ADD COLUMN ttft_p50_ms REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN ttft_p95_ms REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN ttft_p99_ms REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN tpot_p50_ms REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN tpot_p95_ms REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN qps REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN vram_usage_mib INTEGER`,
-		`ALTER TABLE benchmark_results ADD COLUMN ram_usage_mib INTEGER`,
-		`ALTER TABLE benchmark_results ADD COLUMN gpu_utilization_pct REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN error_rate REAL`,
-		`ALTER TABLE benchmark_results ADD COLUMN oom_occurred BOOLEAN`,
-		`ALTER TABLE benchmark_results ADD COLUMN stability TEXT`,
-		`ALTER TABLE benchmark_results ADD COLUMN sample_count INTEGER`,
-		`ALTER TABLE benchmark_results ADD COLUMN agent_model TEXT`,
-		`ALTER TABLE benchmark_results ADD COLUMN notes TEXT`,
-	}
-	for _, stmt := range alterStmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return err
-		}
-	}
-	return nil
+	return s.store.Close()
 }
 
 // IngestPayload is the expected JSON body for POST /api/v1/ingest.
@@ -239,6 +176,7 @@ type IngestBenchmark struct {
 	RAMUsageMiB     int     `json:"ram_usage_mib"`
 	PowerDrawWatts  float64 `json:"power_draw_watts"`
 	GPUUtilPct      float64 `json:"gpu_util_pct"`
+	CPUUsagePct     float64 `json:"cpu_usage_pct"`
 	ErrorRate       float64 `json:"error_rate"`
 	OOMOccurred     bool    `json:"oom_occurred"`
 	Stability       string  `json:"stability"`
@@ -269,12 +207,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
 	// Upsert device
 	if payload.DeviceID != "" {
-		_, _ = s.db.ExecContext(r.Context(),
-			`INSERT INTO devices (id, gpu_arch, last_seen) VALUES (?, ?, datetime('now'))
-			 ON CONFLICT(id) DO UPDATE SET last_seen = datetime('now'), gpu_arch = COALESCE(excluded.gpu_arch, devices.gpu_arch)`,
-			payload.DeviceID, payload.GPUArch)
+		_ = s.store.UpsertDevice(ctx, Device{
+			ID:      payload.DeviceID,
+			GPUArch: payload.GPUArch,
+		})
 	}
 
 	ingested, duplicates := 0, 0
@@ -288,19 +228,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			configHash = fmt.Sprintf("%x", h)[:16]
 		}
 
-		// Check for duplicates by config_hash
-		var existing int
-		_ = s.db.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM configurations WHERE config_hash = ?`, configHash).Scan(&existing)
-		if existing > 0 {
+		exists, _ := s.store.ConfigExistsByHash(ctx, configHash)
+		if exists {
 			duplicates++
 			continue
 		}
 
-		derivedFrom := sql.NullString{}
-		if c.DerivedFrom != "" {
-			derivedFrom = sql.NullString{String: c.DerivedFrom, Valid: true}
-		}
 		createdAt := c.CreatedAt
 		if createdAt == "" {
 			createdAt = time.Now().UTC().Format(time.RFC3339)
@@ -314,11 +247,24 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			deviceID = payload.DeviceID
 		}
 		tagsJSON, _ := json.Marshal(c.Tags)
-		_, err := s.db.ExecContext(r.Context(),
-			`INSERT INTO configurations (id, device_id, hardware, engine_type, engine_version, model, slot, config, config_hash, status, derived_from, tags, source, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ID, deviceID, c.Hardware, c.EngineType, c.EngineVersion, c.Model, c.Slot,
-			string(c.Config), configHash, c.Status, derivedFrom, string(tagsJSON), c.Source, createdAt, updatedAt)
+
+		err := s.store.InsertConfiguration(ctx, Configuration{
+			ID:            c.ID,
+			DeviceID:      deviceID,
+			Hardware:      c.Hardware,
+			EngineType:    c.EngineType,
+			EngineVersion: c.EngineVersion,
+			Model:         c.Model,
+			Slot:          c.Slot,
+			Config:        string(c.Config),
+			ConfigHash:    configHash,
+			Status:        c.Status,
+			DerivedFrom:   c.DerivedFrom,
+			Tags:          string(tagsJSON),
+			Source:        c.Source,
+			CreatedAt:     createdAt,
+			UpdatedAt:     updatedAt,
+		})
 		if err != nil {
 			slog.Warn("ingest config", "id", c.ID, "error", err)
 			continue
@@ -331,14 +277,35 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if testedAt == "" {
 			testedAt = time.Now().UTC().Format(time.RFC3339)
 		}
-		_, err := s.db.ExecContext(r.Context(),
-			`INSERT OR IGNORE INTO benchmark_results (id, config_id, device_id, concurrency, input_len_bucket, output_len_bucket, modality,
-			 throughput_tps, ttft_p50_ms, ttft_p95_ms, ttft_p99_ms, tpot_p50_ms, tpot_p95_ms, qps, vram_usage_mib, ram_usage_mib,
-			 power_draw_watts, gpu_utilization_pct, error_rate, oom_occurred, stability, duration_s, sample_count, tested_at, agent_model, notes)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			b.ID, b.ConfigID, payload.DeviceID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
-			b.ThroughputTPS, b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB,
-			b.PowerDrawWatts, b.GPUUtilPct, b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, testedAt, b.AgentModel, b.Notes)
+		err := s.store.InsertBenchmark(ctx, BenchmarkResult{
+			ID:              b.ID,
+			ConfigID:        b.ConfigID,
+			DeviceID:        payload.DeviceID,
+			Concurrency:     b.Concurrency,
+			InputLenBucket:  b.InputLenBucket,
+			OutputLenBucket: b.OutputLenBucket,
+			Modality:        b.Modality,
+			ThroughputTPS:   b.ThroughputTPS,
+			TTFTP50ms:       b.TTFTP50ms,
+			TTFTP95ms:       b.TTFTP95ms,
+			TTFTP99ms:       b.TTFTP99ms,
+			TPOTP50ms:       b.TPOTP50ms,
+			TPOTP95ms:       b.TPOTP95ms,
+			QPS:             b.QPS,
+			VRAMUsageMiB:    b.VRAMUsageMiB,
+			RAMUsageMiB:     b.RAMUsageMiB,
+			PowerDrawWatts:  b.PowerDrawWatts,
+			GPUUtilPct:      b.GPUUtilPct,
+			CPUUsagePct:     b.CPUUsagePct,
+			ErrorRate:       b.ErrorRate,
+			OOMOccurred:     b.OOMOccurred,
+			Stability:       b.Stability,
+			DurationS:       b.DurationS,
+			SampleCount:     b.SampleCount,
+			TestedAt:        testedAt,
+			AgentModel:      b.AgentModel,
+			Notes:           b.Notes,
+		})
 		if err != nil {
 			slog.Warn("ingest benchmark", "id", b.ID, "error", err)
 			continue
@@ -352,15 +319,26 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			createdAt = time.Now().UTC().Format(time.RFC3339)
 		}
 		tagsJSON, _ := json.Marshal(n.Tags)
-		_, err := s.db.ExecContext(r.Context(),
-			`INSERT OR REPLACE INTO knowledge_notes (id, title, tags, hardware_profile, model, engine, content, confidence, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			n.ID, n.Title, string(tagsJSON), n.HardwareProfile, n.Model, n.Engine, n.Content, n.Confidence, createdAt)
+		err := s.store.UpsertKnowledgeNote(ctx, KnowledgeNote{
+			ID:              n.ID,
+			Title:           n.Title,
+			Tags:            string(tagsJSON),
+			HardwareProfile: n.HardwareProfile,
+			Model:           n.Model,
+			Engine:          n.Engine,
+			Content:         n.Content,
+			Confidence:      n.Confidence,
+			CreatedAt:       createdAt,
+		})
 		if err != nil {
 			slog.Warn("ingest note", "id", n.ID, "error", err)
 			continue
 		}
 		noteIngested++
+	}
+
+	if analyzer, ok := s.analyzer.(*Analyzer); ok && analyzer != nil {
+		analyzer.OnIngest(ctx, payload)
 	}
 
 	writeJSON(w, map[string]any{
@@ -373,50 +351,28 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	query := `SELECT c.id, c.device_id, c.hardware, c.engine_type, c.model, c.config, c.status, c.created_at
-			  FROM configurations c WHERE 1=1`
-	var args []any
-
-	if hw := q.Get("hardware"); hw != "" {
-		query += ` AND c.hardware = ?`
-		args = append(args, hw)
-	}
-	if eng := q.Get("engine"); eng != "" {
-		query += ` AND c.engine_type = ?`
-		args = append(args, eng)
-	}
-	if mdl := q.Get("model"); mdl != "" {
-		query += ` AND c.model = ?`
-		args = append(args, mdl)
-	}
-	if status := q.Get("status"); status != "" {
-		query += ` AND c.status = ?`
-		args = append(args, status)
-	}
-	query += ` ORDER BY c.created_at DESC LIMIT 100`
-
-	rows, err := s.db.QueryContext(r.Context(), query, args...)
+	configs, err := s.store.QueryConfigurations(r.Context(), ConfigFilter{
+		Hardware: q.Get("hardware"),
+		Engine:   q.Get("engine"),
+		Model:    q.Get("model"),
+		Status:   q.Get("status"),
+		Limit:    100,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	var results []map[string]any
-	for rows.Next() {
-		var id, hardware, engine, model, config, status, createdAt string
-		var deviceID sql.NullString
-		if err := rows.Scan(&id, &deviceID, &hardware, &engine, &model, &config, &status, &createdAt); err != nil {
-			continue
+	for _, c := range configs {
+		entry := map[string]any{
+			"id": c.ID, "hardware": c.Hardware, "engine": c.EngineType, "model": c.Model,
+			"config": json.RawMessage(c.Config), "status": c.Status, "created_at": c.CreatedAt,
 		}
-		r := map[string]any{
-			"id": id, "hardware": hardware, "engine": engine, "model": model,
-			"config": json.RawMessage(config), "status": status, "created_at": createdAt,
+		if c.DeviceID != "" {
+			entry["device_id"] = c.DeviceID
 		}
-		if deviceID.Valid {
-			r["device_id"] = deviceID.String
-		}
-		results = append(results, r)
+		results = append(results, entry)
 	}
 	writeJSON(w, results)
 }
@@ -425,124 +381,62 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	since := r.URL.Query().Get("since")
 	hardware := r.URL.Query().Get("hardware")
 
-	configQuery := `SELECT id, device_id, hardware, engine_type, model, slot, config, config_hash, derived_from, status, tags, source, created_at, updated_at
-		FROM configurations WHERE 1=1`
-	var configArgs []any
-	if since != "" {
-		configQuery += ` AND created_at > ?`
-		configArgs = append(configArgs, since)
-	}
-	if hardware != "" {
-		configQuery += ` AND hardware = ?`
-		configArgs = append(configArgs, hardware)
-	}
-	configQuery += ` ORDER BY created_at ASC LIMIT 500`
-
-	rows, err := s.db.QueryContext(r.Context(), configQuery, configArgs...)
+	syncConfigs, err := s.store.ListConfigurationsForSync(r.Context(), SyncFilter{
+		Since:    since,
+		Hardware: hardware,
+		Limit:    500,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	var configs []map[string]any
 	var configIDs []string
-	for rows.Next() {
-		var id, hw, eng, mdl, slot, config, configHash, status, tagsJSON, source, createdAt, updatedAt string
-		var deviceID, derivedFrom sql.NullString
-		if err := rows.Scan(&id, &deviceID, &hw, &eng, &mdl, &slot, &config, &configHash, &derivedFrom, &status, &tagsJSON, &source, &createdAt, &updatedAt); err != nil {
-			continue
-		}
+	for _, c := range syncConfigs {
 		var tags []string
-		_ = json.Unmarshal([]byte(tagsJSON), &tags)
+		_ = json.Unmarshal([]byte(c.Tags), &tags)
 		entry := map[string]any{
-			"id": id, "hardware_id": hw, "engine_id": eng, "model_id": mdl,
-			"slot": slot, "config": json.RawMessage(config), "config_hash": configHash,
-			"status": status, "tags": tags, "source": source, "created_at": createdAt, "updated_at": updatedAt,
+			"id": c.ID, "hardware_id": c.Hardware, "engine_id": c.EngineType, "model_id": c.Model,
+			"slot": c.Slot, "config": json.RawMessage(c.Config), "config_hash": c.ConfigHash,
+			"status": c.Status, "tags": tags, "source": c.Source, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt,
 		}
-		if deviceID.Valid {
-			entry["device_id"] = deviceID.String
+		if c.DeviceID != "" {
+			entry["device_id"] = c.DeviceID
 		}
-		if derivedFrom.Valid {
-			entry["derived_from"] = derivedFrom.String
+		if c.DerivedFrom != "" {
+			entry["derived_from"] = c.DerivedFrom
 		}
 		configs = append(configs, entry)
-		configIDs = append(configIDs, id)
+		configIDs = append(configIDs, c.ID)
 	}
 
-	// Fetch benchmarks: for synced configs, plus any benchmarks added since last sync
+	benchResults, _ := s.store.ListBenchmarksForSync(r.Context(), configIDs, since)
 	var benchmarks []map[string]any
-	benchQuery := `SELECT id, config_id, concurrency, input_len_bucket, output_len_bucket, modality, throughput_tps, ttft_p50_ms, ttft_p95_ms, ttft_p99_ms,
-		 tpot_p50_ms, tpot_p95_ms, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, error_rate, oom_occurred,
-		 stability, duration_s, sample_count, tested_at, agent_model, notes
-		 FROM benchmark_results WHERE 1=1`
-	var benchArgs []any
-
-	// Include benchmarks for synced configs OR benchmarks tested since last sync
-	var conditions []string
-	if len(configIDs) > 0 {
-		placeholders := strings.Repeat("?,", len(configIDs))
-		placeholders = placeholders[:len(placeholders)-1]
-		conditions = append(conditions, fmt.Sprintf("config_id IN (%s)", placeholders))
-		for _, id := range configIDs {
-			benchArgs = append(benchArgs, id)
-		}
-	}
-	if since != "" {
-		conditions = append(conditions, "tested_at > ?")
-		benchArgs = append(benchArgs, since)
-	}
-	if len(conditions) > 0 {
-		benchQuery += " AND (" + strings.Join(conditions, " OR ") + ")"
-	}
-	benchQuery += " ORDER BY tested_at ASC LIMIT 1000"
-
-	bRows, err := s.db.QueryContext(r.Context(), benchQuery, benchArgs...)
-	if err == nil {
-		defer bRows.Close()
-		for bRows.Next() {
-			var id, configID, inBucket, outBucket, modality, stability, testedAt, agentModel, notes string
-			var conc, vramUsed, ramUsed, durationS, sampleCount int
-			var tps, ttft50, ttft95, ttft99, tpot50, tpot95, qps, power, gpuUtil, errorRate float64
-			var oomOccurred bool
-			if err := bRows.Scan(&id, &configID, &conc, &inBucket, &outBucket, &modality, &tps, &ttft50, &ttft95, &ttft99,
-				&tpot50, &tpot95, &qps, &vramUsed, &ramUsed, &power, &gpuUtil, &errorRate, &oomOccurred,
-				&stability, &durationS, &sampleCount, &testedAt, &agentModel, &notes); err != nil {
-				continue
-			}
-			benchmarks = append(benchmarks, map[string]any{
-				"id": id, "config_id": configID, "concurrency": conc, "input_len_bucket": inBucket,
-				"output_len_bucket": outBucket, "modality": modality, "throughput_tps": tps,
-				"ttft_p50_ms": ttft50, "ttft_p95_ms": ttft95, "ttft_p99_ms": ttft99,
-				"tpot_p50_ms": tpot50, "tpot_p95_ms": tpot95, "qps": qps,
-				"vram_usage_mib": vramUsed, "ram_usage_mib": ramUsed, "power_draw_watts": power,
-				"gpu_util_pct": gpuUtil, "error_rate": errorRate, "oom_occurred": oomOccurred,
-				"stability": stability, "duration_s": durationS, "sample_count": sampleCount,
-				"tested_at": testedAt, "agent_model": agentModel, "notes": notes,
-			})
-		}
+	for _, b := range benchResults {
+		benchmarks = append(benchmarks, map[string]any{
+			"id": b.ID, "config_id": b.ConfigID, "concurrency": b.Concurrency, "input_len_bucket": b.InputLenBucket,
+			"output_len_bucket": b.OutputLenBucket, "modality": b.Modality, "throughput_tps": b.ThroughputTPS,
+			"ttft_p50_ms": b.TTFTP50ms, "ttft_p95_ms": b.TTFTP95ms, "ttft_p99_ms": b.TTFTP99ms,
+			"tpot_p50_ms": b.TPOTP50ms, "tpot_p95_ms": b.TPOTP95ms, "qps": b.QPS,
+			"vram_usage_mib": b.VRAMUsageMiB, "ram_usage_mib": b.RAMUsageMiB, "power_draw_watts": b.PowerDrawWatts,
+			"gpu_util_pct": b.GPUUtilPct, "cpu_usage_pct": b.CPUUsagePct, "error_rate": b.ErrorRate, "oom_occurred": b.OOMOccurred,
+			"stability": b.Stability, "duration_s": b.DurationS, "sample_count": b.SampleCount,
+			"tested_at": b.TestedAt, "agent_model": b.AgentModel, "notes": b.Notes,
+		})
 	}
 
+	noteResults, _ := s.store.ListKnowledgeNotes(r.Context())
 	var notes []map[string]any
-	noteQuery := `SELECT id, title, tags, hardware_profile, model, engine, content, confidence, created_at FROM knowledge_notes ORDER BY created_at ASC LIMIT 1000`
-	nRows, err := s.db.QueryContext(r.Context(), noteQuery)
-	if err == nil {
-		defer nRows.Close()
-		for nRows.Next() {
-			var id, title, tagsJSON, hardwareProfile, model, engine, content, confidence, createdAt string
-			if err := nRows.Scan(&id, &title, &tagsJSON, &hardwareProfile, &model, &engine, &content, &confidence, &createdAt); err != nil {
-				continue
-			}
-			var tags []string
-			_ = json.Unmarshal([]byte(tagsJSON), &tags)
-			notes = append(notes, map[string]any{
-				"id": id, "title": title, "tags": tags, "hardware_profile": hardwareProfile,
-				"model": model, "engine": engine, "content": content, "confidence": confidence, "created_at": createdAt,
-			})
-		}
+	for _, n := range noteResults {
+		var tags []string
+		_ = json.Unmarshal([]byte(n.Tags), &tags)
+		notes = append(notes, map[string]any{
+			"id": n.ID, "title": n.Title, "tags": tags, "hardware_profile": n.HardwareProfile,
+			"model": n.Model, "engine": n.Engine, "content": n.Content, "confidence": n.Confidence, "created_at": n.CreatedAt,
+		})
 	}
 
-	// Return in the standard import envelope format so edge can import directly
 	writeJSON(w, map[string]any{
 		"schema_version": 1,
 		"data": map[string]any{
@@ -554,38 +448,252 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	var deviceCount, configCount, benchCount, noteCount int
-	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices`).Scan(&deviceCount)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM configurations`).Scan(&configCount)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM benchmark_results`).Scan(&benchCount)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM knowledge_notes`).Scan(&noteCount)
+	stats, _ := s.store.Stats(r.Context())
+	coverage, _ := s.store.CoverageMatrix(r.Context())
 
-	// Coverage matrix: distinct hardware x engine x model combos
-	coverageRows, _ := s.db.QueryContext(r.Context(),
-		`SELECT hardware, engine_type, COUNT(DISTINCT model) as models FROM configurations GROUP BY hardware, engine_type`)
-	var coverage []map[string]any
-	if coverageRows != nil {
-		defer coverageRows.Close()
-		for coverageRows.Next() {
-			var hw, eng string
-			var models int
-			if err := coverageRows.Scan(&hw, &eng, &models); err != nil {
-				continue
-			}
-			coverage = append(coverage, map[string]any{"hardware": hw, "engine": eng, "models": models})
-		}
+	var coverageList []map[string]any
+	for _, c := range coverage {
+		coverageList = append(coverageList, map[string]any{
+			"hardware": c.Hardware, "engine": c.Engine, "models": c.Models,
+		})
 	}
 
 	writeJSON(w, map[string]any{
-		"devices":         deviceCount,
-		"configurations":  configCount,
-		"benchmarks":      benchCount,
-		"knowledge_notes": noteCount,
-		"coverage":        coverage,
+		"devices":         stats.Devices,
+		"configurations":  stats.Configurations,
+		"benchmarks":      stats.Benchmarks,
+		"knowledge_notes": stats.KnowledgeNotes,
+		"coverage":        coverageList,
 	})
 }
 
+func (s *Server) handleAdvise(w http.ResponseWriter, r *http.Request) {
+	adv, ok := s.advisor.(*Advisor)
+	if !ok || adv == nil {
+		http.Error(w, "advisor not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Action          string   `json:"action"` // "recommend" or "optimize"
+		Hardware        string   `json:"hardware"`
+		HardwareProfile string   `json:"hardware_profile"`
+		Model           string   `json:"model"`
+		Engine          string   `json:"engine,omitempty"`
+		ConfigID        string   `json:"config_id,omitempty"`
+		Goal            string   `json:"goal,omitempty"`
+		Models          []string `json:"models,omitempty"`
+	}
+	limited := http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(limited).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	switch req.Action {
+	case "recommend":
+		resp, advisory, err := adv.Recommend(ctx, RecommendRequest{
+			Hardware:        req.Hardware,
+			HardwareProfile: req.HardwareProfile,
+			Model:           req.Model,
+			Goal:            req.Goal,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"recommendation": resp, "advisory": advisory})
+
+	case "optimize":
+		resp, advisory, err := adv.OptimizeScenario(ctx, OptimizeRequest{
+			ConfigID: req.ConfigID,
+			Hardware: req.Hardware,
+			Model:    req.Model,
+			Engine:   req.Engine,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"optimization": resp, "advisory": advisory})
+
+	default:
+		http.Error(w, "unknown action: "+req.Action, http.StatusBadRequest)
+	}
+}
+
+func (s *Server) handleListAdvisories(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := parseLimit(q.Get("limit"), 50)
+	hardware := q.Get("hardware")
+	if hardware == "" {
+		hardware = q.Get("target_hardware")
+	}
+	_, _ = s.store.ExpireAdvisories(r.Context(), time.Now().UTC().Add(-30*24*time.Hour))
+	advs, err := s.store.ListAdvisories(r.Context(), AdvisoryFilter{
+		Type:     q.Get("type"),
+		Status:   q.Get("status"),
+		Severity: q.Get("severity"),
+		Hardware: hardware,
+		Model:    firstNonEmpty(q.Get("model"), q.Get("target_model")),
+		Engine:   firstNonEmpty(q.Get("engine"), q.Get("target_engine")),
+		Limit:    limit,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if q.Get("status") == AdvisoryStatusPending {
+		deliveredAt := nowRFC3339()
+		for i := range advs {
+			if err := s.store.UpdateAdvisoryStatus(r.Context(), advs[i].ID, AdvisoryStatusUpdate{
+				Status:      AdvisoryStatusDelivered,
+				DeliveredAt: deliveredAt,
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			advs[i].Status = AdvisoryStatusDelivered
+			advs[i].DeliveredAt = deliveredAt
+		}
+	}
+	writeJSON(w, advs)
+}
+
+func (s *Server) handleAdvisoryFeedback(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		AdvisoryID string `json:"advisory_id"`
+		Status     string `json:"status"`
+		Feedback   string `json:"feedback"`
+		Reason     string `json:"reason"`
+		Accepted   *bool  `json:"accepted"`
+	}
+	limited := http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(limited).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if id == "" {
+		id = req.AdvisoryID
+	}
+	if id == "" {
+		http.Error(w, "missing advisory id", http.StatusBadRequest)
+		return
+	}
+
+	status := req.Status
+	if status == "" && req.Accepted != nil {
+		if *req.Accepted {
+			status = AdvisoryStatusValidated
+		} else {
+			status = AdvisoryStatusRejected
+		}
+	}
+	if status != AdvisoryStatusValidated && status != AdvisoryStatusRejected {
+		http.Error(w, "status must be 'validated' or 'rejected'", http.StatusBadRequest)
+		return
+	}
+	feedback := strings.TrimSpace(req.Feedback)
+	if feedback == "" {
+		feedback = strings.TrimSpace(req.Reason)
+	}
+
+	if err := s.store.UpdateAdvisoryStatus(r.Context(), id, AdvisoryStatusUpdate{
+		Status:      status,
+		Feedback:    feedback,
+		ValidatedAt: nowRFC3339(),
+	}); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else if strings.Contains(err.Error(), "cannot transition") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "advisory_id": id, "status": status})
+}
+
+func (s *Server) handleScenarioGenerate(w http.ResponseWriter, r *http.Request) {
+	adv, ok := s.advisor.(*Advisor)
+	if !ok || adv == nil {
+		http.Error(w, "advisor not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req GenerateScenarioRequest
+	limited := http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(limited).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resp, scenario, err := adv.GenerateScenario(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"scenario": resp, "stored": scenario})
+}
+
+func (s *Server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
+	hardware := r.URL.Query().Get("hardware")
+	if hardware == "" {
+		hardware = r.URL.Query().Get("hardware_profile")
+	}
+	scenarios, err := s.store.ListScenarios(r.Context(), ScenarioFilter{
+		Name:       r.URL.Query().Get("name"),
+		Hardware:   hardware,
+		Source:     r.URL.Query().Get("source"),
+		AdvisoryID: r.URL.Query().Get("advisory_id"),
+		Limit:      parseLimit(r.URL.Query().Get("limit"), 100),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, scenarios)
+}
+
+func (s *Server) handleListAnalysis(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.store.ListAnalysisRuns(r.Context(), parseLimit(r.URL.Query().Get("limit"), 20))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, runs)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	w.Write(b)
+}
+
+func parseLimit(v string, fallback int) int {
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

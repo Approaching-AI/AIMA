@@ -26,7 +26,7 @@ startup:
     port: 8188
   health_check:
     path: /health
-    timeout_s: 120
+    timeout_s: 600
   warmup:
     enabled: false
   log_patterns:
@@ -48,7 +48,7 @@ amplifier:
     - gpu_inference
     - openai_compatible_image_gen
     - diffusion_model
-  performance_gain: "GPU diffusion inference, 512x512 ~20s (28 steps) on GB10"
+  performance_gain: "GPU diffusion inference with optional TeaCache DiT caching (~2x speedup)"
   resource_expansion:
     cpu_offload: false
     ssd_offload: false
@@ -60,8 +60,8 @@ partition_hints:
   min_gpu_memory_mib: 16384
   recommended_gpu_cores_percent: 20
 time_constraints:
-  cold_start_s: [30, 90]
-  model_switch_s: [30, 90]
+  cold_start_s: [60, 600]
+  model_switch_s: [60, 600]
 power_constraints:
   typical_draw_watts: [20, 60]
 runtime:

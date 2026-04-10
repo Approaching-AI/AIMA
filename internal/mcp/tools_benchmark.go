@@ -27,6 +27,10 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 			"throughput_tps":{"type":"number","description":"Tokens per second (single request)"},
 			"qps":{"type":"number","description":"Queries per second"},
 			"vram_usage_mib":{"type":"integer","description":"VRAM usage in MiB"},
+			"ram_usage_mib":{"type":"integer","description":"Host RAM usage in MiB during the run"},
+			"power_draw_watts":{"type":"number","description":"GPU power draw in watts during the run"},
+			"gpu_utilization_pct":{"type":"number","description":"GPU utilization percent during the run"},
+			"cpu_usage_pct":{"type":"number","description":"Host CPU usage percent during the run"},
 			"sample_count":{"type":"integer","description":"Number of samples in benchmark"},
 			"stability":{"type":"string","description":"Stability assessment (stable, fluctuating, unstable)"},
 			"notes":{"type":"string","description":"Free-form notes about the benchmark"}
@@ -61,6 +65,8 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
 				`"hardware":{"type":"string","description":"Hardware profile ID for saving (e.g. nvidia-gb10-arm64)"},`+
 				`"engine":{"type":"string","description":"Engine type for saving (e.g. vllm)"},`+
+				`"deploy_config":{"type":"object","description":"Resolved engine startup config to persist as the Configuration record when saving results."},`+
+				`"resolved_config":{"type":"object","description":"Deprecated alias of deploy_config."},`+
 				`"notes":{"type":"string","description":"Free-form notes"}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
@@ -91,7 +97,8 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 				`"max_retries":{"type":"integer","description":"Per-request retry count (default: 0)"},`+
 				`"save":{"type":"boolean","description":"Save results to knowledge DB (default: true)"},`+
 				`"hardware":{"type":"string","description":"Hardware profile ID"},`+
-				`"engine":{"type":"string","description":"Engine type"}`,
+				`"engine":{"type":"string","description":"Engine type"},`+
+				`"deploy_config":{"type":"object","description":"Resolved engine startup config to persist for every saved cell."}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RunBenchmarkMatrix == nil {
@@ -110,10 +117,10 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 		Name:        "benchmark.list",
 		Description: "List benchmark results from the database. Filter by model, hardware, or configuration ID.",
 		InputSchema: schema(
-			`"config_id":{"type":"string","description":"Filter by configuration ID"},`+
-				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
-				`"model":{"type":"string","description":"Filter by model name"},`+
-				`"engine":{"type":"string","description":"Filter by engine type"},`+
+			`"config_id":{"type":"string","description":"Filter by configuration ID"},` +
+				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},` +
+				`"model":{"type":"string","description":"Filter by model name"},` +
+				`"engine":{"type":"string","description":"Filter by engine type"},` +
 				`"limit":{"type":"integer","description":"Max results to return (default: 20)"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ListBenchmarks == nil {

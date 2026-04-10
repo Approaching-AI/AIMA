@@ -54,16 +54,20 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 		return db.InsertNote(ctx, &n)
 	}
-	deps.GeneratePod = func(ctx context.Context, modelName, engineType, slot string) (json.RawMessage, error) {
+	deps.GeneratePod = func(ctx context.Context, modelName, engineType, slot string, configOverrides map[string]any) (json.RawMessage, error) {
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-		overrides := map[string]any{}
+		overrides := make(map[string]any, len(configOverrides)+1)
+		for k, v := range configOverrides {
+			overrides[k] = v
+		}
 		if slot != "" {
 			overrides["slot"] = slot
 		}
 		goldenOpt := knowledge.WithGoldenConfig(func(hardware, engine, model string) map[string]any {
 			return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
 		})
-		resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir, goldenOpt)
+		resolveCat := resolveCatalogWithLocalEngineOverlay(ctx, cat, db, hwInfo, dataDir)
+		resolved, _, err := resolveWithFallback(ctx, resolveCat, db, hwInfo, modelName, engineType, overrides, dataDir, goldenOpt)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +93,9 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 	deps.ListModelAssets = func(ctx context.Context) (json.RawMessage, error) {
 		return json.Marshal(cat.ModelAssets)
+	}
+	deps.ListPartitionStrategies = func(ctx context.Context) (json.RawMessage, error) {
+		return json.Marshal(cat.PartitionStrategies)
 	}
 
 	// Knowledge query (enhanced -- SQLite relational queries)
@@ -254,9 +261,9 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		var envelope struct {
 			SchemaVersion int `json:"schema_version"`
 			Data          struct {
-				Configurations   []*state.Configuration  `json:"configurations"`
+				Configurations   []*state.Configuration   `json:"configurations"`
 				BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
-				KnowledgeNotes   []*state.KnowledgeNote  `json:"knowledge_notes"`
+				KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
@@ -331,12 +338,12 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 			_, insertErr := tx.ExecContext(ctx,
 				`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
 					ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
-					throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct,
+					throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
 					error_rate, oom_occurred, stability, duration_s, sample_count, tested_at, agent_model, notes)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
 				b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
-				b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct,
+				b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct, b.CPUUsagePct,
 				b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.TestedAt, b.AgentModel, b.Notes)
 			if insertErr != nil {
 				errors = append(errors, fmt.Sprintf("benchmark %s: %v", b.ID, insertErr))
@@ -426,9 +433,10 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 
 		summary := map[string]any{
-			"hardware_profiles": len(profiles),
-			"engine_assets":     len(engines),
-			"model_assets":      len(models),
+			"hardware_profiles":    len(profiles),
+			"engine_assets":        len(engines),
+			"model_assets":         len(models),
+			"partition_strategies": len(cat.PartitionStrategies),
 		}
 
 		profileNames := make([]string, 0, len(profiles))
@@ -470,6 +478,12 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 			}
 		}
 		summary["models"] = modelNames
+
+		partitionNames := make([]string, 0, len(cat.PartitionStrategies))
+		for _, ps := range cat.PartitionStrategies {
+			partitionNames = append(partitionNames, ps.Metadata.Name)
+		}
+		summary["partitions"] = partitionNames
 
 		scenarioNames := make([]string, 0, len(cat.DeploymentScenarios))
 		for _, ds := range cat.DeploymentScenarios {

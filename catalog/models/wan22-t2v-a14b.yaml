@@ -48,6 +48,39 @@ variants:
       total_time_s: [600, 700]
       notes: "Validated 2026-04-02 on 8× W7900D 48GB RDNA3. Native Wan2.2 repo + xDiT Ulysses-8 sequence parallelism. BF16, FSDP, flash_attn 2.8.3. MoE dual-expert: high_noise ~6.0s/step (steps 1-13), low_noise ~4.6s/step (steps 14-20), boundary=0.875. First step 8.9s JIT. 20 steps = 110s diffusion. VAE decode ~6min. Total ~11min. 4-GPU tested: 7.0s/step diffusion OK but OOM on VAE decode (dual 53GB experts leave <2GB free). 8-GPU required for Wan2.2 on 48GB cards. Quality improvement over Wan2.1 at similar total time."
 
+  # --- AMD W7900D RDNA3 (xDiT + FSDP + DistVAE, 8-GPU, BF16) ---
+  # xDiT framework: Ulysses-8 SP + FSDP(degree=8) + DistVAE parallel VAE decode
+  # Diffusers format model required (not native Wan2.2 checkpoint)
+  # FSDP: each GPU holds 1/8 transformer params (~6.6GB vs 53GB full)
+  # DistVAE: spatial patch parallel along H dim, avoids rank0 VAE OOM
+  # Validated 2026-04-05: 832×480, 81 frames, 20 steps → 255s total, 8 GPUs 100% util
+  - name: wan22-t2v-a14b-rdna3-xdit-fsdp8-bf16
+    hardware:
+      gpu_arch: RDNA3
+      vram_min_mib: 40960
+      gpu_count_min: 8
+      unified_memory: false
+    engine: xdit-wan22-rocm
+    format: diffusers
+    source:
+      type: huggingface
+      repo: Wan-AI/Wan2.2-T2V-A14B-Diffusers
+    default_config:
+      dtype: bfloat16
+      num_inference_steps: 20
+      num_frames: 81
+      height: 480
+      width: 832
+      guidance_scale: 5.0
+      ulysses_degree: 8
+      fully_shard_degree: 8
+      use_parallel_vae: true
+      shard_dit: true
+      shard_t5_encoder: true
+    expected_performance:
+      total_time_s: [240, 300]
+      notes: "Validated 2026-04-05 on 8× W7900D 48GB RDNA3. xDiT 0.4.5 (source) + DistVAE (source) + diffusers 0.37.1. FSDP degree=8 shards both transformers across all GPUs. Ulysses-8 sequence parallelism for attention. DistVAE parallel VAE decode across 8 GPUs. 832×480, 81 frames (5.06s @16fps), 20 steps → 255s wall time. +TeaCache: 217s (-15%, SSIM=1.0 vs baseline). GPU memory 9-25% per card. Docker image: wan22-xdit-8gpu:v1.0-rdna3."
+
   # --- AMD W7900D RDNA3 (4-GPU, BF16) ---
   # BLOCKED: VAE decode OOM — dual expert models (~106GB) use too much VRAM for 4× 48GB
   # Diffusion runs fine at ~7.0s/step, but after diffusion, GPU 0 has only 2GB free

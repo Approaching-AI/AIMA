@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/model"
 
@@ -23,6 +24,7 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 	cat := ac.cat
 	db := ac.db
 	dataDir := ac.dataDir
+	eventBus := ac.eventBus
 
 	deps.ScanModels = func(ctx context.Context) (json.RawMessage, error) {
 		models, err := model.Scan(ctx, model.ScanOptions{})
@@ -30,6 +32,8 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 			return nil, err
 		}
 		for _, m := range models {
+			existing, _ := db.GetModel(ctx, m.Name)
+			isNew := existing == nil
 			_ = db.UpsertScannedModel(ctx, &state.Model{
 				ID:             m.ID,
 				Name:           m.Name,
@@ -45,6 +49,9 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 				Quantization:   m.Quantization,
 				QuantSrc:       m.QuantSrc,
 			})
+			if isNew && eventBus != nil {
+				eventBus.Publish(agent.ExplorerEvent{Type: agent.EventModelDiscovered, Model: m.Name})
+			}
 		}
 		return json.Marshal(models)
 	}
@@ -104,6 +111,9 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 			Status:         "registered",
 		}); err != nil {
 			return nil, fmt.Errorf("register imported model: %w", err)
+		}
+		if eventBus != nil {
+			eventBus.Publish(agent.ExplorerEvent{Type: agent.EventModelDiscovered, Model: info.Name})
 		}
 		// Wrap info with engine_hint derived from catalog (INV-5: MCP response is the source of truth)
 		raw, err := json.Marshal(info)

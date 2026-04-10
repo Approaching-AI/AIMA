@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jguan/aima/internal/fleet"
@@ -12,8 +11,7 @@ import (
 	"github.com/jguan/aima/internal/proxy"
 )
 
-// buildFleetDeps wires fleet.list_devices, fleet.device_info, fleet.device_tools,
-// and fleet.exec_tool MCP tools.
+// buildFleetDeps wires fleet.info and fleet.exec MCP tools.
 func buildFleetDeps(deps *mcp.ToolDeps,
 	fleetRegistry *fleet.Registry,
 	fleetClient *fleet.Client,
@@ -67,12 +65,8 @@ func buildFleetDeps(deps *mcp.ToolDeps,
 		return fleetClient.ListTools(ctx, d)
 	}
 	deps.FleetExecTool = func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error) {
-		if strings.HasPrefix(toolName, "fleet.") {
-			return nil, fmt.Errorf("cannot execute fleet tools remotely (recursive call blocked): %s", toolName)
-		}
-		// Block destructive tools from fleet execution path (matches agent guardrails)
-		if reason, ok := fleetBlockedTools[toolName]; ok {
-			return nil, fmt.Errorf("fleet.exec_tool: %s is blocked (%s)", toolName, reason)
+		if blocked, reason := isBlockedFleetExecTarget(toolName); blocked {
+			return nil, fmt.Errorf("fleet.exec: %s is blocked (%s)", toolName, reason)
 		}
 		fleetEnsureDiscovery(ctx)
 		d := fleetRegistry.Get(deviceID)

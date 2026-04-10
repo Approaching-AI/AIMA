@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,6 +39,23 @@ type TuningResult struct {
 	ConfigOverrides map[string]any `json:"config_overrides"`
 	ThroughputTPS   float64        `json:"throughput_tps"`
 	TTFTP95Ms       float64        `json:"ttft_p95_ms"`
+	TPOTP95Ms       float64        `json:"tpot_p95_ms,omitempty"`
+	QPS             float64        `json:"qps,omitempty"`
+	Concurrency     int            `json:"concurrency,omitempty"`
+	NumRequests     int            `json:"num_requests,omitempty"`
+	WarmupCount     int            `json:"warmup_count,omitempty"`
+	Rounds          int            `json:"rounds,omitempty"`
+	InputTokens     int            `json:"input_tokens,omitempty"`
+	MaxTokens       int            `json:"max_tokens,omitempty"`
+	AvgInputTokens  int            `json:"avg_input_tokens,omitempty"`
+	AvgOutputTokens int            `json:"avg_output_tokens,omitempty"`
+	VRAMUsageMiB    float64        `json:"vram_usage_mib,omitempty"`
+	RAMUsageMiB     float64        `json:"ram_usage_mib,omitempty"`
+	CPUUsagePct     float64        `json:"cpu_usage_pct,omitempty"`
+	GPUUtilPct      float64        `json:"gpu_utilization_pct,omitempty"`
+	PowerDrawWatts  float64        `json:"power_draw_watts,omitempty"`
+	EngineVersion   string         `json:"engine_version,omitempty"`
+	EngineImage     string         `json:"engine_image,omitempty"`
 	Score           float64        `json:"score"` // composite ranking score
 }
 
@@ -57,15 +76,16 @@ type TuningSession struct {
 
 // Tuner orchestrates parameter search + benchmark loops.
 type Tuner struct {
-	tools   ToolExecutor
-	mu      sync.Mutex
-	session *TuningSession
-	cancel  context.CancelFunc
+	tools           ToolExecutor
+	mu              sync.Mutex
+	session         *TuningSession
+	cancel          context.CancelFunc
+	gpuReleaseSleep time.Duration // grace period after deploy.delete; 0 in tests
 }
 
 // NewTuner creates a tuner.
 func NewTuner(tools ToolExecutor) *Tuner {
-	return &Tuner{tools: tools}
+	return &Tuner{tools: tools, gpuReleaseSleep: gpuReleaseGrace}
 }
 
 // Start kicks off a tuning session. Returns immediately with the session ID.
@@ -155,6 +175,14 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		t.mu.Unlock()
 	}()
 
+	var (
+		resolvedConfig     map[string]any
+		lastDeployedConfig map[string]any
+	)
+	if resolved, err := t.resolveTarget(ctx, session.Config.Model, session.Config.Engine); err == nil {
+		resolvedConfig = resolved.Config
+	}
+
 	for i, candidate := range candidates {
 		select {
 		case <-ctx.Done():
@@ -162,15 +190,32 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		default:
 		}
 
+		candidate = normalizeTuningCandidate(candidate, resolvedConfig)
+		if len(candidate) == 0 {
+			slog.Warn("tuning: candidate invalid after normalization, skipping", "progress", fmt.Sprintf("%d/%d", i+1, session.Total))
+			continue
+		}
 		slog.Info("tuning: testing config", "progress", fmt.Sprintf("%d/%d", i+1, session.Total), "config", candidate)
 
-		// Deploy with this config
+		// Delete existing deployment before redeploying with new config.
+		deleteArgs, _ := json.Marshal(map[string]string{"name": session.Config.Model})
+		deleteResult, delErr := t.tools.ExecuteTool(ctx, "deploy.delete", deleteArgs)
+		if delErr == nil {
+			delErr = toolResultError(deleteResult)
+		}
+		if delErr != nil {
+			slog.Debug("tuning: pre-delete (may not exist)", "model", session.Config.Model, "error", delErr)
+		}
+		waitForGPURelease(ctx, t.tools, session.Config.Model, t.gpuReleaseSleep)
+
+		// Deploy with this config and benchmark the ready endpoint returned by deploy.run.
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":  session.Config.Model,
-			"engine": session.Config.Engine,
-			"config": candidate,
+			"model":   session.Config.Model,
+			"engine":  session.Config.Engine,
+			"config":  candidate,
+			"no_pull": true,
 		})
-		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.run", deployArgs)
 		if err == nil {
 			err = toolResultError(deployResult)
 		}
@@ -178,15 +223,37 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 			slog.Warn("tuning: deploy failed, skipping config", "error", err)
 			continue
 		}
+		var deploySummary struct {
+			Address string         `json:"address"`
+			Config  map[string]any `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(deployResult.Content), &deploySummary); err != nil {
+			slog.Warn("tuning: deploy result parse failed, skipping config", "error", err)
+			continue
+		}
 
 		// Benchmark
+		endpoint := session.Config.Endpoint
+		if endpoint == "" {
+			endpoint = openAIChatCompletionsEndpoint(deploySummary.Address)
+		}
+		if endpoint == "" {
+			slog.Warn("tuning: deploy result missing ready endpoint, skipping config")
+			continue
+		}
+		deployConfig := deploySummary.Config
+		if len(deployConfig) == 0 {
+			deployConfig = candidate
+		}
+		lastDeployedConfig = cloneAnyMap(deployConfig)
 		benchArgs, _ := json.Marshal(map[string]any{
-			"model":       session.Config.Model,
-			"endpoint":    session.Config.Endpoint,
-			"concurrency": session.Config.Concurrency,
-			"rounds":      session.Config.Rounds,
-			"hardware":    session.Config.Hardware,
-			"engine":      session.Config.Engine,
+			"model":         session.Config.Model,
+			"endpoint":      endpoint,
+			"concurrency":   session.Config.Concurrency,
+			"rounds":        session.Config.Rounds,
+			"hardware":      session.Config.Hardware,
+			"engine":        session.Config.Engine,
+			"deploy_config": deployConfig,
 		})
 		result, err := t.tools.ExecuteTool(ctx, "benchmark.run", benchArgs)
 		if err == nil {
@@ -200,9 +267,47 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		// Parse benchmark result
 		var benchResult struct {
 			Result struct {
-				ThroughputTPS float64 `json:"throughput_tps"`
-				TTFTP95Ms     float64 `json:"ttft_p95_ms"`
+				ThroughputTPS   float64 `json:"throughput_tps"`
+				TTFTP95Ms       float64 `json:"ttft_p95_ms"`
+				TPOTP95Ms       float64 `json:"tpot_p95_ms"`
+				QPS             float64 `json:"qps"`
+				AvgInputTokens  int     `json:"avg_input_tokens"`
+				AvgOutputTokens int     `json:"avg_output_tokens"`
+				Config          struct {
+					Concurrency int `json:"concurrency"`
+					NumRequests int `json:"num_requests"`
+					WarmupCount int `json:"warmup_count"`
+					Rounds      int `json:"rounds"`
+					InputTokens int `json:"input_tokens"`
+					MaxTokens   int `json:"max_tokens"`
+				} `json:"config"`
 			} `json:"result"`
+			BenchmarkProfile struct {
+				Concurrency     int `json:"concurrency"`
+				NumRequests     int `json:"num_requests"`
+				WarmupCount     int `json:"warmup_count"`
+				Rounds          int `json:"rounds"`
+				InputTokens     int `json:"input_tokens"`
+				MaxTokens       int `json:"max_tokens"`
+				AvgInputTokens  int `json:"avg_input_tokens"`
+				AvgOutputTokens int `json:"avg_output_tokens"`
+			} `json:"benchmark_profile"`
+			ResourceUsage struct {
+				VRAMUsageMiB      float64 `json:"vram_usage_mib"`
+				RAMUsageMiB       float64 `json:"ram_usage_mib"`
+				CPUUsagePct       float64 `json:"cpu_usage_pct"`
+				GPUUtilizationPct float64 `json:"gpu_utilization_pct"`
+				PowerDrawWatts    float64 `json:"power_draw_watts"`
+			} `json:"resource_usage"`
+			SavedBenchmark struct {
+				VRAMUsageMiB   float64 `json:"vram_usage_mib"`
+				RAMUsageMiB    float64 `json:"ram_usage_mib"`
+				CPUUsagePct    float64 `json:"cpu_usage_pct"`
+				GPUUtilPct     float64 `json:"gpu_util_pct"`
+				PowerDrawWatts float64 `json:"power_draw_watts"`
+			} `json:"saved_benchmark"`
+			EngineVersion string  `json:"engine_version"`
+			EngineImage   string  `json:"engine_image"`
 			ThroughputTPS float64 `json:"throughput_tps"`
 			TTFTP95Ms     float64 `json:"ttft_p95_ms"`
 		}
@@ -225,6 +330,23 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 			ConfigOverrides: candidate,
 			ThroughputTPS:   throughput,
 			TTFTP95Ms:       ttftP95,
+			TPOTP95Ms:       benchResult.Result.TPOTP95Ms,
+			QPS:             benchResult.Result.QPS,
+			Concurrency:     firstPositiveInt(benchResult.BenchmarkProfile.Concurrency, benchResult.Result.Config.Concurrency),
+			NumRequests:     firstPositiveInt(benchResult.BenchmarkProfile.NumRequests, benchResult.Result.Config.NumRequests),
+			WarmupCount:     firstPositiveInt(benchResult.BenchmarkProfile.WarmupCount, benchResult.Result.Config.WarmupCount),
+			Rounds:          firstPositiveInt(benchResult.BenchmarkProfile.Rounds, benchResult.Result.Config.Rounds),
+			InputTokens:     firstPositiveInt(benchResult.BenchmarkProfile.InputTokens, benchResult.Result.Config.InputTokens),
+			MaxTokens:       firstPositiveInt(benchResult.BenchmarkProfile.MaxTokens, benchResult.Result.Config.MaxTokens),
+			AvgInputTokens:  firstPositiveInt(benchResult.BenchmarkProfile.AvgInputTokens, benchResult.Result.AvgInputTokens),
+			AvgOutputTokens: firstPositiveInt(benchResult.BenchmarkProfile.AvgOutputTokens, benchResult.Result.AvgOutputTokens),
+			VRAMUsageMiB:    firstPositiveFloat(benchResult.ResourceUsage.VRAMUsageMiB, benchResult.SavedBenchmark.VRAMUsageMiB),
+			RAMUsageMiB:     firstPositiveFloat(benchResult.ResourceUsage.RAMUsageMiB, benchResult.SavedBenchmark.RAMUsageMiB),
+			CPUUsagePct:     firstPositiveFloat(benchResult.ResourceUsage.CPUUsagePct, benchResult.SavedBenchmark.CPUUsagePct),
+			GPUUtilPct:      firstPositiveFloat(benchResult.ResourceUsage.GPUUtilizationPct, benchResult.SavedBenchmark.GPUUtilPct),
+			PowerDrawWatts:  firstPositiveFloat(benchResult.ResourceUsage.PowerDrawWatts, benchResult.SavedBenchmark.PowerDrawWatts),
+			EngineVersion:   benchResult.EngineVersion,
+			EngineImage:     benchResult.EngineImage,
 			Score:           score,
 		}
 
@@ -240,12 +362,26 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 
 	// Redeploy best config as final state
 	if session.BestConfig != nil {
+		if sameConfigMap(session.BestConfig, lastDeployedConfig) {
+			slog.Info("tuning: best config already deployed", "score", session.BestScore, "config", session.BestConfig)
+			return
+		}
+		deleteArgs, _ := json.Marshal(map[string]string{"name": session.Config.Model})
+		deleteResult, delErr := t.tools.ExecuteTool(ctx, "deploy.delete", deleteArgs)
+		if delErr == nil {
+			delErr = toolResultError(deleteResult)
+		}
+		if delErr != nil {
+			slog.Debug("tuning: final pre-delete (may not exist)", "model", session.Config.Model, "error", delErr)
+		}
+		waitForGPURelease(ctx, t.tools, session.Config.Model, t.gpuReleaseSleep)
 		deployArgs, _ := json.Marshal(map[string]any{
-			"model":  session.Config.Model,
-			"engine": session.Config.Engine,
-			"config": session.BestConfig,
+			"model":   session.Config.Model,
+			"engine":  session.Config.Engine,
+			"config":  session.BestConfig,
+			"no_pull": true,
 		})
-		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.apply", deployArgs)
+		deployResult, err := t.tools.ExecuteTool(ctx, "deploy.run", deployArgs)
 		if err == nil {
 			err = toolResultError(deployResult)
 		}
@@ -255,6 +391,106 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 			slog.Info("tuning: deployed best config", "score", session.BestScore, "config", session.BestConfig)
 		}
 	}
+}
+
+func normalizeTuningCandidate(candidate, resolvedConfig map[string]any) map[string]any {
+	if len(candidate) == 0 {
+		return nil
+	}
+	normalized := make(map[string]any, len(candidate))
+	for key, value := range candidate {
+		base, hasBase := resolvedConfig[key]
+		if !hasBase {
+			normalized[key] = value
+			continue
+		}
+		coerced, ok := coerceTuningValue(value, base)
+		if !ok {
+			slog.Warn("tuning: dropping invalid override", "key", key, "value", value, "resolved_value", base)
+			continue
+		}
+		normalized[key] = coerced
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func coerceTuningValue(value, base any) (any, bool) {
+	switch baseTyped := base.(type) {
+	case bool:
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+			return parsed, err == nil
+		case float64:
+			if typed == 0 || typed == 1 {
+				return typed == 1, true
+			}
+		case int:
+			if typed == 0 || typed == 1 {
+				return typed == 1, true
+			}
+		}
+		return nil, false
+	case string:
+		if typed, ok := value.(string); ok {
+			return typed, true
+		}
+		return fmt.Sprintf("%v", value), true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		switch typed := value.(type) {
+		case bool:
+			if typed {
+				// Preserve the resolved numeric default when the planner emits a
+				// boolean toggle for a numeric knob (e.g. kt_cpuinfer:true).
+				return baseTyped, true
+			}
+			return nil, false
+		case string:
+			if strings.TrimSpace(typed) == "" {
+				return nil, false
+			}
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64); err == nil {
+				return parsed, true
+			}
+			return nil, false
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			return typed, true
+		}
+		return nil, false
+	default:
+		return value, true
+	}
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func sameConfigMap(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aj, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bj, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aj) == string(bj)
 }
 
 func (t *Tuner) defaultParameters(ctx context.Context, config TuningConfig) ([]TunableParam, string, error) {
@@ -360,4 +596,22 @@ func generateCandidates(params []TunableParam) []map[string]any {
 	}
 	generate(0, make(map[string]any))
 	return results
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func firstPositiveFloat(values ...float64) float64 {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }

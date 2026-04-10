@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 
 type DB struct {
 	db *sql.DB
+}
+
+type EngineExecutionHints struct {
+	CPUOffload bool `json:"cpu_offload"`
+	SSDOffload bool `json:"ssd_offload"`
+	NPUOffload bool `json:"npu_offload"`
 }
 
 // RawDB exposes the underlying *sql.DB for packages that need direct SQL access
@@ -119,6 +126,7 @@ type BenchmarkResult struct {
 	RAMUsageMiB     int       `json:"ram_usage_mib"`
 	PowerDrawWatts  float64   `json:"power_draw_watts"`
 	GPUUtilPct      float64   `json:"gpu_util_pct"`
+	CPUUsagePct     float64   `json:"cpu_usage_pct"`
 	ErrorRate       float64   `json:"error_rate"`
 	OOMOccurred     bool      `json:"oom_occurred"`
 	Stability       string    `json:"stability"`
@@ -176,6 +184,19 @@ type ExplorationEvent struct {
 	ArtifactType string    `json:"artifact_type,omitempty"`
 	ArtifactID   string    `json:"artifact_id,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+type ExplorationPlanRow struct {
+	ID          string
+	Tier        int
+	Trigger     string
+	Status      string // "active", "paused", "completed", "archived"
+	PlanJSON    string
+	Progress    int
+	Total       int
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+	SummaryJSON string
 }
 
 func Open(ctx context.Context, dbPath string) (*DB, error) {
@@ -303,6 +324,14 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v11: performance indexes for knowledge_notes, patrol_alerts, open_questions
 	if err := d.migrateV11(ctx); err != nil {
 		return fmt.Errorf("migrate v11: %w", err)
+	}
+	// v12: exploration_plans table for Explorer subsystem
+	if err := d.migrateV12(ctx); err != nil {
+		return fmt.Errorf("migrate v12: %w", err)
+	}
+	// v13: benchmark_results.cpu_usage_pct for heterogeneous-engine knowledge
+	if err := d.migrateV13(ctx); err != nil {
+		return fmt.Errorf("migrate v13: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -532,6 +561,7 @@ CREATE TABLE benchmark_results (
     ram_usage_mib INTEGER,
     power_draw_watts REAL,
     gpu_utilization_pct REAL,
+    cpu_usage_pct REAL,
     error_rate REAL DEFAULT 0,
     oom_occurred BOOLEAN DEFAULT FALSE,
     stability TEXT,
@@ -981,6 +1011,108 @@ CREATE INDEX IF NOT EXISTS idx_questions_status ON open_questions(status);`
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
+}
+
+func (d *DB) migrateV12(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 12 {
+		return nil
+	}
+
+	ddl := `
+CREATE TABLE IF NOT EXISTS exploration_plans (
+    id            TEXT PRIMARY KEY,
+    tier          INTEGER NOT NULL,
+    trigger       TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'active',
+    plan_json     TEXT NOT NULL,
+    progress      INTEGER DEFAULT 0,
+    total         INTEGER DEFAULT 0,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at  DATETIME,
+    summary_json  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plans_status ON exploration_plans(status);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("create exploration_plans table: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 12"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV13(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 13 {
+		return nil
+	}
+
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('benchmark_results') WHERE name='cpu_usage_pct'`).Scan(&count); err != nil {
+		return fmt.Errorf("check benchmark_results.cpu_usage_pct column: %w", err)
+	}
+	if count == 0 {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE benchmark_results ADD COLUMN cpu_usage_pct REAL`); err != nil {
+			return fmt.Errorf("add benchmark_results.cpu_usage_pct: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 13"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) InsertExplorationPlan(ctx context.Context, plan *ExplorationPlanRow) error {
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO exploration_plans (id, tier, trigger, status, plan_json, progress, total, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		plan.ID, plan.Tier, plan.Trigger, plan.Status, plan.PlanJSON,
+		plan.Progress, plan.Total, plan.CreatedAt)
+	return err
+}
+
+func (d *DB) UpdateExplorationPlan(ctx context.Context, plan *ExplorationPlanRow) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE exploration_plans SET status=?, progress=?, completed_at=?, summary_json=? WHERE id=?`,
+		plan.Status, plan.Progress, plan.CompletedAt, plan.SummaryJSON, plan.ID)
+	return err
+}
+
+func (d *DB) ListExplorationPlans(ctx context.Context, status string) ([]*ExplorationPlanRow, error) {
+	query := `SELECT id, tier, trigger, status, plan_json, progress, total, created_at, completed_at, summary_json FROM exploration_plans`
+	var args []any
+	if status != "" {
+		query += ` WHERE status = ?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 50`
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var plans []*ExplorationPlanRow
+	for rows.Next() {
+		p := &ExplorationPlanRow{}
+		var completedAt sql.NullTime
+		var summaryJSON sql.NullString
+		if err := rows.Scan(&p.ID, &p.Tier, &p.Trigger, &p.Status, &p.PlanJSON,
+			&p.Progress, &p.Total, &p.CreatedAt, &completedAt, &summaryJSON); err != nil {
+			return nil, err
+		}
+		if completedAt.Valid {
+			p.CompletedAt = &completedAt.Time
+		}
+		if summaryJSON.Valid {
+			p.SummaryJSON = summaryJSON.String
+		}
+		plans = append(plans, p)
+	}
+	return plans, rows.Err()
 }
 
 // InsertPatrolAlert persists a patrol alert.
@@ -1455,6 +1587,286 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	return engines, rows.Err()
 }
 
+// LookupEngineAssetMetadata resolves version/image for an engine reference.
+// engineRef may be either an exact engine asset id or an engine type.
+func (d *DB) LookupEngineAssetMetadata(ctx context.Context, engineRef, hardwareID string) (string, string, error) {
+	if d == nil || strings.TrimSpace(engineRef) == "" {
+		return "", "", nil
+	}
+	if version, image, found, err := queryEngineAssetMetadata(ctx, d.db,
+		`SELECT COALESCE(version,''), COALESCE(image_name,''), COALESCE(image_tag,'')
+		   FROM engine_assets
+		  WHERE id = ?
+		  LIMIT 1`,
+		engineRef); err != nil {
+		return "", "", fmt.Errorf("lookup engine asset %q by id: %w", engineRef, err)
+	} else if found {
+		return version, image, nil
+	}
+
+	if strings.TrimSpace(hardwareID) != "" {
+		if version, image, found, err := queryEngineAssetMetadata(ctx, d.db,
+			`SELECT COALESCE(e.version,''), COALESCE(e.image_name,''), COALESCE(e.image_tag,'')
+			   FROM engine_assets e
+			  WHERE e.type = ?
+			    AND EXISTS (
+			          SELECT 1
+			            FROM engine_hardware_compat ehc
+			           WHERE ehc.engine_id = e.id AND ehc.hardware_id = ?
+			        )
+			  ORDER BY e.id
+			  LIMIT 1`,
+			engineRef, hardwareID); err != nil {
+			return "", "", fmt.Errorf("lookup engine asset %q for hardware %q: %w", engineRef, hardwareID, err)
+		} else if found {
+			return version, image, nil
+		}
+	}
+
+	version, image, _, err := queryEngineAssetMetadata(ctx, d.db,
+		`SELECT COALESCE(version,''), COALESCE(image_name,''), COALESCE(image_tag,'')
+		   FROM engine_assets
+		  WHERE type = ?
+		  ORDER BY id
+		  LIMIT 1`,
+		engineRef)
+	if err != nil {
+		return "", "", fmt.Errorf("lookup engine asset %q by type: %w", engineRef, err)
+	}
+	return version, image, nil
+}
+
+func queryEngineAssetMetadata(ctx context.Context, db *sql.DB, query string, args ...any) (string, string, bool, error) {
+	if db == nil {
+		return "", "", false, nil
+	}
+	var (
+		version sql.NullString
+		name    sql.NullString
+		tag     sql.NullString
+	)
+	err := db.QueryRowContext(ctx, query, args...).Scan(&version, &name, &tag)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	image := strings.TrimSpace(name.String)
+	if image != "" && strings.TrimSpace(tag.String) != "" {
+		image += ":" + strings.TrimSpace(tag.String)
+	}
+	return strings.TrimSpace(version.String), image, true, nil
+}
+
+func (d *DB) LookupHardwareGPUArch(ctx context.Context, hardwareID string) (string, error) {
+	if d == nil || strings.TrimSpace(hardwareID) == "" {
+		return "", nil
+	}
+	var gpuArch sql.NullString
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COALESCE(gpu_arch,'') FROM hardware_profiles WHERE id = ?`,
+		hardwareID).Scan(&gpuArch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup hardware profile %q: %w", hardwareID, err)
+	}
+	return strings.TrimSpace(gpuArch.String), nil
+}
+
+func (d *DB) LookupEngineExecutionHints(ctx context.Context, engineRef, hardwareID string) (EngineExecutionHints, error) {
+	if d == nil || strings.TrimSpace(engineRef) == "" {
+		return EngineExecutionHints{}, nil
+	}
+	if strings.TrimSpace(hardwareID) != "" {
+		if hints, found, err := queryEngineExecutionHints(ctx, d.db,
+			`SELECT COALESCE(cpu_offload,0), COALESCE(ssd_offload,0), COALESCE(npu_offload,0)
+			   FROM engine_hardware_compat
+			  WHERE engine_id = ? AND hardware_id = ?
+			  LIMIT 1`,
+			engineRef, hardwareID); err != nil {
+			return EngineExecutionHints{}, fmt.Errorf("lookup engine execution hints %q/%q by id: %w", engineRef, hardwareID, err)
+		} else if found {
+			return hints, nil
+		}
+		if hints, found, err := queryEngineExecutionHints(ctx, d.db,
+			`SELECT COALESCE(ehc.cpu_offload,0), COALESCE(ehc.ssd_offload,0), COALESCE(ehc.npu_offload,0)
+			   FROM engine_assets e
+			   JOIN engine_hardware_compat ehc ON ehc.engine_id = e.id
+			  WHERE e.type = ? AND ehc.hardware_id = ?
+			  ORDER BY e.id
+			  LIMIT 1`,
+			engineRef, hardwareID); err != nil {
+			return EngineExecutionHints{}, fmt.Errorf("lookup engine execution hints %q/%q by type: %w", engineRef, hardwareID, err)
+		} else if found {
+			return hints, nil
+		}
+	}
+
+	if hints, found, err := queryEngineExecutionHints(ctx, d.db,
+		`SELECT COALESCE(cpu_offload,0), COALESCE(ssd_offload,0), COALESCE(npu_offload,0)
+		   FROM engine_hardware_compat
+		  WHERE engine_id = ?
+		  ORDER BY hardware_id
+		  LIMIT 1`,
+		engineRef); err != nil {
+		return EngineExecutionHints{}, fmt.Errorf("lookup engine execution hints %q fallback by id: %w", engineRef, err)
+	} else if found {
+		return hints, nil
+	}
+
+	hints, _, err := queryEngineExecutionHints(ctx, d.db,
+		`SELECT COALESCE(ehc.cpu_offload,0), COALESCE(ehc.ssd_offload,0), COALESCE(ehc.npu_offload,0)
+		   FROM engine_assets e
+		   JOIN engine_hardware_compat ehc ON ehc.engine_id = e.id
+		  WHERE e.type = ?
+		  ORDER BY e.id, ehc.hardware_id
+		  LIMIT 1`,
+		engineRef)
+	if err != nil {
+		return EngineExecutionHints{}, fmt.Errorf("lookup engine execution hints %q fallback by type: %w", engineRef, err)
+	}
+	return hints, nil
+}
+
+func queryEngineExecutionHints(ctx context.Context, db *sql.DB, query string, args ...any) (EngineExecutionHints, bool, error) {
+	if db == nil {
+		return EngineExecutionHints{}, false, nil
+	}
+	var cpuOffload, ssdOffload, npuOffload int
+	err := db.QueryRowContext(ctx, query, args...).Scan(&cpuOffload, &ssdOffload, &npuOffload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return EngineExecutionHints{}, false, nil
+	}
+	if err != nil {
+		return EngineExecutionHints{}, false, err
+	}
+	return EngineExecutionHints{
+		CPUOffload: cpuOffload != 0,
+		SSDOffload: ssdOffload != 0,
+		NPUOffload: npuOffload != 0,
+	}, true, nil
+}
+
+func BuildHeterogeneousObservation(hints EngineExecutionHints, config, resourceUsage map[string]any) map[string]any {
+	if !hints.CPUOffload && !hints.SSDOffload && !hints.NPUOffload {
+		if len(heterogeneousConfigKeys(config)) > 0 {
+			_, hasCPU := positiveObservationFloat(resourceUsage["cpu_usage_pct"])
+			_, hasRAM := positiveObservationInt(resourceUsage["ram_usage_mib"])
+			_, hasVRAM := positiveObservationInt(resourceUsage["vram_usage_mib"])
+			if hasCPU && hasRAM && hasVRAM {
+				hints.CPUOffload = true
+			}
+		}
+	}
+	if !hints.CPUOffload && !hints.SSDOffload && !hints.NPUOffload {
+		return nil
+	}
+	path := []string{"gpu"}
+	observation := map[string]any{}
+	if hints.CPUOffload {
+		path = append(path, "cpu")
+		observation["cpu_offload"] = true
+	}
+	if hints.SSDOffload {
+		path = append(path, "ssd")
+		observation["ssd_offload"] = true
+	}
+	if hints.NPUOffload {
+		path = append(path, "npu")
+		observation["npu_offload"] = true
+	}
+	observation["path"] = strings.Join(path, "+")
+
+	for _, key := range heterogeneousConfigKeys(config) {
+		if value := config[key]; value != nil {
+			observation[key] = value
+		}
+	}
+	if value, ok := positiveObservationInt(resourceUsage["ram_usage_mib"]); ok {
+		observation["ram_usage_mib"] = value
+	}
+	if value, ok := positiveObservationFloat(resourceUsage["cpu_usage_pct"]); ok {
+		observation["cpu_usage_pct"] = value
+	}
+	if value, ok := positiveObservationInt(resourceUsage["vram_usage_mib"]); ok {
+		observation["vram_usage_mib"] = value
+	}
+	if value, ok := positiveObservationFloat(resourceUsage["gpu_utilization_pct"]); ok {
+		observation["gpu_utilization_pct"] = value
+	}
+	if value, ok := positiveObservationFloat(resourceUsage["power_draw_watts"]); ok {
+		observation["power_draw_watts"] = value
+	}
+	return observation
+}
+
+func heterogeneousConfigKeys(config map[string]any) []string {
+	if len(config) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(config))
+	for key := range config {
+		if shouldIncludeHeterogeneousConfigKey(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func shouldIncludeHeterogeneousConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	if lower == "" {
+		return false
+	}
+	switch lower {
+	case "tp_size", "tensor_parallel_size", "pipeline_parallel_size":
+		return true
+	}
+	for _, marker := range []string{"cpu", "offload", "thread", "expert", "layer", "npu", "ssd"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func positiveObservationInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, v > 0
+	case int64:
+		n := int(v)
+		return n, n > 0
+	case float64:
+		n := int(v)
+		return n, n > 0
+	default:
+		return 0, false
+	}
+}
+
+func positiveObservationFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, v > 0
+	case float32:
+		n := float64(v)
+		return n, n > 0
+	case int:
+		n := float64(v)
+		return n, n > 0
+	case int64:
+		n := float64(v)
+		return n, n > 0
+	default:
+		return 0, false
+	}
+}
+
 // MarkEnginesUnavailableExcept sets available=false for engines whose ID is not in keepIDs.
 // When runtimeType is non-empty, only engines of that runtime are affected (filtered scan).
 // When runtimeType is empty, all engines not in keepIDs are marked unavailable (full scan).
@@ -1717,12 +2129,12 @@ func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) erro
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
 		    ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
-		    throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct,
+		    throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
 		    error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
 		b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
-		b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct,
+		b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct, b.CPUUsagePct,
 		b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.AgentModel, b.Notes)
 	if err != nil {
 		return fmt.Errorf("insert benchmark %s: %w", b.ID, err)
@@ -1872,7 +2284,7 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 	                 COALESCE(tpot_ms_p50,0), COALESCE(tpot_ms_p95,0),
 	                 throughput_tps, COALESCE(qps,0),
 	                 COALESCE(vram_usage_mib,0), COALESCE(ram_usage_mib,0),
-	                 COALESCE(power_draw_watts,0), COALESCE(gpu_utilization_pct,0),
+	                 COALESCE(power_draw_watts,0), COALESCE(gpu_utilization_pct,0), COALESCE(cpu_usage_pct,0),
 	                 COALESCE(error_rate,0), COALESCE(oom_occurred,0),
 	                 COALESCE(stability,''), COALESCE(duration_s,0), COALESCE(sample_count,0),
 	                 tested_at, COALESCE(agent_model,''), COALESCE(notes,'')
@@ -1905,7 +2317,7 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 			&b.OutputLenBucket, &b.Modality,
 			&b.TTFTP50ms, &b.TTFTP95ms, &b.TTFTP99ms, &b.TPOTP50ms, &b.TPOTP95ms,
 			&b.ThroughputTPS, &b.QPS,
-			&b.VRAMUsageMiB, &b.RAMUsageMiB, &b.PowerDrawWatts, &b.GPUUtilPct,
+			&b.VRAMUsageMiB, &b.RAMUsageMiB, &b.PowerDrawWatts, &b.GPUUtilPct, &b.CPUUsagePct,
 			&b.ErrorRate, &b.OOMOccurred, &b.Stability, &b.DurationS, &b.SampleCount,
 			&b.TestedAt, &b.AgentModel, &b.Notes); err != nil {
 			return nil, fmt.Errorf("scan benchmark row: %w", err)
@@ -2203,6 +2615,67 @@ func (d *DB) CountActiveExplorationRuns(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count active exploration runs: %w", err)
 	}
 	return count, nil
+}
+
+// HasCompletedExploration checks if a model+engine combo has any completed exploration run.
+func (d *DB) HasCompletedExploration(ctx context.Context, modelID, engineID string) (bool, error) {
+	var exists int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT 1 FROM exploration_runs WHERE model_id = ? AND engine_id = ? AND status = 'completed' LIMIT 1`,
+		modelID, engineID).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CountFailedExplorations counts how many times a model+engine combo has failed.
+func (d *DB) CountFailedExplorations(ctx context.Context, modelID, engineID string) (int, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM exploration_runs WHERE model_id = ? AND engine_id = ? AND status = 'failed'`,
+		modelID, engineID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// ExploredCombo summarizes the exploration status of a model+engine pair.
+type ExploredCombo struct {
+	Model     string
+	Engine    string
+	Completed bool
+	FailCount int
+}
+
+// ListExploredCombos returns all model+engine pairs that have been explored,
+// with their completion status and failure count, in a single query.
+func (d *DB) ListExploredCombos(ctx context.Context) ([]ExploredCombo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT model_id, engine_id,
+			MAX(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS fail_count
+		FROM exploration_runs
+		GROUP BY model_id, engine_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var combos []ExploredCombo
+	for rows.Next() {
+		var c ExploredCombo
+		var completed int
+		if err := rows.Scan(&c.Model, &c.Engine, &completed, &c.FailCount); err != nil {
+			return nil, err
+		}
+		c.Completed = completed == 1
+		combos = append(combos, c)
+	}
+	return combos, rows.Err()
 }
 
 func (d *DB) InsertExplorationEvent(ctx context.Context, event *ExplorationEvent) error {

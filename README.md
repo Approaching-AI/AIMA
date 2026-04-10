@@ -2,14 +2,14 @@
 
 [中文](README_zh.md)
 
-**AI Inference Managed by AI** — A single Go binary that detects hardware, resolves optimal configs from a YAML knowledge base, deploys inference engines via K3S, and exposes 94 MCP tools for AI Agents to operate everything.
+**AI Inference Managed by AI** — A single Go binary that detects hardware, resolves optimal configs from a YAML knowledge base, deploys inference engines via K3S, and exposes 56 MCP tools for AI Agents to operate everything.
 
 ## Features
 
 - **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Huawei Ascend, Hygon DCU, Apple Silicon), CPU, and RAM
 - **Knowledge-driven deployment** — YAML catalog of hardware profiles, engines, models, and partition strategies; no engine-specific code branches
 - **Multi-runtime** — K3S (Pod) for clusters, Docker for single-node containers, Native (exec) for bare-metal inference
-- **94 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more
+- **56 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more
 - **Fleet management** — mDNS-based auto-discovery of LAN peers; remote tool execution across heterogeneous devices
 - **Offline-first** — all core functions work with zero network; network is enhancement, not requirement
 - **Single binary, zero CGO** — cross-compiles to Windows, macOS, Linux (amd64/arm64) with no C dependencies
@@ -155,7 +155,7 @@ internal/
   hal/             Hardware detection
   knowledge/       YAML knowledge base + SQLite resolver
   runtime/         K3S (Pod) + Docker (container) + Native (exec) runtimes
-  mcp/             MCP server + 94 MCP tool registrations/implementations
+  mcp/             MCP server + 56 MCP tool registrations/implementations
   agent/           Go Agent loop (L3a)
   cli/             Cobra CLI (thin wrappers over MCP tools)
   ui/              Embedded Web UI (Alpine.js SPA)

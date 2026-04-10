@@ -143,6 +143,61 @@ func TestOpenConcurrent(t *testing.T) {
 	}
 }
 
+func TestLookupEngineExecutionHintsResolvesTypeToHardwareCompat(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO hardware_profiles (id, name, gpu_arch) VALUES ('nvidia-rtx4090-x86', 'RTX 4090', 'Ada')`); err != nil {
+		t.Fatalf("insert hardware profile: %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO engine_assets (id, type) VALUES ('sglang-kt-ada', 'sglang-kt')`); err != nil {
+		t.Fatalf("insert engine asset: %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO engine_hardware_compat (engine_id, hardware_id, cpu_offload, ssd_offload, npu_offload)
+		 VALUES ('sglang-kt-ada', 'nvidia-rtx4090-x86', 1, 0, 0)`); err != nil {
+		t.Fatalf("insert engine compat: %v", err)
+	}
+
+	hints, err := db.LookupEngineExecutionHints(ctx, "sglang-kt", "nvidia-rtx4090-x86")
+	if err != nil {
+		t.Fatalf("LookupEngineExecutionHints: %v", err)
+	}
+	if !hints.CPUOffload || hints.SSDOffload || hints.NPUOffload {
+		t.Fatalf("hints = %#v, want CPU offload only", hints)
+	}
+}
+
+func TestBuildHeterogeneousObservationUsesHintsNotEngineName(t *testing.T) {
+	got := BuildHeterogeneousObservation(EngineExecutionHints{CPUOffload: true}, map[string]any{
+		"n_gpu_layers":        40,
+		"threadpool_count":    2,
+		"mem_fraction_static": 0.85,
+	}, map[string]any{
+		"ram_usage_mib":       32768,
+		"cpu_usage_pct":       61.5,
+		"vram_usage_mib":      84424,
+		"gpu_utilization_pct": 58.0,
+	})
+	if got["path"] != "gpu+cpu" {
+		t.Fatalf("path = %#v, want gpu+cpu", got["path"])
+	}
+	if got["cpu_offload"] != true {
+		t.Fatalf("cpu_offload = %#v, want true", got["cpu_offload"])
+	}
+	if got["n_gpu_layers"] != 40 {
+		t.Fatalf("n_gpu_layers = %#v, want 40", got["n_gpu_layers"])
+	}
+	if got["threadpool_count"] != 2 {
+		t.Fatalf("threadpool_count = %#v, want 2", got["threadpool_count"])
+	}
+	if _, ok := got["mem_fraction_static"]; ok {
+		t.Fatalf("unexpected generic config key in observation: %#v", got)
+	}
+}
+
 func TestModelCRUD(t *testing.T) {
 	db := mustOpen(t)
 	ctx := context.Background()

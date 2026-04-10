@@ -122,3 +122,69 @@ func TestRulePlanner_OpenQuestions(t *testing.T) {
 		t.Error("no open_question task for untested question")
 	}
 }
+
+func TestRulePlanner_DedupesDuplicateGaps(t *testing.T) {
+	p := &RulePlanner{}
+	plan, _, err := p.Plan(context.Background(), PlanInput{
+		Hardware: HardwareInfo{Profile: "nvidia-rtx4090-x86", GPUCount: 1, VRAMMiB: 49140},
+		Gaps: []GapEntry{
+			{Model: "qwen3-30b-a3b", Engine: "sglang-kt", Hardware: "nvidia-rtx4090-x86"},
+			{Model: "qwen3-30b-a3b", Engine: "sglang-kt", Hardware: "nvidia-rtx4090-x86"},
+		},
+		LocalModels: []LocalModel{
+			{Name: "qwen3-30b-a3b", Format: "safetensors", Type: "llm", SizeBytes: 20 * 1024 * 1024 * 1024},
+		},
+		LocalEngines: []LocalEngine{
+			{Name: "sglang-kt", Type: "sglang-kt", Runtime: "container"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	count := 0
+	for _, task := range plan.Tasks {
+		if task.Model == "qwen3-30b-a3b" && task.Engine == "sglang-kt" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("duplicate gap tasks=%d, want 1", count)
+	}
+}
+
+func TestRulePlanner_DedupesAcrossRulesByPriority(t *testing.T) {
+	p := &RulePlanner{}
+	plan, _, err := p.Plan(context.Background(), PlanInput{
+		Hardware: HardwareInfo{Profile: "nvidia-rtx4090-x86", GPUCount: 1, VRAMMiB: 49140},
+		ActiveDeploys: []DeployStatus{
+			{Model: "qwen3-8b", Engine: "vllm", Status: "running"},
+		},
+		Gaps: []GapEntry{
+			{Model: "qwen3-8b", Engine: "vllm", Hardware: "nvidia-rtx4090-x86"},
+		},
+		LocalModels: []LocalModel{
+			{Name: "qwen3-8b", Format: "safetensors", Type: "llm", SizeBytes: 8 * 1024 * 1024 * 1024},
+		},
+		LocalEngines: []LocalEngine{
+			{Name: "vllm", Type: "vllm", Runtime: "container"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	count := 0
+	var reason string
+	for _, task := range plan.Tasks {
+		if task.Model == "qwen3-8b" && task.Engine == "vllm" {
+			count++
+			reason = task.Reason
+		}
+	}
+	if count != 1 {
+		t.Fatalf("tasks for qwen3-8b/vllm=%d, want 1", count)
+	}
+	if reason != "deployed without benchmark baseline" {
+		t.Fatalf("reason=%q, want deployed baseline reason", reason)
+	}
+}

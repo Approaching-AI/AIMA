@@ -14,6 +14,8 @@ func TestHarvester_TemplateNote(t *testing.T) {
 			Success:         true,
 			BenchmarkID:     "bench-001",
 			ConfigID:        "cfg-001",
+			EngineVersion:   "1.2.3",
+			EngineImage:     "example/engine:1.2.3",
 			ExecutionPath:   "gpu+cpu",
 			Throughput:      45.2,
 			QPS:             0.18,
@@ -49,6 +51,9 @@ func TestHarvester_TemplateNote(t *testing.T) {
 	}
 	if !strings.Contains(note, "CPU 64.5%") {
 		t.Error("note missing CPU usage")
+	}
+	if !strings.Contains(note, "example/engine:1.2.3") {
+		t.Error("note missing engine image")
 	}
 	if !strings.Contains(note, "benchmark_id=bench-001") || !strings.Contains(note, "config_id=cfg-001") {
 		t.Error("note missing artifact ids")
@@ -159,9 +164,18 @@ func TestHarvester_MatrixNote(t *testing.T) {
 	input := HarvestInput{
 		Task: PlanTask{Model: "test-model", Engine: "sglang-kt"},
 		Result: HarvestResult{
-			Success:      true,
-			MatrixCells:  4,
-			SuccessCells: 3,
+			Success:       true,
+			BenchmarkID:   "bench-009",
+			ConfigID:      "cfg-009",
+			EngineVersion: "1.0.0",
+			EngineImage:   "example/engine:1.0.0",
+			VRAMMiB:       32768,
+			RAMMiB:        8192,
+			CPUUsagePct:   61.5,
+			GPUUtilPct:    88.0,
+			PowerWatts:    245.0,
+			MatrixCells:   4,
+			SuccessCells:  3,
 			MatrixJSON: `[{"label":"latency","cells":[` +
 				`{"concurrency":1,"input_tokens":128,"max_tokens":256,"result":{"throughput_tps":170.5,"ttft_p95_ms":45}},` +
 				`{"concurrency":1,"input_tokens":1024,"max_tokens":256,"result":{"throughput_tps":155.0,"ttft_p95_ms":120}}` +
@@ -169,6 +183,7 @@ func TestHarvester_MatrixNote(t *testing.T) {
 				`{"concurrency":4,"input_tokens":512,"max_tokens":1024,"result":{"throughput_tps":520.0,"ttft_p95_ms":200}},` +
 				`{"concurrency":4,"input_tokens":2048,"max_tokens":1024,"error":"timeout"}` +
 				`]}]`,
+			Config: map[string]any{"gpu_memory_utilization": 0.85},
 		},
 	}
 	note := h.generateTemplateNote(input)
@@ -183,6 +198,12 @@ func TestHarvester_MatrixNote(t *testing.T) {
 	}
 	if !strings.Contains(note, "Latency") || !strings.Contains(note, "Throughput") {
 		t.Errorf("note missing profile labels: %s", note)
+	}
+	if !strings.Contains(note, "benchmark_id=bench-009") || !strings.Contains(note, "config_id=cfg-009") {
+		t.Errorf("note missing artifact ids: %s", note)
+	}
+	if !strings.Contains(note, "Resources: VRAM 32768 MiB") || !strings.Contains(note, "Power 245.0 W") {
+		t.Errorf("note missing resource summary: %s", note)
 	}
 	// Timeout cell should be excluded
 	if strings.Contains(note, "2048") {

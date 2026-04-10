@@ -592,55 +592,10 @@ func run() error {
 			return result, nil
 		}),
 		agent.WithGatherLocalEngines(func(ctx context.Context) ([]agent.LocalEngine, error) {
-			if deps.ListEngines == nil {
-				return nil, nil
-			}
-			data, err := deps.ListEngines(ctx)
-			if err != nil {
-				return nil, err
-			}
-			var engines []struct {
-				Type      string `json:"type"`
-				Name      string `json:"name"`
-				Runtime   string `json:"runtime"`
-				Available bool   `json:"available"`
-			}
-			if err := json.Unmarshal(data, &engines); err != nil {
-				return nil, nil
-			}
-			hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-			result := make([]agent.LocalEngine, 0, len(engines))
-			seen := make(map[string]bool)
-			for _, e := range engines {
-				engineType := e.Type
-				if engineType == "" {
-					engineType = e.Name
-				}
-				if !e.Available {
-					continue
-				}
-				if seen[engineType] {
-					continue
-				}
-				seen[engineType] = true
-
-				le := agent.LocalEngine{
-					Name:    e.Name,
-					Type:    engineType,
-					Runtime: e.Runtime,
-				}
-				// Enrich from catalog YAML
-				if asset := cat.FindEngineByName(engineType, knowledge.HardwareInfo{
-					GPUArch: hwInfo.GPUArch,
-				}); asset != nil {
-					le.Features = asset.Amplifier.Features
-					le.Notes = asset.Amplifier.PerformanceGain
-					le.TunableParams = asset.Startup.DefaultArgs
-					le.InternalArgs = asset.Startup.InternalArgs
-				}
-				result = append(result, le)
-			}
-			return result, nil
+			return gatherExplorerLocalEngines(ctx, cat, db, rt, nativeRt, dockerRt, k3sRt, dataDir)
+		}),
+		agent.WithGatherComboFacts(func(ctx context.Context, hardware agent.HardwareInfo, models []agent.LocalModel, engines []agent.LocalEngine) ([]agent.ComboFact, error) {
+			return gatherExplorerComboFacts(ctx, cat, db, knowledgeStore, rt, nativeRt, dockerRt, k3sRt, dataDir, hardware, models, engines)
 		}),
 		agent.WithExplorerQueryFunc(func(qType string, filter map[string]any, limit int) (string, error) {
 			filterJSON, _ := json.Marshal(filter)
@@ -697,7 +652,11 @@ func run() error {
 			return profiles
 		}),
 	)
-	explorer := agent.NewExplorer(loadExplorerConfig(ctx, db), goAgent, explorationMgr, db, eventBus, explorerOpts...)
+	explorerConfig := loadExplorerConfig(ctx, db)
+	if explorerConfig.WorkspaceDir == "" {
+		explorerConfig.WorkspaceDir = filepath.Join(dataDir, "explorer")
+	}
+	explorer := agent.NewExplorer(explorerConfig, goAgent, explorationMgr, db, eventBus, explorerOpts...)
 	go explorer.Start(context.Background())
 
 	// Wire explorer MCP tools

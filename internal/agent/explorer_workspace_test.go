@@ -63,11 +63,46 @@ Test vllm on this device for the first time.
 	}
 }
 
+func TestParsePlanTasks_NoYamlBlock(t *testing.T) {
+	// D2: When Act phase writes no yaml block (just prose), should return nil, nil.
+	md := `# Exploration Plan
+
+## Tasks
+No new tasks needed — all failures were environmental.
+`
+	tasks, err := parsePlanTasks(md)
+	if err != nil {
+		t.Fatalf("expected nil error for no-yaml Tasks, got: %v", err)
+	}
+	if tasks != nil {
+		t.Fatalf("expected nil tasks, got %d", len(tasks))
+	}
+}
+
+func TestParsePlanTasks_CommentOnlyYaml(t *testing.T) {
+	// D2: When Act phase writes yaml block with only comments, should return nil tasks.
+	md := `# Exploration Plan
+
+## Tasks
+` + "```yaml\n# No new tasks for this cycle\n# All combos are blocked\n```\n"
+	tasks, err := parsePlanTasks(md)
+	if err != nil {
+		t.Fatalf("expected nil error for comment-only yaml, got: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected 0 tasks, got %d", len(tasks))
+	}
+}
+
 func TestParseRecommendedConfigs(t *testing.T) {
 	md := `# Exploration Summary
 
 ## Key Findings
 - sglang-kt has 20% speedup for MoE models
+
+## Confirmed Blockers
+` + "```yaml\n" + `[]
+` + "```\n" + `
 
 ## Recommended Configurations
 ` + "```yaml\n" + `- model: gemma-4-31B-it
@@ -98,6 +133,88 @@ Focus on engine comparison.
 	}
 	if configs[0].Performance.ThroughputTPS != 95.2 {
 		t.Errorf("config 0 throughput=%f", configs[0].Performance.ThroughputTPS)
+	}
+}
+
+func TestParseSummaryMachineReadableSections(t *testing.T) {
+	md := `# Exploration Summary
+
+## Key Findings
+- vllm works
+
+## Bugs And Failures
+- port 8000 conflict
+
+## Confirmed Blockers
+` + "```yaml\n" + `- family: port_conflict
+  scope: combo
+  model: qwen3-4b
+  engine: vllm
+  reason: port 8000 is occupied
+  retry_when: port allocator can move off busy ports
+  confidence: confirmed
+` + "```\n" + `
+
+## Do Not Retry This Cycle
+` + "```yaml\n" + `- model: qwen3-4b
+  engine: vllm
+  reason_family: port_conflict
+  reason: port 8000 is occupied
+` + "```\n" + `
+
+## Evidence Ledger
+` + "```yaml\n" + `- source: this_cycle
+  kind: benchmark
+  model: qwen3-4b
+  engine: vllm
+  evidence: benchmark_id=bench-001
+  summary: 24 cells, 24 ok
+  confidence: benchmark-backed
+` + "```\n" + `
+
+## Recommended Configurations
+` + "```yaml\n" + `- model: qwen3-4b
+  engine: vllm
+  hardware: nvidia-rtx4090-x86
+  engine_params:
+    gpu_memory_utilization: 0.90
+  performance:
+    throughput_tps: 95.2
+    latency_p50_ms: 42
+  confidence: validated
+  note: first validation
+` + "```\n"
+
+	blockers, err := parseConfirmedBlockers(md)
+	if err != nil {
+		t.Fatalf("parseConfirmedBlockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].Family != "port_conflict" || blockers[0].RetryWhen == "" {
+		t.Fatalf("blockers: %+v", blockers)
+	}
+
+	deny, err := parseDoNotRetryThisCycle(md)
+	if err != nil {
+		t.Fatalf("parseDoNotRetryThisCycle: %v", err)
+	}
+	if len(deny) != 1 || deny[0].ReasonFamily != "port_conflict" {
+		t.Fatalf("denylist: %+v", deny)
+	}
+
+	evidence, err := parseEvidenceLedger(md)
+	if err != nil {
+		t.Fatalf("parseEvidenceLedger: %v", err)
+	}
+	if len(evidence) != 1 || evidence[0].Source != "this_cycle" || evidence[0].Kind != "benchmark" {
+		t.Fatalf("evidence: %+v", evidence)
+	}
+
+	configs, err := parseRecommendedConfigs(md)
+	if err != nil {
+		t.Fatalf("parseRecommendedConfigs: %v", err)
+	}
+	if len(configs) != 1 || configs[0].Model != "qwen3-4b" {
+		t.Fatalf("configs: %+v", configs)
 	}
 }
 
@@ -206,7 +323,7 @@ func TestWorkspaceReadOnlyGuard(t *testing.T) {
 	dir := t.TempDir()
 	ws := NewExplorerWorkspace(dir)
 	_ = ws.Init()
-	for _, name := range []string{"device-profile.md", "available-combos.md", "knowledge-base.md"} {
+	for _, name := range []string{"index.md", "device-profile.md", "available-combos.md", "knowledge-base.md"} {
 		if err := ws.WriteFile(name, "hack"); err == nil {
 			t.Errorf("WriteFile(%s) should fail for read-only doc", name)
 		}
@@ -267,13 +384,21 @@ func TestWriteExperimentResult(t *testing.T) {
 		},
 	}
 	result := ExperimentResult{
-		Status:     "completed",
-		StartedAt:  "2026-04-09T20:15:03Z",
-		DurationS:  342,
-		ColdStartS: 45,
+		Status:        "completed",
+		StartedAt:     "2026-04-09T20:15:03Z",
+		DurationS:     342,
+		ColdStartS:    45,
+		BenchmarkID:   "bench-001",
+		ConfigID:      "cfg-001",
+		EngineVersion: "1.2.3",
+		EngineImage:   "example/vllm:1.2.3",
+		ResourceUsage: map[string]any{"vram_usage_mib": 1234},
+		DeployConfig:  map[string]any{"tensor_parallel_size": 2},
+		MatrixCells:   1,
+		SuccessCells:  1,
 		Benchmarks: []BenchmarkEntry{
 			{Concurrency: 1, InputTokens: 128, MaxTokens: 256,
-				ThroughputTPS: 95.2, LatencyP50Ms: 42, LatencyP99Ms: 118},
+				ThroughputTPS: 95.2, TTFTP95Ms: 42, TPOTP95Ms: 118, BenchmarkID: "bench-001", ConfigID: "cfg-001"},
 		},
 	}
 
@@ -291,6 +416,11 @@ func TestWriteExperimentResult(t *testing.T) {
 	}
 	if !strings.Contains(content, "95.2") {
 		t.Error("experiment missing throughput")
+	}
+	for _, want := range []string{"bench-001", "cfg-001", "resource_usage", "tensor_parallel_size", "TTFT P95", "TPOT P95"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("experiment missing %q: %s", want, content)
+		}
 	}
 }
 
@@ -360,8 +490,13 @@ func TestRefreshFactDocuments(t *testing.T) {
 		},
 		LocalEngines: []LocalEngine{
 			{Name: "sglang-kt", Type: "sglang-kt", Runtime: "native", Features: []string{"cpu_gpu_hybrid_moe"},
-				TunableParams: map[string]any{"gpu_memory_utilization": 0.90}},
-			{Name: "vllm", Type: "vllm", Runtime: "container"},
+				Artifact: "/tmp/sglang-kt", TunableParams: map[string]any{"gpu_memory_utilization": 0.90}},
+			{Name: "vllm", Type: "vllm", Runtime: "container", Artifact: "zhiwen-vllm:v3.3.1"},
+		},
+		ComboFacts: []ComboFact{
+			{Model: "qwen3-4b", Engine: "vllm", Runtime: "docker", Artifact: "zhiwen-vllm:v3.3.1", Status: "ready"},
+			{Model: "qwen3-4b", Engine: "sglang-kt", Runtime: "native", Artifact: "/tmp/sglang-kt", Status: "ready"},
+			{Model: "bge-m3", Engine: "vllm", Runtime: "docker", Artifact: "zhiwen-vllm:v3.3.1", Status: "blocked", Reason: "type mismatch"},
 		},
 		ActiveDeploys: []DeployStatus{{Model: "qwen3-4b", Engine: "sglang-kt", Status: "running"}},
 		SkipCombos: []SkipCombo{
@@ -384,19 +519,78 @@ func TestRefreshFactDocuments(t *testing.T) {
 	if !strings.Contains(dp, "sglang-kt") {
 		t.Error("device-profile missing engine")
 	}
+	if !strings.Contains(dp, "zhiwen-vllm:v3.3.1") {
+		t.Error("device-profile missing engine artifact")
+	}
 
 	// Check available-combos.md
 	ac, _ := ws.ReadFile("available-combos.md")
+	if !strings.Contains(ac, "Ready Combos") {
+		t.Error("available-combos missing Ready Combos section")
+	}
 	if !strings.Contains(ac, "Already Explored") {
 		t.Error("available-combos missing Already Explored section")
 	}
-	if !strings.Contains(ac, "bge-m3") {
-		t.Error("available-combos missing bge-m3 in Incompatible")
+	if !strings.Contains(ac, "Blocked Combos") {
+		t.Error("available-combos missing Blocked Combos section")
+	}
+	if !strings.Contains(ac, "resolver and local no-pull runtime checks passed") {
+		t.Error("available-combos missing ready reason")
+	}
+	if !strings.Contains(ac, "type mismatch") {
+		t.Error("available-combos missing blocked reason")
 	}
 
 	// Check knowledge-base.md exists
 	kb, _ := ws.ReadFile("knowledge-base.md")
 	if !strings.Contains(kb, "Knowledge Base") {
 		t.Error("knowledge-base.md missing header")
+	}
+
+	// Check index.md exists and encodes authority rules
+	index, _ := ws.ReadFile("index.md")
+	if !strings.Contains(index, "Source Of Truth") {
+		t.Error("index.md missing source-of-truth section")
+	}
+	if !strings.Contains(index, "Ready Combos") {
+		t.Error("index.md missing ready-combo rule")
+	}
+}
+
+func TestEnsureWorkingDocuments(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	if err := ws.EnsureWorkingDocuments(); err != nil {
+		t.Fatalf("EnsureWorkingDocuments: %v", err)
+	}
+
+	plan, err := ws.ReadFile("plan.md")
+	if err != nil {
+		t.Fatalf("read plan.md: %v", err)
+	}
+	if !strings.Contains(plan, "## Task Board") {
+		t.Fatal("plan.md missing Task Board template")
+	}
+	if !strings.Contains(plan, "summary.md blockers and evidence") {
+		t.Fatal("plan.md missing summary blocker guidance")
+	}
+
+	summary, err := ws.ReadFile("summary.md")
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+	if !strings.Contains(summary, "## Bugs And Failures") {
+		t.Fatal("summary.md missing Bugs And Failures template")
+	}
+	if !strings.Contains(summary, "## Confirmed Blockers") {
+		t.Fatal("summary.md missing Confirmed Blockers template")
+	}
+	if !strings.Contains(summary, "## Do Not Retry This Cycle") {
+		t.Fatal("summary.md missing Do Not Retry This Cycle template")
+	}
+	if !strings.Contains(summary, "## Evidence Ledger") {
+		t.Fatal("summary.md missing Evidence Ledger template")
 	}
 }

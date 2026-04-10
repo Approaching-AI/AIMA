@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strings"
 
+	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/model"
@@ -60,9 +64,12 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 	if overrides == nil {
 		overrides = map[string]any{}
 	}
+	normalizeAutoPortOverrides(overrides)
 	if slot != "" {
 		overrides["slot"] = slot
 	}
+
+	resolveCat := resolveCatalogWithLocalEngineOverlay(ctx, cat, db, hwInfo, dataDir)
 
 	// Extract deployment constraints (not config params)
 	var resolveOpts []knowledge.ResolveOption
@@ -89,7 +96,7 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
 	}))
 
-	resolved, canonicalName, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir, resolveOpts...)
+	resolved, canonicalName, err := resolveWithFallback(ctx, resolveCat, db, hwInfo, modelName, engineType, overrides, dataDir, resolveOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +112,33 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		Resolved:  resolved,
 		Fit:       fit,
 	}, nil
+}
+
+// normalizeAutoPortOverrides removes "auto" sentinels from port-like override keys
+// before resolution. This preserves the engine YAML default port so Go-side host
+// port allocation can still choose a free host port later in deploy.apply.
+func normalizeAutoPortOverrides(overrides map[string]any) {
+	for key, value := range overrides {
+		raw, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(raw), "auto") {
+			continue
+		}
+		if !isPortOverrideKey(key) {
+			continue
+		}
+		delete(overrides, key)
+	}
+}
+
+func isPortOverrideKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "port" {
+		return true
+	}
+	return strings.HasSuffix(key, "_port") || strings.HasPrefix(key, "port_") || strings.Contains(key, "_port_")
 }
 
 // buildHardwareInfo creates a HardwareInfo with platform, runtime, and hardware awareness.
@@ -227,4 +261,231 @@ func resolvedQuantizationHint(resolved *knowledge.ResolvedConfig) string {
 		return q
 	}
 	return ""
+}
+
+var (
+	resolveImageExistsInDocker     = engine.ImageExistsInDocker
+	resolveImageExistsInContainerd = engine.ImageExistsInContainerd
+)
+
+func resolveCatalogWithLocalEngineOverlay(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hwInfo knowledge.HardwareInfo, dataDir string) *knowledge.Catalog {
+	if cat == nil || db == nil {
+		return cat
+	}
+
+	overlay, err := localEngineOverlayCatalog(ctx, cat, db, hwInfo, dataDir)
+	if err != nil {
+		slog.Warn("resolve: local engine overlay skipped", "error", err)
+		return cloneCatalog(cat)
+	}
+	base := cloneCatalog(cat)
+	if base == nil {
+		return cat
+	}
+	if overlay == nil || len(overlay.EngineAssets) == 0 {
+		return base
+	}
+
+	merged := knowledge.MergeCatalog(base, overlay)
+	slog.Info("resolve: merged local engine overlay", "overlay_assets", len(overlay.EngineAssets))
+	return merged
+}
+
+type localEngineOverlayCandidate struct {
+	base         knowledge.EngineAsset
+	containerRef string
+	nativeBinary string
+}
+
+func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hwInfo knowledge.HardwareInfo, dataDir string) (*knowledge.Catalog, error) {
+	installed, err := db.ListEngines(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list engines for overlay: %w", err)
+	}
+
+	candidates := make(map[string]*localEngineOverlayCandidate)
+	for _, inst := range installed {
+		if inst == nil || !inst.Available || strings.TrimSpace(inst.Type) == "" {
+			continue
+		}
+		base := cat.FindEngineByName(inst.Type, hwInfo)
+		if base == nil {
+			continue
+		}
+		cand := candidates[base.Metadata.Name]
+		if cand == nil {
+			cand = &localEngineOverlayCandidate{
+				base: cloneEngineAsset(*base),
+			}
+			candidates[base.Metadata.Name] = cand
+		}
+
+		switch strings.ToLower(strings.TrimSpace(inst.RuntimeType)) {
+		case "container":
+			if cand.containerRef == "" {
+				if ref := localInstalledContainerRef(ctx, inst); ref != "" && normalizedImageRef(ref) != normalizedImageRef(engineImageRef(&cand.base)) {
+					cand.containerRef = ref
+				}
+			}
+		case "native":
+			if cand.nativeBinary == "" {
+				if path := localInstalledNativeBinaryPath(inst); path != "" {
+					cand.nativeBinary = path
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	overlay := &knowledge.Catalog{EngineAssets: make([]knowledge.EngineAsset, 0, len(candidates))}
+	for _, cand := range candidates {
+		asset := cand.base
+		changed := false
+
+		if cand.containerRef != "" {
+			name, tag := splitImageRef(cand.containerRef)
+			if name != "" && (asset.Image.Name != name || asset.Image.Tag != tag) {
+				asset.Image.Name = name
+				asset.Image.Tag = tag
+				changed = true
+			}
+		}
+		if cand.nativeBinary != "" {
+			if asset.Source == nil {
+				asset.Source = &knowledge.EngineSource{}
+			}
+			if asset.Source.Binary != filepath.Base(cand.nativeBinary) {
+				asset.Source.Binary = filepath.Base(cand.nativeBinary)
+				changed = true
+			}
+			if asset.Source.InstallType != "preinstalled" {
+				asset.Source.InstallType = "preinstalled"
+				changed = true
+			}
+			before := 0
+			if asset.Source.Probe != nil {
+				before = len(asset.Source.Probe.Paths)
+			}
+			ensureResolvedEngineProbePath(&knowledge.ResolvedConfig{Source: asset.Source}, cand.nativeBinary)
+			if len(asset.Source.Probe.Paths) != before {
+				changed = true
+			}
+		}
+
+		if changed {
+			overlay.EngineAssets = append(overlay.EngineAssets, asset)
+		}
+	}
+
+	if len(overlay.EngineAssets) == 0 {
+		return nil, nil
+	}
+	sort.Slice(overlay.EngineAssets, func(i, j int) bool {
+		return overlay.EngineAssets[i].Metadata.Name < overlay.EngineAssets[j].Metadata.Name
+	})
+	return overlay, nil
+}
+
+func localInstalledContainerRef(ctx context.Context, inst *state.Engine) string {
+	if inst == nil {
+		return ""
+	}
+	ref := normalizedImageRef(explorerInstalledImageRef(inst))
+	if ref == "" {
+		return ""
+	}
+	runner := &execRunner{}
+	if resolveImageExistsInContainerd(ctx, ref, runner) || resolveImageExistsInDocker(ctx, ref, runner) {
+		return ref
+	}
+	return ""
+}
+
+func localInstalledNativeBinaryPath(inst *state.Engine) string {
+	if inst == nil || inst.BinaryPath == "" {
+		return ""
+	}
+	if _, err := os.Stat(inst.BinaryPath); err == nil {
+		return inst.BinaryPath
+	}
+	return ""
+}
+
+func cloneCatalog(cat *knowledge.Catalog) *knowledge.Catalog {
+	if cat == nil {
+		return nil
+	}
+	clone := &knowledge.Catalog{
+		HardwareProfiles:      append([]knowledge.HardwareProfile(nil), cat.HardwareProfiles...),
+		PartitionStrategies:   append([]knowledge.PartitionStrategy(nil), cat.PartitionStrategies...),
+		EngineAssets:          append([]knowledge.EngineAsset(nil), cat.EngineAssets...),
+		RawEngineAssets:       append([]knowledge.EngineAsset(nil), cat.RawEngineAssets...),
+		ModelAssets:           append([]knowledge.ModelAsset(nil), cat.ModelAssets...),
+		StackComponents:       append([]knowledge.StackComponent(nil), cat.StackComponents...),
+		DeploymentScenarios:   append([]knowledge.DeploymentScenario(nil), cat.DeploymentScenarios...),
+		BenchmarkProfileTiers: append([]knowledge.BenchmarkProfileTier(nil), cat.BenchmarkProfileTiers...),
+	}
+	if len(cat.EngineProfiles) > 0 {
+		clone.EngineProfiles = make(map[string]*knowledge.EngineProfile, len(cat.EngineProfiles))
+		for name, profile := range cat.EngineProfiles {
+			clone.EngineProfiles[name] = profile
+		}
+	}
+	return clone
+}
+
+func cloneEngineAsset(asset knowledge.EngineAsset) knowledge.EngineAsset {
+	clone := asset
+	if asset.Source != nil {
+		clone.Source = cloneEngineSource(asset.Source)
+	}
+	return clone
+}
+
+func cloneEngineSource(src *knowledge.EngineSource) *knowledge.EngineSource {
+	if src == nil {
+		return nil
+	}
+	// Shallow copy is sufficient — overlay logic only mutates Binary, InstallType,
+	// and Probe.Paths. Other fields (Download, Mirror, SHA256, etc.) are read-only.
+	clone := *src
+	if src.Probe != nil {
+		probe := *src.Probe
+		if len(src.Probe.Paths) > 0 {
+			probe.Paths = append([]string(nil), src.Probe.Paths...)
+		}
+		clone.Probe = &probe
+	}
+	return &clone
+}
+
+func ensureResolvedEngineProbePath(resolved *knowledge.ResolvedConfig, binaryPath string) {
+	if resolved == nil || binaryPath == "" {
+		return
+	}
+	if resolved.Source == nil {
+		resolved.Source = &knowledge.EngineSource{
+			Binary:      filepath.Base(binaryPath),
+			InstallType: "preinstalled",
+			Probe: &knowledge.EngineSourceProbe{
+				Paths: []string{binaryPath},
+			},
+		}
+		return
+	}
+	if resolved.Source.Binary == "" {
+		resolved.Source.Binary = filepath.Base(binaryPath)
+	}
+	if resolved.Source.Probe == nil {
+		resolved.Source.Probe = &knowledge.EngineSourceProbe{}
+	}
+	for _, existing := range resolved.Source.Probe.Paths {
+		if existing == binaryPath {
+			return
+		}
+	}
+	resolved.Source.Probe.Paths = append([]string{binaryPath}, resolved.Source.Probe.Paths...)
 }

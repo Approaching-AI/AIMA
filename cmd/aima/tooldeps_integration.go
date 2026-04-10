@@ -97,7 +97,6 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return applyScenario(ctx, cat, ac.rt.Name(), deps, name, dryRun)
 	}
 
-
 	// Knowledge sync (K6)
 	syncHTTPClient := &http.Client{Timeout: 120 * time.Second}
 	deps.SyncPush = func(ctx context.Context) (json.RawMessage, error) {
@@ -177,9 +176,9 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 			return nil, fmt.Errorf("central.endpoint not configured — use system.config set central.endpoint <url>")
 		}
 		since, _ := db.GetSyncTimestamp(ctx, "pull")
-		syncURL := endpoint + "/api/v1/sync"
-		if since != "" {
-			syncURL += "?since=" + since
+		syncURL, err := buildSyncURL(endpoint, since)
+		if err != nil {
+			return nil, err
 		}
 		req, err := http.NewRequestWithContext(ctx, "GET", syncURL, nil)
 		if err != nil {
@@ -537,7 +536,6 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(items)
 	}
 
-
 	deps.ValidateKnowledge = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
 			Hardware string `json:"hardware"`
@@ -651,10 +649,6 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 // pullAdvisoriesToEventBus fetches advisories and scenarios from central
 // and publishes them as events on the EventBus for Explorer processing.
 func pullAdvisoriesToEventBus(ctx context.Context, ac *appContext, deps *mcp.ToolDeps) (advisories, scenarios []json.RawMessage, advisoryEvents, scenarioEvents int) {
-	if ac.eventBus == nil {
-		return nil, nil, 0, 0
-	}
-
 	// Pull advisories
 	if deps.SyncPullAdvisories != nil {
 		data, err := deps.SyncPullAdvisories(ctx)
@@ -670,12 +664,14 @@ func pullAdvisoriesToEventBus(ctx context.Context, ac *appContext, deps *mcp.Too
 						}
 						seen[id] = struct{}{}
 					}
-					ac.eventBus.Publish(agent.ExplorerEvent{
-						Type:     agent.EventCentralAdvisory,
-						Advisory: adv,
-					})
 					advisories = append(advisories, adv)
-					advisoryEvents++
+					if ac.eventBus != nil {
+						ac.eventBus.Publish(agent.ExplorerEvent{
+							Type:     agent.EventCentralAdvisory,
+							Advisory: adv,
+						})
+						advisoryEvents++
+					}
 				}
 			}
 		} else {
@@ -698,12 +694,14 @@ func pullAdvisoriesToEventBus(ctx context.Context, ac *appContext, deps *mcp.Too
 						}
 						seen[id] = struct{}{}
 					}
-					ac.eventBus.Publish(agent.ExplorerEvent{
-						Type:     agent.EventCentralScenario,
-						Advisory: scn,
-					})
 					scenarios = append(scenarios, scn)
-					scenarioEvents++
+					if ac.eventBus != nil {
+						ac.eventBus.Publish(agent.ExplorerEvent{
+							Type:     agent.EventCentralScenario,
+							Advisory: scn,
+						})
+						scenarioEvents++
+					}
 				}
 			}
 		} else {
@@ -740,6 +738,19 @@ func edgeHardwareTarget(ctx context.Context, ac *appContext) edgeHardwareMatch {
 			"ram_total_mib": hw.RAMTotalMiB,
 		},
 	}
+}
+
+func buildSyncURL(endpoint, since string) (string, error) {
+	u, err := url.Parse(strings.TrimRight(endpoint, "/") + "/api/v1/sync")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(since) != "" {
+		q := u.Query()
+		q.Set("since", since)
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
 }
 
 func normalizeFeedbackStatus(status string) (normalized string, accepted bool, err error) {

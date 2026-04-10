@@ -22,7 +22,7 @@ func TestOpenAICompleter(t *testing.T) {
 		}
 
 		var req struct {
-			Model    string           `json:"model"`
+			Model    string              `json:"model"`
 			Messages []map[string]string `json:"messages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -92,5 +92,28 @@ func TestOpenAICompleterNoChoices(t *testing.T) {
 	_, err := completer.Complete(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error on empty choices")
+	}
+}
+
+func TestNormalizeOpenAIBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "already v1", in: "https://api.example.com/v1", want: "https://api.example.com/v1"},
+		{name: "coding base", in: "https://api.kimi.com/coding", want: "https://api.kimi.com/coding/v1"},
+		{name: "chat completions path", in: "https://api.example.com/v1/chat/completions", want: "https://api.example.com/v1"},
+		{name: "trailing slash", in: "https://api.example.com/v1/", want: "https://api.example.com/v1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeOpenAIBaseURL(tt.in); got != tt.want {
+				t.Fatalf("normalizeOpenAIBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

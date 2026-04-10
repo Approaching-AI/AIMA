@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,7 +36,7 @@ func WithOpenAIHeaders(headers map[string]string) OpenAIOption {
 // NewOpenAICompleter creates a completer using the OpenAI chat completions API.
 func NewOpenAICompleter(baseURL, apiKey string, opts ...OpenAIOption) *OpenAICompleter {
 	c := &OpenAICompleter{
-		baseURL: baseURL,
+		baseURL: normalizeOpenAIBaseURL(baseURL),
 		apiKey:  apiKey,
 		model:   "gpt-4",
 		client: &http.Client{
@@ -46,6 +47,16 @@ func NewOpenAICompleter(baseURL, apiKey string, opts ...OpenAIOption) *OpenAICom
 		opt(c)
 	}
 	return c
+}
+
+func normalizeOpenAIBaseURL(baseURL string) string {
+	trimmed := strings.TrimSpace(baseURL)
+	trimmed = strings.TrimSuffix(trimmed, "/")
+	trimmed = strings.TrimSuffix(trimmed, "/chat/completions")
+	if !strings.HasSuffix(trimmed, "/v1") {
+		trimmed += "/v1"
+	}
+	return trimmed
 }
 
 func (c *OpenAICompleter) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {

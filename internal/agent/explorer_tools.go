@@ -63,7 +63,9 @@ func (e *ExplorerToolExecutor) Execute(name string, args json.RawMessage) Explor
 }
 
 func (e *ExplorerToolExecutor) execCat(args json.RawMessage) ExplorerToolResult {
-	var p struct{ Path string `json:"path"` }
+	var p struct {
+		Path string `json:"path"`
+	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return ExplorerToolResult{Content: err.Error(), IsError: true}
 	}
@@ -75,7 +77,9 @@ func (e *ExplorerToolExecutor) execCat(args json.RawMessage) ExplorerToolResult 
 }
 
 func (e *ExplorerToolExecutor) execLs(args json.RawMessage) ExplorerToolResult {
-	var p struct{ Path string `json:"path"` }
+	var p struct {
+		Path string `json:"path"`
+	}
 	_ = json.Unmarshal(args, &p)
 	if p.Path == "" {
 		p.Path = "."
@@ -163,7 +167,9 @@ func (e *ExplorerToolExecutor) execQuery(args json.RawMessage) ExplorerToolResul
 }
 
 func (e *ExplorerToolExecutor) execDone(args json.RawMessage) ExplorerToolResult {
-	var p struct{ Verdict string `json:"verdict"` }
+	var p struct {
+		Verdict string `json:"verdict"`
+	}
 	_ = json.Unmarshal(args, &p)
 	e.done = true
 	e.verdict = p.Verdict
@@ -200,8 +206,8 @@ func (e *ExplorerToolExecutor) ToolDefinitions() []ToolDefinition {
 		},
 		{
 			Name:        "query",
-			Description: "Query the knowledge base (SQLite, read-only). Types: configurations, benchmarks, advisories, exploration_runs.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"type":{"type":"string","enum":["configurations","benchmarks","advisories","exploration_runs"]},"filter":{"type":"object"},"limit":{"type":"integer"}},"required":["type"]}`),
+			Description: "Query the knowledge base (SQLite, read-only). Supported types: search, compare, gaps, aggregate. Prefer workspace fact files first; use query only for deeper detail.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"type":{"type":"string","enum":["search","compare","gaps","aggregate"]},"filter":{"type":"object"},"limit":{"type":"integer"}},"required":["type"]}`),
 		},
 		{
 			Name:        "done",

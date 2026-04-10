@@ -83,6 +83,7 @@ type Explorer struct {
 	gatherAdvisories    func(ctx context.Context) ([]Advisory, error)
 	gatherLocalModels   func(ctx context.Context) ([]LocalModel, error)
 	gatherLocalEngines  func(ctx context.Context) ([]LocalEngine, error)
+	gatherComboFacts    func(ctx context.Context, hardware HardwareInfo, models []LocalModel, engines []LocalEngine) ([]ComboFact, error)
 
 	// Harvester callbacks, wired via options or buildToolDeps.
 	syncPush func(ctx context.Context) error
@@ -97,13 +98,13 @@ type Explorer struct {
 	// Benchmark profile resolver from catalog YAML, wired via WithBenchmarkProfiles.
 	benchmarkProfilesFn func(totalVRAMMiB int) []ExplorationBenchmarkProfile
 
-	mu               sync.RWMutex
-	running          bool
-	tier             int
-	activePlan       *ExplorerPlan
-	cachedGPUArch    string // cached from gatherHardware for overlay YAML (O13)
-	lastRun          time.Time
-	cancel context.CancelFunc
+	mu            sync.RWMutex
+	running       bool
+	tier          int
+	activePlan    *ExplorerPlan
+	cachedGPUArch string // cached from gatherHardware for overlay YAML (O13)
+	lastRun       time.Time
+	cancel        context.CancelFunc
 
 	// T2: Resource control state
 	roundsUsed      int
@@ -162,6 +163,11 @@ func WithGatherLocalEngines(fn func(ctx context.Context) ([]LocalEngine, error))
 	return func(e *Explorer) { e.gatherLocalEngines = fn }
 }
 
+// WithGatherComboFacts sets the function to compute authoritative ready/blocked combo facts.
+func WithGatherComboFacts(fn func(ctx context.Context, hardware HardwareInfo, models []LocalModel, engines []LocalEngine) ([]ComboFact, error)) ExplorerOption {
+	return func(e *Explorer) { e.gatherComboFacts = fn }
+}
+
 // WithAdvisoryFeedback sets the callback for sending advisory feedback to central.
 func WithAdvisoryFeedback(fn func(ctx context.Context, advisoryID, status, reason string) error) ExplorerOption {
 	return func(e *Explorer) { e.advisoryFeedback = fn }
@@ -206,6 +212,17 @@ func NewExplorer(config ExplorerConfig, agent *Agent, explMgr *ExplorationManage
 	e.setupPlannerLocked()
 	e.harvester = e.buildHarvesterLocked()
 	return e
+}
+
+// persistConfigKey writes a single explorer config key to the database.
+// Key names match loadExplorerConfig in cmd/aima/main.go (e.g. "enabled", "rounds_used").
+func (e *Explorer) persistConfigKey(ctx context.Context, key, value string) {
+	if e.db == nil {
+		return
+	}
+	if err := e.db.SetConfig(ctx, "explorer."+key, value); err != nil {
+		slog.Warn("explorer: persist config failed", "key", key, "error", err)
+	}
 }
 
 func (e *Explorer) detectTier() int {
@@ -283,6 +300,8 @@ func (e *Explorer) Start(ctx context.Context) {
 		slog.Info("explorer started in disabled mode", "tier", e.tier)
 	}
 
+	e.reconcileStaleExplorationPlans(ctx)
+
 	// Start scheduler (emits timed events)
 	e.scheduler.StartAll(ctx)
 
@@ -295,6 +314,24 @@ func (e *Explorer) Start(ctx context.Context) {
 			return
 		case ev := <-ch:
 			e.handleEvent(ctx, ev)
+			// D5: After handling an event (which may include multi-minute plan
+			// execution), drain stale events that accumulated during processing.
+			// This prevents re-processing 14 gap_scan events that piled up
+			// during an 8-minute PDCA cycle.
+			drained := 0
+			for {
+				select {
+				case stale := <-ch:
+					drained++
+					slog.Debug("explorer: drained stale event", "type", stale.Type)
+				default:
+					goto drainDone
+				}
+			}
+		drainDone:
+			if drained > 0 {
+				slog.Info("explorer: drained stale events after plan execution", "count", drained)
+			}
 		}
 	}
 }
@@ -370,6 +407,8 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		return
 	}
 
+	e.reconcileStaleExplorationPlans(ctx)
+
 	// T2: Mode and budget checks
 	e.mu.Lock()
 	today := time.Now().Format("2006-01-02")
@@ -391,6 +430,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		e.mu.Lock()
 		e.config.Enabled = false
 		e.mu.Unlock()
+		e.persistConfigKey(ctx, "enabled", "false")
 		slog.Info("explorer: once mode completed, auto-disabling")
 		return
 	}
@@ -439,10 +479,14 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	plan, planTokens, err := planner.Plan(ctx, *input)
 	degraded := false
 	if err != nil {
-		slog.Warn("explorer: plan generation failed", "error", err)
+		if tier >= 2 {
+			slog.Warn("explorer: tier 2 planner failed", "error", err)
+		} else {
+			slog.Warn("explorer: plan generation failed", "error", err)
+		}
 		// If LLM planner failed, try rule planner fallback
 		if tier >= 2 {
-			slog.Info("explorer: LLM unavailable, degrading to Tier 1 planner")
+			slog.Info("explorer: degrading to Tier 1 planner")
 			rp := &RulePlanner{}
 			plan, planTokens, err = rp.Plan(ctx, *input)
 			if err != nil {
@@ -495,22 +539,21 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		// LLM calls when all proposed tasks are deduped.
 		e.mu.Lock()
 		e.roundsUsed++
+		if mode == "once" {
+			e.config.Enabled = false
+		}
 		e.mu.Unlock()
+		if mode == "once" {
+			slog.Info("explorer: once mode completed, auto-disabling")
+		}
 		return
 	}
 
 	// Persist plan
 	if e.db != nil {
-		planJSON, _ := json.Marshal(plan)
-		_ = e.db.InsertExplorationPlan(ctx, &state.ExplorationPlanRow{
-			ID:        plan.ID,
-			Tier:      plan.Tier,
-			Trigger:   ev.Type,
-			Status:    "active",
-			PlanJSON:  string(planJSON),
-			Total:     len(plan.Tasks),
-			CreatedAt: time.Now(),
-		})
+		if err := e.persistExplorationPlan(ctx, plan, ev.Type); err != nil {
+			slog.Warn("explorer: persist plan failed", "error", err)
+		}
 	}
 
 	// D1: synchronous execution — budget, dedup, and activePlan are naturally correct
@@ -518,7 +561,9 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	e.activePlan = plan
 	e.lastRun = time.Now()
 	e.roundsUsed++ // increment BEFORE execution to prevent race
+	roundsUsed = e.roundsUsed
 	e.mu.Unlock()
+	e.persistConfigKey(ctx, "rounds_used", strconv.Itoa(roundsUsed))
 
 	// Plan time budget
 	maxDur := e.config.MaxPlanDuration
@@ -556,6 +601,8 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				e.mu.Unlock()
 			}
 			if err != nil {
+				// Only break on hard errors (context cancelled, LLM failure).
+				// Validation guard feedback is now injected into workspace by Analyze().
 				slog.Warn("explorer: PDCA analyze failed", "error", err, "cycle", cycle+1)
 				break
 			}
@@ -576,6 +623,11 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				Reasoning: fmt.Sprintf("PDCA Act cycle %d", cycle+1),
 			}
 			slog.Info("explorer: PDCA Do phase", "tasks", len(extraPlanTasks), "cycle", cycle+1)
+			if e.db != nil {
+				if err := e.persistExplorationPlan(planCtx, extraPlan, fmt.Sprintf("%s:pdca-act-%d", ev.Type, cycle+1)); err != nil {
+					slog.Warn("explorer: persist PDCA plan failed", "error", err, "cycle", cycle+1)
+				}
+			}
 			e.executePlan(planCtx, extraPlan)
 		}
 	}
@@ -594,7 +646,14 @@ pdcaDone:
 	e.mu.Lock()
 	e.lastPlanMetrics = metrics
 	e.activePlan = nil // D9: clear after execution
+	if mode == "once" {
+		e.config.Enabled = false
+	}
 	e.mu.Unlock()
+	if mode == "once" {
+		e.persistConfigKey(ctx, "enabled", "false")
+		slog.Info("explorer: once mode completed, auto-disabling")
+	}
 
 	// D10: log what's still deployed when budget exhausted
 	if mode == "budget" && maxRounds > 0 && e.roundsUsed >= maxRounds {
@@ -703,6 +762,33 @@ func (e *Explorer) sendAdvisoryFeedback(ctx context.Context, advisoryID, status,
 
 func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 	harvester := e.currentHarvester()
+	terminalStatus := "completed"
+	defer func() {
+		if e.db == nil || plan == nil {
+			return
+		}
+		updateCtx := ctx
+		if updateCtx.Err() != nil {
+			updateCtx = context.Background()
+		}
+		if ctx.Err() != nil {
+			terminalStatus = "cancelled"
+		}
+		now := time.Now()
+		summaryJSON := ""
+		if planJSON, err := json.Marshal(plan); err == nil {
+			summaryJSON = string(planJSON)
+		}
+		if err := e.db.UpdateExplorationPlan(updateCtx, &state.ExplorationPlanRow{
+			ID:          plan.ID,
+			Status:      terminalStatus,
+			Progress:    len(plan.Tasks),
+			CompletedAt: &now,
+			SummaryJSON: summaryJSON,
+		}); err != nil {
+			slog.Debug("explorer: finalize plan failed", "error", err, "plan_id", plan.ID, "status", terminalStatus)
+		}
+	}()
 	// Track deploy-level failures so we can skip doomed tasks within the same plan.
 	// Key: "model|engine", only set for deploy crashes (not benchmark/param failures).
 	deployFailures := make(map[string]string) // key → error message
@@ -714,6 +800,22 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 			for j := i; j < len(plan.Tasks); j++ {
 				if plan.Tasks[j].Status == "" {
 					plan.Tasks[j].Status = "skipped_timeout"
+				}
+				if e.workspace != nil {
+					timeoutResult := HarvestResult{
+						Success: false,
+						Error:   "skipped: timeout before execution",
+					}
+					timeoutTask := TaskSpec{
+						Kind:         plan.Tasks[j].Kind,
+						Model:        plan.Tasks[j].Model,
+						Engine:       plan.Tasks[j].Engine,
+						EngineParams: plan.Tasks[j].Params,
+						Reason:       plan.Tasks[j].Reason,
+					}
+					if _, werr := e.workspace.WriteExperimentResult(j+1, timeoutTask, harvestToExperimentResult(plan.Tasks[j].Status, time.Now(), 0, timeoutResult)); werr != nil {
+						slog.Debug("explorer: write timeout experiment result failed", "error", werr)
+					}
 				}
 			}
 			return
@@ -740,6 +842,18 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 			actions := harvester.Harvest(ctx, HarvestInput{Task: *task, Result: skipResult})
 			for _, a := range actions {
 				slog.Info("explorer: harvest action", "type", a.Type, "detail", a.Detail)
+			}
+			if e.workspace != nil {
+				expTask := TaskSpec{
+					Kind:         task.Kind,
+					Model:        task.Model,
+					Engine:       task.Engine,
+					EngineParams: task.Params,
+					Reason:       task.Reason,
+				}
+				if _, werr := e.workspace.WriteExperimentResult(i+1, expTask, harvestToExperimentResult(task.Status, time.Now(), 0, skipResult)); werr != nil {
+					slog.Debug("explorer: write skipped experiment result failed", "error", werr)
+				}
 			}
 			continue
 		}
@@ -800,21 +914,67 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 			})
 		}
 	}
+}
 
-	// Mark plan completed (with updated task statuses in JSON)
-	if e.db != nil {
-		now := time.Now()
-		summaryJSON := ""
-		if planJSON, err := json.Marshal(plan); err == nil {
-			summaryJSON = string(planJSON)
+func (e *Explorer) persistExplorationPlan(ctx context.Context, plan *ExplorerPlan, trigger string) error {
+	if e.db == nil || plan == nil {
+		return nil
+	}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		return fmt.Errorf("marshal plan %s: %w", plan.ID, err)
+	}
+	return e.db.InsertExplorationPlan(ctx, &state.ExplorationPlanRow{
+		ID:        plan.ID,
+		Tier:      plan.Tier,
+		Trigger:   trigger,
+		Status:    "active",
+		PlanJSON:  string(planJSON),
+		Total:     len(plan.Tasks),
+		CreatedAt: time.Now(),
+	})
+}
+
+func (e *Explorer) reconcileStaleExplorationPlans(ctx context.Context) {
+	if e.db == nil {
+		return
+	}
+	activePlanID := ""
+	e.mu.RLock()
+	if e.activePlan != nil {
+		activePlanID = e.activePlan.ID
+	}
+	e.mu.RUnlock()
+
+	plans, err := e.db.ListExplorationPlans(ctx, "active")
+	if err != nil {
+		slog.Debug("explorer: list active plans failed", "error", err)
+		return
+	}
+
+	now := time.Now()
+	for _, plan := range plans {
+		if plan == nil || plan.ID == "" || plan.ID == activePlanID {
+			continue
 		}
-		_ = e.db.UpdateExplorationPlan(ctx, &state.ExplorationPlanRow{
+		summaryJSON := plan.SummaryJSON
+		if summaryJSON == "" {
+			if b, err := json.Marshal(map[string]any{
+				"reconciled": true,
+				"reason":     "stale active plan",
+			}); err == nil {
+				summaryJSON = string(b)
+			}
+		}
+		if err := e.db.UpdateExplorationPlan(context.Background(), &state.ExplorationPlanRow{
 			ID:          plan.ID,
-			Status:      "completed",
-			Progress:    len(plan.Tasks),
+			Status:      "cancelled",
+			Progress:    plan.Progress,
 			CompletedAt: &now,
 			SummaryJSON: summaryJSON,
-		})
+		}); err != nil {
+			slog.Debug("explorer: stale plan reconciliation failed", "error", err, "plan_id", plan.ID)
+		}
 	}
 }
 
@@ -956,6 +1116,7 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 		if engines, err := e.gatherLocalEngines(ctx); err == nil {
 			for _, eng := range engines {
 				if eng.Name == task.Engine || eng.Type == task.Engine {
+					req.Target.Runtime = eng.Runtime
 					req.Target.InternalArgs = eng.InternalArgs
 					break
 				}
@@ -1006,6 +1167,16 @@ func (e *Explorer) parseExplorationResult(status *ExplorationStatus) HarvestResu
 			if nested, ok := summary["result"].(map[string]any); ok {
 				readBenchmarkMetrics(nested, &result)
 			}
+			result.BenchmarkID = firstNonEmptyJSON(summary, "benchmark_id")
+			result.ConfigID = firstNonEmptyJSON(summary, "config_id")
+			result.EngineVersion = firstNonEmptyJSON(summary, "engine_version")
+			result.EngineImage = firstNonEmptyJSON(summary, "engine_image")
+			if usage, ok := summary["resource_usage"].(map[string]any); ok {
+				result.ResourceUsage = cloneAnyMap(usage)
+			}
+			if cfg, ok := summary["deploy_config"].(map[string]any); ok {
+				result.DeployConfig = cloneAnyMap(cfg)
+			}
 			if promoted, ok := summary["auto_promoted"].(bool); ok {
 				result.Promoted = promoted
 			}
@@ -1016,7 +1187,12 @@ func (e *Explorer) parseExplorationResult(status *ExplorationStatus) HarvestResu
 				result.SuccessCells = int(sc)
 			}
 			if mp, ok := summary["matrix_profiles"]; ok {
-				matrixJSON, _ := json.Marshal(mp)
+				matrixJSON, _ := json.Marshal(map[string]any{
+					"matrix_profiles": mp,
+					"total_cells":     result.MatrixCells,
+					"success_cells":   result.SuccessCells,
+					"deploy_config":   result.DeployConfig,
+				})
 				result.MatrixJSON = string(matrixJSON)
 			}
 		}
@@ -1027,57 +1203,97 @@ func (e *Explorer) parseExplorationResult(status *ExplorationStatus) HarvestResu
 func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*PlanInput, error) {
 	input := &PlanInput{Event: ev}
 
-	if e.gatherHardware != nil {
-		hardware, err := e.gatherHardware(ctx)
-		if err == nil {
-			input.Hardware = hardware
-			if hardware.GPUArch != "" {
-				e.cachedGPUArch = hardware.GPUArch
+	// D4: Run independent gathers in parallel to reduce plan input build time.
+	// gatherComboFacts depends on hardware/models/engines, so it runs after.
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherHardware != nil {
+			hardware, err := e.gatherHardware(ctx)
+			if err == nil {
+				input.Hardware = hardware
+				if hardware.GPUArch != "" {
+					e.cachedGPUArch = hardware.GPUArch
+				}
 			}
 		}
-	}
+	}()
 
-		// Gather gaps via the consolidated knowledge analytics path.
-	if e.gatherGaps != nil {
-		gaps, err := e.gatherGaps(ctx)
-		if err == nil {
-			input.Gaps = gaps
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherGaps != nil {
+			gaps, err := e.gatherGaps(ctx)
+			if err == nil {
+				input.Gaps = gaps
+			}
 		}
-	}
+	}()
 
-	// Gather active deploys
-	if e.gatherDeploys != nil {
-		deploys, err := e.gatherDeploys(ctx)
-		if err == nil {
-			input.ActiveDeploys = deploys
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherDeploys != nil {
+			deploys, err := e.gatherDeploys(ctx)
+			if err == nil {
+				input.ActiveDeploys = deploys
+			}
 		}
-	}
+	}()
 
-	if e.gatherOpenQuestions != nil {
-		openQuestions, err := e.gatherOpenQuestions(ctx)
-		if err == nil {
-			input.OpenQuestions = openQuestions
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherOpenQuestions != nil {
+			openQuestions, err := e.gatherOpenQuestions(ctx)
+			if err == nil {
+				input.OpenQuestions = openQuestions
+			}
 		}
-	}
+	}()
 
-	if e.gatherAdvisories != nil {
-		advisories, err := e.gatherAdvisories(ctx)
-		if err == nil {
-			input.Advisories = advisories
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherAdvisories != nil {
+			advisories, err := e.gatherAdvisories(ctx)
+			if err == nil {
+				input.Advisories = advisories
+			}
 		}
-	}
+	}()
 
-	if e.gatherLocalModels != nil {
-		models, err := e.gatherLocalModels(ctx)
-		if err == nil {
-			input.LocalModels = models
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherLocalModels != nil {
+			models, err := e.gatherLocalModels(ctx)
+			if err == nil {
+				input.LocalModels = models
+			}
 		}
-	}
+	}()
 
-	if e.gatherLocalEngines != nil {
-		engines, err := e.gatherLocalEngines(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if e.gatherLocalEngines != nil {
+			engines, err := e.gatherLocalEngines(ctx)
+			if err == nil {
+				input.LocalEngines = engines
+			}
+		}
+	}()
+
+	wg.Wait()
+
+	// gatherComboFacts depends on hardware, models, and engines gathered above.
+	if e.gatherComboFacts != nil {
+		comboFacts, err := e.gatherComboFacts(ctx, input.Hardware, input.LocalModels, input.LocalEngines)
 		if err == nil {
-			input.LocalEngines = engines
+			input.ComboFacts = comboFacts
 		}
 	}
 
@@ -1109,7 +1325,6 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 	return input, nil
 }
 
-
 func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration, tokensUsed int) *PlanMetrics {
 	m := &PlanMetrics{
 		TotalTasks: len(plan.Tasks),
@@ -1136,7 +1351,6 @@ func (e *Explorer) computePlanMetrics(plan *ExplorerPlan, elapsed time.Duration,
 	}
 	return m
 }
-
 
 func (e *Explorer) refreshTier(ctx context.Context) bool {
 	// O4: If agent is available but tool mode is still unknown, probe it.
@@ -1247,6 +1461,20 @@ func (e *Explorer) UpdateConfig(key, value string) (string, error) {
 			return "", fmt.Errorf("max_tokens_per_day must be a non-negative integer")
 		}
 		e.config.MaxTokensPerDay = n
+	case "max_cycles":
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			e.mu.Unlock()
+			return "", fmt.Errorf("max_cycles must be a positive integer")
+		}
+		e.config.MaxCycles = n
+	case "max_tasks":
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			e.mu.Unlock()
+			return "", fmt.Errorf("max_tasks must be a positive integer")
+		}
+		e.config.MaxTasks = n
 	case "rounds_used":
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 {
@@ -1292,6 +1520,10 @@ func (e *Explorer) configValueLocked(key string) string {
 		return e.config.MaxPlanDuration.String()
 	case "max_tokens_per_day":
 		return strconv.Itoa(e.config.MaxTokensPerDay)
+	case "max_cycles":
+		return strconv.Itoa(e.config.MaxCycles)
+	case "max_tasks":
+		return strconv.Itoa(e.config.MaxTasks)
 	case "rounds_used":
 		return strconv.Itoa(e.roundsUsed)
 	case "tokens_used_today":
@@ -1369,34 +1601,118 @@ func firstNonEmptyJSON(payload map[string]any, keys ...string) string {
 
 func harvestToExperimentResult(status string, start time.Time, elapsed time.Duration, r HarvestResult) ExperimentResult {
 	exp := ExperimentResult{
-		Status:    status,
-		StartedAt: start.UTC().Format(time.RFC3339),
-		DurationS: elapsed.Seconds(),
+		Status:        status,
+		StartedAt:     start.UTC().Format(time.RFC3339),
+		DurationS:     elapsed.Seconds(),
+		BenchmarkID:   r.BenchmarkID,
+		ConfigID:      r.ConfigID,
+		EngineVersion: r.EngineVersion,
+		EngineImage:   r.EngineImage,
+		ResourceUsage: cloneAnyMap(r.ResourceUsage),
+		DeployConfig:  cloneAnyMap(r.DeployConfig),
+		MatrixCells:   r.MatrixCells,
+		SuccessCells:  r.SuccessCells,
 	}
 	if !r.Success {
 		exp.Error = r.Error
 	}
-	if r.Throughput > 0 || r.Concurrency > 0 {
+	if entries := benchmarkEntriesFromMatrixJSON(r.MatrixJSON); len(entries) > 0 {
+		exp.Benchmarks = entries
+		return exp
+	}
+	if r.Throughput > 0 || r.Concurrency > 0 || r.BenchmarkID != "" {
 		exp.Benchmarks = []BenchmarkEntry{{
 			Concurrency:   r.Concurrency,
 			InputTokens:   r.InputTokens,
 			MaxTokens:     r.MaxTokens,
 			ThroughputTPS: r.Throughput,
-			LatencyP50Ms:  r.TTFTP95, // best available latency metric
-			LatencyP99Ms:  r.TPOTP95,
+			TTFTP95Ms:     r.TTFTP95,
+			TPOTP95Ms:     r.TPOTP95,
+			BenchmarkID:   r.BenchmarkID,
+			ConfigID:      r.ConfigID,
+			EngineVersion: r.EngineVersion,
+			EngineImage:   r.EngineImage,
+			ResourceUsage: cloneAnyMap(r.ResourceUsage),
+			Error:         r.Error,
 		}}
 	}
 	return exp
 }
 
+func benchmarkEntriesFromMatrixJSON(matrixJSON string) []BenchmarkEntry {
+	if strings.TrimSpace(matrixJSON) == "" {
+		return nil
+	}
+	var payload struct {
+		MatrixProfiles []struct {
+			Label string `json:"label"`
+			Cells []struct {
+				Concurrency   int            `json:"concurrency"`
+				InputTokens   int            `json:"input_tokens"`
+				MaxTokens     int            `json:"max_tokens"`
+				Result        map[string]any `json:"result"`
+				Error         string         `json:"error"`
+				BenchmarkID   string         `json:"benchmark_id,omitempty"`
+				ConfigID      string         `json:"config_id,omitempty"`
+				EngineVersion string         `json:"engine_version,omitempty"`
+				EngineImage   string         `json:"engine_image,omitempty"`
+				ResourceUsage map[string]any `json:"resource_usage,omitempty"`
+			} `json:"cells"`
+		} `json:"matrix_profiles"`
+	}
+	if err := json.Unmarshal([]byte(matrixJSON), &payload); err != nil {
+		return nil
+	}
+	var entries []BenchmarkEntry
+	for _, profile := range payload.MatrixProfiles {
+		for _, cell := range profile.Cells {
+			entry := BenchmarkEntry{
+				Profile:       profile.Label,
+				Concurrency:   cell.Concurrency,
+				InputTokens:   cell.InputTokens,
+				MaxTokens:     cell.MaxTokens,
+				BenchmarkID:   cell.BenchmarkID,
+				ConfigID:      cell.ConfigID,
+				EngineVersion: cell.EngineVersion,
+				EngineImage:   cell.EngineImage,
+				ResourceUsage: cloneAnyMap(cell.ResourceUsage),
+				Error:         cell.Error,
+			}
+			if cell.Result != nil {
+				entry.ThroughputTPS = readFloatField(cell.Result, "throughput_tps")
+				entry.TTFTP95Ms = readFloatField(cell.Result, "ttft_p95_ms")
+				entry.TPOTP95Ms = readFloatField(cell.Result, "tpot_p95_ms")
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+func readFloatField(summary map[string]any, key string) float64 {
+	if summary == nil {
+		return 0
+	}
+	if value, ok := summary[key].(float64); ok {
+		return value
+	}
+	return 0
+}
+
 func readBenchmarkMetrics(summary map[string]any, result *HarvestResult) {
-	if tp, ok := summary["throughput_tps"].(float64); ok {
+	if result == nil {
+		return
+	}
+	if tp := readFloatField(summary, "throughput_tps"); tp > 0 {
 		result.Throughput = tp
 	}
-	if ttft, ok := summary["ttft_p95_ms"].(float64); ok {
+	if ttft := readFloatField(summary, "ttft_p95_ms"); ttft > 0 {
 		result.TTFTP95 = ttft
 	}
-	if vram, ok := summary["vram_usage_mib"].(float64); ok {
+	if tpot := readFloatField(summary, "tpot_p95_ms"); tpot > 0 {
+		result.TPOTP95 = tpot
+	}
+	if vram := readFloatField(summary, "vram_usage_mib"); vram > 0 {
 		result.VRAMMiB = vram
 	}
 }

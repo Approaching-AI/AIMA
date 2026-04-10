@@ -15,9 +15,10 @@ import (
 
 // readOnlyDocs lists AIMA-generated fact documents the Explorer agent must not overwrite.
 var readOnlyDocs = map[string]bool{
-	"device-profile.md":  true,
+	"index.md":            true,
+	"device-profile.md":   true,
 	"available-combos.md": true,
-	"knowledge-base.md":  true,
+	"knowledge-base.md":   true,
 }
 
 // ExplorerWorkspace manages the file workspace for an Explorer session.
@@ -38,6 +39,31 @@ func (w *ExplorerWorkspace) Init() error {
 		return fmt.Errorf("init workspace: %w", err)
 	}
 	return nil
+}
+
+// EnsureWorkingDocuments creates writable session documents when missing and
+// resets plan.md to the expected structure for the next phase.
+func (w *ExplorerWorkspace) EnsureWorkingDocuments() error {
+	if err := w.ensureFile("summary.md", defaultSummaryTemplate()); err != nil {
+		return err
+	}
+	if err := w.WriteFile("plan.md", defaultPlanTemplate()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *ExplorerWorkspace) ensureFile(rel, content string) error {
+	p, err := w.safePath(rel)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", rel, err)
+	}
+	return w.WriteFile(rel, content)
 }
 
 // safePath resolves a relative path inside the workspace root and blocks escapes.
@@ -217,6 +243,7 @@ var yamlBlockRe = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
 
 // parsePlanTasks extracts TaskSpec list from plan.md markdown.
 // Looks for the yaml code block under "## Tasks".
+// Returns nil, nil when the section exists but contains no tasks (valid for Act phase).
 func parsePlanTasks(md string) ([]TaskSpec, error) {
 	section := extractSection(md, "## Tasks")
 	if section == "" {
@@ -224,12 +251,15 @@ func parsePlanTasks(md string) ([]TaskSpec, error) {
 	}
 	matches := yamlBlockRe.FindStringSubmatch(section)
 	if len(matches) < 2 {
-		return nil, fmt.Errorf("no yaml code block in ## Tasks section")
+		// D2: No yaml block in ## Tasks is valid — the LLM may write prose
+		// like "No new tasks needed" or omit the block entirely.
+		return nil, nil
 	}
 	var tasks []TaskSpec
 	if err := yaml.Unmarshal([]byte(matches[1]), &tasks); err != nil {
 		return nil, fmt.Errorf("parse tasks yaml: %w", err)
 	}
+	// D2: comment-only yaml blocks unmarshal to nil — also valid "no tasks".
 	return tasks, nil
 }
 
@@ -240,15 +270,104 @@ func parseRecommendedConfigs(md string) ([]RecommendedConfig, error) {
 	if section == "" {
 		return nil, nil // no recommendations yet is normal
 	}
-	matches := yamlBlockRe.FindStringSubmatch(section)
-	if len(matches) < 2 {
-		return nil, nil
-	}
 	var configs []RecommendedConfig
-	if err := yaml.Unmarshal([]byte(matches[1]), &configs); err != nil {
+	found, err := parseYAMLListSection(section, &configs)
+	if err != nil {
 		return nil, fmt.Errorf("parse recommendations yaml: %w", err)
 	}
+	if !found {
+		return nil, nil
+	}
 	return configs, nil
+}
+
+// ConfirmedBlocker captures a machine-readable blocker discovered during the run.
+type ConfirmedBlocker struct {
+	Family     string `yaml:"family" json:"family"`
+	Scope      string `yaml:"scope" json:"scope,omitempty"`
+	Model      string `yaml:"model" json:"model,omitempty"`
+	Engine     string `yaml:"engine" json:"engine,omitempty"`
+	Reason     string `yaml:"reason" json:"reason"`
+	RetryWhen  string `yaml:"retry_when" json:"retry_when,omitempty"`
+	Confidence string `yaml:"confidence" json:"confidence,omitempty"`
+}
+
+// RetryDenyEntry captures a task or family that must not be retried this cycle.
+type RetryDenyEntry struct {
+	Model        string `yaml:"model" json:"model,omitempty"`
+	Engine       string `yaml:"engine" json:"engine,omitempty"`
+	ReasonFamily string `yaml:"reason_family" json:"reason_family"`
+	Reason       string `yaml:"reason" json:"reason"`
+}
+
+// EvidenceLedgerEntry captures an evidence row used to ground later phases.
+type EvidenceLedgerEntry struct {
+	Source     string `yaml:"source" json:"source"`
+	Kind       string `yaml:"kind" json:"kind"`
+	Model      string `yaml:"model" json:"model,omitempty"`
+	Engine     string `yaml:"engine" json:"engine,omitempty"`
+	Evidence   string `yaml:"evidence" json:"evidence,omitempty"`
+	Summary    string `yaml:"summary" json:"summary"`
+	Confidence string `yaml:"confidence" json:"confidence,omitempty"`
+}
+
+func parseConfirmedBlockers(md string) ([]ConfirmedBlocker, error) {
+	section := extractSection(md, "## Confirmed Blockers")
+	if section == "" {
+		return nil, nil
+	}
+	var blockers []ConfirmedBlocker
+	found, err := parseYAMLListSection(section, &blockers)
+	if err != nil {
+		return nil, fmt.Errorf("parse confirmed blockers yaml: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return blockers, nil
+}
+
+func parseDoNotRetryThisCycle(md string) ([]RetryDenyEntry, error) {
+	section := extractSection(md, "## Do Not Retry This Cycle")
+	if section == "" {
+		return nil, nil
+	}
+	var entries []RetryDenyEntry
+	found, err := parseYAMLListSection(section, &entries)
+	if err != nil {
+		return nil, fmt.Errorf("parse do-not-retry yaml: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return entries, nil
+}
+
+func parseEvidenceLedger(md string) ([]EvidenceLedgerEntry, error) {
+	section := extractSection(md, "## Evidence Ledger")
+	if section == "" {
+		return nil, nil
+	}
+	var entries []EvidenceLedgerEntry
+	found, err := parseYAMLListSection(section, &entries)
+	if err != nil {
+		return nil, fmt.Errorf("parse evidence ledger yaml: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return entries, nil
+}
+
+func parseYAMLListSection(section string, out any) (bool, error) {
+	matches := yamlBlockRe.FindStringSubmatch(section)
+	if len(matches) < 2 {
+		return false, nil
+	}
+	if err := yaml.Unmarshal([]byte(matches[1]), out); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // RefreshFactDocuments regenerates all AIMA fact documents from current PlanInput.
@@ -256,9 +375,10 @@ func parseRecommendedConfigs(md string) ([]RecommendedConfig, error) {
 func (w *ExplorerWorkspace) RefreshFactDocuments(input PlanInput) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	docs := map[string]string{
-		"device-profile.md":  w.generateDeviceProfile(input, now),
+		"index.md":            w.generateIndex(input, now),
+		"device-profile.md":   w.generateDeviceProfile(input, now),
 		"available-combos.md": w.generateAvailableCombos(input, now),
-		"knowledge-base.md":  w.generateKnowledgeBase(input, now),
+		"knowledge-base.md":   w.generateKnowledgeBase(input, now),
 	}
 	for name, content := range docs {
 		if err := w.writeFactDocument(name, content); err != nil {
@@ -266,6 +386,75 @@ func (w *ExplorerWorkspace) RefreshFactDocuments(input PlanInput) error {
 		}
 	}
 	return nil
+}
+
+func (w *ExplorerWorkspace) generateIndex(input PlanInput, now string) string {
+	readyCombos, blockedCombos, exploredCombos := comboFactCounts(input)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Explorer Index\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "This workspace is the Explorer's file-based memory. Read this file first in every phase.\n\n")
+
+	fmt.Fprintf(&sb, "## Mission\n\n")
+	fmt.Fprintf(&sb, "- Build fact-grounded exploration plans for `%s`\n", input.Hardware.Profile)
+	fmt.Fprintf(&sb, "- Prefer real executable discoveries over speculative tuning\n")
+	fmt.Fprintf(&sb, "- Preserve high-signal notes about bugs, failure modes, and design doubts\n\n")
+
+	fmt.Fprintf(&sb, "## Read Order\n\n")
+	fmt.Fprintf(&sb, "1. `index.md`\n")
+	fmt.Fprintf(&sb, "2. `available-combos.md`\n")
+	fmt.Fprintf(&sb, "3. `device-profile.md`\n")
+	fmt.Fprintf(&sb, "4. `knowledge-base.md`\n")
+	fmt.Fprintf(&sb, "5. `summary.md`\n")
+	fmt.Fprintf(&sb, "6. `experiments/`\n\n")
+
+	fmt.Fprintf(&sb, "## Source Of Truth\n\n")
+	fmt.Fprintf(&sb, "| Document | Owner | Writable | Purpose |\n")
+	fmt.Fprintf(&sb, "|----------|-------|----------|---------|\n")
+	fmt.Fprintf(&sb, "| index.md | AIMA | no | Workspace map, authority rules, required structure |\n")
+	fmt.Fprintf(&sb, "| available-combos.md | AIMA | no | Authoritative ready/blocked combo frontier |\n")
+	fmt.Fprintf(&sb, "| device-profile.md | AIMA | no | Hardware, local models, local engines, deployed state |\n")
+	fmt.Fprintf(&sb, "| knowledge-base.md | AIMA | no | History, advisories, catalog capability hints |\n")
+	fmt.Fprintf(&sb, "| plan.md | Agent | yes | Current executable plan for the next Do phase |\n")
+	fmt.Fprintf(&sb, "| summary.md | Agent | yes | Running memory of findings, bugs, doubts, and strategy |\n")
+	fmt.Fprintf(&sb, "| experiments/*.md | AIMA + Agent Notes | append notes only | Raw experiment outcomes |\n\n")
+
+	fmt.Fprintf(&sb, "## Hard Rules\n\n")
+	fmt.Fprintf(&sb, "- AIMA-generated fact documents are authoritative. If a fact is absent, treat it as unavailable.\n")
+	fmt.Fprintf(&sb, "- New tasks may only use combos listed under `## Ready Combos` in `available-combos.md`.\n")
+	fmt.Fprintf(&sb, "- Do not schedule any combo listed under `## Blocked Combos` in this round.\n")
+	fmt.Fprintf(&sb, "- Do not infer standard engines, default images, or hidden model variants from prior knowledge.\n")
+	fmt.Fprintf(&sb, "- The `query` tool supports only `search`, `compare`, `gaps`, and `aggregate`.\n")
+	fmt.Fprintf(&sb, "- Keep the required headings in `plan.md` and `summary.md` so later phases can continue from them.\n\n")
+
+	fmt.Fprintf(&sb, "## Current Fact Snapshot\n\n")
+	fmt.Fprintf(&sb, "| Metric | Value |\n|--------|-------|\n")
+	fmt.Fprintf(&sb, "| Hardware Profile | %s |\n", input.Hardware.Profile)
+	fmt.Fprintf(&sb, "| Local Models | %d |\n", len(input.LocalModels))
+	fmt.Fprintf(&sb, "| Local Engines | %d |\n", len(input.LocalEngines))
+	fmt.Fprintf(&sb, "| Ready Combos | %d |\n", readyCombos)
+	fmt.Fprintf(&sb, "| Blocked Combos | %d |\n", blockedCombos)
+	fmt.Fprintf(&sb, "| Already Explored Combos | %d |\n\n", exploredCombos)
+
+	fmt.Fprintf(&sb, "## Required Working Doc Structure\n\n")
+	fmt.Fprintf(&sb, "`plan.md` should keep these sections:\n")
+	fmt.Fprintf(&sb, "- `## Objective`\n")
+	fmt.Fprintf(&sb, "- `## Fact Snapshot`\n")
+	fmt.Fprintf(&sb, "- `## Task Board`\n")
+	fmt.Fprintf(&sb, "- `## Tasks` with a YAML block\n\n")
+
+	fmt.Fprintf(&sb, "`summary.md` should keep these sections:\n")
+	fmt.Fprintf(&sb, "- `## Key Findings`\n")
+	fmt.Fprintf(&sb, "- `## Bugs And Failures`\n")
+	fmt.Fprintf(&sb, "- `## Design Doubts`\n")
+	fmt.Fprintf(&sb, "- `## Recommended Configurations` with a YAML block\n")
+	fmt.Fprintf(&sb, "- `## Confirmed Blockers` with a YAML block\n")
+	fmt.Fprintf(&sb, "- `## Do Not Retry This Cycle` with a YAML block\n")
+	fmt.Fprintf(&sb, "- `## Evidence Ledger` with a YAML block\n")
+	fmt.Fprintf(&sb, "- `## Current Strategy`\n")
+	fmt.Fprintf(&sb, "- `## Next Cycle Candidates`\n")
+
+	return sb.String()
 }
 
 // generateDeviceProfile produces device-profile.md with hardware, models, engines, and active deployments.
@@ -306,8 +495,8 @@ func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) s
 
 	// Engines table
 	fmt.Fprintf(&sb, "## Local Engines\n\n")
-	fmt.Fprintf(&sb, "| Type | Runtime | Features | Tunable Params |\n")
-	fmt.Fprintf(&sb, "|------|---------|----------|----------------|\n")
+	fmt.Fprintf(&sb, "| Type | Runtime | Deploy Artifact | Features | Tunable Params |\n")
+	fmt.Fprintf(&sb, "|------|---------|-----------------|----------|----------------|\n")
 	for _, e := range input.LocalEngines {
 		features := strings.Join(e.Features, ", ")
 		paramKeys := make([]string, 0, len(e.TunableParams))
@@ -315,7 +504,11 @@ func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) s
 			paramKeys = append(paramKeys, k)
 		}
 		params := strings.Join(paramKeys, ", ")
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n", e.Type, e.Runtime, features, params)
+		artifact := e.Artifact
+		if artifact == "" {
+			artifact = "_n/a_"
+		}
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n", e.Type, e.Runtime, artifact, features, params)
 	}
 	fmt.Fprintf(&sb, "\n")
 
@@ -336,6 +529,10 @@ func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) s
 
 // generateAvailableCombos produces available-combos.md classifying all model×engine pairs.
 func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string) string {
+	if len(input.ComboFacts) > 0 {
+		return w.generateResolvedAvailableCombos(input, now)
+	}
+
 	hw := input.Hardware
 	totalVRAM := hw.VRAMMiB * hw.GPUCount
 	if hw.GPUCount <= 1 {
@@ -383,14 +580,15 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "_Resolver-backed combo facts unavailable; this is a coarse compatibility fallback._\n\n")
 
-	fmt.Fprintf(&sb, "## Unexplored\n\n")
+	fmt.Fprintf(&sb, "## Ready Combos\n\n")
 	if len(unexplored) == 0 {
 		fmt.Fprintf(&sb, "_None_\n\n")
 	} else {
-		fmt.Fprintf(&sb, "| Model | Engine |\n|-------|--------|\n")
+		fmt.Fprintf(&sb, "| Model | Engine | Reason |\n|-------|--------|--------|\n")
 		for _, r := range unexplored {
-			fmt.Fprintf(&sb, "| %s | %s |\n", r.model, r.engine)
+			fmt.Fprintf(&sb, "| %s | %s | coarse local compatibility only |\n", r.model, r.engine)
 		}
 		fmt.Fprintf(&sb, "\n")
 	}
@@ -406,7 +604,7 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string)
 		fmt.Fprintf(&sb, "\n")
 	}
 
-	fmt.Fprintf(&sb, "## Incompatible\n\n")
+	fmt.Fprintf(&sb, "## Blocked Combos\n\n")
 	if len(incompatible) == 0 {
 		fmt.Fprintf(&sb, "_None_\n\n")
 	} else {
@@ -416,6 +614,43 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string)
 		}
 		fmt.Fprintf(&sb, "\n")
 	}
+
+	return sb.String()
+}
+
+func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now string) string {
+	skipSet := make(map[string]string, len(input.SkipCombos))
+	for _, s := range input.SkipCombos {
+		skipSet[s.Model+"|"+s.Engine] = s.Reason
+	}
+
+	var ready, explored, blocked []ComboFact
+	for _, fact := range input.ComboFacts {
+		key := fact.Model + "|" + fact.Engine
+		if reason, ok := skipSet[key]; ok {
+			fact.Reason = reason
+			explored = append(explored, fact)
+			continue
+		}
+		if fact.Status == "ready" {
+			ready = append(ready, fact)
+			continue
+		}
+		blocked = append(blocked, fact)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "This document is authoritative for new scheduling. Only rows under `## Ready Combos` may appear in new tasks.\n\n")
+
+	fmt.Fprintf(&sb, "## Ready Combos\n\n")
+	writeComboTable(&sb, ready, "ready")
+
+	fmt.Fprintf(&sb, "## Already Explored\n\n")
+	writeComboTable(&sb, explored, "explored")
+
+	fmt.Fprintf(&sb, "## Blocked Combos\n\n")
+	writeComboTable(&sb, blocked, "blocked")
 
 	return sb.String()
 }
@@ -470,24 +705,130 @@ func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) s
 	return sb.String()
 }
 
+func comboFactCounts(input PlanInput) (ready, blocked, explored int) {
+	skipSet := make(map[string]struct{}, len(input.SkipCombos))
+	for _, s := range input.SkipCombos {
+		skipSet[s.Model+"|"+s.Engine] = struct{}{}
+	}
+	if len(input.ComboFacts) == 0 {
+		return 0, 0, len(input.SkipCombos)
+	}
+	for _, fact := range input.ComboFacts {
+		if _, ok := skipSet[fact.Model+"|"+fact.Engine]; ok {
+			explored++
+			continue
+		}
+		if fact.Status == "ready" {
+			ready++
+			continue
+		}
+		blocked++
+	}
+	return ready, blocked, explored
+}
+
+func writeComboTable(sb *strings.Builder, facts []ComboFact, mode string) {
+	if len(facts) == 0 {
+		fmt.Fprintf(sb, "_None_\n\n")
+		return
+	}
+	fmt.Fprintf(sb, "| Model | Engine | Runtime | Deploy Artifact | Reason |\n")
+	fmt.Fprintf(sb, "|-------|--------|---------|-----------------|--------|\n")
+	for _, fact := range facts {
+		runtime := fact.Runtime
+		if runtime == "" {
+			runtime = "_n/a_"
+		}
+		artifact := fact.Artifact
+		if artifact == "" {
+			artifact = "_n/a_"
+		}
+		reason := strings.TrimSpace(fact.Reason)
+		if reason == "" {
+			switch mode {
+			case "ready":
+				reason = "resolver and local no-pull runtime checks passed"
+			case "explored":
+				reason = "already explored"
+			default:
+				reason = "blocked"
+			}
+		}
+		fmt.Fprintf(sb, "| %s | %s | %s | %s | %s |\n", fact.Model, fact.Engine, runtime, artifact, reason)
+	}
+	fmt.Fprintf(sb, "\n")
+}
+
+func defaultPlanTemplate() string {
+	return "# Exploration Plan\n\n" +
+		"## Objective\n\n" +
+		"Summarize the next most valuable fact-grounded experiments for this device.\n\n" +
+		"## Fact Snapshot\n\n" +
+		"- Fill after reading index.md and available-combos.md.\n\n" +
+		"## Task Board\n\n" +
+		"- [ ] Read index.md\n" +
+		"- [ ] Read available-combos.md\n" +
+		"- [ ] Read summary.md blockers and evidence\n" +
+		"- [ ] Write only executable tasks from Ready Combos not on Do Not Retry This Cycle\n\n" +
+		"## Tasks\n" +
+		"```yaml\n[]\n```\n"
+}
+
+func defaultSummaryTemplate() string {
+	return "# Exploration Summary\n\n" +
+		"## Key Findings\n\n" +
+		"_No findings yet._\n\n" +
+		"## Bugs And Failures\n\n" +
+		"_No bugs recorded yet._\n\n" +
+		"## Confirmed Blockers\n\n" +
+		"```yaml\n[]\n```\n\n" +
+		"## Do Not Retry This Cycle\n\n" +
+		"```yaml\n[]\n```\n\n" +
+		"## Evidence Ledger\n\n" +
+		"```yaml\n[]\n```\n\n" +
+		"## Design Doubts\n\n" +
+		"_No design doubts recorded yet._\n\n" +
+		"## Recommended Configurations\n" +
+		"```yaml\n[]\n```\n\n" +
+		"## Current Strategy\n\n" +
+		"Start from Ready Combos only. Treat Confirmed Blockers and Do Not Retry This Cycle as hard constraints.\n\n" +
+		"## Next Cycle Candidates\n\n" +
+		"_No candidates yet._\n"
+}
+
 // ExperimentResult records the outcome of a single experiment task.
 type ExperimentResult struct {
-	Status     string           `yaml:"status"`
-	StartedAt  string           `yaml:"started_at"`
-	DurationS  float64          `yaml:"duration_s"`
-	ColdStartS float64          `yaml:"cold_start_s,omitempty"`
-	Error      string           `yaml:"error,omitempty"`
-	Benchmarks []BenchmarkEntry `yaml:"benchmarks,omitempty"`
+	Status        string           `yaml:"status"`
+	StartedAt     string           `yaml:"started_at"`
+	DurationS     float64          `yaml:"duration_s"`
+	ColdStartS    float64          `yaml:"cold_start_s,omitempty"`
+	Error         string           `yaml:"error,omitempty"`
+	BenchmarkID   string           `yaml:"benchmark_id,omitempty"`
+	ConfigID      string           `yaml:"config_id,omitempty"`
+	EngineVersion string           `yaml:"engine_version,omitempty"`
+	EngineImage   string           `yaml:"engine_image,omitempty"`
+	ResourceUsage map[string]any   `yaml:"resource_usage,omitempty"`
+	DeployConfig  map[string]any   `yaml:"deploy_config,omitempty"`
+	MatrixCells   int              `yaml:"matrix_cells,omitempty"`
+	SuccessCells  int              `yaml:"success_cells,omitempty"`
+	Benchmarks    []BenchmarkEntry `yaml:"benchmarks,omitempty"`
 }
 
 // BenchmarkEntry records a single benchmark data point.
 type BenchmarkEntry struct {
-	Concurrency   int     `yaml:"concurrency"`
-	InputTokens   int     `yaml:"input_tokens"`
-	MaxTokens     int     `yaml:"max_tokens"`
-	ThroughputTPS float64 `yaml:"throughput_tps"`
-	LatencyP50Ms  float64 `yaml:"latency_p50_ms"`
-	LatencyP99Ms  float64 `yaml:"latency_p99_ms"`
+	Profile       string         `yaml:"profile,omitempty"`
+	Concurrency   int            `yaml:"concurrency"`
+	InputTokens   int            `yaml:"input_tokens"`
+	MaxTokens     int            `yaml:"max_tokens"`
+	ThroughputTPS float64        `yaml:"throughput_tps,omitempty"`
+	TTFTP95Ms     float64        `yaml:"ttft_p95_ms,omitempty"`
+	TPOTP95Ms     float64        `yaml:"tpot_p95_ms,omitempty"`
+	BenchmarkID   string         `yaml:"benchmark_id,omitempty"`
+	ConfigID      string         `yaml:"config_id,omitempty"`
+	EngineVersion string         `yaml:"engine_version,omitempty"`
+	EngineImage   string         `yaml:"engine_image,omitempty"`
+	ResourceUsage map[string]any `yaml:"resource_usage,omitempty"`
+	Error         string         `yaml:"error,omitempty"`
 }
 
 // WriteExperimentResult writes experiments/NNN-model-engine.md for the given task and result.
@@ -514,12 +855,20 @@ func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, resu
 	if len(result.Benchmarks) == 0 {
 		fmt.Fprintf(&sb, "_No benchmark data_\n\n")
 	} else {
-		fmt.Fprintf(&sb, "| Concurrency | Input Tokens | Max Tokens | Throughput (TPS) | P50 Latency (ms) | P99 Latency (ms) |\n")
-		fmt.Fprintf(&sb, "|-------------|--------------|------------|-----------------|-----------------|------------------|\n")
+		fmt.Fprintf(&sb, "| Profile | Concurrency | Input Tokens | Max Tokens | Throughput (TPS) | TTFT P95 (ms) | TPOT P95 (ms) | Status |\n")
+		fmt.Fprintf(&sb, "|---------|-------------|--------------|------------|------------------|---------------|---------------|--------|\n")
 		for _, b := range result.Benchmarks {
-			fmt.Fprintf(&sb, "| %d | %d | %d | %.1f | %.0f | %.0f |\n",
-				b.Concurrency, b.InputTokens, b.MaxTokens,
-				b.ThroughputTPS, b.LatencyP50Ms, b.LatencyP99Ms)
+			status := "ok"
+			if strings.TrimSpace(b.Error) != "" {
+				status = b.Error
+			}
+			profile := "-"
+			if strings.TrimSpace(b.Profile) != "" {
+				profile = b.Profile
+			}
+			fmt.Fprintf(&sb, "| %s | %d | %d | %d | %.1f | %.0f | %.0f | %s |\n",
+				profile, b.Concurrency, b.InputTokens, b.MaxTokens,
+				b.ThroughputTPS, b.TTFTP95Ms, b.TPOTP95Ms, status)
 		}
 		fmt.Fprintf(&sb, "\n")
 	}

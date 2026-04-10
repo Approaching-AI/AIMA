@@ -25,6 +25,7 @@ type StreamingLLMClient interface {
 type CompletionDelta struct {
 	Content          string
 	ReasoningContent string
+	ToolCalls        []ToolCall
 }
 
 // Message represents a chat message in the conversation.

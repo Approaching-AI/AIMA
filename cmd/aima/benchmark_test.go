@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	state "github.com/jguan/aima/internal"
 	benchpkg "github.com/jguan/aima/internal/benchmark"
+	"github.com/jguan/aima/internal/runtime"
 )
 
 func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
@@ -56,5 +58,37 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 	}
 	if results[0].ThroughputTPS != 42.5 {
 		t.Fatalf("ThroughputTPS = %v, want 42.5", results[0].ThroughputTPS)
+	}
+}
+
+func TestSelectReadyDeployConfigPrefersExplicitAndMatchingReadyDeployment(t *testing.T) {
+	explicit := map[string]any{"concurrency": 8, "max_tokens": 512}
+	matches := []matchedDeployment{
+		{
+			Status: &runtime.DeploymentStatus{
+				Ready: true,
+				Config: map[string]any{
+					"concurrency": 4,
+					"max_tokens":  256,
+				},
+				Labels: map[string]string{"aima.dev/engine": "sglang"},
+			},
+		},
+	}
+
+	got := selectReadyDeployConfig("sglang", explicit, matches)
+	if !reflect.DeepEqual(got, explicit) {
+		t.Fatalf("explicit deploy config = %#v, want %#v", got, explicit)
+	}
+
+	got = selectReadyDeployConfig("sglang", nil, matches)
+	want := map[string]any{"concurrency": 4, "max_tokens": 256}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ready deploy config = %#v, want %#v", got, want)
+	}
+
+	got = selectReadyDeployConfig("llama.cpp", nil, matches)
+	if got != nil {
+		t.Fatalf("mismatched engine config = %#v, want nil", got)
 	}
 }

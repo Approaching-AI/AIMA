@@ -201,3 +201,44 @@ func TestPullAdvisoriesToEventBusDedupesPublishedItems(t *testing.T) {
 		t.Fatalf("event types = %#v, want scenario included", gotTypes)
 	}
 }
+
+func TestPullAdvisoriesToEventBusWithoutEventBusStillReturnsItems(t *testing.T) {
+	t.Parallel()
+
+	ac := &appContext{}
+	deps := &mcp.ToolDeps{
+		SyncPullAdvisories: func(context.Context) (json.RawMessage, error) {
+			return json.RawMessage(`[{"id":"adv-1","status":"delivered","target_hardware":"nvidia-rtx4090-x86"}]`), nil
+		},
+		SyncPullScenarios: func(context.Context) (json.RawMessage, error) {
+			return json.RawMessage(`[{"id":"scn-1","hardware_profile":"nvidia-rtx4090-x86"}]`), nil
+		},
+	}
+
+	advisories, scenarios, advisoryEvents, scenarioEvents := pullAdvisoriesToEventBus(context.Background(), ac, deps)
+	if len(advisories) != 1 {
+		t.Fatalf("advisories = %d, want 1", len(advisories))
+	}
+	if len(scenarios) != 1 {
+		t.Fatalf("scenarios = %d, want 1", len(scenarios))
+	}
+	if advisoryEvents != 0 {
+		t.Fatalf("advisoryEvents = %d, want 0", advisoryEvents)
+	}
+	if scenarioEvents != 0 {
+		t.Fatalf("scenarioEvents = %d, want 0", scenarioEvents)
+	}
+}
+
+func TestBuildSyncURLEncodesSince(t *testing.T) {
+	t.Parallel()
+
+	got, err := buildSyncURL("http://localhost:18080", "2026-04-07 07:37:48")
+	if err != nil {
+		t.Fatalf("buildSyncURL: %v", err)
+	}
+	want := "http://localhost:18080/api/v1/sync?since=2026-04-07+07%3A37%3A48"
+	if got != want {
+		t.Fatalf("buildSyncURL = %q, want %q", got, want)
+	}
+}

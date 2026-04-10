@@ -118,4 +118,27 @@ func TestExplorerToolDefinitions(t *testing.T) {
 			t.Errorf("missing tool: %s", want)
 		}
 	}
+
+	var queryDef *ToolDefinition
+	for i := range defs {
+		if defs[i].Name == "query" {
+			queryDef = &defs[i]
+			break
+		}
+	}
+	if queryDef == nil {
+		t.Fatal("query tool definition missing")
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(queryDef.InputSchema, &schema); err != nil {
+		t.Fatalf("unmarshal query schema: %v", err)
+	}
+	got := strings.Join(schema.Properties["type"].Enum, ",")
+	if got != "search,compare,gaps,aggregate" {
+		t.Fatalf("query type enum = %q", got)
+	}
 }

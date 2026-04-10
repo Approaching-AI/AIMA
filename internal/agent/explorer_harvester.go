@@ -39,6 +39,8 @@ type HarvestResult struct {
 	AvgOutputTokens int
 	EngineVersion   string
 	EngineImage     string
+	ResourceUsage   map[string]any
+	DeployConfig    map[string]any
 	Config          map[string]any
 	Promoted        bool // set by maybeAutoPromote
 	Error           string
@@ -111,7 +113,9 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 		if insightPending {
 			title += " [insight_pending]"
 		}
-		_ = h.saveNote(ctx, title, note, input.Task.Hardware, input.Task.Model, input.Task.Engine)
+		if err := h.saveNote(ctx, title, note, input.Task.Hardware, input.Task.Model, input.Task.Engine); err != nil {
+			slog.Warn("harvester save note failed", "error", err, "title", title)
+		}
 	}
 
 	// Track promotion
@@ -157,6 +161,9 @@ func (h *Harvester) generateTemplateNote(input HarvestInput) string {
 	if input.Result.EngineVersion != "" {
 		engineLabel += "@" + input.Result.EngineVersion
 	}
+	if input.Result.EngineImage != "" {
+		engineLabel += " [" + input.Result.EngineImage + "]"
+	}
 	summary := fmt.Sprintf("%s on %s: %.1f tok/s", input.Task.Model, engineLabel, input.Result.Throughput)
 	if input.Result.QPS > 0 {
 		summary += fmt.Sprintf(", QPS %.2f", input.Result.QPS)
@@ -185,8 +192,15 @@ func (h *Harvester) generateTemplateNote(input HarvestInput) string {
 }
 
 func (h *Harvester) generateMatrixNote(input HarvestInput) string {
+	engineLabel := input.Task.Engine
+	if input.Result.EngineVersion != "" {
+		engineLabel += "@" + input.Result.EngineVersion
+	}
+	if input.Result.EngineImage != "" {
+		engineLabel += " [" + input.Result.EngineImage + "]"
+	}
 	header := fmt.Sprintf("%s on %s (%d cells, %d ok):",
-		input.Task.Model, input.Task.Engine,
+		input.Task.Model, engineLabel,
 		input.Result.MatrixCells, input.Result.SuccessCells)
 
 	var profiles []json.RawMessage
@@ -231,8 +245,14 @@ func (h *Harvester) generateMatrixNote(input HarvestInput) string {
 		}
 	}
 
+	if artifacts := benchmarkArtifactSummary(input.Result); artifacts != "" {
+		lines = append(lines, "Artifacts: "+artifacts)
+	}
+	if resources := benchmarkResourceSummary(input.Result); resources != "" {
+		lines = append(lines, "Resources: "+resources)
+	}
 	if cfg := input.Result.Config; len(cfg) > 0 {
-		lines = append(lines, fmt.Sprintf("  Config: %v", cfg))
+		lines = append(lines, fmt.Sprintf("Config: %v", cfg))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -246,14 +266,18 @@ func (h *Harvester) generateLLMNote(ctx context.Context, input HarvestInput) (st
 			"Use only the facts below. Do not speculate about missing data or failure causes. Mention artifact ids when present.\n"+
 			"Model: %s, Engine: %s\n"+
 			"Engine version: %s\n"+
+			"Engine image: %s\n"+
 			"Benchmark id: %s, Config id: %s\n"+
+			"Deploy config: %v\n"+
 			"Throughput: %.1f tok/s, QPS: %.2f, TTFT P95: %.0fms, TPOT P95: %.1fms\n"+
 			"Benchmark profile: conc=%d, requests=%d, warmup=%d, rounds=%d, input_tokens=%d, max_tokens=%d, avg_input=%d, avg_output=%d\n"+
 			"Resources: VRAM=%.0f MiB, RAM=%.0f MiB, CPU=%.1f%%, GPU=%.1f%%, Power=%.1f W\n"+
 			"Config: %v",
 		input.Task.Model, input.Task.Engine,
 		input.Result.EngineVersion,
+		input.Result.EngineImage,
 		input.Result.BenchmarkID, input.Result.ConfigID,
+		input.Result.Config,
 		input.Result.Throughput, input.Result.QPS, input.Result.TTFTP95, input.Result.TPOTP95,
 		input.Result.Concurrency, input.Result.NumRequests, input.Result.WarmupCount, input.Result.Rounds,
 		input.Result.InputTokens, input.Result.MaxTokens, input.Result.AvgInputTokens, input.Result.AvgOutputTokens,

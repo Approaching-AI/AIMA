@@ -244,6 +244,9 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 				"avg_output_tokens": result.AvgOutputTokens,
 			},
 		}
+		if len(deployConfig) > 0 {
+			resp["deploy_config"] = deployConfig
+		}
 		if engineVersion != "" {
 			resp["engine_version"] = engineVersion
 		}
@@ -317,13 +320,28 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		}
 
 		endpoint := resolveEndpoint(p.Endpoint, p.Model)
+		deployConfig := selectDeployConfig(ctx, p.Model, p.Engine, p.DeployConfig)
+		engineVersion, engineImage := "", ""
+		if p.Hardware != "" && p.Engine != "" {
+			if version, image, err := db.LookupEngineAssetMetadata(ctx, p.Engine, p.Hardware); err != nil {
+				slog.Warn("benchmark matrix: lookup engine asset metadata failed", "engine", p.Engine, "hardware", p.Hardware, "error", err)
+			} else {
+				engineVersion, engineImage = version, image
+			}
+		}
 
 		type matrixCell struct {
-			Concurrency int                 `json:"concurrency"`
-			InputTokens int                 `json:"input_tokens"`
-			MaxTokens   int                 `json:"max_tokens"`
-			Result      *benchpkg.RunResult `json:"result"`
-			Error       string              `json:"error,omitempty"`
+			Concurrency   int                 `json:"concurrency"`
+			InputTokens   int                 `json:"input_tokens"`
+			MaxTokens     int                 `json:"max_tokens"`
+			Result        *benchpkg.RunResult `json:"result"`
+			Error         string              `json:"error,omitempty"`
+			BenchmarkID   string              `json:"benchmark_id,omitempty"`
+			ConfigID      string              `json:"config_id,omitempty"`
+			EngineVersion string              `json:"engine_version,omitempty"`
+			EngineImage   string              `json:"engine_image,omitempty"`
+			ResourceUsage map[string]any      `json:"resource_usage,omitempty"`
+			DeployConfig  map[string]any      `json:"deploy_config,omitempty"`
 		}
 
 		var cells []matrixCell
@@ -353,11 +371,16 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						cell.Error = err.Error()
 					} else {
 						cell.Result = result
+						cell.EngineVersion = engineVersion
+						cell.EngineImage = engineImage
+						cell.ResourceUsage = resourceUsageMap(observedMetrics)
+						if len(deployConfig) > 0 {
+							cell.DeployConfig = cloneConfigMapForBenchmark(deployConfig)
+						}
 						// Save each cell if requested
 						save := p.Save == nil || *p.Save
 						if save && p.Hardware != "" && p.Engine != "" {
 							notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
-							deployConfig := selectDeployConfig(ctx, p.Model, p.Engine, p.DeployConfig)
 							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, deployConfig, observedMetrics, conc, inTok, maxTok, notes)
 							if saveErr != nil {
 								slog.Warn("benchmark matrix: save failed", "error", saveErr, "concurrency", conc, "input_tokens", inTok, "max_tokens", maxTok)
@@ -366,6 +389,8 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 								if err := writeBenchmarkValidation(ctx, db, benchmarkID, configID, p.Hardware, p.Engine, p.Model, result.ThroughputTPS); err != nil {
 									slog.Warn("benchmark validation: write failed", "error", err, "benchmark_id", benchmarkID)
 								}
+								cell.BenchmarkID = benchmarkID
+								cell.ConfigID = configID
 							}
 						}
 					}
@@ -378,9 +403,10 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		}
 
 		return json.Marshal(map[string]any{
-			"model": p.Model,
-			"cells": cells,
-			"total": len(cells),
+			"model":         p.Model,
+			"cells":         cells,
+			"total":         len(cells),
+			"deploy_config": deployConfig,
 		})
 	}
 

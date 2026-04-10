@@ -66,7 +66,8 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		goldenOpt := knowledge.WithGoldenConfig(func(hardware, engine, model string) map[string]any {
 			return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
 		})
-		resolved, _, err := resolveWithFallback(ctx, cat, db, hwInfo, modelName, engineType, overrides, dataDir, goldenOpt)
+		resolveCat := resolveCatalogWithLocalEngineOverlay(ctx, cat, db, hwInfo, dataDir)
+		resolved, _, err := resolveWithFallback(ctx, resolveCat, db, hwInfo, modelName, engineType, overrides, dataDir, goldenOpt)
 		if err != nil {
 			return nil, err
 		}

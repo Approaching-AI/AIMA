@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"time"
 
 	state "github.com/jguan/aima/internal"
@@ -32,6 +33,7 @@ type PlanInput struct {
 	OpenQuestions []OpenQuestion
 	LocalModels   []LocalModel  // models physically present on this device
 	LocalEngines  []LocalEngine // engines installed on this device
+	ComboFacts    []ComboFact   // authoritative model×engine execution facts for this run
 	Event         *ExplorerEvent
 	SkipCombos    []SkipCombo // model+engine pairs already explored (prefill dedup for LLM)
 }
@@ -58,10 +60,22 @@ type LocalEngine struct {
 	Name          string         `json:"name"`
 	Type          string         `json:"type"`
 	Runtime       string         `json:"runtime"` // "native", "container"
+	Artifact      string         `json:"artifact,omitempty"`
 	Features      []string       `json:"features,omitempty"`
-	Notes         string         `json:"notes,omitempty"`         // e.g. "CPU+GPU hybrid MoE inference"
+	Notes         string         `json:"notes,omitempty"`          // e.g. "CPU+GPU hybrid MoE inference"
 	TunableParams map[string]any `json:"tunable_params,omitempty"` // startup.default_args from engine YAML
 	InternalArgs  []string       `json:"internal_args,omitempty"`  // startup.internal_args from engine YAML
+}
+
+// ComboFact is an authoritative execution fact for one local model×engine pair.
+// Explorer should only schedule new work from facts marked ready.
+type ComboFact struct {
+	Model    string `json:"model"`
+	Engine   string `json:"engine"`
+	Runtime  string `json:"runtime,omitempty"`
+	Artifact string `json:"artifact,omitempty"`
+	Status   string `json:"status"` // "ready" | "blocked"
+	Reason   string `json:"reason,omitempty"`
 }
 
 type HardwareInfo struct {
@@ -130,7 +144,7 @@ type PlanTask struct {
 // TaskSpec is an LLM-authored exploration task parsed from plan.md YAML.
 // The LLM fills in all structured fields; Go transparently executes.
 type TaskSpec struct {
-	Kind         string         `yaml:"kind" json:"kind"`     // "validate" | "tune"
+	Kind         string         `yaml:"kind" json:"kind"` // "validate" | "tune"
 	Model        string         `yaml:"model" json:"model"`
 	Engine       string         `yaml:"engine" json:"engine"`
 	EngineParams map[string]any `yaml:"engine_params" json:"engine_params,omitempty"`
@@ -168,6 +182,17 @@ type RulePlanner struct{}
 
 func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan, int, error) {
 	var tasks []PlanTask
+	seenCombos := make(map[string]struct{})
+	appendTask := func(task PlanTask) {
+		key := planTaskComboKey(task.Model, task.Engine)
+		if key != "" {
+			if _, exists := seenCombos[key]; exists {
+				return
+			}
+			seenCombos[key] = struct{}{}
+		}
+		tasks = append(tasks, task)
+	}
 	defaultHardware := firstTaskHardware(input.Hardware.Profile, input.Hardware.GPUArch)
 	localModels := toSet(input.LocalModels)
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
@@ -184,7 +209,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 			continue
 		}
 		if !hasHistoryFor(input.History, d.Model, d.Engine) {
-			tasks = append(tasks, PlanTask{
+			appendTask(PlanTask{
 				Kind:     "validate",
 				Hardware: defaultHardware,
 				Model:    d.Model,
@@ -197,7 +222,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 
 	// Rule 2: central advisories -- verify recommended configs
 	for _, adv := range input.Advisories {
-		tasks = append(tasks, PlanTask{
+		appendTask(PlanTask{
 			Kind:      "validate",
 			Hardware:  firstTaskHardware(adv.TargetHardware, defaultHardware),
 			Model:     adv.TargetModel,
@@ -242,7 +267,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 		if i >= 3 {
 			break
 		}
-		tasks = append(tasks, PlanTask{
+		appendTask(PlanTask{
 			Kind:     "validate",
 			Hardware: firstTaskHardware(gap.Hardware, defaultHardware),
 			Model:    gap.Model,
@@ -260,7 +285,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 		if !isLocallyAvailable(q.Model, q.Engine, localModels, localEngineTypes) {
 			continue
 		}
-		tasks = append(tasks, PlanTask{
+		appendTask(PlanTask{
 			Kind:      "open_question",
 			Hardware:  firstTaskHardware(q.Hardware, defaultHardware),
 			Model:     q.Model,
@@ -291,7 +316,6 @@ func hasHistoryFor(history []ExplorationRun, model, engine string) bool {
 	}
 	return false
 }
-
 
 func firstTaskHardware(values ...string) string {
 	for _, value := range values {
@@ -395,6 +419,15 @@ func isLocallyAvailable(model, engine string, localModels, localEngines map[stri
 		return false
 	}
 	return true
+}
+
+func planTaskComboKey(model, engine string) string {
+	model = strings.TrimSpace(model)
+	engine = strings.TrimSpace(engine)
+	if model == "" && engine == "" {
+		return ""
+	}
+	return model + "|" + engine
 }
 
 // ExplorationRun is re-exported from state for plan input convenience.

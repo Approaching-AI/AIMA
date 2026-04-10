@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -330,6 +331,7 @@ func decodeChatResponse(respBody []byte, wireToOrig map[string]string) (*Respons
 		resp.CompletionTokens = chatResp.Usage.CompletionTokens
 		resp.TotalTokens = chatResp.Usage.TotalTokens
 	}
+	logLLMOutput("chat_response", "", "", string(respBody), resp)
 	return resp, nil
 }
 
@@ -354,6 +356,7 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, messages []Message, t
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+	logLLMOutput("chat_http_response", prepared.url, prepared.model, string(respBody), nil)
 	if httpResp.StatusCode != http.StatusOK {
 		// Invalidate cached model on 404/503 so the next call re-resolves
 		if httpResp.StatusCode == http.StatusNotFound || httpResp.StatusCode == http.StatusServiceUnavailable {
@@ -402,6 +405,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
+		logLLMOutput("chat_stream_fallback_http_response", prepared.url, prepared.model, string(respBody), nil)
 		return decodeChatResponse(respBody, prepared.wireToOrig)
 	}
 
@@ -418,6 +422,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		if payload == "" {
 			continue
 		}
+		logLLMOutput("chat_stream_chunk", prepared.url, prepared.model, payload, nil)
 		if payload == "[DONE]" {
 			break
 		}
@@ -439,16 +444,25 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		if delta.ReasoningContent == "" && choice.Message.ReasoningContent != "" {
 			delta.ReasoningContent = choice.Message.ReasoningContent
 		}
+		if len(delta.ToolCalls) == 0 && len(choice.Message.ToolCalls) > 0 {
+			delta.ToolCalls = choice.Message.ToolCalls
+		}
 		if delta.Content != "" {
 			resp.Content += delta.Content
 		}
 		if delta.ReasoningContent != "" {
 			resp.ReasoningContent += delta.ReasoningContent
 		}
-		if onDelta != nil && (delta.Content != "" || delta.ReasoningContent != "") {
+		var deltaToolCalls []ToolCall
+		if len(delta.ToolCalls) > 0 {
+			deltaToolCalls = mergeStreamToolCalls(nil, prepared.wireToOrig, delta.ToolCalls)
+			resp.ToolCalls = mergeStreamToolCalls(resp.ToolCalls, prepared.wireToOrig, delta.ToolCalls)
+		}
+		if onDelta != nil && (delta.Content != "" || delta.ReasoningContent != "" || len(deltaToolCalls) > 0) {
 			onDelta(CompletionDelta{
 				Content:          delta.Content,
 				ReasoningContent: delta.ReasoningContent,
+				ToolCalls:        deltaToolCalls,
 			})
 		}
 	}
@@ -460,10 +474,112 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		resp.CompletionTokens = lastUsage.CompletionTokens
 		resp.TotalTokens = lastUsage.TotalTokens
 	}
-	if resp.Content == "" && resp.ReasoningContent == "" {
+	if resp.Content == "" && resp.ReasoningContent == "" && len(resp.ToolCalls) == 0 {
 		return nil, fmt.Errorf("chat completions: empty stream response")
 	}
+	logLLMOutput("chat_stream_response", prepared.url, prepared.model, "", resp)
 	return resp, nil
+}
+
+func llmOutputLoggingEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AIMA_LLM_LOG_OUTPUT"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func logLLMOutput(kind, url, model, payload string, resp *Response) {
+	if !llmOutputLoggingEnabled() {
+		return
+	}
+	attrs := []any{"kind", kind}
+	if url != "" {
+		attrs = append(attrs, "url", url)
+	}
+	if model != "" {
+		attrs = append(attrs, "model", model)
+	}
+	if payload != "" {
+		const maxPayloadLog = 512
+		if len(payload) > maxPayloadLog {
+			attrs = append(attrs, "payload", payload[:maxPayloadLog]+"…(truncated)")
+		} else {
+			attrs = append(attrs, "payload", payload)
+		}
+	}
+	if resp != nil {
+		attrs = append(attrs,
+			"content", resp.Content,
+			"reasoning_content", resp.ReasoningContent,
+			"tool_calls", resp.ToolCalls,
+			"prompt_tokens", resp.PromptTokens,
+			"completion_tokens", resp.CompletionTokens,
+			"total_tokens", resp.TotalTokens,
+		)
+	}
+	// Stream chunks are high-volume; log at Debug to avoid noise.
+	if kind == "chat_stream_chunk" {
+		slog.Debug("llm output", attrs...)
+	} else {
+		slog.Info("llm output", attrs...)
+	}
+}
+
+func mergeStreamToolCalls(existing []ToolCall, wireToOrig map[string]string, deltas []chatToolCall) []ToolCall {
+	for _, tc := range deltas {
+		idx := streamToolCallIndex(existing, tc)
+		if idx < 0 {
+			existing = append(existing, ToolCall{})
+			idx = len(existing) - 1
+		}
+		for len(existing) <= idx {
+			existing = append(existing, ToolCall{})
+		}
+		call := &existing[idx]
+		if tc.ID != "" {
+			call.ID = tc.ID
+		}
+		if name := strings.TrimSpace(tc.Function.Name); name != "" {
+			if orig, ok := wireToOrig[name]; ok {
+				name = orig
+			}
+			call.Name = name
+		}
+		call.Arguments = mergeStreamArguments(call.Arguments, tc.Function.Arguments)
+	}
+	return existing
+}
+
+func streamToolCallIndex(existing []ToolCall, tc chatToolCall) int {
+	if tc.Index != nil && *tc.Index >= 0 {
+		return *tc.Index
+	}
+	if tc.ID != "" {
+		for i := range existing {
+			if existing[i].ID == tc.ID {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func mergeStreamArguments(existing, fragment string) string {
+	if fragment == "" {
+		return existing
+	}
+	if existing == "" {
+		return fragment
+	}
+	if strings.HasPrefix(fragment, existing) {
+		return fragment
+	}
+	if strings.HasPrefix(existing, fragment) {
+		return existing
+	}
+	return existing + fragment
 }
 
 const modelCacheTTL = 30 * time.Second
@@ -1056,6 +1172,7 @@ type chatMessage struct {
 
 type chatToolCall struct {
 	ID       string       `json:"id"`
+	Index    *int         `json:"index,omitempty"`
 	Type     string       `json:"type"`
 	Function chatFunction `json:"function"`
 }

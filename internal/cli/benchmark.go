@@ -315,17 +315,39 @@ func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 		noSave         bool
 		hardware       string
 		engine         string
+		// VLM
+		imageURLs []string
+		// TTS
+		voice       string
+		audioFormat string
+		texts       []string
+		// ASR
+		audioFiles []string
+		language   string
+		// T2I / T2V shared
+		prompt        string
+		width         int
+		height        int
+		steps         int
+		guidanceScale float64
+		numImages     int
+		// T2V
+		durationS     float64
+		fps           int
+		inputImageURL string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "matrix",
 		Short: "Run a benchmark test matrix",
 		Long: `Run benchmarks across multiple concurrency levels and input/output length combinations.
+Works with all modalities: llm, vlm, tts, asr, image_gen, video_gen.
 
 Examples:
   aima benchmark matrix --model qwen3-8b
   aima benchmark matrix --model qwen3-8b --concurrency 1,4,8 --hardware nvidia-gb10-arm64 --engine vllm
-  aima benchmark matrix --model qwen3-8b --rounds 3 --max-retries 1`,
+  aima benchmark matrix --model Qwen3-TTS-0.6B --modality tts --concurrency 1,2,4 --texts "Hello world"
+  aima benchmark matrix --model SenseVoiceSmall --modality asr --concurrency 1,2 --audio-files /path/to/audio.wav`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			save := !noSave
 			params := map[string]any{
@@ -342,6 +364,55 @@ Examples:
 				"save":               save,
 				"hardware":           hardware,
 				"engine":             engine,
+			}
+			// VLM
+			if len(imageURLs) > 0 {
+				params["image_urls"] = imageURLs
+			}
+			// TTS
+			if voice != "" {
+				params["voice"] = voice
+			}
+			if audioFormat != "" {
+				params["audio_format"] = audioFormat
+			}
+			if len(texts) > 0 {
+				params["texts"] = texts
+			}
+			// ASR
+			if len(audioFiles) > 0 {
+				params["audio_files"] = audioFiles
+			}
+			if language != "" {
+				params["language"] = language
+			}
+			// T2I / T2V
+			if prompt != "" {
+				params["prompt"] = prompt
+			}
+			if width > 0 {
+				params["width"] = width
+			}
+			if height > 0 {
+				params["height"] = height
+			}
+			if steps > 0 {
+				params["steps"] = steps
+			}
+			if guidanceScale > 0 {
+				params["guidance_scale"] = guidanceScale
+			}
+			if numImages > 0 {
+				params["num_images"] = numImages
+			}
+			if durationS > 0 {
+				params["duration_s"] = durationS
+			}
+			if fps > 0 {
+				params["fps"] = fps
+			}
+			if inputImageURL != "" {
+				params["input_image_url"] = inputImageURL
 			}
 			raw, err := json.Marshal(params)
 			if err != nil {
@@ -369,6 +440,26 @@ Examples:
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID")
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type")
+	// VLM
+	cmd.Flags().StringArrayVar(&imageURLs, "image-urls", nil, "Image URLs for VLM benchmark (repeat flag for multiple)")
+	// TTS
+	cmd.Flags().StringVar(&voice, "voice", "", "TTS voice name")
+	cmd.Flags().StringVar(&audioFormat, "audio-format", "", "TTS output format (pcm, wav, mp3, opus, flac, aac)")
+	cmd.Flags().StringArrayVar(&texts, "texts", nil, "TTS input texts (repeat flag for multiple)")
+	// ASR
+	cmd.Flags().StringArrayVar(&audioFiles, "audio-files", nil, "ASR audio file paths (repeat flag for multiple)")
+	cmd.Flags().StringVar(&language, "language", "", "ASR language hint")
+	// T2I / T2V
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt for image/video generation")
+	cmd.Flags().IntVar(&width, "width", 0, "Image/video width in pixels")
+	cmd.Flags().IntVar(&height, "height", 0, "Image/video height in pixels")
+	cmd.Flags().IntVar(&steps, "steps", 0, "Inference steps for image/video generation")
+	cmd.Flags().Float64Var(&guidanceScale, "guidance-scale", 0, "Guidance scale for image/video generation")
+	cmd.Flags().IntVar(&numImages, "num-images", 0, "Number of images to generate per request")
+	// T2V
+	cmd.Flags().Float64Var(&durationS, "duration", 0, "Video duration in seconds")
+	cmd.Flags().IntVar(&fps, "fps", 0, "Video frames per second")
+	cmd.Flags().StringVar(&inputImageURL, "input-image-url", "", "Input image URL for I2V mode")
 	_ = cmd.MarkFlagRequired("model")
 
 	return cmd

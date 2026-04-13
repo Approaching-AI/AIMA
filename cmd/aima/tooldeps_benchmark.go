@@ -326,6 +326,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		var p struct {
 			Model             string         `json:"model"`
 			Endpoint          string         `json:"endpoint"`
+			Modality          string         `json:"modality"`
 			ConcurrencyLevels []int          `json:"concurrency_levels"`
 			InputTokenLevels  []int          `json:"input_token_levels"`
 			MaxTokenLevels    []int          `json:"max_token_levels"`
@@ -337,10 +338,36 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			Hardware          string         `json:"hardware"`
 			Engine            string         `json:"engine"`
 			DeployConfig      map[string]any `json:"deploy_config"`
+			// VLM
+			ImageURLs []string `json:"image_urls"`
+			// TTS
+			Voice       string   `json:"voice"`
+			AudioFormat string   `json:"audio_format"`
+			Texts       []string `json:"texts"`
+			// ASR
+			AudioFiles []string `json:"audio_files"`
+			Language   string   `json:"language"`
+			// T2I / T2V
+			Prompt        string  `json:"prompt"`
+			Width         int     `json:"width"`
+			Height        int     `json:"height"`
+			Steps         int     `json:"steps"`
+			GuidanceScale float64 `json:"guidance_scale"`
+			NumImages     int     `json:"num_images"`
+			// T2V
+			DurationS     float64 `json:"duration_s"`
+			FPS           int     `json:"fps"`
+			InputImageURL string  `json:"input_image_url"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("parse matrix params: %w", err)
 		}
+
+		modality := p.Modality
+		if modality == "" {
+			modality = "llm"
+		}
+
 		if len(p.ConcurrencyLevels) == 0 {
 			p.ConcurrencyLevels = []int{1, 4}
 		}
@@ -396,7 +423,17 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						MinOutputRatio: p.MinOutputRatio,
 						MaxRetries:     p.MaxRetries,
 					}
-					result, observedMetrics, err := runBenchmarkWithMetrics(ctx, cfg)
+					req, reqErr := buildRequester(modality, cfg, p.ImageURLs, p.Voice, p.AudioFormat, p.Texts,
+						p.AudioFiles, p.Language, p.Prompt, p.Width, p.Height, p.Steps, p.GuidanceScale,
+						p.NumImages, p.DurationS, p.FPS, p.InputImageURL)
+					var result *benchpkg.RunResult
+					var observedMetrics benchmarkSystemMetrics
+					var err error
+					if reqErr != nil {
+						err = reqErr
+					} else {
+						result, observedMetrics, err = runBenchmarkWithMetricsAndRequester(ctx, cfg, req)
+					}
 					cell := matrixCell{
 						Concurrency: conc,
 						InputTokens: inTok,

@@ -31,20 +31,21 @@ type ExplorerConfig struct {
 
 // ExplorerStatus reports the Explorer's current state.
 type ExplorerStatus struct {
-	Running         bool           `json:"running"`
-	Enabled         bool           `json:"enabled"`
-	Tier            int            `json:"tier"`
-	ActivePlan      *ExplorerPlan  `json:"active_plan,omitempty"`
-	Schedule        ScheduleConfig `json:"schedule"`
-	LastRun         time.Time      `json:"last_run,omitempty"`
-	Mode            string         `json:"mode"`
-	RoundsUsed      int            `json:"rounds_used"`
-	MaxRounds       int            `json:"max_rounds"`
-	TokensUsedToday int            `json:"tokens_used_today"`
-	MaxTokensPerDay int            `json:"max_tokens_per_day"`
-	MaxCycles       int            `json:"max_cycles"`
-	MaxTasks        int            `json:"max_tasks"`
-	LastPlanMetrics *PlanMetrics   `json:"last_plan_metrics,omitempty"`
+	Running            bool           `json:"running"`
+	Enabled            bool           `json:"enabled"`
+	Tier               int            `json:"tier"`
+	ActivePlan         *ExplorerPlan  `json:"active_plan,omitempty"`
+	Schedule           ScheduleConfig `json:"schedule"`
+	LastRun            time.Time      `json:"last_run,omitempty"`
+	Mode               string         `json:"mode"`
+	RoundsUsed         int            `json:"rounds_used"`
+	MaxRounds          int            `json:"max_rounds"`
+	TokensUsedToday    int            `json:"tokens_used_today"`
+	MaxTokensPerDay    int            `json:"max_tokens_per_day"`
+	MaxCycles          int            `json:"max_cycles"`
+	MaxTasks           int            `json:"max_tasks"`
+	LastPlanMetrics    *PlanMetrics   `json:"last_plan_metrics,omitempty"`
+	BlockedByDeploys   []DeployStatus `json:"blocked_by_deploys,omitempty"`
 }
 
 // PlanMetrics captures per-plan execution statistics.
@@ -90,6 +91,9 @@ type Explorer struct {
 	syncPush func(ctx context.Context) error
 	saveNote func(ctx context.Context, title, content, hardware, model, engine string) error
 
+	// Pre-cycle cleanup: stop all existing deployments to free GPU memory.
+	cleanupDeploys func(ctx context.Context) (int, error)
+
 	// Advisory feedback callback, wired via WithAdvisoryFeedback.
 	advisoryFeedback func(ctx context.Context, advisoryID, status, reason string) error
 
@@ -114,6 +118,9 @@ type Explorer struct {
 
 	// T5: Plan metrics
 	lastPlanMetrics *PlanMetrics
+
+	// Pre-cycle block: set when active deployments detected, cleared by CleanupDeploys.
+	blockedByDeploys []DeployStatus
 }
 
 // ExplorerOption configures the Explorer.
@@ -167,6 +174,12 @@ func WithGatherLocalEngines(fn func(ctx context.Context) ([]LocalEngine, error))
 // WithGatherComboFacts sets the function to compute authoritative ready/blocked combo facts.
 func WithGatherComboFacts(fn func(ctx context.Context, hardware HardwareInfo, models []LocalModel, engines []LocalEngine) ([]ComboFact, error)) ExplorerOption {
 	return func(e *Explorer) { e.gatherComboFacts = fn }
+}
+
+// WithCleanupDeploys sets the function to stop all existing deployments before
+// an exploration cycle. Returns the number of deployments cleaned up.
+func WithCleanupDeploys(fn func(ctx context.Context) (int, error)) ExplorerOption {
+	return func(e *Explorer) { e.cleanupDeploys = fn }
 }
 
 // WithAdvisoryFeedback sets the callback for sending advisory feedback to central.
@@ -352,21 +365,43 @@ func (e *Explorer) Status() ExplorerStatus {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return ExplorerStatus{
-		Running:         e.running,
-		Enabled:         e.config.Enabled,
-		Tier:            e.tier,
-		ActivePlan:      e.activePlan,
-		Schedule:        e.config.Schedule,
-		LastRun:         e.lastRun,
-		Mode:            e.config.Mode,
-		RoundsUsed:      e.roundsUsed,
-		MaxRounds:       e.config.MaxRounds,
-		TokensUsedToday: e.tokensUsedToday,
-		MaxTokensPerDay: e.config.MaxTokensPerDay,
-		MaxCycles:       e.config.MaxCycles,
-		MaxTasks:        e.config.MaxTasks,
-		LastPlanMetrics: e.lastPlanMetrics,
+		Running:            e.running,
+		Enabled:            e.config.Enabled,
+		Tier:               e.tier,
+		ActivePlan:         e.activePlan,
+		Schedule:           e.config.Schedule,
+		LastRun:            e.lastRun,
+		Mode:               e.config.Mode,
+		RoundsUsed:         e.roundsUsed,
+		MaxRounds:          e.config.MaxRounds,
+		TokensUsedToday:    e.tokensUsedToday,
+		MaxTokensPerDay:    e.config.MaxTokensPerDay,
+		MaxCycles:          e.config.MaxCycles,
+		MaxTasks:           e.config.MaxTasks,
+		LastPlanMetrics:    e.lastPlanMetrics,
+		BlockedByDeploys:   e.blockedByDeploys,
 	}
+}
+
+// CleanupDeploys stops all active deployments to free GPU memory.
+// Called explicitly by the user via explorer action=cleanup.
+// Returns the number of deployments cleaned up.
+func (e *Explorer) CleanupDeploys(ctx context.Context) (int, error) {
+	if e.cleanupDeploys == nil {
+		return 0, fmt.Errorf("cleanup not available")
+	}
+	cleaned, err := e.cleanupDeploys(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if cleaned > 0 {
+		time.Sleep(gpuReleaseGrace)
+	}
+	e.mu.Lock()
+	e.blockedByDeploys = nil
+	e.mu.Unlock()
+	slog.Info("explorer: user-confirmed cleanup completed", "stopped", cleaned)
+	return cleaned, nil
 }
 
 func (e *Explorer) claimPlanRound(ctx context.Context, mode string, maxRounds int) (int, bool) {
@@ -480,6 +515,29 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	if tier == 0 {
 		slog.Debug("explorer: tier 0, skipping event", "type", ev.Type)
 		return
+	}
+
+	// Pre-cycle check: block if active deployments consume GPU memory.
+	// Single-model exploration needs a clean slate for accurate VRAM readings.
+	// The user must explicitly call explorer action=cleanup to proceed.
+	// Only gated when cleanupDeploys is wired — otherwise no action available.
+	if e.cleanupDeploys != nil && e.gatherDeploys != nil {
+		deploys, gErr := e.gatherDeploys(ctx)
+		if gErr == nil && len(deploys) > 0 {
+			names := make([]string, 0, len(deploys))
+			for _, d := range deploys {
+				names = append(names, d.Model+"("+d.Engine+")")
+			}
+			slog.Warn("explorer: cycle blocked — active deployments occupy GPU memory",
+				"count", len(deploys), "deployments", strings.Join(names, ", "))
+			e.mu.Lock()
+			e.blockedByDeploys = deploys
+			e.mu.Unlock()
+			return
+		}
+		e.mu.Lock()
+		e.blockedByDeploys = nil
+		e.mu.Unlock()
 	}
 
 	// Build plan input from current state

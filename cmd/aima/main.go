@@ -480,6 +480,33 @@ func run() error {
 			}
 			return statuses, nil
 		}),
+		agent.WithCleanupDeploys(func(ctx context.Context) (int, error) {
+			if deps.DeployList == nil || deps.DeployDelete == nil {
+				return 0, nil
+			}
+			data, err := deps.DeployList(ctx)
+			if err != nil {
+				return 0, err
+			}
+			var deployments []runtime.DeploymentStatus
+			if err := json.Unmarshal(data, &deployments); err != nil {
+				return 0, err
+			}
+			cleaned := 0
+			for _, d := range deployments {
+				name := d.Name
+				if name == "" {
+					continue
+				}
+				slog.Info("explorer: pre-cycle cleanup stopping deployment", "name", name)
+				if err := deps.DeployDelete(ctx, name); err != nil {
+					slog.Warn("explorer: pre-cycle cleanup failed for deployment", "name", name, "error", err)
+					continue
+				}
+				cleaned++
+			}
+			return cleaned, nil
+		}),
 		agent.WithGatherOpenQuestions(func(ctx context.Context) ([]agent.OpenQuestion, error) {
 			rows, err := db.ListOpenQuestions(ctx, "untested")
 			if err != nil {
@@ -693,6 +720,16 @@ func run() error {
 	deps.ExplorerTrigger = func(ctx context.Context) (json.RawMessage, error) {
 		explorer.Trigger()
 		return json.Marshal(map[string]string{"status": "triggered"})
+	}
+	deps.ExplorerCleanup = func(ctx context.Context) (json.RawMessage, error) {
+		cleaned, err := explorer.CleanupDeploys(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{
+			"status":  "cleaned",
+			"stopped": cleaned,
+		})
 	}
 
 	// Wire agent, patrol, tuning, exploration, and open questions tools.

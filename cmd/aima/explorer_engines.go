@@ -169,6 +169,16 @@ func gatherExplorerComboFacts(
 				Status:   "blocked",
 			}
 
+			// Check on-disk model format against engine's supported formats.
+			// The resolver may find a catalog variant with a compatible format
+			// (e.g. gguf variant for llamacpp), but the actual files on disk
+			// may differ (e.g. safetensors). Block early to avoid wasted work.
+			if reason := explorerFormatBlockReason(item.model.Format, item.engine.Type, cat, hwInfo); reason != "" {
+				fact.Reason = reason
+				results[i] = indexedFact{idx: i, fact: fact}
+				return
+			}
+
 			rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, item.model.Name, item.engine.Type, "", nil, dataDir)
 			if err != nil {
 				fact.Reason = err.Error()
@@ -444,5 +454,25 @@ func normalizedImageRef(ref string) string {
 		return ref
 	}
 	return ref + ":latest"
+}
+
+// explorerFormatBlockReason checks if a model's on-disk format is compatible
+// with the engine's supported formats. Returns a non-empty reason string if
+// the combo should be blocked, or "" if compatible (or check cannot be performed).
+func explorerFormatBlockReason(modelFormat, engineType string, cat *knowledge.Catalog, hwInfo knowledge.HardwareInfo) string {
+	if modelFormat == "" {
+		return ""
+	}
+	ea := cat.FindEngineByName(engineType, hwInfo)
+	if ea == nil || len(ea.Metadata.SupportedFormats) == 0 {
+		return ""
+	}
+	for _, f := range ea.Metadata.SupportedFormats {
+		if strings.EqualFold(f, modelFormat) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("on-disk model format %q incompatible with engine %s (supported: %v)",
+		modelFormat, engineType, ea.Metadata.SupportedFormats)
 }
 

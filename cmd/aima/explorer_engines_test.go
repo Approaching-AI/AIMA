@@ -30,6 +30,65 @@ func TestExplorerContainerRuntimeAvailable_FallsBackToDockerFromRootlessK3S(t *t
 	}
 }
 
+func TestExplorerFormatBlockReason(t *testing.T) {
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{
+			{
+				Metadata: knowledge.EngineMetadata{
+					Name:             "vllm-blackwell",
+					Type:             "vllm",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: knowledge.EngineHardware{GPUArch: "Blackwell"},
+			},
+			{
+				Metadata: knowledge.EngineMetadata{
+					Name:             "llamacpp-universal",
+					Type:             "llamacpp",
+					SupportedFormats: []string{"gguf"},
+				},
+				Hardware: knowledge.EngineHardware{GPUArch: "*"},
+			},
+			{
+				Metadata: knowledge.EngineMetadata{
+					Name: "custom-engine",
+					Type: "custom",
+					// No SupportedFormats — format-agnostic engine
+				},
+				Hardware: knowledge.EngineHardware{GPUArch: "*"},
+			},
+		},
+	}
+	hw := knowledge.HardwareInfo{GPUArch: "Blackwell"}
+
+	tests := []struct {
+		name        string
+		modelFormat string
+		engineType  string
+		wantBlock   bool
+	}{
+		{"safetensors+vllm=OK", "safetensors", "vllm", false},
+		{"gguf+llamacpp=OK", "gguf", "llamacpp", false},
+		{"safetensors+llamacpp=BLOCKED", "safetensors", "llamacpp", true},
+		{"gguf+vllm=BLOCKED", "gguf", "vllm", true},
+		{"empty format=skip", "", "llamacpp", false},
+		{"unknown engine=skip", "safetensors", "nonexistent", false},
+		{"format-agnostic engine=skip", "safetensors", "custom", false},
+		{"case insensitive", "SafeTensors", "vllm", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := explorerFormatBlockReason(tt.modelFormat, tt.engineType, cat, hw)
+			if tt.wantBlock && reason == "" {
+				t.Errorf("expected block for %s+%s, got empty reason", tt.modelFormat, tt.engineType)
+			}
+			if !tt.wantBlock && reason != "" {
+				t.Errorf("expected no block for %s+%s, got: %s", tt.modelFormat, tt.engineType, reason)
+			}
+		})
+	}
+}
+
 func TestCatalogModelMaxContextLen(t *testing.T) {
 	cat := &knowledge.Catalog{
 		ModelAssets: []knowledge.ModelAsset{

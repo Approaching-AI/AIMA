@@ -235,9 +235,9 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 	// explorer — status/config/trigger via action param
 	s.RegisterTool(&Tool{
 		Name:        "explorer",
-		Description: "Autonomous Explorer management. action=status: show current state (tier, active plan, schedule config, last run). action=config: get or update Explorer schedule configuration. action=trigger: manually trigger an Explorer gap scan cycle.",
+		Description: "Autonomous Explorer management. action=status: show current state (tier, active plan, schedule config, last run). action=config: get or update Explorer schedule configuration. action=trigger: manually trigger an Explorer gap scan cycle. action=cleanup: stop all active deployments to free GPU memory before exploration (use when status shows blocked_by_deploys).",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["status","config","trigger"],"description":"Explorer action"},`+
+			`"action":{"type":"string","enum":["status","config","trigger","cleanup"],"description":"Explorer action"},`+
 				`"config_action":{"type":"string","enum":["get","set"],"description":"Config sub-action (for action=config)"},`+
 				`"key":{"type":"string","description":"Config key: gap_scan_interval, sync_interval, full_audit_interval, quiet_start, quiet_end, max_concurrent_runs, enabled, mode (continuous/once/budget), max_rounds, max_plan_duration, max_tokens_per_day, rounds_used (for action=config, config_action=set)"},`+
 				`"value":{"type":"string","description":"New value (for action=config, config_action=set)"}`,
@@ -295,8 +295,17 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explorer trigger: %w", err)
 				}
 				return TextResult(string(data)), nil
+				case "cleanup":
+					if deps.ExplorerCleanup == nil {
+						return ErrorResult("explorer action=cleanup not implemented"), nil
+					}
+				data, err := deps.ExplorerCleanup(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("explorer cleanup: %w", err)
+				}
+				return TextResult(string(data)), nil
 			default:
-				return ErrorResult(fmt.Sprintf("unknown action %q; supported: status, config, trigger", p.Action)), nil
+				return ErrorResult(fmt.Sprintf("unknown action %q; supported: status, config, trigger, cleanup", p.Action)), nil
 			}
 		},
 	})

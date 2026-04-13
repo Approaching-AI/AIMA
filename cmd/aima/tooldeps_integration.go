@@ -100,11 +100,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	// Knowledge sync (K6)
 	syncHTTPClient := &http.Client{Timeout: 120 * time.Second}
 	deps.SyncPush = func(ctx context.Context) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured — use system.config set central.endpoint <url>")
-		}
 		// Export local knowledge
 		exportData, err := deps.ExportKnowledge(ctx, json.RawMessage(`{}`))
 		if err != nil {
@@ -170,11 +167,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.SyncPull = func(ctx context.Context) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured — use system.config set central.endpoint <url>")
-		}
 		since, _ := db.GetSyncTimestamp(ctx, "pull")
 		syncURL, err := buildSyncURL(endpoint, since)
 		if err != nil {
@@ -261,7 +255,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.SyncStatus = func(ctx context.Context) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		pushAt, _ := db.GetSyncTimestamp(ctx, "push")
 		pullAt, _ := db.GetSyncTimestamp(ctx, "pull")
 		connected := false
@@ -285,11 +279,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 
 	// Sync v2: advisory pull, scenario requests, feedback (v0.4 integration)
 	deps.SyncPullAdvisories = func(ctx context.Context) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		hwTarget := edgeHardwareTarget(ctx, ac)
 		u := endpoint + "/api/v1/advisories"
 		params := url.Values{}
@@ -329,11 +320,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.SyncPullScenarios = func(ctx context.Context) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		hwTarget := edgeHardwareTarget(ctx, ac)
 		u := endpoint + "/api/v1/scenarios"
 		params := url.Values{}
@@ -371,11 +359,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.AdvisoryFeedback = func(ctx context.Context, advisoryID, feedbackStatus, reason string) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		normalizedStatus, accepted, err := normalizeFeedbackStatus(feedbackStatus)
 		if err != nil {
 			return nil, err
@@ -414,11 +399,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.RequestAdvise = func(ctx context.Context, model, engine, intent string) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		hwTarget := edgeHardwareTarget(ctx, ac)
 		payload, _ := json.Marshal(map[string]any{
 			"action":           "recommend",
@@ -458,11 +440,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.RequestScenario = func(ctx context.Context, hardware string, models []string, goal string) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		payload, _ := json.Marshal(map[string]any{
 			"hardware": hardware,
 			"models":   models,
@@ -494,11 +473,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.ListCentralScenarios = func(ctx context.Context, hardware, source string) (json.RawMessage, error) {
-		endpoint, _ := deps.GetConfig(ctx, "central.endpoint")
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
-		if endpoint == "" {
-			return nil, fmt.Errorf("central.endpoint not configured")
-		}
 		u := endpoint + "/api/v1/scenarios"
 		params := url.Values{}
 		if hardware != "" {
@@ -1206,3 +1182,16 @@ func firstNonEmptyString(values ...string) string {
 var _ = strconv.Itoa
 var _ state.DB
 var _ = slog.Info
+
+const defaultCentralEndpoint = "https://aimaservice.ai/central"
+
+// centralEndpoint returns the configured central endpoint, falling back to the
+// production default (https://aimaservice.ai/central) when not explicitly set.
+// Users can override via: system.config set central.endpoint <url>
+func centralEndpoint(ctx context.Context, getConfig func(context.Context, string) (string, error)) string {
+	ep, _ := getConfig(ctx, "central.endpoint")
+	if ep == "" {
+		return defaultCentralEndpoint
+	}
+	return ep
+}

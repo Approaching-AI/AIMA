@@ -31,7 +31,9 @@ Central 已部署到 `aima-oversea` 服务器，作为 aima-service docker-compo
 | **覆盖方式** | `system.config set central.endpoint <url>` |
 | **Gateway 代理** | Rust gateway `/central/*` → strip 前缀 → `http://central:8081` |
 | **数据库** | PostgreSQL `aima_central` database（与 platform 隔离） |
-| **升级** | `cd aima-central-knowledge && git pull && docker build -t aima-central:latest . && docker compose up -d central` |
+| **升级 Central** | `cd /root/aima-central-knowledge && git pull && docker build -t aima-central:latest . && cd /root/aima-service && docker compose -f docker-compose.prod.yml up -d central` |
+| **升级 Gateway** | `cd /root/aima-service && git pull && docker compose -f docker-compose.prod.yml build gateway && docker compose -f docker-compose.prod.yml up -d gateway` |
+| **服务器 Git** | `aima-oversea` 已配 SSH key（`aima-oversea-deploy`），两个 repo 均可 `git pull` |
 
 ### 开发警告
 

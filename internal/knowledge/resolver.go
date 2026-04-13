@@ -1192,6 +1192,44 @@ func (c *Catalog) engineDefaultArgs(engineType string, hw HardwareInfo) map[stri
 	return engine.Startup.DefaultArgs
 }
 
+// ModelMaxContextLen returns the largest context window (max_model_len,
+// context_length, ctx_size, max_context_tokens) across all variants of the
+// named model. Returns 0 if the model is not found or no key is set.
+// Safe for concurrent use.
+func (c *Catalog) ModelMaxContextLen(name string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.ModelAssets {
+		if !strings.EqualFold(c.ModelAssets[i].Metadata.Name, name) {
+			continue
+		}
+		var best int
+		for _, v := range c.ModelAssets[i].Variants {
+			for _, key := range []string{"max_model_len", "context_length", "ctx_size", "max_context_tokens"} {
+				if val, ok := v.DefaultConfig[key]; ok {
+					if n := anyToInt(val); n > best {
+						best = n
+					}
+				}
+			}
+		}
+		return best
+	}
+	return 0
+}
+
+func anyToInt(v any) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	}
+	return 0
+}
+
 // RegisterModel appends a ModelAsset to the catalog if no asset with the
 // same name already exists. Safe for concurrent use.
 func (c *Catalog) RegisterModel(ma ModelAsset) {

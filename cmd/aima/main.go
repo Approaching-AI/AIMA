@@ -586,7 +586,7 @@ func run() error {
 						Format:        m.Format,
 						Type:          m.Type,
 						SizeBytes:     m.SizeBytes,
-						MaxContextLen: modelMaxContextLen(cat, m.Name),
+						MaxContextLen: cat.ModelMaxContextLen(m.Name),
 					})
 				}
 			}

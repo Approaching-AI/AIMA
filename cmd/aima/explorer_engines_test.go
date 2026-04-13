@@ -30,7 +30,7 @@ func TestExplorerContainerRuntimeAvailable_FallsBackToDockerFromRootlessK3S(t *t
 	}
 }
 
-func TestModelMaxContextLen(t *testing.T) {
+func TestCatalogModelMaxContextLen(t *testing.T) {
 	cat := &knowledge.Catalog{
 		ModelAssets: []knowledge.ModelAsset{
 			{
@@ -44,6 +44,12 @@ func TestModelMaxContextLen(t *testing.T) {
 				Metadata: knowledge.ModelMetadata{Name: "qwen3.5-27b"},
 				Variants: []knowledge.ModelVariant{
 					{DefaultConfig: map[string]any{"context_length": float64(65536)}},
+				},
+			},
+			{
+				Metadata: knowledge.ModelMetadata{Name: "gemma-4"},
+				Variants: []knowledge.ModelVariant{
+					{DefaultConfig: map[string]any{"max_context_tokens": float64(32768)}},
 				},
 			},
 			{
@@ -62,19 +68,15 @@ func TestModelMaxContextLen(t *testing.T) {
 	}{
 		{"picks largest variant", "qwen3-4b", 8192},
 		{"uses context_length key", "qwen3.5-27b", 65536},
+		{"uses max_context_tokens key", "gemma-4", 32768},
 		{"unknown model returns 0", "nonexistent", 0},
 		{"model without context keys returns 0", "no-context-model", 0},
-		{"nil catalog returns 0", "", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := cat
-			if tt.name == "nil catalog returns 0" {
-				c = nil
-			}
-			got := modelMaxContextLen(c, tt.modelName)
+			got := cat.ModelMaxContextLen(tt.modelName)
 			if got != tt.want {
-				t.Errorf("modelMaxContextLen(%q) = %d, want %d", tt.modelName, got, tt.want)
+				t.Errorf("ModelMaxContextLen(%q) = %d, want %d", tt.modelName, got, tt.want)
 			}
 		})
 	}

@@ -554,22 +554,7 @@ func (a catalogAdapter) ModelType(name string) string {
 }
 
 func (a catalogAdapter) ModelContextWindow(name string) int {
-	for _, m := range a.cat.ModelAssets {
-		if m.Metadata.Name != name {
-			continue
-		}
-		for _, v := range m.Variants {
-			if ml, ok := v.DefaultConfig["max_model_len"]; ok {
-				switch n := ml.(type) {
-				case int:
-					return n
-				case float64:
-					return int(n)
-				}
-			}
-		}
-	}
-	return 0
+	return a.cat.ModelMaxContextLen(name)
 }
 
 func (a catalogAdapter) ModelFamily(name string) string {

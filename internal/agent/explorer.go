@@ -1214,13 +1214,15 @@ func defaultBenchmarkProfiles(hw HardwareInfo) []ExplorationBenchmarkProfile {
 // extractMaxModelLen reads max_model_len (vLLM) or context_length (sglang)
 // from the task params set by the LLM planner.
 func extractMaxModelLen(params map[string]any) int {
-	for _, key := range []string{"max_model_len", "context_length", "ctx_size"} {
+	for _, key := range []string{"max_model_len", "context_length", "ctx_size", "max_context_tokens"} {
 		if v, ok := params[key]; ok {
 			switch x := v.(type) {
 			case float64:
 				return int(x)
 			case int:
 				return x
+			case int64:
+				return int(x)
 			}
 		}
 	}

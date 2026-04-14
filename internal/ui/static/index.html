@@ -2927,7 +2927,7 @@ body {
           </div>
           <div class="wiz-actions" style="margin-top:16px">
             <template x-if="wizNeedsInit()">
-              <button class="wiz-btn wiz-btn-primary" @click="onboardingPhase = 'init'; wizStartInitPolling()" x-text="t('wiz_continue_setup')"></button>
+              <button class="wiz-btn wiz-btn-primary" @click="wizEnterInit()" x-text="t('wiz_continue_setup')"></button>
             </template>
             <template x-if="!wizNeedsInit()">
               <button class="wiz-btn wiz-btn-primary" @click="wizStartScan()" x-text="t('wiz_continue_scan')"></button>
@@ -2942,44 +2942,71 @@ body {
             <div class="wiz-card-title"><span class="wiz-icon">&#x2699;</span> <span x-text="t('wiz_init')"></span></div>
             <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px" x-text="t('wiz_needs_init')"></p>
 
-            <!-- Linux instructions -->
-            <template x-if="wizPlatform() === 'linux'">
+            <template x-if="wizCanAutoInit()">
               <div style="display:flex;flex-direction:column;gap:12px">
-                <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_linux')"></p>
-                <div class="wiz-cmd-box">
-                  <code>sudo aima init</code>
-                  <button class="wiz-copy-btn" @click="wizCopyText('sudo aima init', $event)" x-text="t('wiz_copy')"></button>
+                <div class="wiz-hint">
+                  <span x-text="'Automatic ' + wizInitTier() + ' stack setup is running in this browser session.'"></span>
+                </div>
+                <div class="wiz-scan-list">
+                  <template x-for="(item, i) in onboardingInitLog" :key="i">
+                    <div class="wiz-scan-item">
+                      <span class="wiz-scan-icon" x-text="item.type === 'component' ? '\u2714' : '\u2699'"></span>
+                      <span class="wiz-scan-type" x-text="item.type"></span>
+                      <span x-text="item.name"></span>
+                    </div>
+                  </template>
+                  <div class="wiz-scan-item" x-show="onboardingInitLog.length === 0 || onboardingInitRunning">
+                    <span class="wiz-spinner"></span>
+                    <span x-text="onboardingInitRunning ? t('wiz_init_polling') : ('Waiting for ' + wizInitTier() + ' stack setup...')"></span>
+                  </div>
+                </div>
+                <div class="wiz-error" x-show="onboardingInitError" x-text="onboardingInitError"></div>
+              </div>
+            </template>
+
+            <template x-if="!wizCanAutoInit()">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <!-- Linux instructions -->
+                <template x-if="wizPlatform() === 'linux'">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_linux')"></p>
+                    <div class="wiz-cmd-box">
+                      <code x-text="wizInitCommand()"></code>
+                      <button class="wiz-copy-btn" @click="wizCopyText(wizInitCommand(), $event)" x-text="t('wiz_copy')"></button>
+                    </div>
+                    <p class="wiz-hint" x-show="wizInitBlockedReason()" x-text="wizInitBlockedReason()"></p>
+                  </div>
+                </template>
+
+                <!-- macOS instructions -->
+                <template x-if="wizPlatform() === 'darwin'">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <template x-if="wizStackReady('docker')">
+                      <p style="font-size:13px;color:var(--success)" x-text="t('wiz_init_mac_ready')"></p>
+                    </template>
+                    <template x-if="!wizStackReady('docker')">
+                      <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_mac')"></p>
+                    </template>
+                  </div>
+                </template>
+
+                <!-- Windows instructions -->
+                <template x-if="wizPlatform() === 'windows'">
+                  <div>
+                    <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_win')"></p>
+                  </div>
+                </template>
+
+                <!-- Polling status -->
+                <div class="wiz-polling-note" style="margin-top:16px">
+                  <span class="wiz-spinner"></span>
+                  <span x-text="onboardingInitTimeout ? t('wiz_init_timeout') : t('wiz_init_polling')"></span>
                 </div>
               </div>
             </template>
-
-            <!-- macOS instructions -->
-            <template x-if="wizPlatform() === 'darwin'">
-              <div style="display:flex;flex-direction:column;gap:12px">
-                <template x-if="wizStackReady('docker')">
-                  <p style="font-size:13px;color:var(--success)" x-text="t('wiz_init_mac_ready')"></p>
-                </template>
-                <template x-if="!wizStackReady('docker')">
-                  <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_mac')"></p>
-                </template>
-              </div>
-            </template>
-
-            <!-- Windows instructions -->
-            <template x-if="wizPlatform() === 'windows'">
-              <div>
-                <p style="font-size:13px;color:var(--text-dim)" x-text="t('wiz_init_win')"></p>
-              </div>
-            </template>
-
-            <!-- Polling status -->
-            <div class="wiz-polling-note" style="margin-top:16px">
-              <span class="wiz-spinner"></span>
-              <span x-text="onboardingInitTimeout ? t('wiz_init_timeout') : t('wiz_init_polling')"></span>
-            </div>
           </div>
           <div class="wiz-actions" style="margin-top:16px">
-            <button class="wiz-btn wiz-btn-secondary" @click="wizSkipInit()" x-text="t('wiz_skip_native')"></button>
+            <button class="wiz-btn wiz-btn-secondary" @click="wizCanAutoInit() ? wizCancelInit() : wizSkipInit()" x-text="wizCanAutoInit() ? t('wiz_cancel') : t('wiz_skip_native')"></button>
           </div>
         </div>
 
@@ -5195,9 +5222,13 @@ function aimaApp() {
     onboardingDeployModel: null,
     onboardingDeployEndpoint: '',
     onboardingDeployProgress: null,
+    onboardingInitLog: [],
+    onboardingInitError: '',
+    onboardingInitRunning: false,
     onboardingInitPolling: null,
     onboardingInitTimeout: false,
     _wizDeployAbort: null,
+    _wizInitAbort: null,
     _wizScanAbort: null,
     openclaw: {
       connected: false,
@@ -5648,6 +5679,21 @@ function aimaApp() {
       if (!this.onboardingData || !this.onboardingData.stack_status) return false;
       return !!this.onboardingData.stack_status.needs_init;
     },
+    wizCanAutoInit() {
+      if (!this.onboardingData || !this.onboardingData.stack_status) return false;
+      return !!this.onboardingData.stack_status.can_auto_init;
+    },
+    wizInitTier() {
+      if (!this.onboardingData || !this.onboardingData.stack_status) return 'docker';
+      return this.onboardingData.stack_status.init_tier_recommendation || 'docker';
+    },
+    wizInitCommand() {
+      return this.wizInitTier() === 'k3s' ? 'sudo aima init --k3s' : 'sudo aima init';
+    },
+    wizInitBlockedReason() {
+      if (!this.onboardingData || !this.onboardingData.stack_status) return '';
+      return this.onboardingData.stack_status.init_blocked_reason || '';
+    },
     wizPlatform() {
       if (!this.onboardingData || !this.onboardingData.hardware) return 'linux';
       var os = (this.onboardingData.hardware.os || '').toLowerCase();
@@ -5666,6 +5712,10 @@ function aimaApp() {
         clearInterval(this.onboardingInitPolling);
         this.onboardingInitPolling = null;
       }
+      if (this._wizInitAbort) {
+        this._wizInitAbort.abort();
+        this._wizInitAbort = null;
+      }
       if (this._wizScanAbort) {
         this._wizScanAbort.abort();
         this._wizScanAbort = null;
@@ -5674,6 +5724,17 @@ function aimaApp() {
         this._wizDeployAbort.abort();
         this._wizDeployAbort = null;
       }
+    },
+
+    wizEnterInit() {
+      this.onboardingPhase = 'init';
+      this.onboardingInitLog = [];
+      this.onboardingInitError = '';
+      if (this.wizCanAutoInit()) {
+        this.wizStartInit();
+        return;
+      }
+      this.wizStartInitPolling();
     },
 
     // INIT phase: start polling
@@ -5689,7 +5750,7 @@ function aimaApp() {
           if (resp.ok) {
             var data = await resp.json();
             self.onboardingData = data;
-            if (data.stack_status && data.stack_status.docker === 'ready') {
+            if (data.stack_status && (data.stack_status.docker === 'ready' || data.stack_status.k3s === 'ready')) {
               clearInterval(self.onboardingInitPolling);
               self.onboardingInitPolling = null;
               self.wizStartScan();
@@ -5704,12 +5765,114 @@ function aimaApp() {
       }, 3000);
     },
 
+    async wizStartInit() {
+      this.onboardingInitLog = [];
+      this.onboardingInitError = '';
+      this.onboardingInitRunning = true;
+      this.onboardingInitTimeout = false;
+      var self = this;
+      try {
+        var abort = new AbortController();
+        this._wizInitAbort = abort;
+        var headers = { 'Content-Type': 'application/json' };
+        if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+        var resp = await fetch('/ui/api/onboarding-init', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({ tier: this.wizInitTier(), allow_download: true }),
+          signal: abort.signal
+        });
+        if (!resp.ok) throw new Error('init ' + resp.status);
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+        var currentEvent = '';
+        while (true) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (var li = 0; li < lines.length; li++) {
+            var line = lines[li];
+            if (line.indexOf('event: ') === 0) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.indexOf('data: ') === 0 && currentEvent) {
+              try {
+                var eventData = JSON.parse(line.slice(6));
+                self.wizHandleInitEvent(currentEvent, eventData);
+              } catch (e) { /* ignore */ }
+              currentEvent = '';
+            }
+          }
+        }
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          this.onboardingInitError = (e && e.message) ? e.message : 'init failed';
+        }
+      } finally {
+        this.onboardingInitRunning = false;
+        this._wizInitAbort = null;
+      }
+    },
+
+    async wizHandleInitEvent(event, data) {
+      if (event === 'init_phase') {
+        this.onboardingInitLog.push({ type: 'phase', name: data.message || data.phase || 'init' });
+      } else if (event === 'init_preflight') {
+        var count = data.download_count || 0;
+        var tier = data.tier || this.wizInitTier();
+        this.onboardingInitLog.push({ type: 'preflight', name: count > 0 ? ('Preparing ' + tier + ' stack (' + count + ' downloads)') : ('Preparing ' + tier + ' stack') });
+      } else if (event === 'init_component') {
+        var label = data.name || 'component';
+        if (data.ready) label += ' ready';
+        else if (data.skipped) label += ' skipped';
+        else if (data.message) label += ': ' + data.message;
+        this.onboardingInitLog.push({ type: 'component', name: label });
+      } else if (event === 'init_complete') {
+        if (data.stack_status) {
+          if (!this.onboardingData) this.onboardingData = {};
+          this.onboardingData.stack_status = data.stack_status;
+        }
+        var headers = {};
+        if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+        try {
+          var resp = await fetch('/ui/api/onboarding-status', { headers: headers });
+          if (resp.ok) {
+            this.onboardingData = await resp.json();
+          }
+        } catch (e) { /* ignore */ }
+        if (this.onboardingData && this.onboardingData.stack_status &&
+            (this.onboardingData.stack_status.docker === 'ready' || this.onboardingData.stack_status.k3s === 'ready')) {
+          this.wizStartScan();
+        } else if (!this.onboardingInitError) {
+          this.onboardingInitError = 'init finished but stack is not ready yet';
+        }
+      } else if (event === 'error') {
+        this.onboardingInitError = data.message || 'init failed';
+      }
+    },
+
     wizSkipInit() {
+      if (this._wizInitAbort) {
+        this._wizInitAbort.abort();
+        this._wizInitAbort = null;
+      }
       if (this.onboardingInitPolling) {
         clearInterval(this.onboardingInitPolling);
         this.onboardingInitPolling = null;
       }
+      this.onboardingInitRunning = false;
       this.wizStartScan();
+    },
+
+    wizCancelInit() {
+      if (this._wizInitAbort) {
+        this._wizInitAbort.abort();
+        this._wizInitAbort = null;
+      }
+      this.onboardingInitRunning = false;
+      this.onboardingPhase = 'detecting';
     },
 
     // SCANNING phase: SSE connection
@@ -5894,6 +6057,11 @@ function aimaApp() {
           this.onboardingDeployEndpoint = data.endpoint;
         }
       } else if (event === 'deploy_complete') {
+        if (data.status && data.status !== 'ready') {
+          this.onboardingDeployProgress.error = data.message || this.t('wiz_deploy_error');
+          steps[2].status = 'error';
+          return;
+        }
         steps[2].status = 'done';
         steps[2].progress = 100;
         if (data.endpoint) this.onboardingDeployEndpoint = data.endpoint;

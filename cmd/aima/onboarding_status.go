@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -42,10 +43,12 @@ type onboardingHardware struct {
 
 // onboardingStackStatus describes the stack readiness for onboarding.
 type onboardingStackStatus struct {
-	Docker              string `json:"docker"`
-	K3S                 string `json:"k3s"`
-	NeedsInit           bool   `json:"needs_init"`
+	Docker                 string `json:"docker"`
+	K3S                    string `json:"k3s"`
+	NeedsInit              bool   `json:"needs_init"`
 	InitTierRecommendation string `json:"init_tier_recommendation"`
+	CanAutoInit            bool   `json:"can_auto_init"`
+	InitBlockedReason      string `json:"init_blocked_reason,omitempty"`
 }
 
 // onboardingVersion holds version check results.
@@ -82,9 +85,12 @@ type githubRelease struct {
 
 const (
 	versionCheckCacheTTL   = 24 * time.Hour
-	versionCheckTimeout    = 5 * time.Second
+	versionCheckTimeout    = 2 * time.Second
 	githubReleasesEndpoint = "https://api.github.com/repos/Approaching-AI/aima/releases/latest"
 )
+
+var fetchLatestRelease = fetchLatestGitHubRelease
+var detectOnboardingInitCapability = defaultOnboardingInitCapability
 
 // buildOnboardingStatusJSON aggregates hardware, stack, version, and onboarding
 // completion state into a single JSON response for the Web UI onboarding wizard.
@@ -157,9 +163,9 @@ func buildOnboardingHardware(ctx context.Context, ac *appContext, hw *hal.Hardwa
 // buildOnboardingStackStatus calls StackStatus and interprets component readiness.
 func buildOnboardingStackStatus(ctx context.Context, deps *mcp.ToolDeps) (onboardingStackStatus, error) {
 	result := onboardingStackStatus{
-		Docker:              "not_installed",
-		K3S:                 "not_installed",
-		NeedsInit:           false,
+		Docker:                 "not_installed",
+		K3S:                    "not_installed",
+		NeedsInit:              false,
 		InitTierRecommendation: "docker",
 	}
 
@@ -212,8 +218,24 @@ func buildOnboardingStackStatus(ctx context.Context, deps *mcp.ToolDeps) (onboar
 	if result.K3S != "not_installed" && result.K3S != "ready" {
 		result.InitTierRecommendation = "k3s"
 	}
+	if result.NeedsInit {
+		result.CanAutoInit, result.InitBlockedReason = detectOnboardingInitCapability(deps)
+	}
 
 	return result, nil
+}
+
+func defaultOnboardingInitCapability(deps *mcp.ToolDeps) (bool, string) {
+	if deps == nil || deps.StackInit == nil {
+		return false, "stack init is not available"
+	}
+	if runtime.GOOS != "linux" {
+		return false, ""
+	}
+	if os.Geteuid() != 0 {
+		return false, "automatic init requires AIMA to run with root privileges or a privileged helper"
+	}
+	return true, ""
 }
 
 // buildOnboardingVersion checks the current version against the latest GitHub release.
@@ -236,9 +258,12 @@ func buildOnboardingVersion(ctx context.Context, deps *mcp.ToolDeps) onboardingV
 	}
 
 	// Fetch from GitHub
-	release, err := fetchLatestGitHubRelease(ctx)
+	release, err := fetchLatestRelease(ctx)
 	if err != nil {
 		slog.Debug("onboarding status: version check failed", "error", err)
+		if deps.SetConfig != nil {
+			saveVersionCheckCache(ctx, deps, versionCheckCache{Timestamp: time.Now()})
+		}
 		return result
 	}
 

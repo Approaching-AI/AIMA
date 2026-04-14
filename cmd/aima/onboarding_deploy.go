@@ -1,12 +1,12 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/jguan/aima/internal/engine"
@@ -19,10 +19,65 @@ type onboardingDeployRequest struct {
 	Engine string `json:"engine,omitempty"`
 }
 
+type onboardingDeployResult struct {
+	Name    string `json:"name"`
+	Model   string `json:"model"`
+	Engine  string `json:"engine"`
+	Address string `json:"address"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+func decodeOnboardingDeployResult(raw json.RawMessage) (onboardingDeployResult, error) {
+	var result onboardingDeployResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return onboardingDeployResult{}, err
+	}
+	return result, nil
+}
+
+func (r onboardingDeployResult) ready() bool {
+	status := strings.ToLower(strings.TrimSpace(r.Status))
+	switch status {
+	case "ready":
+		return true
+	case "":
+		return strings.TrimSpace(r.Address) != ""
+	default:
+		return false
+	}
+}
+
+func (r onboardingDeployResult) failureMessage() string {
+	if msg := strings.TrimSpace(r.Message); msg != "" {
+		return msg
+	}
+	status := strings.TrimSpace(r.Status)
+	if status == "" {
+		return "deployment did not report a ready status"
+	}
+	return fmt.Sprintf("deployment ended with status %s", status)
+}
+
+func normalizeOnboardingEndpoint(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if strings.Contains(address, "://") {
+		return address
+	}
+	return "http://" + address
+}
+
 // handleOnboardingDeploy returns an HTTP handler that orchestrates engine pull +
 // model pull + deploy.run with SSE progress streaming.
 func handleOnboardingDeploy(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireOnboardingMutation(ac, w, r) {
+			return
+		}
+
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
 		if err != nil {
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -190,42 +245,26 @@ func handleOnboardingDeploy(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc
 		result, err := deps.DeployRun(ctx, modelName, engineType, "", nil, false, onPhase, onEngineProgress)
 		if err != nil {
 			slog.Warn("onboarding deploy failed", "model", modelName, "error", err)
-			sendError(0, "deploy", err)
+			sendError(3, "deploy", err)
 			return
 		}
 
-		// Parse the result to extract endpoint address
-		var deployResult struct {
-			Name    string `json:"name"`
-			Model   string `json:"model"`
-			Engine  string `json:"engine"`
-			Address string `json:"address"`
-			Status  string `json:"status"`
-		}
-		if err := json.Unmarshal(result, &deployResult); err == nil {
-			endpoint := deployResult.Address
-			if endpoint == "" {
-				endpoint = "http://localhost:6188"
-			}
-			send("deploy_complete", map[string]any{
-				"model":    deployResult.Model,
-				"engine":   deployResult.Engine,
-				"endpoint": endpoint,
-				"status":   deployResult.Status,
-			})
-		} else {
-			// Fallback: send raw result
-			send("deploy_complete", map[string]any{
-				"model":  modelName,
-				"status": "complete",
-			})
+		deployResult, err := decodeOnboardingDeployResult(result)
+		if err != nil {
+			sendError(3, "deploy", fmt.Errorf("parse deploy result: %w", err))
+			return
 		}
 
-		// Mark onboarding as completed
-		if deps.SetConfig != nil {
-			if cfgErr := deps.SetConfig(context.Background(), "onboarding_completed", "true"); cfgErr != nil {
-				slog.Warn("onboarding deploy: failed to mark onboarding completed", "error", cfgErr)
-			}
+		if !deployResult.ready() {
+			sendError(3, "deploy", fmt.Errorf("%s", deployResult.failureMessage()))
+			return
 		}
+
+		send("deploy_complete", map[string]any{
+			"model":    deployResult.Model,
+			"engine":   deployResult.Engine,
+			"endpoint": normalizeOnboardingEndpoint(deployResult.Address),
+			"status":   "ready",
+		})
 	}
 }

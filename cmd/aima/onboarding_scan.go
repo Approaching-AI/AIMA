@@ -38,10 +38,41 @@ type scanModelResult struct {
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 }
 
+const onboardingCentralSyncTimeout = 2 * time.Second
+
+func parseOnboardingCentralSyncCounts(raw json.RawMessage) (int, int) {
+	var nested struct {
+		KnowledgeImport struct {
+			Imported struct {
+				Configurations   int `json:"configurations"`
+				BenchmarkResults int `json:"benchmark_results"`
+			} `json:"imported"`
+		} `json:"knowledge_import"`
+	}
+	if err := json.Unmarshal(raw, &nested); err == nil {
+		if nested.KnowledgeImport.Imported.Configurations != 0 || nested.KnowledgeImport.Imported.BenchmarkResults != 0 {
+			return nested.KnowledgeImport.Imported.Configurations, nested.KnowledgeImport.Imported.BenchmarkResults
+		}
+	}
+
+	var legacy struct {
+		Configurations int `json:"configurations_imported"`
+		Benchmarks     int `json:"benchmarks_imported"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err == nil {
+		return legacy.Configurations, legacy.Benchmarks
+	}
+	return 0, 0
+}
+
 // handleOnboardingScan returns an HTTP handler that triggers engine scan + model scan +
 // Central sync in parallel, streaming results to the client via SSE.
 func handleOnboardingScan(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireOnboardingMutation(ac, w, r) {
+			return
+		}
+
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -177,7 +208,7 @@ func handleOnboardingScan(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc {
 				centralCh <- result
 				return
 			}
-			syncCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			syncCtx, cancel := context.WithTimeout(ctx, onboardingCentralSyncTimeout)
 			defer cancel()
 			raw, err := deps.SyncPull(syncCtx)
 			if err != nil {
@@ -190,17 +221,10 @@ func handleOnboardingScan(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc {
 				return
 			}
 			result.connected = true
-			// Try to parse pulled counts from the import result
-			var importResult struct {
-				Configurations int `json:"configurations_imported"`
-				Benchmarks     int `json:"benchmarks_imported"`
-			}
-			_ = json.Unmarshal(raw, &importResult)
-			result.configsPulled = importResult.Configurations
-			result.benchmarkPulled = importResult.Benchmarks
+			result.configsPulled, result.benchmarkPulled = parseOnboardingCentralSyncCounts(raw)
 			send("central_synced", map[string]any{
-				"connected":        true,
-				"configs_pulled":   result.configsPulled,
+				"connected":         true,
+				"configs_pulled":    result.configsPulled,
 				"benchmarks_pulled": result.benchmarkPulled,
 			})
 			centralCh <- result

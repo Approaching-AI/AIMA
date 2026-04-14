@@ -357,7 +357,11 @@ func run() error {
 			w.Write(data)
 		})
 		mux.HandleFunc("POST /ui/api/onboarding-scan", handleOnboardingScan(ac, deps))
+		mux.HandleFunc("POST /ui/api/onboarding-init", handleOnboardingInit(ac, deps))
 		mux.HandleFunc("POST /ui/api/onboarding-recommend", func(w http.ResponseWriter, r *http.Request) {
+			if !requireOnboardingMutation(ac, w, r) {
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-cache")
 			data, err := buildModelRecommendations(r.Context(), ac, deps)

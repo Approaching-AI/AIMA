@@ -21,8 +21,8 @@ func isTTY() bool {
 
 func newInitCmd(app *App) *cobra.Command {
 	var (
-		yesFlag  bool
-		k3sFlag  bool
+		yesFlag bool
+		k3sFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -131,14 +131,6 @@ when confirmed (or use --yes to skip the prompt).`,
 						detail += " (" + p.Message + ")"
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "    [%s] pod/%s: %s\n", podStatus, p.Name, detail)
-				}
-			}
-
-			// 4. Auto-import Docker images to K3S containerd (only for K3S tier)
-			if k3sFlag && result.AllReady && app.ToolDeps.ScanEngines != nil {
-				fmt.Fprintln(cmd.OutOrStdout(), "\nImporting Docker engine images to K3S containerd...")
-				if _, err := app.ToolDeps.ScanEngines(ctx, "auto", true); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: engine import failed: %v\n", err)
 				}
 			}
 

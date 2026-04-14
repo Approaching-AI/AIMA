@@ -231,43 +231,14 @@ func TestHarvester_SinglePointNote(t *testing.T) {
 	}
 }
 
-func TestIsStructuralFailure(t *testing.T) {
-	tests := []struct {
-		errMsg string
-		want   bool
-	}{
-		{"Transformers does not recognize this architecture", true},
-		{"model format \"safetensors\" not supported by engine llamacpp-universal", true},
-		{"container compatibility check failed for qwen3-tts-0.6b", true},
-		{"CUDA out of memory", false},
-		{"health check timed out", false},
-		{"connection refused", false},
-		{"exit status 137", false},
-		{"some random error", false},
-	}
-	for _, tt := range tests {
-		name := tt.errMsg
-		if len(name) > 30 {
-			name = name[:30]
-		}
-		t.Run(name, func(t *testing.T) {
-			got := isStructuralFailure(tt.errMsg)
-			if got != tt.want {
-				t.Errorf("isStructuralFailure(%q) = %v, want %v", tt.errMsg, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestHarvester_PersistsStructuralFailure(t *testing.T) {
-	var savedTitle, savedNote string
+func TestHarvester_SkipsAllFailureNotes(t *testing.T) {
+	var savedTitle string
 	h := NewHarvester(1, WithSaveNote(func(ctx context.Context, title, content, hardware, model, engine string) error {
 		savedTitle = title
-		savedNote = content
 		return nil
 	}))
 
-	// Structural failure: should be persisted
+	// Structural failure: should NOT be persisted (no failure notes at all)
 	h.Harvest(context.Background(), HarvestInput{
 		Task: PlanTask{Hardware: "nvidia-rtx4090-x86", Model: "qwen3-tts-0.6b", Engine: "vllm"},
 		Result: HarvestResult{
@@ -275,18 +246,11 @@ func TestHarvester_PersistsStructuralFailure(t *testing.T) {
 			Error:   "Transformers does not recognize this architecture qwen3_tts",
 		},
 	})
-	if savedTitle == "" {
-		t.Fatal("structural failure should have been persisted")
-	}
-	if !strings.Contains(savedTitle, "structural failure") {
-		t.Errorf("title = %q, want 'structural failure'", savedTitle)
-	}
-	if !strings.Contains(savedNote, "qwen3-tts-0.6b") {
-		t.Errorf("note missing model name: %s", savedNote)
+	if savedTitle != "" {
+		t.Fatalf("failure notes should not be persisted, got title=%q", savedTitle)
 	}
 
-	// Reset and test transient failure: should NOT be persisted
-	savedTitle = ""
+	// Transient failure: also should NOT be persisted
 	h.Harvest(context.Background(), HarvestInput{
 		Task: PlanTask{Hardware: "nvidia-rtx4090-x86", Model: "qwen3-8b", Engine: "vllm"},
 		Result: HarvestResult{
@@ -295,6 +259,6 @@ func TestHarvester_PersistsStructuralFailure(t *testing.T) {
 		},
 	})
 	if savedTitle != "" {
-		t.Fatalf("transient failure should NOT have been persisted, got title=%q", savedTitle)
+		t.Fatalf("failure notes should not be persisted, got title=%q", savedTitle)
 	}
 }

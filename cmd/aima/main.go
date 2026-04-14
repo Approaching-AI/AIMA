@@ -344,36 +344,6 @@ func run() error {
 			json.NewEncoder(w).Encode(results)
 		})
 
-		// Onboarding wizard API endpoints
-		mux.HandleFunc("GET /ui/api/onboarding-status", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "no-cache")
-			data, err := buildOnboardingStatusJSON(r.Context(), ac, deps)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-				return
-			}
-			w.Write(data)
-		})
-		mux.HandleFunc("POST /ui/api/onboarding-scan", handleOnboardingScan(ac, deps))
-		mux.HandleFunc("POST /ui/api/onboarding-init", handleOnboardingInit(ac, deps))
-		mux.HandleFunc("POST /ui/api/onboarding-recommend", func(w http.ResponseWriter, r *http.Request) {
-			if !requireOnboardingMutation(ac, w, r) {
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "no-cache")
-			data, err := buildModelRecommendations(r.Context(), ac, deps)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-				return
-			}
-			w.Write(data)
-		})
-		mux.HandleFunc("POST /ui/api/onboarding-deploy", handleOnboardingDeploy(ac, deps))
-
 		// Start power sampling goroutine (30s interval, 7-day retention)
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
@@ -638,13 +608,22 @@ func run() error {
 			result := make([]agent.LocalModel, 0, len(models))
 			for _, m := range models {
 				if m.Name != "" {
-					result = append(result, agent.LocalModel{
+					lm := agent.LocalModel{
 						Name:          m.Name,
 						Format:        m.Format,
 						Type:          m.Type,
 						SizeBytes:     m.SizeBytes,
 						MaxContextLen: cat.ModelMaxContextLen(m.Name),
-					})
+					}
+					// Enrich from catalog YAML (INV-1: knowledge from YAML, not code)
+					for i := range cat.ModelAssets {
+						if strings.EqualFold(cat.ModelAssets[i].Metadata.Name, m.Name) {
+							lm.Family = cat.ModelAssets[i].Metadata.Family
+							lm.ParameterCount = cat.ModelAssets[i].Metadata.ParameterCount
+							break
+						}
+					}
+					result = append(result, lm)
 				}
 			}
 			return result, nil
@@ -808,7 +787,6 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 		"enabled",
 		"mode",
 		"max_rounds",
-		"max_plan_duration",
 		"max_tokens_per_day",
 		"max_cycles",
 		"max_tasks",
@@ -870,12 +848,6 @@ func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig 
 		case "max_rounds":
 			if n, parseErr := strconv.Atoi(value); parseErr == nil {
 				config.MaxRounds = n
-			} else {
-				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
-			}
-		case "max_plan_duration":
-			if duration, parseErr := time.ParseDuration(value); parseErr == nil {
-				config.MaxPlanDuration = duration
 			} else {
 				slog.Warn("ignore invalid explorer config", "key", key, "value", value, "error", parseErr)
 			}
@@ -1348,7 +1320,6 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 	buildDeployDeps(ac, deps, pullModelCore, deployRunCore)
 	buildKnowledgeDeps(ac, deps)
 	buildBenchmarkDeps(ac, deps, resolveEndpoint)
-	buildOnboardingDeps(ac, deps)
 
 	return deps
 }

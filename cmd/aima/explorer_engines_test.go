@@ -89,6 +89,39 @@ func TestExplorerFormatBlockReason(t *testing.T) {
 	}
 }
 
+func TestExplorerModalityBlockReason(t *testing.T) {
+	tests := []struct {
+		name           string
+		supportedTypes []string
+		modelType      string
+		engineType     string
+		wantBlock      bool
+	}{
+		{"llm model + llm engine = OK", []string{"llm"}, "llm", "vllm", false},
+		{"llm model + image engine = BLOCKED", []string{"image"}, "llm", "z-image-diffusers", true},
+		{"empty supported types = OK (backward compat)", nil, "llm", "vllm", false},
+		{"empty model type = OK (backward compat)", []string{"llm"}, "", "vllm", false},
+		{"both empty = OK", nil, "", "vllm", false},
+		{"multi-type engine with match", []string{"llm", "embedding"}, "embedding", "vllm", false},
+		{"multi-type engine without match", []string{"llm", "embedding"}, "tts", "vllm", true},
+		{"case insensitive match", []string{"LLM"}, "llm", "vllm", false},
+		{"case insensitive model type", []string{"llm"}, "LLM", "vllm", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := explorerModalityBlockReason(tt.supportedTypes, tt.modelType, tt.engineType)
+			if tt.wantBlock && reason == "" {
+				t.Errorf("expected block for supportedTypes=%v modelType=%q engineType=%q, got empty reason",
+					tt.supportedTypes, tt.modelType, tt.engineType)
+			}
+			if !tt.wantBlock && reason != "" {
+				t.Errorf("expected no block for supportedTypes=%v modelType=%q engineType=%q, got: %s",
+					tt.supportedTypes, tt.modelType, tt.engineType, reason)
+			}
+		})
+	}
+}
+
 func TestCatalogModelMaxContextLen(t *testing.T) {
 	cat := &knowledge.Catalog{
 		ModelAssets: []knowledge.ModelAsset{

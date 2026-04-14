@@ -96,17 +96,9 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 	var actions []HarvestAction
 
 	if !input.Result.Success {
-		note := generateFailureNote(input)
-		actions = append(actions, HarvestAction{Type: "note", Detail: note})
-		// Persist structural failures (architecture incompatibility, version gaps) to
-		// prevent re-exploration of known-broken combos. Transient failures (OOM,
-		// timeout, deploy_crash) are NOT persisted — they may succeed with different params.
-		if h.saveNote != nil && isStructuralFailure(input.Result.Error) {
-			title := fmt.Sprintf("%s on %s: structural failure", input.Task.Model, input.Task.Engine)
-			if err := h.saveNote(ctx, title, note, input.Task.Hardware, input.Task.Model, input.Task.Engine); err != nil {
-				slog.Warn("harvester save structural failure note failed", "error", err, "title", title)
-			}
-		}
+		// Skip all failure note persistence — failures are tracked locally in the
+		// PDCA workspace (summary.md blockers) and should not pollute the central
+		// knowledge server. Only successful, validated data points are harvested.
 		return actions
 	}
 
@@ -393,34 +385,3 @@ func classifyError(errMsg string) string {
 	}
 }
 
-// isStructuralFailure returns true for failures caused by fundamental
-// incompatibilities (architecture not recognized, format not supported) that
-// won't be fixed by retrying with different parameters. Transient failures
-// (OOM, timeout, deploy_crash) return false.
-func isStructuralFailure(errMsg string) bool {
-	lower := strings.ToLower(errMsg)
-	return strings.Contains(lower, "does not recognize") ||
-		strings.Contains(lower, "not supported") ||
-		strings.Contains(lower, "architecture") ||
-		strings.Contains(lower, "not recognize this") ||
-		strings.Contains(lower, "compatibility check failed")
-}
-
-// generateFailureNote creates a structured failure note with config evidence.
-func generateFailureNote(input HarvestInput) string {
-	var parts []string
-	parts = append(parts, fmt.Sprintf("%s on %s: FAILED [%s].", input.Task.Model, input.Task.Engine, classifyError(input.Result.Error)))
-	parts = append(parts, fmt.Sprintf("Error: %s.", input.Result.Error))
-	if len(input.Result.Config) > 0 {
-		parts = append(parts, fmt.Sprintf("Config tried: %v.", input.Result.Config))
-	} else if len(input.Task.Params) > 0 {
-		parts = append(parts, fmt.Sprintf("Config tried: %v.", input.Task.Params))
-	}
-	if input.Task.Kind != "" {
-		parts = append(parts, fmt.Sprintf("Task kind: %s.", input.Task.Kind))
-	}
-	if input.Task.Reason != "" {
-		parts = append(parts, fmt.Sprintf("Reason: %s.", input.Task.Reason))
-	}
-	return strings.Join(parts, " ")
-}

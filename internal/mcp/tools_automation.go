@@ -239,7 +239,7 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 		InputSchema: schema(
 			`"action":{"type":"string","enum":["status","config","trigger","cleanup"],"description":"Explorer action"},`+
 				`"config_action":{"type":"string","enum":["get","set"],"description":"Config sub-action (for action=config)"},`+
-				`"key":{"type":"string","description":"Config key: gap_scan_interval, sync_interval, full_audit_interval, quiet_start, quiet_end, max_concurrent_runs, enabled, mode (continuous/once/budget), max_rounds, max_plan_duration, max_tokens_per_day, rounds_used (for action=config, config_action=set)"},`+
+				`"key":{"type":"string","description":"Config key: gap_scan_interval, sync_interval, full_audit_interval, quiet_start, quiet_end, max_concurrent_runs, enabled, mode (continuous/once/budget), max_rounds, max_tokens_per_day, rounds_used (for action=config, config_action=set)"},`+
 				`"value":{"type":"string","description":"New value (for action=config, config_action=set)"}`,
 			"action"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {

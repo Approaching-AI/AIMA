@@ -395,6 +395,61 @@ func TestExplorationManagerEnsureDeployed_EngineMismatchRedeploys(t *testing.T) 
 	}
 }
 
+func TestInferModelFamily(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"Qwen2.5-Coder-3B-Instruct", "qwen"},
+		{"qwen3-30B-A3B", "qwen"},
+		{"GLM-4.6V-Flash", "glm"},
+		{"ChatGLM3-6B", "glm"},
+		{"CodeGeeX4-All-9B", "glm"},
+		{"Llama-3.1-8B-Instruct", "llama"},
+		{"Mistral-7B-v0.1", "mistral"},
+		{"deepseek-coder-33B", "deepseek"},
+		{"MiniCPM-2B", "minicpm"},
+		{"Phi-3-mini-4k", "phi"},
+		{"gemma-2-9b", "gemma"},
+		{"Baichuan2-7B-Chat", "baichuan"},
+		{"internlm2-20b", "internlm"},
+		{"unknown-model-7B", "unknown"},
+		{"", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := inferModelFamily(tt.model)
+			if got != tt.want {
+				t.Errorf("inferModelFamily(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferParameterCount(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"Qwen2.5-Coder-3B-Instruct", "3B"},
+		{"GLM-4.1V-9B", "9B"},
+		{"Llama-3.1-70B-Instruct", "70B"},
+		{"deepseek-v2-236b", "236B"},
+		{"Qwen3-0.6B", "0.6B"},
+		{"Qwen3-30B-A3B", "30B"},
+		{"no-size-model", "unknown"},
+		{"", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := inferParameterCount(tt.model)
+			if got != tt.want {
+				t.Errorf("inferParameterCount(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExplorationManagerEnsureDeployed_SameEngineSkipsDeploy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

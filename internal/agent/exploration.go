@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -21,13 +22,16 @@ import (
 const gpuReleaseGrace = 3 * time.Second // grace period for GPU memory to fully release from driver
 
 type ExplorationTarget struct {
-	Hardware     string   `json:"hardware,omitempty"`
-	GPUArch      string   `json:"gpu_arch,omitempty"` // e.g. "Ada" — for overlay YAML, not resolution
-	Model        string   `json:"model"`
-	Engine       string   `json:"engine,omitempty"`
-	Runtime      string   `json:"runtime,omitempty"`
-	ModelType    string   `json:"model_type,omitempty"`    // e.g. "llm", "asr", "tts", "embedding"
-	InternalArgs []string `json:"internal_args,omitempty"` // engine params to exclude from overlay YAML
+	Hardware        string   `json:"hardware,omitempty"`
+	GPUArch         string   `json:"gpu_arch,omitempty"` // e.g. "Ada" — for overlay YAML, not resolution
+	Model           string   `json:"model"`
+	Engine          string   `json:"engine,omitempty"`
+	Runtime         string   `json:"runtime,omitempty"`
+	ModelType       string   `json:"model_type,omitempty"`        // e.g. "llm", "asr", "tts", "embedding"
+	InternalArgs    []string `json:"internal_args,omitempty"`     // engine params to exclude from overlay YAML
+	HealthCheckPath string   `json:"health_check_path,omitempty"` // from engine YAML startup.health_check.path
+	Family          string   `json:"family,omitempty"`            // from catalog metadata.family — overlay YAML
+	ParameterCount  string   `json:"parameter_count,omitempty"`   // from catalog metadata.parameter_count — overlay YAML
 }
 
 type ExplorationConstraints struct {
@@ -160,17 +164,19 @@ type ExplorationManager struct {
 	tuner *Tuner
 	tools ToolExecutor
 
-	mu         sync.Mutex
-	activeRuns map[string]context.CancelFunc
-	tuneRunID  string
+	mu              sync.Mutex
+	activeRuns      map[string]context.CancelFunc
+	activeProbeInfo map[string]string // model name → health check path from engine YAML
+	tuneRunID       string
 }
 
 func NewExplorationManager(db *state.DB, tuner *Tuner, tools ToolExecutor) *ExplorationManager {
 	return &ExplorationManager{
-		db:         db,
-		tuner:      tuner,
-		tools:      tools,
-		activeRuns: make(map[string]context.CancelFunc),
+		db:              db,
+		tuner:           tuner,
+		tools:           tools,
+		activeRuns:      make(map[string]context.CancelFunc),
+		activeProbeInfo: make(map[string]string),
 	}
 }
 
@@ -208,6 +214,9 @@ func (m *ExplorationManager) Start(ctx context.Context, req ExplorationStart) (*
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	m.activeRuns[run.ID] = cancel
+	if req.Target.HealthCheckPath != "" {
+		m.activeProbeInfo[run.ModelID] = req.Target.HealthCheckPath
+	}
 	if run.Kind == "tune" {
 		m.tuneRunID = run.ID
 	}
@@ -325,7 +334,7 @@ func (m *ExplorationManager) Result(ctx context.Context, runID string) (*Explora
 }
 
 func (m *ExplorationManager) execute(ctx context.Context, run *state.ExplorationRun) {
-	defer m.cleanup(run.ID, run.Kind)
+	defer m.cleanup(run.ID, run.Kind, run.ModelID)
 
 	switch run.Kind {
 	case "tune":
@@ -925,15 +934,20 @@ func (m *ExplorationManager) resolveDeployEndpoint(ctx context.Context, model st
 	return fmt.Sprintf("http://%s/v1/chat/completions", status.Address)
 }
 
-// probeInferenceEndpoint does a quick GET /v1/models to verify the inference
-// engine is actually serving, not just that the container is running.
+// probeInferenceEndpoint verifies the inference engine is actually serving.
+// Uses the engine YAML's health_check.path when available; falls back to
+// /v1/models (the standard OpenAI endpoint) for engines without explicit config.
 func (m *ExplorationManager) probeInferenceEndpoint(ctx context.Context, model string) bool {
 	addr := m.resolveDeployEndpoint(ctx, model)
 	if addr == "" {
 		return false
 	}
-	modelsURL := strings.Replace(addr, "/v1/chat/completions", "/v1/models", 1)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	baseURL := strings.Replace(addr, "/v1/chat/completions", "", 1)
+	probePath := "/v1/models"
+	if hp := m.healthCheckPath(model); hp != "" {
+		probePath = hp
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+probePath, nil)
 	if err != nil {
 		return false
 	}
@@ -946,18 +960,35 @@ func (m *ExplorationManager) probeInferenceEndpoint(ctx context.Context, model s
 	return resp.StatusCode == http.StatusOK
 }
 
+// healthCheckPath returns the engine YAML health_check.path for a running exploration.
+func (m *ExplorationManager) healthCheckPath(model string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeProbeInfo[model]
+}
+
 // waitForInferenceReady polls the inference endpoint until it actually serves
 // requests. This catches the gap where deploy.status reports ready=true but the
 // engine is still loading weights or running health checks.
 func (m *ExplorationManager) waitForInferenceReady(ctx context.Context, model string) error {
-	const (
-		pollInterval = 5 * time.Second
-		timeout      = 5 * time.Minute
-	)
+	const pollInterval = 5 * time.Second
 
 	// Fast path: already serving.
 	if m.probeInferenceEndpoint(ctx, model) {
 		return nil
+	}
+
+	// Use remaining context deadline if available, otherwise default to 10 minutes.
+	// The caller (executeValidate) may have already consumed time in waitForReady(),
+	// so the context deadline naturally shrinks for larger models.
+	timeout := 10 * time.Minute
+	if dl, ok := ctx.Deadline(); ok {
+		remaining := time.Until(dl)
+		if remaining > pollInterval {
+			timeout = remaining
+		} else {
+			return fmt.Errorf("timeout waiting for inference endpoint %s (context deadline too close: %v)", model, remaining)
+		}
 	}
 
 	slog.Info("exploration: inference not yet serving, waiting for endpoint",
@@ -1010,6 +1041,9 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		} `json:"result"`
 	}
 
+	// resourceUsage tracks GPU/memory usage from the benchmark for overlay YAML.
+	resourceUsage := result.ResourceUsage
+
 	if result.TotalCells > 0 {
 		// Matrix benchmark — extract representative cell for overlay
 		repCell, ok := extractRepresentativeCell(result.ResponseJSON)
@@ -1020,6 +1054,10 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		repResult, _ := repCell["result"].(map[string]any)
 		if repResult == nil {
 			return
+		}
+		// Use resource_usage from representative cell if available
+		if ru, ok := repCell["resource_usage"].(map[string]any); ok && len(ru) > 0 {
+			resourceUsage = ru
 		}
 		// Marshal the representative cell's result and re-parse into envelope
 		wrapped, _ := json.Marshal(map[string]any{"result": repResult})
@@ -1098,14 +1136,38 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		modelType = "llm"
 	}
 
+	// Infer VRAM from benchmark resource usage
+	vramMinMiB := 0
+	if resourceUsage != nil {
+		if v, ok := resourceUsage["vram_usage_mib"]; ok {
+			switch vf := v.(type) {
+			case float64:
+				vramMinMiB = int(vf)
+			case int:
+				vramMinMiB = vf
+			}
+		}
+	}
+
+	// Prefer catalog metadata for family/parameter_count (INV-1: knowledge from YAML),
+	// fall back to name-based inference for models not yet in the catalog.
+	family := plan.Target.Family
+	if family == "" {
+		family = inferModelFamily(plan.Target.Model)
+	}
+	paramCount := plan.Target.ParameterCount
+	if paramCount == "" {
+		paramCount = inferParameterCount(plan.Target.Model)
+	}
+
 	// Build structured overlay as a map and marshal to YAML.
 	overlay := map[string]any{
 		"kind": "model_asset",
 		"metadata": map[string]any{
 			"name":            plan.Target.Model,
 			"type":            modelType,
-			"family":          "explorer-discovered",
-			"parameter_count": "unknown",
+			"family":          family,
+			"parameter_count": paramCount,
 			"notes": fmt.Sprintf("Auto-discovered by Explorer on %s. Benchmark ID: %s. Engine version: %s. Engine image: %s.",
 				time.Now().Format("2006-01-02"), result.BenchmarkID, result.EngineVersion, result.EngineImage),
 		},
@@ -1116,7 +1178,7 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 			"name": variantName,
 			"hardware": map[string]any{
 				"gpu_arch":     gpuArch,
-				"vram_min_mib": 0,
+				"vram_min_mib": vramMinMiB,
 			},
 			"engine":         plan.Target.Engine,
 			"format":         "safetensors",
@@ -1309,6 +1371,33 @@ func parseDeployConfig(responseJSON string) map[string]any {
 	return resp.Config
 }
 
+// inferModelFamily extracts the model family from a model name by prefix matching.
+func inferModelFamily(model string) string {
+	lower := strings.ToLower(model)
+	for _, f := range []struct{ prefix, family string }{
+		{"qwen", "qwen"}, {"glm", "glm"}, {"llama", "llama"},
+		{"mistral", "mistral"}, {"deepseek", "deepseek"},
+		{"minicpm", "minicpm"}, {"phi", "phi"}, {"gemma", "gemma"},
+		{"baichuan", "baichuan"}, {"internlm", "internlm"},
+		{"chatglm", "glm"}, {"codegeex", "glm"},
+	} {
+		if strings.HasPrefix(lower, f.prefix) {
+			return f.family
+		}
+	}
+	return "unknown"
+}
+
+var paramCountRe = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)[Bb]`)
+
+// inferParameterCount extracts the parameter count (e.g. "3B") from a model name.
+func inferParameterCount(model string) string {
+	if m := paramCountRe.FindStringSubmatch(model); len(m) > 1 {
+		return m[1] + "B"
+	}
+	return "unknown"
+}
+
 func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state.ExplorationRun) {
 	if m.tools == nil {
 		run.Status = "failed"
@@ -1415,10 +1504,11 @@ func (m *ExplorationManager) executeOpenQuestion(ctx context.Context, run *state
 	_ = m.db.UpdateExplorationRun(context.Background(), run)
 }
 
-func (m *ExplorationManager) cleanup(runID, kind string) {
+func (m *ExplorationManager) cleanup(runID, kind, modelID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.activeRuns, runID)
+	delete(m.activeProbeInfo, modelID)
 	if kind == "tune" && m.tuneRunID == runID {
 		m.tuneRunID = ""
 	}

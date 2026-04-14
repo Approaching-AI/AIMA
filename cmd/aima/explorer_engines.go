@@ -94,6 +94,7 @@ func gatherExplorerLocalEngines(
 			TunableParams:       asset.Startup.DefaultArgs,
 			InternalArgs:        asset.Startup.InternalArgs,
 			SupportedModelTypes: asset.Metadata.SupportedModelTypes,
+			HealthCheckPath:     asset.Startup.HealthCheck.Path,
 		})
 	}
 
@@ -175,6 +176,13 @@ func gatherExplorerComboFacts(
 			// (e.g. gguf variant for llamacpp), but the actual files on disk
 			// may differ (e.g. safetensors). Block early to avoid wasted work.
 			if reason := explorerFormatBlockReason(item.model.Format, item.engine.Type, cat, hwInfo); reason != "" {
+				fact.Reason = reason
+				results[i] = indexedFact{idx: i, fact: fact}
+				return
+			}
+
+			// Modality check: engine must support the model's type (llm, embedding, tts, etc.)
+			if reason := explorerModalityBlockReason(item.engine.SupportedModelTypes, item.model.Type, item.engine.Type); reason != "" {
 				fact.Reason = reason
 				results[i] = indexedFact{idx: i, fact: fact}
 				return
@@ -475,5 +483,21 @@ func explorerFormatBlockReason(modelFormat, engineType string, cat *knowledge.Ca
 	}
 	return fmt.Sprintf("on-disk model format %q incompatible with engine %s (supported: %v)",
 		modelFormat, engineType, ea.Metadata.SupportedFormats)
+}
+
+// explorerModalityBlockReason checks if an engine supports the model's modality type.
+// Returns a non-empty reason string if the combo should be blocked, or "" if compatible.
+// Empty supportedTypes or empty modelType means no constraint (backward compat).
+func explorerModalityBlockReason(supportedTypes []string, modelType, engineType string) string {
+	if len(supportedTypes) == 0 || modelType == "" {
+		return ""
+	}
+	for _, t := range supportedTypes {
+		if strings.EqualFold(t, modelType) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("modality mismatch: engine %s does not support model type %q (supported: %v)",
+		engineType, modelType, supportedTypes)
 }
 

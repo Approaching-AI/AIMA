@@ -2870,6 +2870,46 @@ func (d *DB) HasCompletedExploration(ctx context.Context, modelID, engineID stri
 	return true, nil
 }
 
+// structuralFailurePatterns lists error substrings that indicate permanent,
+// non-retriable failures. Centralized here so the classifier and SQL query
+// stay in sync. Add new patterns here when a new class of structural failure
+// is discovered (no rebuild of the SQL query is needed — it's generated on init).
+var structuralFailurePatterns = []string{
+	"architectures",
+	"not implemented",
+	"unsupported model",
+	"requires transformers",
+	"no module named",
+	"modality mismatch",
+	"format mismatch",
+	"does not support model type",
+}
+
+// structuralFailureSQL is the pre-built WHERE clause fragment for structural
+// failure detection, generated once from structuralFailurePatterns.
+var structuralFailureSQL = func() string {
+	clauses := make([]string, len(structuralFailurePatterns))
+	for i, p := range structuralFailurePatterns {
+		clauses[i] = fmt.Sprintf("LOWER(error) LIKE '%%%s%%'", p)
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}()
+
+// HasStructuralExplorationFailure checks if a model+engine combo has a permanent
+// structural failure (e.g., unsupported architecture) that won't resolve on retry.
+func (d *DB) HasStructuralExplorationFailure(ctx context.Context, modelID, engineID string) (bool, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM exploration_runs
+		 WHERE model_id = ? AND engine_id = ? AND status = 'failed'
+		 AND `+structuralFailureSQL,
+		modelID, engineID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // CountFailedExplorations counts how many times a model+engine combo has failed.
 func (d *DB) CountFailedExplorations(ctx context.Context, modelID, engineID string) (int, error) {
 	var count int

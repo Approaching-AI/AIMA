@@ -54,10 +54,12 @@ type SkipCombo struct {
 // LocalModel describes a model installed on this device.
 type LocalModel struct {
 	Name           string `json:"name"`
-	Format         string `json:"format"`                    // "safetensors", "gguf"
-	Type           string `json:"type"`                      // "llm", "asr", "tts", "embedding", "reranker"
-	SizeBytes      int64  `json:"size_bytes"`                // on-disk size (≈ VRAM needed for non-quantized)
-	MaxContextLen  int    `json:"max_context_len,omitempty"` // model's max context window from catalog variant (0 = unknown)
+	Format         string `json:"format"`                      // "safetensors", "gguf"
+	Type           string `json:"type"`                        // "llm", "asr", "tts", "embedding", "reranker"
+	SizeBytes      int64  `json:"size_bytes"`                  // on-disk size (≈ VRAM needed for non-quantized)
+	MaxContextLen  int    `json:"max_context_len,omitempty"`   // model's max context window from catalog variant (0 = unknown)
+	Family         string `json:"family,omitempty"`            // from catalog metadata.family (e.g. "qwen", "llama")
+	ParameterCount string `json:"parameter_count,omitempty"`   // from catalog metadata.parameter_count (e.g. "8B")
 }
 
 // LocalEngine describes an engine installed on this device with catalog metadata.
@@ -73,6 +75,7 @@ type LocalEngine struct {
 	TunableParams       map[string]any `json:"tunable_params,omitempty"`         // startup.default_args from engine YAML
 	InternalArgs        []string       `json:"internal_args,omitempty"`          // startup.internal_args from engine YAML
 	SupportedModelTypes []string       `json:"supported_model_types,omitempty"`  // e.g. ["llm","embedding"] — empty = all
+	HealthCheckPath     string         `json:"health_check_path,omitempty"`      // startup.health_check.path from engine YAML
 }
 
 // ComboFact is an authoritative execution fact for one local model×engine pair.
@@ -143,6 +146,7 @@ type PlanTask struct {
 	Engine    string         `json:"engine"`
 	SourceRef string         `json:"source_ref,omitempty"`
 	Params    map[string]any `json:"params,omitempty"`
+	Benchmark BenchmarkSpec  `json:"benchmark,omitempty"`
 	Reason    string         `json:"reason"`
 	Priority  int            `json:"priority"`
 	DependsOn string         `json:"depends_on,omitempty"`

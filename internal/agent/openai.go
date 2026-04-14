@@ -474,6 +474,16 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, messages []Mess
 		resp.CompletionTokens = lastUsage.CompletionTokens
 		resp.TotalTokens = lastUsage.TotalTokens
 	}
+	// Fallback: if the provider didn't return usage (e.g. stream_options unsupported),
+	// estimate completion tokens from output length so token budgets still work.
+	if resp.TotalTokens == 0 && (resp.Content != "" || resp.ReasoningContent != "") {
+		outputChars := len(resp.Content) + len(resp.ReasoningContent)
+		for _, tc := range resp.ToolCalls {
+			outputChars += len(tc.Arguments)
+		}
+		resp.CompletionTokens = outputChars / 4 // rough 4 chars/token estimate
+		resp.TotalTokens = resp.CompletionTokens
+	}
 	if resp.Content == "" && resp.ReasoningContent == "" && len(resp.ToolCalls) == 0 {
 		return nil, fmt.Errorf("chat completions: empty stream response")
 	}

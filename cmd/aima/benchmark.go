@@ -41,6 +41,22 @@ type benchmarkMetricsWindow struct {
 }
 
 var benchmarkMetricsSampleInterval = time.Second
+
+// unifiedMemoryRatioLow/High define the VRAM-to-RAM ratio band that identifies
+// unified memory systems (e.g., NVIDIA GB10, Apple Silicon) where VRAM and RAM
+// report nearly identical values from the same physical memory pool.
+const (
+	unifiedMemoryRatioLow  = 0.90
+	unifiedMemoryRatioHigh = 1.10
+)
+
+func isUnifiedMemory(vramMiB, ramMiB int) bool {
+	if vramMiB <= 0 || ramMiB <= 0 {
+		return false
+	}
+	ratio := float64(vramMiB) / float64(ramMiB)
+	return ratio > unifiedMemoryRatioLow && ratio < unifiedMemoryRatioHigh
+}
 var executeBenchmarkRun = benchpkg.Run
 
 // defaultChatRequester creates a ChatRequester from RunConfig for backward compatibility.
@@ -128,6 +144,9 @@ func runBenchmarkWithMetrics(ctx context.Context, cfg benchpkg.RunConfig) (*benc
 }
 
 func runBenchmarkWithMetricsAndRequester(ctx context.Context, cfg benchpkg.RunConfig, req benchpkg.Requester) (*benchpkg.RunResult, benchmarkSystemMetrics, error) {
+	// Capture baseline metrics before benchmark for delta calculation
+	baseline := collectBenchmarkSystemMetrics(ctx)
+
 	window := &benchmarkMetricsWindow{}
 	sampleCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -158,6 +177,18 @@ func runBenchmarkWithMetricsAndRequester(ctx context.Context, cfg benchpkg.RunCo
 	if metrics == (benchmarkSystemMetrics{}) {
 		metrics = collectBenchmarkSystemMetrics(ctx)
 	}
+
+	// On unified memory systems, report delta from baseline instead of peak absolute
+	// to better approximate model's actual memory footprint.
+	if isUnifiedMemory(baseline.VRAMUsageMiB, baseline.RAMUsageMiB) {
+		if metrics.VRAMUsageMiB > baseline.VRAMUsageMiB {
+			metrics.VRAMUsageMiB = metrics.VRAMUsageMiB - baseline.VRAMUsageMiB
+		}
+		if metrics.RAMUsageMiB > baseline.RAMUsageMiB {
+			metrics.RAMUsageMiB = metrics.RAMUsageMiB - baseline.RAMUsageMiB
+		}
+	}
+
 	return result, metrics, err
 }
 
@@ -181,6 +212,12 @@ func resourceUsageMap(metrics benchmarkSystemMetrics) map[string]any {
 			}
 		}
 	}
+
+	// Flag unified memory systems for downstream consumers.
+	if isUnifiedMemory(metrics.VRAMUsageMiB, metrics.RAMUsageMiB) {
+		resourceUsage["unified_memory"] = true
+	}
+
 	return resourceUsage
 }
 

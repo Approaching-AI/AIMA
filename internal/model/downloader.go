@@ -592,11 +592,12 @@ func PathLooksUsable(modelPath, format string) bool {
 	case "safetensors":
 		return dirHasCompleteSafetensorsModel(modelPath) || dirHasCompleteDiffusersModel(modelPath)
 	case "":
-		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin", ".onnx", ".mnn") ||
+		return dirHasAnyExt(modelPath, ".gguf", ".ggml", ".bin", ".onnx", ".mnn", ".pt", ".pth") ||
 			dirHasCompleteSafetensorsModel(modelPath) ||
 			dirHasCompleteDiffusersModel(modelPath)
 	default:
-		return dirHasCompleteSafetensorsModel(modelPath) || dirHasCompleteDiffusersModel(modelPath)
+		return dirHasCompleteSafetensorsModel(modelPath) ||
+			dirHasCompleteDiffusersModel(modelPath)
 	}
 }
 

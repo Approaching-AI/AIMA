@@ -147,21 +147,4 @@ func registerModelTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// model.recommend
-	s.RegisterTool(&Tool{
-		Name:        "model.recommend",
-		Description: "List recommended models for detected hardware with engine matching, performance data, and availability status. Returns ranked recommendations suitable for onboarding.",
-		InputSchema: schema(``),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.RecommendModels == nil {
-				return ErrorResult("model.recommend not implemented"), nil
-			}
-			data, err := deps.RecommendModels(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("recommend models: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
-
 }

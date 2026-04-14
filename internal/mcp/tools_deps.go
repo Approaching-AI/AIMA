@@ -151,9 +151,6 @@ type ToolDeps struct {
 	ExplorerTrigger func(ctx context.Context) (json.RawMessage, error)
 	ExplorerCleanup func(ctx context.Context) (json.RawMessage, error)
 
-	// Onboarding
-	RecommendModels func(ctx context.Context) (json.RawMessage, error)
-
 	// Sync v2: advisory pull/push (v0.4 integration)
 	SyncPullAdvisories   func(ctx context.Context) (json.RawMessage, error)
 	SyncPullScenarios    func(ctx context.Context) (json.RawMessage, error)

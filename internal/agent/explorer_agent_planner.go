@@ -445,12 +445,13 @@ func taskSpecToPlanTask(ts TaskSpec, defaultHardware string) PlanTask {
 		params[k] = v
 	}
 	return PlanTask{
-		Kind:     ts.Kind,
-		Hardware: defaultHardware,
-		Model:    ts.Model,
-		Engine:   ts.Engine,
-		Params:   params,
-		Reason:   ts.Reason,
+		Kind:      ts.Kind,
+		Hardware:  defaultHardware,
+		Model:     ts.Model,
+		Engine:    ts.Engine,
+		Params:    params,
+		Benchmark: ts.Benchmark,
+		Reason:    ts.Reason,
 	}
 }
 

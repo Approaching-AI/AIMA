@@ -20,13 +20,12 @@ import (
 type ExplorerConfig struct {
 	Schedule        ScheduleConfig
 	Enabled         bool
-	Mode            string        // "continuous" | "once" | "budget"
-	MaxRounds       int           // budget mode: max plans to execute (0=unlimited)
-	MaxPlanDuration time.Duration // per-plan time budget (default 30min)
-	MaxTokensPerDay int           // daily LLM token cap (0=unlimited)
-	MaxCycles       int           // PDCA max iterations per round (default 3)
-	MaxTasks        int           // max tasks per plan (default 5)
-	WorkspaceDir    string        // workspace root (default ~/.aima/explorer/)
+	Mode            string // "continuous" | "once" | "budget"
+	MaxRounds       int    // budget mode: max plans to execute (0=unlimited)
+	MaxTokensPerDay int    // daily LLM token cap (0=unlimited)
+	MaxCycles       int    // PDCA max iterations per round (default 3)
+	MaxTasks        int    // max tasks per plan (default 5)
+	WorkspaceDir    string // workspace root (default ~/.aima/explorer/)
 }
 
 // ExplorerStatus reports the Explorer's current state.
@@ -601,6 +600,11 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				slog.Info("explorer: dedup skipped (completed)", "model", t.Model, "engine", t.Engine)
 				continue
 			}
+			structural, _ := e.db.HasStructuralExplorationFailure(ctx, t.Model, t.Engine)
+			if structural {
+				slog.Info("explorer: dedup skipped (structural failure)", "model", t.Model, "engine", t.Engine)
+				continue
+			}
 			failCount, _ := e.db.CountFailedExplorations(ctx, t.Model, t.Engine)
 			if failCount >= maxExplorationFailures {
 				slog.Info("explorer: dedup skipped (too many failures)", "model", t.Model, "engine", t.Engine, "fails", failCount)
@@ -653,19 +657,15 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	e.lastRun = time.Now()
 	e.mu.Unlock()
 
-	// Plan time budget
-	maxDur := e.config.MaxPlanDuration
-	if maxDur <= 0 {
-		maxDur = 30 * time.Minute
-	}
-	planCtx, planCancel := context.WithTimeout(ctx, maxDur)
+	// No hard timeout — PDCA runs until completion, budget exhaustion, or user-initiated Stop().
+	// The parent ctx is already cancellable via Explorer.Stop().
 
 	e.mu.RLock()
 	tokensBefore := e.tokensUsedToday
 	e.mu.RUnlock()
 
 	planStart := time.Now()
-	e.executePlan(planCtx, plan)
+	e.executePlan(ctx, plan)
 
 	// PDCA Check+Act loop (only for AnalyzablePlanner, i.e., Tier 2 agent planner)
 	maxCycles := e.config.MaxCycles
@@ -675,14 +675,14 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	if ap, ok := e.planner.(AnalyzablePlanner); ok {
 		for cycle := 0; cycle < maxCycles; cycle++ {
 			select {
-			case <-planCtx.Done():
-				slog.Info("explorer: PDCA timeout", "cycle", cycle)
+			case <-ctx.Done():
+				slog.Info("explorer: PDCA cancelled by user", "cycle", cycle)
 				goto pdcaDone
 			default:
 			}
 
 			if refresher, ok := ap.(FactRefreshablePlanner); ok {
-				input, err := e.buildPlanInput(planCtx, &ev)
+				input, err := e.buildPlanInput(ctx, &ev)
 				if err != nil {
 					slog.Warn("explorer: PDCA fact refresh build failed", "error", err, "cycle", cycle+1)
 				} else if err := refresher.RefreshFacts(*input); err != nil {
@@ -691,7 +691,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 			}
 
 			slog.Info("explorer: PDCA Check phase", "cycle", cycle+1)
-			verdict, extraTasks, analyzeTokens, err := ap.Analyze(planCtx)
+			verdict, extraTasks, analyzeTokens, err := ap.Analyze(ctx)
 			if analyzeTokens > 0 {
 				e.mu.Lock()
 				e.tokensUsedToday += analyzeTokens
@@ -699,9 +699,6 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 			}
 			if err != nil {
 				slog.Warn("explorer: PDCA analyze failed", "error", err, "cycle", cycle+1)
-				// Hard errors (context cancelled) break the entire loop.
-				// Transient errors (LLM timeout, rate limit) skip this cycle's
-				// Check/Act and continue to the next PDCA cycle.
 				if errors.Is(err, context.Canceled) {
 					break
 				}
@@ -724,7 +721,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				Tasks:     extraPlanTasks,
 				Reasoning: fmt.Sprintf("PDCA Act cycle %d", cycle+1),
 			}
-			roundsUsed, ok := e.claimPlanRound(planCtx, mode, maxRounds)
+			roundsUsed, ok := e.claimPlanRound(ctx, mode, maxRounds)
 			if !ok {
 				if mode == "budget" && maxRounds > 0 {
 					slog.Info("explorer: budget exhausted", "rounds_used", roundsUsed, "max_rounds", maxRounds)
@@ -733,15 +730,14 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 			}
 			slog.Info("explorer: PDCA Do phase", "tasks", len(extraPlanTasks), "cycle", cycle+1)
 			if e.db != nil {
-				if err := e.persistExplorationPlan(planCtx, extraPlan, fmt.Sprintf("%s:pdca-act-%d", ev.Type, cycle+1)); err != nil {
+				if err := e.persistExplorationPlan(ctx, extraPlan, fmt.Sprintf("%s:pdca-act-%d", ev.Type, cycle+1)); err != nil {
 					slog.Warn("explorer: persist PDCA plan failed", "error", err, "cycle", cycle+1)
 				}
 			}
-			e.executePlan(planCtx, extraPlan)
+			e.executePlan(ctx, extraPlan)
 		}
 	}
 pdcaDone:
-	planCancel()
 	elapsed := time.Since(planStart)
 
 	// D8: refresh tier after execution (LLM may have gone offline)
@@ -1201,6 +1197,23 @@ func (e *Explorer) resolveBenchmarkProfiles(hw HardwareInfo) []ExplorationBenchm
 	return defaultBenchmarkProfiles(hw)
 }
 
+// benchmarkSpecToProfile converts a planner-authored BenchmarkSpec into an ExplorationBenchmarkProfile.
+func benchmarkSpecToProfile(spec BenchmarkSpec) ExplorationBenchmarkProfile {
+	p := ExplorationBenchmarkProfile{
+		Label:             "plan",
+		ConcurrencyLevels: spec.Concurrency,
+		InputTokenLevels:  spec.InputTokens,
+		MaxTokenLevels:    spec.MaxTokens,
+		RequestsPerCombo:  spec.RequestsPerCombo,
+		Rounds:            1,
+	}
+	// If only single-value arrays, also set legacy single-point fields for tune-style tasks.
+	if len(spec.Concurrency) == 1 {
+		p.Concurrency = spec.Concurrency[0]
+	}
+	return p
+}
+
 // defaultBenchmarkProfile returns sensible benchmark parameters based on hardware capability.
 // D6: Explorer decides "how to test" (tactical), Planner decides "what to test" (strategic).
 func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
@@ -1394,33 +1407,39 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 		req.SearchSpace = searchSpace
 	}
 
-	// Populate model type from local inventory for accurate overlay YAML
+	// Populate model metadata from local inventory for accurate overlay YAML
 	if e.gatherLocalModels != nil {
 		if models, err := e.gatherLocalModels(ctx); err == nil {
 			for _, m := range models {
 				if strings.EqualFold(m.Name, task.Model) {
 					req.Target.ModelType = m.Type
+					req.Target.Family = m.Family
+					req.Target.ParameterCount = m.ParameterCount
 					break
 				}
 			}
 		}
 	}
 
-	// Populate internal args from engine YAML (INV-1: engine behavior = YAML)
+	// Populate internal args + health check from engine YAML (INV-1: engine behavior = YAML)
 	if e.gatherLocalEngines != nil {
 		if engines, err := e.gatherLocalEngines(ctx); err == nil {
 			for _, eng := range engines {
 				if strings.EqualFold(eng.Name, task.Engine) || strings.EqualFold(eng.Type, task.Engine) {
 					req.Target.Runtime = eng.Runtime
 					req.Target.InternalArgs = eng.InternalArgs
+					req.Target.HealthCheckPath = eng.HealthCheckPath
 					break
 				}
 			}
 		}
 	}
 
-	// D6: set benchmark profile from hardware (catalog YAML → Go fallback)
-	if e.gatherHardware != nil {
+	// D6: set benchmark profile — prefer plan's BenchmarkSpec, fall back to hardware defaults.
+	if task.Benchmark.RequestsPerCombo > 0 || len(task.Benchmark.Concurrency) > 0 {
+		// LLM planner specified benchmark parameters — use them directly.
+		req.BenchmarkProfiles = []ExplorationBenchmarkProfile{benchmarkSpecToProfile(task.Benchmark)}
+	} else if e.gatherHardware != nil {
 		if hw, err := e.gatherHardware(ctx); err == nil {
 			if task.Kind == "validate" {
 				req.BenchmarkProfiles = e.resolveBenchmarkProfiles(hw)
@@ -1625,6 +1644,13 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 				input.SkipCombos = append(input.SkipCombos, SkipCombo{
 					Model: c.Model, Engine: c.Engine, Reason: "completed",
 				})
+				continue
+			}
+			structural, _ := e.db.HasStructuralExplorationFailure(ctx, c.Model, c.Engine)
+			if structural {
+				input.SkipCombos = append(input.SkipCombos, SkipCombo{
+					Model: c.Model, Engine: c.Engine, Reason: "structural_failure",
+				})
 			} else if c.FailCount >= maxExplorationFailures {
 				input.SkipCombos = append(input.SkipCombos, SkipCombo{
 					Model:  c.Model,
@@ -1762,13 +1788,6 @@ func (e *Explorer) UpdateConfig(key, value string) (string, error) {
 			return "", fmt.Errorf("max_rounds must be a non-negative integer")
 		}
 		e.config.MaxRounds = n
-	case "max_plan_duration":
-		duration, err := time.ParseDuration(value)
-		if err != nil {
-			e.mu.Unlock()
-			return "", fmt.Errorf("parse max_plan_duration: %w", err)
-		}
-		e.config.MaxPlanDuration = duration
 	case "max_tokens_per_day":
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 {
@@ -1831,8 +1850,6 @@ func (e *Explorer) configValueLocked(key string) string {
 		return e.config.Mode
 	case "max_rounds":
 		return strconv.Itoa(e.config.MaxRounds)
-	case "max_plan_duration":
-		return e.config.MaxPlanDuration.String()
 	case "max_tokens_per_day":
 		return strconv.Itoa(e.config.MaxTokensPerDay)
 	case "max_cycles":

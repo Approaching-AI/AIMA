@@ -1,17 +1,10 @@
 package benchmark
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"math/rand/v2"
-	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -67,7 +60,7 @@ func (c *RunConfig) applyDefaults() {
 	}
 }
 
-// RequestSample holds per-request measurements.
+// RequestSample holds per-request measurements (legacy LLM format).
 type RequestSample struct {
 	TTFT         time.Duration `json:"-"`
 	TotalTime    time.Duration `json:"-"`
@@ -88,12 +81,13 @@ type RoundResult struct {
 // RunResult holds aggregated metrics from a completed benchmark run.
 type RunResult struct {
 	Config         RunConfig `json:"config"`
+	Modality       string    `json:"modality"`
 	TotalRequests  int       `json:"total_requests"`
 	SuccessfulReqs int       `json:"successful_requests"`
 	FailedReqs     int       `json:"failed_requests"`
 	DurationMs     float64   `json:"duration_ms"`
 
-	// TTFT statistics (milliseconds)
+	// TTFT statistics (milliseconds) — LLM/VLM
 	TTFTP50ms float64 `json:"ttft_p50_ms"`
 	TTFTP95ms float64 `json:"ttft_p95_ms"`
 	TTFTP99ms float64 `json:"ttft_p99_ms"`
@@ -102,7 +96,7 @@ type RunResult struct {
 	TTFTMinMs float64 `json:"ttft_min_ms"`
 	TTFTMaxMs float64 `json:"ttft_max_ms"`
 
-	// TPOT statistics (milliseconds)
+	// TPOT statistics (milliseconds) — LLM/VLM
 	TPOTP50ms float64 `json:"tpot_p50_ms"`
 	TPOTP95ms float64 `json:"tpot_p95_ms"`
 	TPOTStdMs float64 `json:"tpot_std_ms"`
@@ -116,17 +110,55 @@ type RunResult struct {
 	AvgInputTokens  int `json:"avg_input_tokens"`
 	AvgOutputTokens int `json:"avg_output_tokens"`
 
-	ErrorRate float64 `json:"error_rate"`
+	ErrorRate  float64 `json:"error_rate"`
+	FirstError string  `json:"first_error,omitempty"`
 
 	Rounds       int           `json:"rounds,omitempty"`
 	RoundResults []RoundResult `json:"round_results,omitempty"`
 
 	Samples []RequestSample `json:"-"`
+
+	// ---- TTS/ASR shared ----
+	RTFP50   float64 `json:"rtf_p50,omitempty"`
+	RTFP95   float64 `json:"rtf_p95,omitempty"`
+	RTFMean  float64 `json:"rtf_mean,omitempty"`
+
+	// ---- TTS specific ----
+	TTFAP50ms         float64 `json:"ttfa_p50_ms,omitempty"`
+	TTFAP95ms         float64 `json:"ttfa_p95_ms,omitempty"`
+	AudioThroughput   float64 `json:"audio_throughput,omitempty"`   // audio-seconds generated / wall-second
+	AvgInputChars     int     `json:"avg_input_chars,omitempty"`
+	AvgAudioDurationS float64 `json:"avg_audio_duration_s,omitempty"`
+
+	// ---- ASR specific ----
+	ASRThroughput  float64 `json:"asr_throughput,omitempty"`   // audio-hours processed / wall-hour
+	AvgInputAudioS float64 `json:"avg_input_audio_s,omitempty"`
+	AvgOutputChars int     `json:"avg_output_chars,omitempty"`
+
+	// ---- T2I specific ----
+	LatencyP50ms float64 `json:"latency_p50_ms,omitempty"`
+	LatencyP95ms float64 `json:"latency_p95_ms,omitempty"`
+	LatencyP99ms float64 `json:"latency_p99_ms,omitempty"`
+	ImagesPerSec float64 `json:"images_per_sec,omitempty"`
+	AvgSteps     int     `json:"avg_steps,omitempty"`
+	ImageWidth   int     `json:"image_width,omitempty"`
+	ImageHeight  int     `json:"image_height,omitempty"`
+
+	// ---- T2V specific ----
+	VideoLatencyP50s  float64 `json:"video_latency_p50_s,omitempty"`
+	VideoLatencyP95s  float64 `json:"video_latency_p95_s,omitempty"`
+	VideosPerHour     float64 `json:"videos_per_hour,omitempty"`
+	AvgVideoDurationS float64 `json:"avg_video_duration_s,omitempty"`
+	AvgFrames         int     `json:"avg_frames,omitempty"`
+	VideoFPS          int     `json:"video_fps,omitempty"`
+	VideoWidth        int     `json:"video_width,omitempty"`
+	VideoHeight       int     `json:"video_height,omitempty"`
+	VideoSteps        int     `json:"video_steps,omitempty"`
 }
 
-// Run executes a benchmark against an OpenAI-compatible streaming endpoint.
+// Run executes a benchmark against an inference endpoint using the given Requester.
 // With Rounds > 1, it runs multiple measurement rounds and aggregates results.
-func Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
+func Run(ctx context.Context, cfg RunConfig, req Requester) (*RunResult, error) {
 	cfg.applyDefaults()
 
 	if cfg.Endpoint == "" {
@@ -136,26 +168,33 @@ func Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 		return nil, fmt.Errorf("model is required")
 	}
 
-	// Warmup once before all measurement rounds
-	for i := 0; i < cfg.WarmupCount; i++ {
-		sendStreamingRequest(ctx, cfg)
+	// Warmup using requester's recommended count
+	warmupCount := cfg.WarmupCount
+	if req != nil {
+		warmupCount = req.WarmupRequests()
+	}
+	for i := 0; i < warmupCount; i++ {
+		if req != nil {
+			req.Do(ctx, cfg.Endpoint, -1)
+		}
 	}
 
 	start := time.Now()
-	var allSamples []RequestSample
+	var allSamples []*Sample
 	var roundResults []RoundResult
 
 	for round := 1; round <= cfg.Rounds; round++ {
 		sem := make(chan struct{}, cfg.Concurrency)
-		results := make(chan RequestSample, cfg.NumRequests)
+		results := make(chan *Sample, cfg.NumRequests)
 		var wg sync.WaitGroup
 
 		for i := 0; i < cfg.NumRequests; i++ {
 			wg.Add(1)
+			seq := i
 			go func() {
 				defer wg.Done()
 				sem <- struct{}{}
-				sample := sendWithRetry(ctx, cfg)
+				sample, _ := req.Do(ctx, cfg.Endpoint, seq)
 				<-sem
 				results <- sample
 			}()
@@ -163,205 +202,48 @@ func Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 
 		go func() { wg.Wait(); close(results) }()
 
-		var roundSamples []RequestSample
+		var roundSamples []*Sample
 		for s := range results {
 			roundSamples = append(roundSamples, s)
 		}
 
 		allSamples = append(allSamples, roundSamples...)
-		roundResults = append(roundResults, summarizeRound(round, roundSamples))
+
+		// Summarize round using legacy format for compatibility
+		reqSamples := samplesToRequestSamples(roundSamples)
+		roundResults = append(roundResults, summarizeRound(round, reqSamples))
 	}
 
 	duration := time.Since(start)
+	modality := "llm"
+	if req != nil {
+		modality = req.Modality()
+	}
 
-	result := aggregate(allSamples, duration)
+	// Aggregate LLM metrics for backward compatibility (always populated for llm/vlm)
+	reqSamples := samplesToRequestSamples(allSamples)
+	result := aggregateLLMMetrics(reqSamples, duration)
+	result.Modality = modality
 	result.Config = cfg
 	result.TotalRequests = len(allSamples)
-	result.Samples = allSamples
+	result.Samples = reqSamples
 	if cfg.Rounds > 1 {
 		result.Rounds = cfg.Rounds
 		result.RoundResults = roundResults
 	}
 
+	// Aggregate modality-specific metrics
+	aggregateByModality(modality, allSamples, duration, result)
+
 	return result, nil
 }
 
-// sendWithRetry wraps sendStreamingRequest with retry logic and output length checks.
-func sendWithRetry(ctx context.Context, cfg RunConfig) RequestSample {
-	if cfg.MaxRetries <= 0 && cfg.MinOutputRatio <= 0 {
-		return sendStreamingRequest(ctx, cfg)
+func samplesToRequestSamples(samples []*Sample) []RequestSample {
+	result := make([]RequestSample, len(samples))
+	for i, s := range samples {
+		result[i] = sampleToRequestSample(s)
 	}
-
-	const maxDelay = 30 * time.Second
-	delay := cfg.RetryDelay
-	var lastSample RequestSample
-	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return RequestSample{Error: ctx.Err()}
-			case <-time.After(delay):
-				delay = min(delay*2, maxDelay)
-			}
-		}
-		lastSample = sendStreamingRequest(ctx, cfg)
-
-		if attempt == cfg.MaxRetries {
-			break
-		}
-
-		// Retry on error
-		if lastSample.Error != nil {
-			continue
-		}
-
-		// Retry on output too short
-		if cfg.MinOutputRatio > 0 {
-			minTokens := int(float64(cfg.MaxTokens) * cfg.MinOutputRatio)
-			if lastSample.OutputTokens < minTokens {
-				continue
-			}
-		}
-
-		break
-	}
-	return lastSample
-}
-
-func sendStreamingRequest(ctx context.Context, cfg RunConfig) RequestSample {
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	payload := map[string]any{
-		"model":       cfg.Model,
-		"messages":    []map[string]string{{"role": "user", "content": generatePrompt(cfg.InputTokens)}},
-		"max_tokens":  cfg.MaxTokens,
-		"temperature": cfg.Temperature,
-		"stream":      true,
-		"stream_options": map[string]bool{
-			"include_usage": true,
-		},
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return RequestSample{Error: fmt.Errorf("marshal request: %w", err)}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint, bytes.NewReader(body))
-	if err != nil {
-		return RequestSample{Error: fmt.Errorf("create request: %w", err)}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-
-	startTime := time.Now()
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return RequestSample{Error: fmt.Errorf("send request: %w", err)}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestSample{Error: fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))}
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	// Increase scanner buffer for large SSE payloads
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-
-	var ttft time.Duration
-	var outputTokens, inputTokens int
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					Reasoning        string `json:"reasoning"`
-					ReasoningContent string `json:"reasoning_content"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal([]byte(data), &chunk) != nil {
-			continue
-		}
-
-		if chunk.Usage != nil {
-			inputTokens = chunk.Usage.PromptTokens
-			outputTokens = chunk.Usage.CompletionTokens
-		}
-
-		if len(chunk.Choices) > 0 {
-			d := chunk.Choices[0].Delta
-			content := d.Content + d.Reasoning + d.ReasoningContent
-			if content != "" && ttft == 0 {
-				ttft = time.Since(startTime)
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return RequestSample{Error: fmt.Errorf("read SSE stream: %w", err)}
-	}
-
-	return RequestSample{
-		TTFT:         ttft,
-		TotalTime:    time.Since(startTime),
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-	}
-}
-
-// promptPadding is a pre-generated padding string (64KB) reused across calls.
-// Only the random prefix differs per call, avoiding O(n) string building.
-var promptPadding = func() string {
-	const unit = "The quick brown fox jumps over the lazy dog. "
-	var sb strings.Builder
-	sb.Grow(64 * 1024)
-	for sb.Len() < 64*1024 {
-		sb.WriteString(unit)
-	}
-	return sb.String()
-}()
-
-// generatePrompt generates a randomized prompt of approximately targetTokens length.
-// Each call produces a unique prompt to avoid KV cache prefix matching.
-func generatePrompt(targetTokens int) string {
-	prefix := fmt.Sprintf("[%d] Please write a detailed response about the following topic. ", rand.Uint64())
-	targetChars := targetTokens * 4
-	if len(prefix) >= targetChars {
-		return prefix[:targetChars]
-	}
-	need := targetChars - len(prefix)
-	if need > len(promptPadding) {
-		// Extremely large prompt — extend padding on the fly (rare path)
-		var sb strings.Builder
-		sb.Grow(targetChars)
-		sb.WriteString(prefix)
-		for sb.Len() < targetChars {
-			sb.WriteString(promptPadding)
-		}
-		return sb.String()[:targetChars]
-	}
-	return prefix + promptPadding[:need]
+	return result
 }
 
 func summarizeRound(roundID int, samples []RequestSample) RoundResult {
@@ -394,13 +276,15 @@ func summarizeRound(roundID int, samples []RequestSample) RoundResult {
 	return rr
 }
 
-func aggregate(samples []RequestSample, totalDuration time.Duration) *RunResult {
+func aggregateLLMMetrics(samples []RequestSample, totalDuration time.Duration) *RunResult {
 	result := &RunResult{}
 
 	var successSamples []RequestSample
 	for _, s := range samples {
 		if s.Error == nil {
 			successSamples = append(successSamples, s)
+		} else if result.FirstError == "" {
+			result.FirstError = s.Error.Error()
 		}
 	}
 
@@ -473,6 +357,198 @@ func aggregate(samples []RequestSample, totalDuration time.Duration) *RunResult 
 	result.AvgOutputTokens = totalOutputTokens / len(successSamples)
 
 	return result
+}
+
+// aggregateByModality dispatches to modality-specific aggregation functions.
+func aggregateByModality(modality string, samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	switch modality {
+	case "llm", "vlm":
+		// Already handled by aggregateLLMMetrics
+		return
+	case "tts":
+		aggregateTTSMetrics(samples, totalDuration, result)
+	case "asr":
+		aggregateASRMetrics(samples, totalDuration, result)
+	case "image_gen":
+		aggregateImageGenMetrics(samples, totalDuration, result)
+	case "video_gen":
+		aggregateVideoGenMetrics(samples, totalDuration, result)
+	}
+}
+
+func aggregateTTSMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	// RTF = processing_time_s / audio_duration_s
+	rtfValues := make([]float64, 0, len(successSamples))
+	ttfaValues := make([]float64, 0, len(successSamples))
+	var totalAudioDurationS float64
+	var totalInputChars int
+
+	for _, s := range successSamples {
+		if s.AudioDurationS > 0 {
+			rtf := (s.LatencyMs / 1000.0) / s.AudioDurationS
+			rtfValues = append(rtfValues, rtf)
+		}
+		if s.TTFAMs > 0 {
+			ttfaValues = append(ttfaValues, s.TTFAMs)
+		}
+		totalAudioDurationS += s.AudioDurationS
+		totalInputChars += s.InputChars
+	}
+
+	if len(rtfValues) > 0 {
+		sort.Float64s(rtfValues)
+		result.RTFP50 = percentile(rtfValues, 50)
+		result.RTFP95 = percentile(rtfValues, 95)
+		result.RTFMean = mean(rtfValues)
+	}
+
+	if len(ttfaValues) > 0 {
+		sort.Float64s(ttfaValues)
+		result.TTFAP50ms = percentile(ttfaValues, 50)
+		result.TTFAP95ms = percentile(ttfaValues, 95)
+	}
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		result.AudioThroughput = totalAudioDurationS / durationS
+	}
+
+	result.AvgInputChars = totalInputChars / len(successSamples)
+	result.AvgAudioDurationS = totalAudioDurationS / float64(len(successSamples))
+}
+
+func aggregateASRMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	// RTF = processing_time_s / input_audio_duration_s
+	rtfValues := make([]float64, 0, len(successSamples))
+	var totalInputAudioS float64
+	var totalOutputChars int
+
+	for _, s := range successSamples {
+		if s.InputAudioS > 0 {
+			rtf := (s.LatencyMs / 1000.0) / s.InputAudioS
+			rtfValues = append(rtfValues, rtf)
+		}
+		totalInputAudioS += s.InputAudioS
+		totalOutputChars += s.OutputChars
+	}
+
+	if len(rtfValues) > 0 {
+		sort.Float64s(rtfValues)
+		result.RTFP50 = percentile(rtfValues, 50)
+		result.RTFP95 = percentile(rtfValues, 95)
+		result.RTFMean = mean(rtfValues)
+	}
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		// ASRThroughput = audio-hours processed / wall-hours
+		result.ASRThroughput = (totalInputAudioS / 3600.0) / (durationS / 3600.0)
+	}
+
+	result.AvgInputAudioS = totalInputAudioS / float64(len(successSamples))
+	result.AvgOutputChars = totalOutputChars / len(successSamples)
+}
+
+func aggregateImageGenMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	latencyValues := make([]float64, len(successSamples))
+	var totalImages, totalSteps int
+	for i, s := range successSamples {
+		latencyValues[i] = s.LatencyMs
+		totalImages += s.ImagesGenerated
+		totalSteps += s.StepsCompleted
+	}
+
+	sort.Float64s(latencyValues)
+	result.LatencyP50ms = percentile(latencyValues, 50)
+	result.LatencyP95ms = percentile(latencyValues, 95)
+	result.LatencyP99ms = percentile(latencyValues, 99)
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		result.ImagesPerSec = float64(totalImages) / durationS
+	}
+
+	result.AvgSteps = totalSteps / len(successSamples)
+
+	// Take width/height from first sample (constant across requests)
+	if len(successSamples) > 0 {
+		result.ImageWidth = successSamples[0].WidthPx
+		result.ImageHeight = successSamples[0].HeightPx
+	}
+}
+
+func aggregateVideoGenMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	// Latency in seconds (not ms) for video gen
+	latencyValues := make([]float64, len(successSamples))
+	var totalVideoDurationS float64
+	var totalFrames, totalSteps int
+
+	for i, s := range successSamples {
+		latencyValues[i] = s.LatencyMs / 1000.0
+		totalVideoDurationS += s.VideoDurationS
+		totalFrames += s.FramesGenerated
+		totalSteps += s.VideoSteps
+	}
+
+	sort.Float64s(latencyValues)
+	result.VideoLatencyP50s = percentile(latencyValues, 50)
+	result.VideoLatencyP95s = percentile(latencyValues, 95)
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		result.VideosPerHour = float64(len(successSamples)) / (durationS / 3600.0)
+	}
+
+	result.AvgVideoDurationS = totalVideoDurationS / float64(len(successSamples))
+	result.AvgFrames = totalFrames / len(successSamples)
+	result.VideoSteps = totalSteps / len(successSamples)
+
+	// Take video params from first sample (constant across requests)
+	if len(successSamples) > 0 {
+		result.VideoFPS = successSamples[0].FPS
+		result.VideoWidth = successSamples[0].VideoWidthPx
+		result.VideoHeight = successSamples[0].VideoHeightPx
+	}
 }
 
 func mean(values []float64) float64 {

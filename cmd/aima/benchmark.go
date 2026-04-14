@@ -43,6 +43,21 @@ type benchmarkMetricsWindow struct {
 var benchmarkMetricsSampleInterval = time.Second
 var executeBenchmarkRun = benchpkg.Run
 
+// defaultChatRequester creates a ChatRequester from RunConfig for backward compatibility.
+func defaultChatRequester(cfg benchpkg.RunConfig) *benchpkg.ChatRequester {
+	return &benchpkg.ChatRequester{
+		Model:          cfg.Model,
+		MaxTokens:      cfg.MaxTokens,
+		InputTokens:    cfg.InputTokens,
+		Temperature:    cfg.Temperature,
+		APIKey:         cfg.APIKey,
+		Timeout:        cfg.Timeout,
+		MinOutputRatio: cfg.MinOutputRatio,
+		MaxRetries:     cfg.MaxRetries,
+		RetryDelay:     cfg.RetryDelay,
+	}
+}
+
 var collectBenchmarkSystemMetrics = func(ctx context.Context) benchmarkSystemMetrics {
 	var metrics benchmarkSystemMetrics
 
@@ -109,6 +124,10 @@ func (w *benchmarkMetricsWindow) snapshot() benchmarkSystemMetrics {
 }
 
 func runBenchmarkWithMetrics(ctx context.Context, cfg benchpkg.RunConfig) (*benchpkg.RunResult, benchmarkSystemMetrics, error) {
+	return runBenchmarkWithMetricsAndRequester(ctx, cfg, defaultChatRequester(cfg))
+}
+
+func runBenchmarkWithMetricsAndRequester(ctx context.Context, cfg benchpkg.RunConfig, req benchpkg.Requester) (*benchpkg.RunResult, benchmarkSystemMetrics, error) {
 	window := &benchmarkMetricsWindow{}
 	sampleCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -130,7 +149,7 @@ func runBenchmarkWithMetrics(ctx context.Context, cfg benchpkg.RunConfig) (*benc
 		}
 	}()
 
-	result, err := executeBenchmarkRun(ctx, cfg)
+	result, err := executeBenchmarkRun(ctx, cfg, req)
 	window.observe(collectBenchmarkSystemMetrics(ctx))
 	cancel()
 	wg.Wait()
@@ -356,7 +375,12 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 
 // maybeAutoPromote promotes a config to golden if its benchmark throughput beats
 // the current golden by >5%. Returns (promoted, oldGoldenID).
-func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, newThroughput float64, hardware, engine, model string) (bool, string) {
+// The modality parameter ensures promotion only competes within the same modality;
+// an empty modality defaults to "text" for backward compatibility.
+func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, newThroughput float64, hardware, engine, model, modality string) (bool, string) {
+	if modality == "" {
+		modality = "text"
+	}
 	goldenCfg, goldenBench, err := db.FindGoldenBenchmark(ctx, hardware, engine, model)
 	if err != nil {
 		slog.Warn("auto-promote: failed to query golden", "error", err)

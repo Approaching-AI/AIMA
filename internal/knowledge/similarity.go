@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // SimilarParams controls similarity search.
 type SimilarParams struct {
-	ConfigID        string             `json:"config_id"`
-	Weights         map[string]float64 `json:"weights"`
-	FilterHardware  string             `json:"filter_hardware"`
-	ExcludeSame     bool               `json:"exclude_same_config"`
-	Limit           int                `json:"limit"`
+	ConfigID       string             `json:"config_id"`
+	Weights        map[string]float64 `json:"weights"`
+	FilterHardware string             `json:"filter_hardware"`
+	Modality       string             `json:"modality"`
+	ExcludeSame    bool               `json:"exclude_same_config"`
+	Limit          int                `json:"limit"`
 }
 
 // SimilarResult is a configuration similar to the query config.
@@ -83,10 +85,22 @@ SELECT pv.config_id, c.hardware_id, c.engine_id, c.model_id,
        COALESCE(pv.avg_throughput, 0), COALESCE(pv.avg_ttft_p95, 0), COALESCE(pv.avg_vram_mib, 0)
 FROM perf_vectors pv
 JOIN configurations c ON pv.config_id = c.id`
+	var conditions []string
 	var args []any
 	if p.FilterHardware != "" {
-		query += " WHERE c.hardware_id = ?"
+		conditions = append(conditions, "c.hardware_id = ?")
 		args = append(args, p.FilterHardware)
+	}
+	// Modality filter: only include configs that have benchmarks of the requested modality.
+	// Backward compatible: "llm" also matches legacy "text" records.
+	if p.Modality != "" {
+		conditions = append(conditions, `pv.config_id IN (
+			SELECT DISTINCT config_id FROM benchmark_results
+			WHERE modality = ? OR (? = 'llm' AND modality = 'text'))`)
+		args = append(args, p.Modality, p.Modality)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)

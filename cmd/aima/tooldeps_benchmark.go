@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,39 @@ import (
 
 	state "github.com/jguan/aima/internal"
 )
+
+// modalityParams holds all modality-specific parameters shared between
+// benchmark.run and benchmark.matrix handlers.
+type modalityParams struct {
+	Modality string `json:"modality"`
+	// VLM
+	ImageURLs []string `json:"image_urls"`
+	// TTS
+	Voice       string   `json:"voice"`
+	AudioFormat string   `json:"audio_format"`
+	Texts       []string `json:"texts"`
+	// ASR
+	AudioFiles []string `json:"audio_files"`
+	Language   string   `json:"language"`
+	// T2I / T2V
+	Prompt        string  `json:"prompt"`
+	Width         int     `json:"width"`
+	Height        int     `json:"height"`
+	Steps         int     `json:"steps"`
+	GuidanceScale float64 `json:"guidance_scale"`
+	NumImages     int     `json:"num_images"`
+	// T2V
+	DurationS     float64 `json:"duration_s"`
+	FPS           int     `json:"fps"`
+	InputImageURL string  `json:"input_image_url"`
+}
+
+func (mp *modalityParams) resolvedModality() string {
+	if mp.Modality == "" {
+		return "llm"
+	}
+	return mp.Modality
+}
 
 // buildBenchmarkDeps wires benchmark.record, benchmark.run, benchmark.matrix,
 // benchmark.list, and knowledge.promote tools.
@@ -156,6 +191,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 
 	deps.RunBenchmark = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
+			modalityParams
 			Model          string         `json:"model"`
 			Endpoint       string         `json:"endpoint"`
 			Concurrency    int            `json:"concurrency"`
@@ -177,6 +213,8 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			return nil, fmt.Errorf("parse benchmark params: %w", err)
 		}
 
+		modality := p.resolvedModality()
+
 		endpoint := resolveEndpoint(p.Endpoint, p.Model)
 
 		warmup := 2
@@ -197,7 +235,12 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			MaxRetries:     p.MaxRetries,
 		}
 
-		result, observedMetrics, err := runBenchmarkWithMetrics(ctx, cfg)
+		req, err := buildRequester(modality, cfg, &p.modalityParams)
+		if err != nil {
+			return nil, fmt.Errorf("build requester: %w", err)
+		}
+
+		result, observedMetrics, err := runBenchmarkWithMetricsAndRequester(ctx, cfg, req)
 		if err != nil {
 			return nil, fmt.Errorf("benchmark run: %w", err)
 		}
@@ -272,7 +315,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			}
 
 			// L2c auto-promote: if new benchmark beats current golden by >5%
-			if promoted, oldID := maybeAutoPromote(ctx, db, configID, result.ThroughputTPS, p.Hardware, p.Engine, p.Model); promoted {
+			if promoted, oldID := maybeAutoPromote(ctx, db, configID, result.ThroughputTPS, p.Hardware, p.Engine, p.Model, modality); promoted {
 				resp["auto_promoted"] = true
 				if oldID != "" {
 					resp["old_golden_id"] = oldID
@@ -289,6 +332,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 
 	deps.RunBenchmarkMatrix = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
+			modalityParams
 			Model             string         `json:"model"`
 			Endpoint          string         `json:"endpoint"`
 			ConcurrencyLevels []int          `json:"concurrency_levels"`
@@ -306,6 +350,9 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("parse matrix params: %w", err)
 		}
+
+		modality := p.resolvedModality()
+
 		if len(p.ConcurrencyLevels) == 0 {
 			p.ConcurrencyLevels = []int{1, 4}
 		}
@@ -361,7 +408,15 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						MinOutputRatio: p.MinOutputRatio,
 						MaxRetries:     p.MaxRetries,
 					}
-					result, observedMetrics, err := runBenchmarkWithMetrics(ctx, cfg)
+					req, reqErr := buildRequester(modality, cfg, &p.modalityParams)
+					var result *benchpkg.RunResult
+					var observedMetrics benchmarkSystemMetrics
+					var err error
+					if reqErr != nil {
+						err = reqErr
+					} else {
+						result, observedMetrics, err = runBenchmarkWithMetricsAndRequester(ctx, cfg, req)
+					}
 					cell := matrixCell{
 						Concurrency: conc,
 						InputTokens: inTok,
@@ -482,6 +537,83 @@ func cloneConfigMapForBenchmark(src map[string]any) map[string]any {
 		dst[key] = value
 	}
 	return dst
+}
+
+// buildRequester creates the appropriate Requester for the given modality.
+func buildRequester(modality string, cfg benchpkg.RunConfig, mp *modalityParams) (benchpkg.Requester, error) {
+	switch modality {
+	case "llm":
+		return defaultChatRequester(cfg), nil
+	case "vlm":
+		req := defaultChatRequester(cfg)
+		req.ImageURLs = mp.ImageURLs
+		return req, nil
+	case "tts":
+		return &benchpkg.AudioSpeechRequester{
+			Model:   cfg.Model,
+			Voice:   mp.Voice,
+			Format:  mp.AudioFormat,
+			Texts:   mp.Texts,
+			Timeout: cfg.Timeout,
+		}, nil
+	case "asr":
+		loaded, err := loadAudioInputs(mp.AudioFiles)
+		if err != nil {
+			return nil, fmt.Errorf("load ASR audio files: %w", err)
+		}
+		return &benchpkg.TranscriptionRequester{
+			Model:      cfg.Model,
+			AudioFiles: loaded,
+			Language:   mp.Language,
+			Timeout:    cfg.Timeout,
+		}, nil
+	case "image_gen":
+		return &benchpkg.ImageGenRequester{
+			Model:         cfg.Model,
+			Prompt:        mp.Prompt,
+			Width:         mp.Width,
+			Height:        mp.Height,
+			Steps:         mp.Steps,
+			GuidanceScale: mp.GuidanceScale,
+			NumImages:     mp.NumImages,
+			Timeout:       cfg.Timeout,
+		}, nil
+	case "video_gen":
+		return &benchpkg.VideoGenRequester{
+			Model:         cfg.Model,
+			Prompt:        mp.Prompt,
+			Width:         mp.Width,
+			Height:        mp.Height,
+			DurationS:     mp.DurationS,
+			FPS:           mp.FPS,
+			Steps:         mp.Steps,
+			GuidanceScale: mp.GuidanceScale,
+			InputImageURL: mp.InputImageURL,
+			Timeout:       cfg.Timeout,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported modality %q", modality)
+	}
+}
+
+// loadAudioInputs reads audio files from disk into memory for ASR benchmarking.
+func loadAudioInputs(paths []string) ([]benchpkg.AudioInput, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	var inputs []benchpkg.AudioInput
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		inputs = append(inputs, benchpkg.AudioInput{
+			Filename:  filepath.Base(path),
+			Data:      data,
+			DurationS: 0, // duration calculated by server or unknown
+		})
+	}
+	return inputs, nil
 }
 
 // suppress "imported and not used" for packages only used in type literals

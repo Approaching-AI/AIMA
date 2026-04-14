@@ -31,6 +31,7 @@ func newBenchmarkRecordCmd(app *App) *cobra.Command {
 		engine          string
 		model           string
 		deviceID        string
+		modality        string
 		concurrency     int
 		inputLenBucket  string
 		outputLenBucket string
@@ -65,6 +66,7 @@ Example:
 				"hardware":          hardware,
 				"engine":            engine,
 				"model":             model,
+				"modality":          modality,
 				"concurrency":       concurrency,
 				"throughput_tps":    throughput,
 				"ttft_ms_p50":       ttftP50,
@@ -102,6 +104,7 @@ Example:
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type (e.g. vllm-nightly)")
 	cmd.Flags().StringVar(&model, "model", "", "Model name (e.g. qwen3.5-35b-a3b)")
 	cmd.Flags().StringVar(&deviceID, "device", "", "Device ID (e.g. gb10)")
+	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, tts, asr, image_gen, video_gen")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency level during test")
 	cmd.Flags().StringVar(&inputLenBucket, "input-bucket", "", "Input length bucket (e.g. 1K, 8K, 128K)")
 	cmd.Flags().StringVar(&outputLenBucket, "output-bucket", "", "Output length bucket (e.g. 128)")
@@ -128,6 +131,7 @@ func newBenchmarkRunCmd(app *App) *cobra.Command {
 	var (
 		modelName      string
 		endpoint       string
+		modality       string
 		concurrency    int
 		requests       int
 		maxTokens      int
@@ -140,6 +144,26 @@ func newBenchmarkRunCmd(app *App) *cobra.Command {
 		hardware       string
 		engine         string
 		notes          string
+		// VLM
+		imageURLs []string
+		// TTS
+		voice       string
+		audioFormat string
+		texts       []string
+		// ASR
+		audioFiles []string
+		language   string
+		// T2I / T2V shared
+		prompt        string
+		width         int
+		height        int
+		steps         int
+		guidanceScale float64
+		numImages     int
+		// T2V
+		durationS     float64
+		fps           int
+		inputImageURL string
 	)
 
 	cmd := &cobra.Command{
@@ -152,12 +176,15 @@ Examples:
   aima benchmark run --model qwen3-8b
   aima benchmark run --model qwen3-8b --concurrency 4 --requests 20
   aima benchmark run --model gpt-4 --endpoint https://api.openai.com/v1/chat/completions --no-save
-  aima benchmark run --model qwen3-8b --rounds 3 --min-output-ratio 0.5 --max-retries 2`,
+  aima benchmark run --model qwen3-8b --rounds 3 --min-output-ratio 0.5 --max-retries 2
+  aima benchmark run --model Qwen3-TTS-0.6B --modality tts --endpoint http://host:8002 --texts "Hello world"
+  aima benchmark run --model SenseVoiceSmall --modality asr --endpoint http://host:8003 --audio-files /path/to/audio.wav`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			save := !noSave
 			params := map[string]any{
 				"model":            modelName,
 				"endpoint":         endpoint,
+				"modality":         modality,
 				"concurrency":      concurrency,
 				"num_requests":     requests,
 				"max_tokens":       maxTokens,
@@ -170,6 +197,55 @@ Examples:
 				"hardware":         hardware,
 				"engine":           engine,
 				"notes":            notes,
+			}
+			// VLM
+			if len(imageURLs) > 0 {
+				params["image_urls"] = imageURLs
+			}
+			// TTS
+			if voice != "" {
+				params["voice"] = voice
+			}
+			if audioFormat != "" {
+				params["audio_format"] = audioFormat
+			}
+			if len(texts) > 0 {
+				params["texts"] = texts
+			}
+			// ASR
+			if len(audioFiles) > 0 {
+				params["audio_files"] = audioFiles
+			}
+			if language != "" {
+				params["language"] = language
+			}
+			// T2I / T2V
+			if prompt != "" {
+				params["prompt"] = prompt
+			}
+			if width > 0 {
+				params["width"] = width
+			}
+			if height > 0 {
+				params["height"] = height
+			}
+			if steps > 0 {
+				params["steps"] = steps
+			}
+			if guidanceScale > 0 {
+				params["guidance_scale"] = guidanceScale
+			}
+			if numImages > 0 {
+				params["num_images"] = numImages
+			}
+			if durationS > 0 {
+				params["duration_s"] = durationS
+			}
+			if fps > 0 {
+				params["fps"] = fps
+			}
+			if inputImageURL != "" {
+				params["input_image_url"] = inputImageURL
 			}
 			raw, err := json.Marshal(params)
 			if err != nil {
@@ -186,6 +262,7 @@ Examples:
 
 	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OpenAI-compatible endpoint URL (auto-detect if empty)")
+	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, tts, asr, image_gen, video_gen")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Number of concurrent requests")
 	cmd.Flags().IntVar(&requests, "requests", 10, "Total requests to send")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 256, "Max output tokens per request")
@@ -198,6 +275,26 @@ Examples:
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID for saving")
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type for saving")
 	cmd.Flags().StringVar(&notes, "notes", "", "Free-form notes")
+	// VLM
+	cmd.Flags().StringArrayVar(&imageURLs, "image-urls", nil, "Image URLs for VLM benchmark (repeat flag for multiple)")
+	// TTS
+	cmd.Flags().StringVar(&voice, "voice", "", "TTS voice name")
+	cmd.Flags().StringVar(&audioFormat, "audio-format", "", "TTS output format (pcm, wav, mp3, opus, flac, aac)")
+	cmd.Flags().StringArrayVar(&texts, "texts", nil, "TTS input texts (repeat flag for multiple)")
+	// ASR
+	cmd.Flags().StringArrayVar(&audioFiles, "audio-files", nil, "ASR audio file paths (repeat flag for multiple)")
+	cmd.Flags().StringVar(&language, "language", "", "ASR language hint")
+	// T2I / T2V
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt for image/video generation")
+	cmd.Flags().IntVar(&width, "width", 0, "Image/video width in pixels")
+	cmd.Flags().IntVar(&height, "height", 0, "Image/video height in pixels")
+	cmd.Flags().IntVar(&steps, "steps", 0, "Inference steps for image/video generation")
+	cmd.Flags().Float64Var(&guidanceScale, "guidance-scale", 0, "Guidance scale for image/video generation")
+	cmd.Flags().IntVar(&numImages, "num-images", 0, "Number of images to generate per request")
+	// T2V
+	cmd.Flags().Float64Var(&durationS, "duration", 0, "Video duration in seconds")
+	cmd.Flags().IntVar(&fps, "fps", 0, "Video frames per second")
+	cmd.Flags().StringVar(&inputImageURL, "input-image-url", "", "Input image URL for I2V mode")
 	_ = cmd.MarkFlagRequired("model")
 
 	return cmd
@@ -207,6 +304,7 @@ func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 	var (
 		modelName      string
 		endpoint       string
+		modality       string
 		concurrencyStr string
 		inputTokensStr string
 		maxTokensStr   string
@@ -217,22 +315,45 @@ func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 		noSave         bool
 		hardware       string
 		engine         string
+		// VLM
+		imageURLs []string
+		// TTS
+		voice       string
+		audioFormat string
+		texts       []string
+		// ASR
+		audioFiles []string
+		language   string
+		// T2I / T2V shared
+		prompt        string
+		width         int
+		height        int
+		steps         int
+		guidanceScale float64
+		numImages     int
+		// T2V
+		durationS     float64
+		fps           int
+		inputImageURL string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "matrix",
 		Short: "Run a benchmark test matrix",
 		Long: `Run benchmarks across multiple concurrency levels and input/output length combinations.
+Works with all modalities: llm, vlm, tts, asr, image_gen, video_gen.
 
 Examples:
   aima benchmark matrix --model qwen3-8b
   aima benchmark matrix --model qwen3-8b --concurrency 1,4,8 --hardware nvidia-gb10-arm64 --engine vllm
-  aima benchmark matrix --model qwen3-8b --rounds 3 --max-retries 1`,
+  aima benchmark matrix --model Qwen3-TTS-0.6B --modality tts --concurrency 1,2,4 --texts "Hello world"
+  aima benchmark matrix --model SenseVoiceSmall --modality asr --concurrency 1,2 --audio-files /path/to/audio.wav`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			save := !noSave
 			params := map[string]any{
 				"model":              modelName,
 				"endpoint":           endpoint,
+				"modality":           modality,
 				"concurrency_levels": parseIntList(concurrencyStr),
 				"input_token_levels": parseIntList(inputTokensStr),
 				"max_token_levels":   parseIntList(maxTokensStr),
@@ -243,6 +364,55 @@ Examples:
 				"save":               save,
 				"hardware":           hardware,
 				"engine":             engine,
+			}
+			// VLM
+			if len(imageURLs) > 0 {
+				params["image_urls"] = imageURLs
+			}
+			// TTS
+			if voice != "" {
+				params["voice"] = voice
+			}
+			if audioFormat != "" {
+				params["audio_format"] = audioFormat
+			}
+			if len(texts) > 0 {
+				params["texts"] = texts
+			}
+			// ASR
+			if len(audioFiles) > 0 {
+				params["audio_files"] = audioFiles
+			}
+			if language != "" {
+				params["language"] = language
+			}
+			// T2I / T2V
+			if prompt != "" {
+				params["prompt"] = prompt
+			}
+			if width > 0 {
+				params["width"] = width
+			}
+			if height > 0 {
+				params["height"] = height
+			}
+			if steps > 0 {
+				params["steps"] = steps
+			}
+			if guidanceScale > 0 {
+				params["guidance_scale"] = guidanceScale
+			}
+			if numImages > 0 {
+				params["num_images"] = numImages
+			}
+			if durationS > 0 {
+				params["duration_s"] = durationS
+			}
+			if fps > 0 {
+				params["fps"] = fps
+			}
+			if inputImageURL != "" {
+				params["input_image_url"] = inputImageURL
 			}
 			raw, err := json.Marshal(params)
 			if err != nil {
@@ -259,6 +429,7 @@ Examples:
 
 	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OpenAI-compatible endpoint URL (auto-detect if empty)")
+	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, tts, asr, image_gen, video_gen")
 	cmd.Flags().StringVar(&concurrencyStr, "concurrency", "1,4", "Comma-separated concurrency levels")
 	cmd.Flags().StringVar(&inputTokensStr, "input-tokens", "128,1024", "Comma-separated input token lengths")
 	cmd.Flags().StringVar(&maxTokensStr, "max-tokens", "128,512", "Comma-separated output token lengths")
@@ -269,6 +440,26 @@ Examples:
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving results to DB")
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Hardware profile ID")
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type")
+	// VLM
+	cmd.Flags().StringArrayVar(&imageURLs, "image-urls", nil, "Image URLs for VLM benchmark (repeat flag for multiple)")
+	// TTS
+	cmd.Flags().StringVar(&voice, "voice", "", "TTS voice name")
+	cmd.Flags().StringVar(&audioFormat, "audio-format", "", "TTS output format (pcm, wav, mp3, opus, flac, aac)")
+	cmd.Flags().StringArrayVar(&texts, "texts", nil, "TTS input texts (repeat flag for multiple)")
+	// ASR
+	cmd.Flags().StringArrayVar(&audioFiles, "audio-files", nil, "ASR audio file paths (repeat flag for multiple)")
+	cmd.Flags().StringVar(&language, "language", "", "ASR language hint")
+	// T2I / T2V
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt for image/video generation")
+	cmd.Flags().IntVar(&width, "width", 0, "Image/video width in pixels")
+	cmd.Flags().IntVar(&height, "height", 0, "Image/video height in pixels")
+	cmd.Flags().IntVar(&steps, "steps", 0, "Inference steps for image/video generation")
+	cmd.Flags().Float64Var(&guidanceScale, "guidance-scale", 0, "Guidance scale for image/video generation")
+	cmd.Flags().IntVar(&numImages, "num-images", 0, "Number of images to generate per request")
+	// T2V
+	cmd.Flags().Float64Var(&durationS, "duration", 0, "Video duration in seconds")
+	cmd.Flags().IntVar(&fps, "fps", 0, "Video frames per second")
+	cmd.Flags().StringVar(&inputImageURL, "input-image-url", "", "Input image URL for I2V mode")
 	_ = cmd.MarkFlagRequired("model")
 
 	return cmd
@@ -276,11 +467,12 @@ Examples:
 
 func newBenchmarkListCmd(app *App) *cobra.Command {
 	var (
-		configID string
-		hardware string
+		configID  string
+		hardware  string
 		modelName string
-		engine   string
-		limit    int
+		engine    string
+		modality  string
+		limit     int
 	)
 
 	cmd := &cobra.Command{
@@ -298,6 +490,7 @@ Examples:
 				"hardware":  hardware,
 				"model":     modelName,
 				"engine":    engine,
+				"modality":  modality,
 				"limit":     limit,
 			}
 			raw, err := json.Marshal(params)
@@ -317,6 +510,7 @@ Examples:
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Filter by hardware profile ID")
 	cmd.Flags().StringVar(&modelName, "model", "", "Filter by model name")
 	cmd.Flags().StringVar(&engine, "engine", "", "Filter by engine type")
+	cmd.Flags().StringVar(&modality, "modality", "", "Filter by modality: llm, vlm, tts, asr, image_gen, video_gen")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Max results to return")
 
 	return cmd

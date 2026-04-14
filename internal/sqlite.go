@@ -135,6 +135,43 @@ type BenchmarkResult struct {
 	TestedAt        time.Time `json:"tested_at"`
 	AgentModel      string    `json:"agent_model"`
 	Notes           string    `json:"notes"`
+
+	// TTS/ASR shared
+	RTFP50           *float64 `json:"rtf_p50,omitempty"`
+	RTFP95           *float64 `json:"rtf_p95,omitempty"`
+	RTFMean          *float64 `json:"rtf_mean,omitempty"`
+
+	// TTS
+	TTFAP50ms        *float64 `json:"ttfa_p50_ms,omitempty"`
+	TTFAP95ms        *float64 `json:"ttfa_p95_ms,omitempty"`
+	AudioThroughput  *float64 `json:"audio_throughput,omitempty"`
+	AvgInputChars    *int     `json:"avg_input_chars,omitempty"`
+	AvgAudioDurationS *float64 `json:"avg_audio_duration_s,omitempty"`
+
+	// ASR
+	ASRThroughput    *float64 `json:"asr_throughput,omitempty"`
+	AvgInputAudioS   *float64 `json:"avg_input_audio_s,omitempty"`
+	AvgOutputChars   *int     `json:"avg_output_chars,omitempty"`
+
+	// T2I
+	LatencyP50ms     *float64 `json:"latency_p50_ms,omitempty"`
+	LatencyP95ms     *float64 `json:"latency_p95_ms,omitempty"`
+	LatencyP99ms     *float64 `json:"latency_p99_ms,omitempty"`
+	ImagesPerSec     *float64 `json:"images_per_sec,omitempty"`
+	AvgSteps         *int     `json:"avg_steps,omitempty"`
+	ImageWidth       *int     `json:"image_width,omitempty"`
+	ImageHeight      *int     `json:"image_height,omitempty"`
+
+	// T2V
+	VideoLatencyP50s  *float64 `json:"video_latency_p50_s,omitempty"`
+	VideoLatencyP95s  *float64 `json:"video_latency_p95_s,omitempty"`
+	VideosPerHour     *float64 `json:"videos_per_hour,omitempty"`
+	AvgVideoDurationS *float64 `json:"avg_video_duration_s,omitempty"`
+	AvgFrames         *int     `json:"avg_frames,omitempty"`
+	VideoFPS          *int     `json:"video_fps,omitempty"`
+	VideoWidth        *int     `json:"video_width,omitempty"`
+	VideoHeight       *int     `json:"video_height,omitempty"`
+	VideoSteps        *int     `json:"video_steps,omitempty"`
 }
 
 type ExplorationRun struct {
@@ -332,6 +369,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v13: benchmark_results.cpu_usage_pct for heterogeneous-engine knowledge
 	if err := d.migrateV13(ctx); err != nil {
 		return fmt.Errorf("migrate v13: %w", err)
+	}
+	// v14: multi-modal benchmark columns (TTS/ASR/T2I/T2V)
+	if err := d.migrateV14(ctx); err != nil {
+		return fmt.Errorf("migrate v14: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1061,6 +1102,71 @@ func (d *DB) migrateV13(ctx context.Context) error {
 		}
 	}
 	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 13"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV14(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 14 {
+		return nil
+	}
+
+	columns := []struct {
+		name string
+		typ  string
+	}{
+		// TTS/ASR shared
+		{"rtf_p50", "REAL"},
+		{"rtf_p95", "REAL"},
+		{"rtf_mean", "REAL"},
+		// TTS specific
+		{"ttfa_p50_ms", "REAL"},
+		{"ttfa_p95_ms", "REAL"},
+		{"audio_throughput", "REAL"},
+		{"avg_input_chars", "INTEGER"},
+		{"avg_audio_duration_s", "REAL"},
+		// ASR specific
+		{"asr_throughput", "REAL"},
+		{"avg_input_audio_s", "REAL"},
+		{"avg_output_chars", "INTEGER"},
+		// T2I specific
+		{"latency_p50_ms", "REAL"},
+		{"latency_p95_ms", "REAL"},
+		{"latency_p99_ms", "REAL"},
+		{"images_per_sec", "REAL"},
+		{"avg_steps", "INTEGER"},
+		{"image_width", "INTEGER"},
+		{"image_height", "INTEGER"},
+		// T2V specific
+		{"video_latency_p50_s", "REAL"},
+		{"video_latency_p95_s", "REAL"},
+		{"videos_per_hour", "REAL"},
+		{"avg_video_duration_s", "REAL"},
+		{"avg_frames", "INTEGER"},
+		{"video_fps", "INTEGER"},
+		{"video_width", "INTEGER"},
+		{"video_height", "INTEGER"},
+		{"video_steps", "INTEGER"},
+	}
+
+	for _, col := range columns {
+		var count int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('benchmark_results') WHERE name=?`, col.name).Scan(&count); err != nil {
+			return fmt.Errorf("check benchmark_results.%s column: %w", col.name, err)
+		}
+		if count == 0 {
+			stmt := fmt.Sprintf(`ALTER TABLE benchmark_results ADD COLUMN %s %s`, col.name, col.typ)
+			if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("add benchmark_results.%s: %w", col.name, err)
+			}
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 14"); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
@@ -2130,12 +2236,26 @@ func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) erro
 		`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
 		    ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
 		    throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
-		    error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes,
+		    rtf_p50, rtf_p95, rtf_mean,
+		    ttfa_p50_ms, ttfa_p95_ms, audio_throughput, avg_input_chars, avg_audio_duration_s,
+		    asr_throughput, avg_input_audio_s, avg_output_chars,
+		    latency_p50_ms, latency_p95_ms, latency_p99_ms, images_per_sec, avg_steps, image_width, image_height,
+		    video_latency_p50_s, video_latency_p95_s, videos_per_hour, avg_video_duration_s,
+		    avg_frames, video_fps, video_width, video_height, video_steps)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
 		b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
 		b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct, b.CPUUsagePct,
-		b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.AgentModel, b.Notes)
+		b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.AgentModel, b.Notes,
+		b.RTFP50, b.RTFP95, b.RTFMean,
+		b.TTFAP50ms, b.TTFAP95ms, b.AudioThroughput, b.AvgInputChars, b.AvgAudioDurationS,
+		b.ASRThroughput, b.AvgInputAudioS, b.AvgOutputChars,
+		b.LatencyP50ms, b.LatencyP95ms, b.LatencyP99ms, b.ImagesPerSec, b.AvgSteps, b.ImageWidth, b.ImageHeight,
+		b.VideoLatencyP50s, b.VideoLatencyP95s, b.VideosPerHour, b.AvgVideoDurationS,
+		b.AvgFrames, b.VideoFPS, b.VideoWidth, b.VideoHeight, b.VideoSteps)
 	if err != nil {
 		return fmt.Errorf("insert benchmark %s: %w", b.ID, err)
 	}
@@ -2287,7 +2407,13 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 	                 COALESCE(power_draw_watts,0), COALESCE(gpu_utilization_pct,0), COALESCE(cpu_usage_pct,0),
 	                 COALESCE(error_rate,0), COALESCE(oom_occurred,0),
 	                 COALESCE(stability,''), COALESCE(duration_s,0), COALESCE(sample_count,0),
-	                 tested_at, COALESCE(agent_model,''), COALESCE(notes,'')
+	                 tested_at, COALESCE(agent_model,''), COALESCE(notes,''),
+	                 rtf_p50, rtf_p95, rtf_mean,
+	                 ttfa_p50_ms, ttfa_p95_ms, audio_throughput, avg_input_chars, avg_audio_duration_s,
+	                 asr_throughput, avg_input_audio_s, avg_output_chars,
+	                 latency_p50_ms, latency_p95_ms, latency_p99_ms, images_per_sec, avg_steps, image_width, image_height,
+	                 video_latency_p50_s, video_latency_p95_s, videos_per_hour, avg_video_duration_s,
+	                 avg_frames, video_fps, video_width, video_height, video_steps
 	          FROM benchmark_results WHERE 1=1`
 	var args []any
 	if len(configIDs) > 0 {
@@ -2313,14 +2439,126 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 	results := make([]*BenchmarkResult, 0)
 	for rows.Next() {
 		b := &BenchmarkResult{}
+		var (
+			rtfP50, rtfP95, rtfMean                     sql.NullFloat64
+			ttfaP50ms, ttfaP95ms, audioThroughput        sql.NullFloat64
+			avgInputChars                                 sql.NullInt64
+			avgAudioDurationS                             sql.NullFloat64
+			asrThroughput, avgInputAudioS                 sql.NullFloat64
+			avgOutputChars                                sql.NullInt64
+			latencyP50ms, latencyP95ms, latencyP99ms      sql.NullFloat64
+			imagesPerSec                                  sql.NullFloat64
+			avgSteps, imageWidth, imageHeight             sql.NullInt64
+			videoLatencyP50s, videoLatencyP95s             sql.NullFloat64
+			videosPerHour, avgVideoDurationS               sql.NullFloat64
+			avgFrames, videoFPS, videoWidth, videoHeight  sql.NullInt64
+			videoSteps                                    sql.NullInt64
+		)
 		if err := rows.Scan(&b.ID, &b.ConfigID, &b.Concurrency, &b.InputLenBucket,
 			&b.OutputLenBucket, &b.Modality,
 			&b.TTFTP50ms, &b.TTFTP95ms, &b.TTFTP99ms, &b.TPOTP50ms, &b.TPOTP95ms,
 			&b.ThroughputTPS, &b.QPS,
 			&b.VRAMUsageMiB, &b.RAMUsageMiB, &b.PowerDrawWatts, &b.GPUUtilPct, &b.CPUUsagePct,
 			&b.ErrorRate, &b.OOMOccurred, &b.Stability, &b.DurationS, &b.SampleCount,
-			&b.TestedAt, &b.AgentModel, &b.Notes); err != nil {
+			&b.TestedAt, &b.AgentModel, &b.Notes,
+			&rtfP50, &rtfP95, &rtfMean,
+			&ttfaP50ms, &ttfaP95ms, &audioThroughput, &avgInputChars, &avgAudioDurationS,
+			&asrThroughput, &avgInputAudioS, &avgOutputChars,
+			&latencyP50ms, &latencyP95ms, &latencyP99ms, &imagesPerSec, &avgSteps, &imageWidth, &imageHeight,
+			&videoLatencyP50s, &videoLatencyP95s, &videosPerHour, &avgVideoDurationS,
+			&avgFrames, &videoFPS, &videoWidth, &videoHeight, &videoSteps); err != nil {
 			return nil, fmt.Errorf("scan benchmark row: %w", err)
+		}
+		if rtfP50.Valid {
+			b.RTFP50 = &rtfP50.Float64
+		}
+		if rtfP95.Valid {
+			b.RTFP95 = &rtfP95.Float64
+		}
+		if rtfMean.Valid {
+			b.RTFMean = &rtfMean.Float64
+		}
+		if ttfaP50ms.Valid {
+			b.TTFAP50ms = &ttfaP50ms.Float64
+		}
+		if ttfaP95ms.Valid {
+			b.TTFAP95ms = &ttfaP95ms.Float64
+		}
+		if audioThroughput.Valid {
+			b.AudioThroughput = &audioThroughput.Float64
+		}
+		if avgInputChars.Valid {
+			v := int(avgInputChars.Int64)
+			b.AvgInputChars = &v
+		}
+		if avgAudioDurationS.Valid {
+			b.AvgAudioDurationS = &avgAudioDurationS.Float64
+		}
+		if asrThroughput.Valid {
+			b.ASRThroughput = &asrThroughput.Float64
+		}
+		if avgInputAudioS.Valid {
+			b.AvgInputAudioS = &avgInputAudioS.Float64
+		}
+		if avgOutputChars.Valid {
+			v := int(avgOutputChars.Int64)
+			b.AvgOutputChars = &v
+		}
+		if latencyP50ms.Valid {
+			b.LatencyP50ms = &latencyP50ms.Float64
+		}
+		if latencyP95ms.Valid {
+			b.LatencyP95ms = &latencyP95ms.Float64
+		}
+		if latencyP99ms.Valid {
+			b.LatencyP99ms = &latencyP99ms.Float64
+		}
+		if imagesPerSec.Valid {
+			b.ImagesPerSec = &imagesPerSec.Float64
+		}
+		if avgSteps.Valid {
+			v := int(avgSteps.Int64)
+			b.AvgSteps = &v
+		}
+		if imageWidth.Valid {
+			v := int(imageWidth.Int64)
+			b.ImageWidth = &v
+		}
+		if imageHeight.Valid {
+			v := int(imageHeight.Int64)
+			b.ImageHeight = &v
+		}
+		if videoLatencyP50s.Valid {
+			b.VideoLatencyP50s = &videoLatencyP50s.Float64
+		}
+		if videoLatencyP95s.Valid {
+			b.VideoLatencyP95s = &videoLatencyP95s.Float64
+		}
+		if videosPerHour.Valid {
+			b.VideosPerHour = &videosPerHour.Float64
+		}
+		if avgVideoDurationS.Valid {
+			b.AvgVideoDurationS = &avgVideoDurationS.Float64
+		}
+		if avgFrames.Valid {
+			v := int(avgFrames.Int64)
+			b.AvgFrames = &v
+		}
+		if videoFPS.Valid {
+			v := int(videoFPS.Int64)
+			b.VideoFPS = &v
+		}
+		if videoWidth.Valid {
+			v := int(videoWidth.Int64)
+			b.VideoWidth = &v
+		}
+		if videoHeight.Valid {
+			v := int(videoHeight.Int64)
+			b.VideoHeight = &v
+		}
+		if videoSteps.Valid {
+			v := int(videoSteps.Int64)
+			b.VideoSteps = &v
 		}
 		results = append(results, b)
 	}

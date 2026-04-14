@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -546,7 +547,7 @@ type catalogAdapter struct{ cat *knowledge.Catalog }
 
 func (a catalogAdapter) ModelType(name string) string {
 	for _, m := range a.cat.ModelAssets {
-		if m.Metadata.Name == name {
+		if strings.EqualFold(m.Metadata.Name, name) {
 			return m.Metadata.Type
 		}
 	}
@@ -559,7 +560,7 @@ func (a catalogAdapter) ModelContextWindow(name string) int {
 
 func (a catalogAdapter) ModelFamily(name string) string {
 	for _, m := range a.cat.ModelAssets {
-		if m.Metadata.Name == name {
+		if strings.EqualFold(m.Metadata.Name, name) {
 			return m.Metadata.Family
 		}
 	}
@@ -568,7 +569,7 @@ func (a catalogAdapter) ModelFamily(name string) string {
 
 func (a catalogAdapter) ModelChatProvider(name string) bool {
 	for _, m := range a.cat.ModelAssets {
-		if m.Metadata.Name == name {
+		if strings.EqualFold(m.Metadata.Name, name) {
 			if m.OpenClaw != nil && m.OpenClaw.ChatProvider != nil {
 				return *m.OpenClaw.ChatProvider
 			}
@@ -580,7 +581,7 @@ func (a catalogAdapter) ModelChatProvider(name string) bool {
 
 func (a catalogAdapter) OpenClawRequestPatches(name string) []openclaw.RequestPatch {
 	for _, m := range a.cat.ModelAssets {
-		if m.Metadata.Name != name || m.OpenClaw == nil {
+		if !strings.EqualFold(m.Metadata.Name, name) || m.OpenClaw == nil {
 			continue
 		}
 		out := make([]openclaw.RequestPatch, 0, len(m.OpenClaw.RequestPatches))

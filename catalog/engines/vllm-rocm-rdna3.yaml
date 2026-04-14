@@ -4,6 +4,7 @@ metadata:
   name: vllm-rocm-rdna3
   type: vllm
   version: "0.16.0"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: RDNA3
   vram_min_mib: 4096

@@ -18,18 +18,10 @@ import (
 )
 
 func findModelAsset(cat *knowledge.Catalog, name string) (*knowledge.ModelAsset, *knowledge.ModelSource) {
-	// 1. Exact catalog name
+	// 1. Case-insensitive catalog name match
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
-		if ma.Metadata.Name == name && len(ma.Storage.Sources) > 0 {
-			return ma, &ma.Storage.Sources[0]
-		}
-	}
-	// 2. Case-insensitive catalog name
-	lower := strings.ToLower(name)
-	for i := range cat.ModelAssets {
-		ma := &cat.ModelAssets[i]
-		if strings.ToLower(ma.Metadata.Name) == lower && len(ma.Storage.Sources) > 0 {
+		if strings.EqualFold(ma.Metadata.Name, name) && len(ma.Storage.Sources) > 0 {
 			return ma, &ma.Storage.Sources[0]
 		}
 	}
@@ -208,7 +200,7 @@ func deploymentMatchesQuery(d *runtime.DeploymentStatus, query string) bool {
 	if d == nil {
 		return false
 	}
-	if d.Name == query {
+	if strings.EqualFold(d.Name, query) {
 		return true
 	}
 	modelName := strings.TrimSpace(d.Model)
@@ -219,11 +211,12 @@ func deploymentMatchesQuery(d *runtime.DeploymentStatus, query string) bool {
 	if engineName == "" {
 		engineName = strings.TrimSpace(d.Labels["aima.dev/engine"])
 	}
-	if modelName == query {
+	if strings.EqualFold(modelName, query) {
 		return true
 	}
 	if modelName != "" && engineName != "" {
-		return knowledge.SanitizePodName(modelName+"-"+engineName) == query
+		sanitized := knowledge.SanitizePodName(modelName + "-" + engineName)
+		return sanitized == strings.ToLower(query)
 	}
 	return false
 }

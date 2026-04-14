@@ -4,6 +4,7 @@ metadata:
   type: litetts
   version: "0.4d"
   supported_formats: [mnn]
+  supported_model_types: [tts]
 hardware:
   gpu_arch: "*"
   vram_min_mib: 0

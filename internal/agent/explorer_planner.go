@@ -64,14 +64,15 @@ type LocalModel struct {
 // The TunableParams field exposes startup.default_args from the engine YAML so
 // that planners (especially LLM) know exactly which knobs can be adjusted.
 type LocalEngine struct {
-	Name          string         `json:"name"`
-	Type          string         `json:"type"`
-	Runtime       string         `json:"runtime"` // "native", "container"
-	Artifact      string         `json:"artifact,omitempty"`
-	Features      []string       `json:"features,omitempty"`
-	Notes         string         `json:"notes,omitempty"`          // e.g. "CPU+GPU hybrid MoE inference"
-	TunableParams map[string]any `json:"tunable_params,omitempty"` // startup.default_args from engine YAML
-	InternalArgs  []string       `json:"internal_args,omitempty"`  // startup.internal_args from engine YAML
+	Name                string         `json:"name"`
+	Type                string         `json:"type"`
+	Runtime             string         `json:"runtime"` // "native", "container"
+	Artifact            string         `json:"artifact,omitempty"`
+	Features            []string       `json:"features,omitempty"`
+	Notes               string         `json:"notes,omitempty"`                  // e.g. "CPU+GPU hybrid MoE inference"
+	TunableParams       map[string]any `json:"tunable_params,omitempty"`         // startup.default_args from engine YAML
+	InternalArgs        []string       `json:"internal_args,omitempty"`          // startup.internal_args from engine YAML
+	SupportedModelTypes []string       `json:"supported_model_types,omitempty"`  // e.g. ["llm","embedding"] — empty = all
 }
 
 // ComboFact is an authoritative execution fact for one local model×engine pair.
@@ -207,6 +208,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
 	modelFormats := localModelFormatMap(input.LocalModels)
 	modelTypes := localModelTypeMap(input.LocalModels)
+	engineModelTypes := localEngineSupportedModelTypes(input.LocalEngines)
 	totalVRAMMiB := input.Hardware.VRAMMiB * input.Hardware.GPUCount
 	if totalVRAMMiB == 0 {
 		totalVRAMMiB = input.Hardware.VRAMMiB // single GPU fallback
@@ -256,8 +258,8 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 		if !engineFormatCompatible(g.Engine, modelFormats[g.Model]) {
 			continue
 		}
-		// B24: skip non-LLM models for LLM-only engines
-		if !engineSupportsModelType(g.Engine, modelTypes[g.Model]) {
+		// B24: skip models whose type is not supported by the engine
+		if !engineSupportsModelTypeFromList(engineModelTypes[strings.ToLower(g.Engine)], modelTypes[strings.ToLower(g.Model)]) {
 			continue
 		}
 		// B23: skip models that obviously won't fit in total VRAM
@@ -319,7 +321,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 
 func hasHistoryFor(history []ExplorationRun, model, engine string) bool {
 	for _, h := range history {
-		if h.ModelID == model && h.EngineID == engine && h.Status == "completed" {
+		if strings.EqualFold(h.ModelID, model) && strings.EqualFold(h.EngineID, engine) && h.Status == "completed" {
 			return true
 		}
 	}
@@ -338,7 +340,7 @@ func firstTaskHardware(values ...string) string {
 func toSet(items []LocalModel) map[string]bool {
 	s := make(map[string]bool, len(items))
 	for _, item := range items {
-		s[item.Name] = true
+		s[strings.ToLower(item.Name)] = true
 	}
 	return s
 }
@@ -376,7 +378,7 @@ func modelFitsVRAM(modelName string, models []LocalModel, totalVRAMMiB int) bool
 		return true // unknown VRAM — allow (best-effort)
 	}
 	for _, m := range models {
-		if m.Name == modelName && m.SizeBytes > 0 {
+		if strings.EqualFold(m.Name, modelName) && m.SizeBytes > 0 {
 			modelMiB := int(m.SizeBytes / (1024 * 1024))
 			// Model weights + ~25% overhead for KV cache and activations
 			needed := modelMiB + modelMiB/4
@@ -386,25 +388,29 @@ func modelFitsVRAM(modelName string, models []LocalModel, totalVRAMMiB int) bool
 	return true // model not found in local list — allow
 }
 
-// engineSupportsModelType checks if an engine type can serve a model type.
-// B24: sglang-kt/vllm/sglang only serve LLM; other types need specialized engines.
-func engineSupportsModelType(engineType, modelType string) bool {
-	if modelType == "" || modelType == "llm" {
-		return true // unknown or LLM — always allowed
+// engineSupportsModelTypeFromList checks if the engine's declared supported model
+// types include the given model type. Returns true when the engine has no
+// declared types (backwards-compatible permissive matching).
+func engineSupportsModelTypeFromList(supportedTypes []string, modelType string) bool {
+	if len(supportedTypes) == 0 {
+		return true // engine doesn't declare types — allow all
 	}
-	switch engineType {
-	case "vllm", "sglang", "sglang-kt":
-		return false // these engines only serve text LLMs
-	default:
-		return true // specialized engines decide themselves
+	if modelType == "" {
+		return true // unknown model type — allow
 	}
+	for _, t := range supportedTypes {
+		if strings.EqualFold(t, modelType) {
+			return true
+		}
+	}
+	return false
 }
 
 // localModelTypeMap builds a name→type map for type compatibility checks.
 func localModelTypeMap(models []LocalModel) map[string]string {
 	m := make(map[string]string, len(models))
 	for _, model := range models {
-		m[model.Name] = model.Type
+		m[strings.ToLower(model.Name)] = model.Type
 	}
 	return m
 }
@@ -412,19 +418,28 @@ func localModelTypeMap(models []LocalModel) map[string]string {
 func localEngineTypeSet(engines []LocalEngine) map[string]bool {
 	s := make(map[string]bool, len(engines))
 	for _, e := range engines {
-		s[e.Type] = true
-		s[e.Name] = true
+		s[strings.ToLower(e.Type)] = true
+		s[strings.ToLower(e.Name)] = true
 	}
 	return s
+}
+
+func localEngineSupportedModelTypes(engines []LocalEngine) map[string][]string {
+	m := make(map[string][]string, len(engines))
+	for _, e := range engines {
+		m[strings.ToLower(e.Type)] = e.SupportedModelTypes
+		m[strings.ToLower(e.Name)] = e.SupportedModelTypes
+	}
+	return m
 }
 
 // isLocallyAvailable checks if the model and engine are present on this device.
 // Empty local sets mean "no constraint" (backwards-compatible for tests).
 func isLocallyAvailable(model, engine string, localModels, localEngines map[string]bool) bool {
-	if len(localModels) > 0 && !localModels[model] {
+	if len(localModels) > 0 && !localModels[strings.ToLower(model)] {
 		return false
 	}
-	if len(localEngines) > 0 && engine != "" && !localEngines[engine] {
+	if len(localEngines) > 0 && engine != "" && !localEngines[strings.ToLower(engine)] {
 		return false
 	}
 	return true

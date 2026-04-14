@@ -3,6 +3,7 @@ metadata:
   name: qwen-tts-fastapi-cuda-blackwell
   type: qwen-tts-fastapi-cuda
   version: "1.0"
+  supported_model_types: [tts]
 image:
   # ARM64 CUDA TTS image built on GB10 from CPU image + PyTorch cu130
   # Base: qujing-qwen3-tts-real + torch 2.10.0+cu130 + torchaudio 2.10.0+cu130

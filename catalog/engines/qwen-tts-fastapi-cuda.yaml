@@ -3,6 +3,7 @@ metadata:
   name: qwen-tts-fastapi-cuda
   type: qwen-tts-fastapi-cuda
   version: "1.0"
+  supported_model_types: [tts]
 image:
   name: qwen3-tts-cuda-x86
   tag: "latest"

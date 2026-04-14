@@ -4,6 +4,7 @@ metadata:
   name: vllm-nightly-blackwell
   type: vllm-nightly
   version: "nightly"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

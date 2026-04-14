@@ -3,6 +3,7 @@ metadata:
   name: qwen-tts-fastapi
   type: qwen-tts-fastapi
   version: "1.0"
+  supported_model_types: [tts]
 image:
   # gb10 本地构建的 ARM64 CPU-only TTS 镜像 (FastAPI + qwen-tts)
   # 已有 /v1/audio/speech (OpenAI compat) + /v1/tts + /health 端点

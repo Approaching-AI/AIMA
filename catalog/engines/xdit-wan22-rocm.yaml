@@ -3,6 +3,7 @@ metadata:
   name: xdit-wan22-rocm
   type: xdit-wan22
   version: "1.0"
+  supported_model_types: [video_gen]
 image:
   # 8× AMD W7900D RDNA3 视频生成镜像
   # xDiT 0.4.5 (source) + DistVAE (source) + diffusers 0.37.1 + PyTorch 2.10.0-rocm

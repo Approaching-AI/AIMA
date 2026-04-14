@@ -69,7 +69,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 
 	deps.ScenarioShow = func(ctx context.Context, name string) (json.RawMessage, error) {
 		for i := range cat.DeploymentScenarios {
-			if cat.DeploymentScenarios[i].Metadata.Name == name {
+			if strings.EqualFold(cat.DeploymentScenarios[i].Metadata.Name, name) {
 				ds := &cat.DeploymentScenarios[i]
 				return json.Marshal(map[string]any{
 					"name":                ds.Metadata.Name,

@@ -3,6 +3,7 @@ metadata:
   name: z-image-diffusers-rocm
   type: z-image-diffusers
   version: "1.0"
+  supported_model_types: [image_gen]
 image:
   # AMD RDNA3 (W7900D) diffusers+FastAPI 推理镜像 (ROCm + bitsandbytes)
   # OpenAI 兼容 /v1/images/generations 端点

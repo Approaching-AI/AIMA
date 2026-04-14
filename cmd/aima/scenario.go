@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -30,7 +31,7 @@ type orderedScenarioDeploy struct {
 func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, deps *mcp.ToolDeps, name string, dryRun bool) (json.RawMessage, error) {
 	var scenario *knowledge.DeploymentScenario
 	for i := range cat.DeploymentScenarios {
-		if cat.DeploymentScenarios[i].Metadata.Name == name {
+		if strings.EqualFold(cat.DeploymentScenarios[i].Metadata.Name, name) {
 			scenario = &cat.DeploymentScenarios[i]
 			break
 		}
@@ -59,13 +60,13 @@ func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, d
 	if len(scenario.StartupOrder) > 0 {
 		byModel := make(map[string]knowledge.ScenarioDeployment, len(scenario.Deployments))
 		for _, d := range scenario.Deployments {
-			byModel[d.Model] = d
+			byModel[strings.ToLower(d.Model)] = d
 		}
 		steps := make([]knowledge.ScenarioStartupStep, len(scenario.StartupOrder))
 		copy(steps, scenario.StartupOrder)
 		sort.Slice(steps, func(i, j int) bool { return steps[i].Step < steps[j].Step })
 		for _, step := range steps {
-			d, ok := byModel[step.Model]
+			d, ok := byModel[strings.ToLower(step.Model)]
 			if !ok {
 				results = append(results, scenarioDeployResult{
 					Model:  step.Model,
@@ -79,10 +80,10 @@ func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, d
 				waitFor:    step.WaitFor,
 				timeoutS:   step.TimeoutS,
 			})
-			delete(byModel, step.Model)
+			delete(byModel, strings.ToLower(step.Model))
 		}
 		for _, d := range scenario.Deployments {
-			if _, remaining := byModel[d.Model]; remaining {
+			if _, remaining := byModel[strings.ToLower(d.Model)]; remaining {
 				ordered = append(ordered, orderedScenarioDeploy{deployment: d})
 			}
 		}

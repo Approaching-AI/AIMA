@@ -4,6 +4,7 @@ metadata:
   name: vllm-ada
   type: vllm
   version: "0.8.5"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: Ada
   vram_min_mib: 4096

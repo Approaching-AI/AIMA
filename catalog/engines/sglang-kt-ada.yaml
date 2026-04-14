@@ -4,6 +4,7 @@ metadata:
   name: sglang-kt-ada
   type: sglang-kt
   version: "0.5.9-kt0.5.2"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: Ada
   vram_min_mib: 4096

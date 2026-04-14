@@ -4,6 +4,7 @@ metadata:
   name: vllm-gemma4-blackwell
   type: vllm
   version: "0.19.0-gemma4"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

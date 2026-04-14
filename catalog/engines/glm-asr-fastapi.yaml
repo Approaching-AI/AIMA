@@ -3,6 +3,7 @@ metadata:
   name: glm-asr-fastapi
   type: glm-asr-fastapi
   version: "1.0"
+  supported_model_types: [asr]
 image:
   # gb10 本地构建的 ARM64 CPU-only ASR 镜像 (FastAPI + GLM-ASR-Nano)
   # OpenAI 兼容 /v1/audio/transcriptions 端点

@@ -4,6 +4,7 @@ metadata:
   name: sglang-spark
   type: sglang-spark
   version: "cu13"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

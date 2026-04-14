@@ -757,7 +757,7 @@ func (m *ExplorationManager) activeConflictingDeploys(ctx context.Context, targe
 	}
 	var conflicts []string
 	for _, d := range deploys {
-		if d.Name == targetModel {
+		if strings.EqualFold(d.Name, targetModel) {
 			continue
 		}
 		// Only running/starting deployments actively hold resources.

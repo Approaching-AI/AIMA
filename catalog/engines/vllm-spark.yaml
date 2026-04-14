@@ -4,6 +4,7 @@ metadata:
   name: vllm-spark
   type: vllm-spark
   version: "0.14.1"
+  supported_model_types: [llm, vlm, embedding]
   status: blocked
   status_reason: "all scitrera tags require CUDA 13.1, incompatible with Driver 580"
 hardware:

@@ -238,10 +238,10 @@ func (h *Healer) lookupDeployment(ctx context.Context, deployName string) (*depl
 		if deploys[i].Slot == "" {
 			deploys[i].Slot = deploys[i].Labels["aima.dev/slot"]
 		}
-		if deploys[i].Name == deployName {
+		if strings.EqualFold(deploys[i].Name, deployName) {
 			return validateDeploymentMetadata(&deploys[i], deployName)
 		}
-		if deploys[i].Model == deployName {
+		if strings.EqualFold(deploys[i].Model, deployName) {
 			modelMatches = append(modelMatches, &deploys[i])
 		}
 	}

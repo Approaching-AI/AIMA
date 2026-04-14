@@ -4,6 +4,7 @@ metadata:
   name: vllm-rocm
   type: vllm
   version: "nightly"
+  supported_model_types: [llm, vlm, embedding]
 hardware:
   gpu_arch: RDNA3.5
   vram_min_mib: 4096

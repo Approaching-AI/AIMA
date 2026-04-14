@@ -4,6 +4,7 @@ metadata:
   type: mooer
   version: "1.5"
   supported_formats: [safetensors]
+  supported_model_types: [asr]
 hardware:
   gpu_arch: MUSA
   vram_min_mib: 15360

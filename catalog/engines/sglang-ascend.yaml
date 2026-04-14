@@ -4,6 +4,7 @@ metadata:
   name: sglang-ascend
   type: sglang
   version: "0.4.6-cann8.5"
+  supported_model_types: [llm, vlm]
 hardware:
   gpu_arch: Ascend910B
   vram_min_mib: 32768

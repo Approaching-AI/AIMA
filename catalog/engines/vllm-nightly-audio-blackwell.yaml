@@ -4,6 +4,7 @@ metadata:
   name: vllm-nightly-audio-blackwell
   type: vllm-nightly-audio
   version: "nightly"
+  supported_model_types: [llm, vlm, embedding, asr]
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

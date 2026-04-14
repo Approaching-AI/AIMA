@@ -698,10 +698,15 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 				e.mu.Unlock()
 			}
 			if err != nil {
-				// Only break on hard errors (context cancelled, LLM failure).
-				// Validation guard feedback is now injected into workspace by Analyze().
 				slog.Warn("explorer: PDCA analyze failed", "error", err, "cycle", cycle+1)
-				break
+				// Hard errors (context cancelled) break the entire loop.
+				// Transient errors (LLM timeout, rate limit) skip this cycle's
+				// Check/Act and continue to the next PDCA cycle.
+				if errors.Is(err, context.Canceled) {
+					break
+				}
+				slog.Info("explorer: transient analyze error, continuing to next cycle", "cycle", cycle+1)
+				continue
 			}
 			slog.Info("explorer: PDCA verdict", "verdict", verdict, "extra_tasks", len(extraTasks), "cycle", cycle+1)
 
@@ -1393,7 +1398,7 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	if e.gatherLocalModels != nil {
 		if models, err := e.gatherLocalModels(ctx); err == nil {
 			for _, m := range models {
-				if m.Name == task.Model {
+				if strings.EqualFold(m.Name, task.Model) {
 					req.Target.ModelType = m.Type
 					break
 				}
@@ -1405,7 +1410,7 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	if e.gatherLocalEngines != nil {
 		if engines, err := e.gatherLocalEngines(ctx); err == nil {
 			for _, eng := range engines {
-				if eng.Name == task.Engine || eng.Type == task.Engine {
+				if strings.EqualFold(eng.Name, task.Engine) || strings.EqualFold(eng.Type, task.Engine) {
 					req.Target.Runtime = eng.Runtime
 					req.Target.InternalArgs = eng.InternalArgs
 					break

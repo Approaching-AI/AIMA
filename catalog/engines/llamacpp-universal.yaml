@@ -5,6 +5,7 @@ metadata:
   type: llamacpp
   version: "b8157"
   default: true
+  supported_model_types: [llm, vlm, embedding]
 image:
   name: ghcr.io/ggml-org/llama.cpp
   tag: "server"

@@ -3,6 +3,7 @@ metadata:
   name: z-image-diffusers
   type: z-image-diffusers
   version: "1.0"
+  supported_model_types: [image_gen]
 image:
   # ARM64 GPU diffusers+FastAPI 推理镜像 (基于 sglang:dev-arm64-cu13)
   # OpenAI 兼容 /v1/images/generations 端点

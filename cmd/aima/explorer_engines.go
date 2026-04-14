@@ -85,14 +85,15 @@ func gatherExplorerLocalEngines(
 			artifact = imageRef
 		}
 		result = append(result, agent.LocalEngine{
-			Name:          firstNonEmpty(asset.Metadata.Name, engineType),
-			Type:          firstNonEmpty(asset.Metadata.Type, engineType),
-			Runtime:       requiredRuntime,
-			Artifact:      artifact,
-			Features:      asset.Amplifier.Features,
-			Notes:         asset.Amplifier.PerformanceGain,
-			TunableParams: asset.Startup.DefaultArgs,
-			InternalArgs:  asset.Startup.InternalArgs,
+			Name:                firstNonEmpty(asset.Metadata.Name, engineType),
+			Type:                firstNonEmpty(asset.Metadata.Type, engineType),
+			Runtime:             requiredRuntime,
+			Artifact:            artifact,
+			Features:            asset.Amplifier.Features,
+			Notes:               asset.Amplifier.PerformanceGain,
+			TunableParams:       asset.Startup.DefaultArgs,
+			InternalArgs:        asset.Startup.InternalArgs,
+			SupportedModelTypes: asset.Metadata.SupportedModelTypes,
 		})
 	}
 

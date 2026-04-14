@@ -3,6 +3,7 @@ metadata:
   name: ltx23-pipelines-rocm
   type: ltx-pipelines
   version: "1.1.0"
+  supported_model_types: [video_gen]
 image:
   # LTX-2.3 不使用 Docker 镜像，在 Python venv 中直接运行
   # venv 路径: /disk/ssd1/ltx23-env/ (PyTorch 2.5.1+rocm6.2)

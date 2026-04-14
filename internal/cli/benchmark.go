@@ -104,7 +104,7 @@ Example:
 	cmd.Flags().StringVar(&engine, "engine", "", "Engine type (e.g. vllm-nightly)")
 	cmd.Flags().StringVar(&model, "model", "", "Model name (e.g. qwen3.5-35b-a3b)")
 	cmd.Flags().StringVar(&deviceID, "device", "", "Device ID (e.g. gb10)")
-	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, tts, asr, image_gen, video_gen")
+	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, embedding, tts, asr, image_gen, video_gen")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Concurrency level during test")
 	cmd.Flags().StringVar(&inputLenBucket, "input-bucket", "", "Input length bucket (e.g. 1K, 8K, 128K)")
 	cmd.Flags().StringVar(&outputLenBucket, "output-bucket", "", "Output length bucket (e.g. 128)")
@@ -285,7 +285,7 @@ Examples:
 	cmd.Flags().StringArrayVar(&audioFiles, "audio-files", nil, "ASR audio file paths (repeat flag for multiple)")
 	cmd.Flags().StringVar(&language, "language", "", "ASR language hint")
 	// T2I / T2V
-	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt for image/video generation")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt override for llm, vlm, embedding, image, or video benchmarking")
 	cmd.Flags().IntVar(&width, "width", 0, "Image/video width in pixels")
 	cmd.Flags().IntVar(&height, "height", 0, "Image/video height in pixels")
 	cmd.Flags().IntVar(&steps, "steps", 0, "Inference steps for image/video generation")
@@ -341,7 +341,7 @@ func newBenchmarkMatrixCmd(app *App) *cobra.Command {
 		Use:   "matrix",
 		Short: "Run a benchmark test matrix",
 		Long: `Run benchmarks across multiple concurrency levels and input/output length combinations.
-Works with all modalities: llm, vlm, tts, asr, image_gen, video_gen.
+Works with all modalities: llm, vlm, embedding, tts, asr, image_gen, video_gen.
 
 Examples:
   aima benchmark matrix --model qwen3-8b
@@ -429,7 +429,7 @@ Examples:
 
 	cmd.Flags().StringVar(&modelName, "model", "", "Model name (required)")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OpenAI-compatible endpoint URL (auto-detect if empty)")
-	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, tts, asr, image_gen, video_gen")
+	cmd.Flags().StringVar(&modality, "modality", "llm", "Benchmark modality: llm, vlm, embedding, tts, asr, image_gen, video_gen")
 	cmd.Flags().StringVar(&concurrencyStr, "concurrency", "1,4", "Comma-separated concurrency levels")
 	cmd.Flags().StringVar(&inputTokensStr, "input-tokens", "128,1024", "Comma-separated input token lengths")
 	cmd.Flags().StringVar(&maxTokensStr, "max-tokens", "128,512", "Comma-separated output token lengths")
@@ -450,7 +450,7 @@ Examples:
 	cmd.Flags().StringArrayVar(&audioFiles, "audio-files", nil, "ASR audio file paths (repeat flag for multiple)")
 	cmd.Flags().StringVar(&language, "language", "", "ASR language hint")
 	// T2I / T2V
-	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt for image/video generation")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt override for llm, vlm, embedding, image, or video benchmarking")
 	cmd.Flags().IntVar(&width, "width", 0, "Image/video width in pixels")
 	cmd.Flags().IntVar(&height, "height", 0, "Image/video height in pixels")
 	cmd.Flags().IntVar(&steps, "steps", 0, "Inference steps for image/video generation")
@@ -510,7 +510,7 @@ Examples:
 	cmd.Flags().StringVar(&hardware, "hardware", "", "Filter by hardware profile ID")
 	cmd.Flags().StringVar(&modelName, "model", "", "Filter by model name")
 	cmd.Flags().StringVar(&engine, "engine", "", "Filter by engine type")
-	cmd.Flags().StringVar(&modality, "modality", "", "Filter by modality: llm, vlm, tts, asr, image_gen, video_gen")
+	cmd.Flags().StringVar(&modality, "modality", "", "Filter by modality: llm, vlm, embedding, tts, asr, image_gen, video_gen")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Max results to return")
 
 	return cmd

@@ -259,21 +259,32 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		pushAt, _ := db.GetSyncTimestamp(ctx, "push")
 		pullAt, _ := db.GetSyncTimestamp(ctx, "pull")
 		connected := false
+		httpStatus := 0
+		var stats any
 		if endpoint != "" {
 			req, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/v1/stats", nil)
 			if err == nil {
 				resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 				if err == nil {
+					httpStatus = resp.StatusCode
+					body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 					resp.Body.Close()
 					connected = resp.StatusCode == http.StatusOK
+					if len(body) > 0 {
+						if err := json.Unmarshal(body, &stats); err != nil {
+							stats = map[string]any{"raw": string(body)}
+						}
+					}
 				}
 			}
 		}
 		return json.Marshal(map[string]any{
-			"endpoint":  endpoint,
-			"connected": connected,
-			"last_push": pushAt,
-			"last_pull": pullAt,
+			"endpoint":    endpoint,
+			"connected":   connected,
+			"http_status": httpStatus,
+			"last_push":   pushAt,
+			"last_pull":   pullAt,
+			"stats":       stats,
 		})
 	}
 

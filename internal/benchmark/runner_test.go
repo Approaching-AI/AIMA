@@ -3,9 +3,11 @@ package benchmark
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,6 +85,74 @@ func TestChatRequester_SendStreamingRequest_HTTPError(t *testing.T) {
 	sample, _ := req.Do(context.Background(), ts.URL, 0)
 	if sample.Error == nil {
 		t.Fatal("expected error for HTTP 400")
+	}
+}
+
+func TestChatRequester_UsesCustomPrompt(t *testing.T) {
+	var requestBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		requestBody = string(data)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":1}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	req := &ChatRequester{
+		Model:       "test",
+		InputTokens: 32,
+		Prompt:      "Summarize the deployment logs and extract root cause.",
+		Timeout:     10 * time.Second,
+	}
+
+	sample, err := req.Do(context.Background(), ts.URL, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sample.Error != nil {
+		t.Fatalf("unexpected sample error: %v", sample.Error)
+	}
+	if !strings.Contains(requestBody, "Summarize the deployment logs") {
+		t.Fatalf("request body missing custom prompt: %s", requestBody)
+	}
+}
+
+func TestEmbeddingRequester_Basic(t *testing.T) {
+	var requestPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data":[{"embedding":[0.1,0.2,0.3,0.4]}],
+			"usage":{"prompt_tokens":42}
+		}`))
+	}))
+	defer ts.Close()
+
+	req := &EmbeddingRequester{
+		Model:       "bge-m3",
+		InputTokens: 128,
+		Prompt:      "Encode this hardware report for similarity search.",
+		Timeout:     10 * time.Second,
+	}
+
+	sample, err := req.Do(context.Background(), ts.URL, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sample.Error != nil {
+		t.Fatalf("unexpected sample error: %v", sample.Error)
+	}
+	if requestPath != "/v1/embeddings" {
+		t.Fatalf("request path = %q, want /v1/embeddings", requestPath)
+	}
+	if sample.InputTokens != 42 {
+		t.Fatalf("sample.InputTokens = %d, want 42", sample.InputTokens)
+	}
+	if sample.EmbeddingDimensions != 4 {
+		t.Fatalf("sample.EmbeddingDimensions = %d, want 4", sample.EmbeddingDimensions)
 	}
 }
 
@@ -414,7 +484,7 @@ func TestStddev(t *testing.T) {
 		want   float64
 	}{
 		{[]float64{2, 4, 4, 4, 5, 5, 7, 9}, 2.138},
-		{[]float64{10}, 0},        // single value
+		{[]float64{10}, 0},         // single value
 		{nil, 0},                   // empty
 		{[]float64{5, 5, 5, 5}, 0}, // no variance
 	}

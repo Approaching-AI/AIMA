@@ -21,6 +21,7 @@ import (
 // benchmark.run and benchmark.matrix handlers.
 type modalityParams struct {
 	Modality string `json:"modality"`
+	Prompt   string `json:"prompt"`
 	// VLM
 	ImageURLs []string `json:"image_urls"`
 	// TTS
@@ -31,7 +32,6 @@ type modalityParams struct {
 	AudioFiles []string `json:"audio_files"`
 	Language   string   `json:"language"`
 	// T2I / T2V
-	Prompt        string  `json:"prompt"`
 	Width         int     `json:"width"`
 	Height        int     `json:"height"`
 	Steps         int     `json:"steps"`
@@ -71,6 +71,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			Model           string         `json:"model"`
 			DeviceID        string         `json:"device_id"`
 			Config          map[string]any `json:"config"`
+			Modality        string         `json:"modality"`
 			Concurrency     int            `json:"concurrency"`
 			InputLenBucket  string         `json:"input_len_bucket"`
 			OutputLenBucket string         `json:"output_len_bucket"`
@@ -134,7 +135,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			Concurrency:     p.Concurrency,
 			InputLenBucket:  p.InputLenBucket,
 			OutputLenBucket: p.OutputLenBucket,
-			Modality:        "text",
+			Modality:        storageBenchmarkModality(p.Modality),
 			TTFTP50ms:       p.TTFTP50ms,
 			TTFTP95ms:       p.TTFTP95ms,
 			TPOTP50ms:       p.TPOTP50ms,
@@ -259,7 +260,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		if save && p.Hardware != "" && p.Engine != "" {
 			var err error
 			benchmarkID, configID, savedBench, err = saveBenchmarkResult(ctx, db,
-				p.Hardware, p.Engine, p.Model, result, deployConfig, observedMetrics,
+				p.Hardware, p.Engine, p.Model, modality, result, deployConfig, observedMetrics,
 				cfg.Concurrency, cfg.InputTokens, cfg.MaxTokens, p.Notes)
 			if err != nil {
 				return nil, err
@@ -362,6 +363,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		if len(p.MaxTokenLevels) == 0 {
 			p.MaxTokenLevels = []int{128, 512}
 		}
+		p.MaxTokenLevels = effectiveMatrixMaxTokenLevels(modality, p.MaxTokenLevels)
 		if p.RequestsPerCombo <= 0 {
 			p.RequestsPerCombo = 5
 		}
@@ -436,7 +438,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						save := p.Save == nil || *p.Save
 						if save && p.Hardware != "" && p.Engine != "" {
 							notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
-							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, result, deployConfig, observedMetrics, conc, inTok, maxTok, notes)
+							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, modality, result, deployConfig, observedMetrics, conc, inTok, maxTok, notes)
 							if saveErr != nil {
 								slog.Warn("benchmark matrix: save failed", "error", saveErr, "concurrency", conc, "input_tokens", inTok, "max_tokens", maxTok)
 							} else {
@@ -471,6 +473,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			Hardware string `json:"hardware"`
 			Model    string `json:"model"`
 			Engine   string `json:"engine"`
+			Modality string `json:"modality"`
 			Limit    int    `json:"limit"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -503,12 +506,32 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 		if err != nil {
 			return nil, fmt.Errorf("list benchmarks: %w", err)
 		}
+		if p.Modality != "" {
+			want := storageBenchmarkModality(p.Modality)
+			filtered := make([]*state.BenchmarkResult, 0, len(results))
+			for _, item := range results {
+				if item != nil && strings.EqualFold(item.Modality, want) {
+					filtered = append(filtered, item)
+				}
+			}
+			results = filtered
+		}
 
 		return json.Marshal(map[string]any{
 			"results": results,
 			"total":   len(results),
 		})
 	}
+}
+
+func effectiveMatrixMaxTokenLevels(modality string, levels []int) []int {
+	if strings.EqualFold(modality, "embedding") {
+		return []int{0}
+	}
+	if len(levels) == 0 {
+		return []int{128, 512}
+	}
+	return levels
 }
 
 func selectReadyDeployConfig(engineName string, explicit map[string]any, matches []matchedDeployment) map[string]any {
@@ -543,11 +566,22 @@ func cloneConfigMapForBenchmark(src map[string]any) map[string]any {
 func buildRequester(modality string, cfg benchpkg.RunConfig, mp *modalityParams) (benchpkg.Requester, error) {
 	switch modality {
 	case "llm":
-		return defaultChatRequester(cfg), nil
+		req := defaultChatRequester(cfg)
+		req.Prompt = mp.Prompt
+		return req, nil
 	case "vlm":
 		req := defaultChatRequester(cfg)
+		req.Prompt = mp.Prompt
 		req.ImageURLs = mp.ImageURLs
 		return req, nil
+	case "embedding":
+		return &benchpkg.EmbeddingRequester{
+			Model:       cfg.Model,
+			InputTokens: cfg.InputTokens,
+			Prompt:      mp.Prompt,
+			APIKey:      cfg.APIKey,
+			Timeout:     cfg.Timeout,
+		}, nil
 	case "tts":
 		return &benchpkg.AudioSpeechRequester{
 			Model:   cfg.Model,

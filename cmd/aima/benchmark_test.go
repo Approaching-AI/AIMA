@@ -20,6 +20,7 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 
 	benchmarkID, configID, _, err := saveBenchmarkResult(ctx, db,
 		"nvidia-rtx4090-x86", "sglang-kt", "qwen3-4b",
+		"llm",
 		&benchpkg.RunResult{
 			ThroughputTPS:   42.5,
 			TTFTP95ms:       123.4,
@@ -58,6 +59,69 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 	}
 	if results[0].ThroughputTPS != 42.5 {
 		t.Fatalf("ThroughputTPS = %v, want 42.5", results[0].ThroughputTPS)
+	}
+}
+
+func TestSaveBenchmarkResultPersistsEmbeddingModality(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, configID, saved, err := saveBenchmarkResult(ctx, db,
+		"nvidia-gb10-arm64", "vllm", "bge-m3",
+		"embedding",
+		&benchpkg.RunResult{
+			ThroughputTPS:          18.5,
+			AvgInputTokens:         256,
+			AvgOutputTokens:        1024,
+			AvgEmbeddingDimensions: 1024,
+			TotalRequests:          6,
+			DurationMs:             1000,
+		},
+		nil, benchmarkSystemMetrics{}, 1, 256, 0, "embedding validate")
+	if err != nil {
+		t.Fatalf("saveBenchmarkResult: %v", err)
+	}
+	if saved == nil || saved.Modality != "embedding" {
+		t.Fatalf("saved modality = %#v, want embedding", saved)
+	}
+
+	results, err := db.ListBenchmarkResults(ctx, []string{configID}, 10)
+	if err != nil {
+		t.Fatalf("ListBenchmarkResults: %v", err)
+	}
+	if len(results) != 1 || results[0].Modality != "embedding" {
+		t.Fatalf("results = %#v, want one embedding benchmark", results)
+	}
+}
+
+func TestStorageBenchmarkModality(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: "text"},
+		{input: "llm", want: "text"},
+		{input: "text", want: "text"},
+		{input: "vlm", want: "vlm"},
+		{input: "embedding", want: "embedding"},
+	}
+	for _, tt := range tests {
+		if got := storageBenchmarkModality(tt.input); got != tt.want {
+			t.Fatalf("storageBenchmarkModality(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestEffectiveMatrixMaxTokenLevels(t *testing.T) {
+	if got := effectiveMatrixMaxTokenLevels("embedding", []int{128, 512}); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("embedding levels = %v, want [0]", got)
+	}
+	if got := effectiveMatrixMaxTokenLevels("llm", []int{128, 512}); !reflect.DeepEqual(got, []int{128, 512}) {
+		t.Fatalf("llm levels = %v, want unchanged", got)
 	}
 }
 

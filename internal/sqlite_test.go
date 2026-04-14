@@ -592,7 +592,7 @@ func TestFindGoldenBenchmark(t *testing.T) {
 	}
 
 	t.Run("finds golden with benchmark", func(t *testing.T) {
-		c, b, err := db.FindGoldenBenchmark(ctx, "hw1", "eng1", "model1")
+		c, b, err := db.FindGoldenBenchmark(ctx, "hw1", "eng1", "model1", "text")
 		if err != nil {
 			t.Fatalf("FindGoldenBenchmark: %v", err)
 		}
@@ -611,7 +611,7 @@ func TestFindGoldenBenchmark(t *testing.T) {
 	})
 
 	t.Run("no golden for different triple", func(t *testing.T) {
-		c, b, err := db.FindGoldenBenchmark(ctx, "hw2", "eng1", "model1")
+		c, b, err := db.FindGoldenBenchmark(ctx, "hw2", "eng1", "model1", "text")
 		if err != nil {
 			t.Fatalf("FindGoldenBenchmark: %v", err)
 		}
@@ -629,7 +629,7 @@ func TestFindGoldenBenchmark(t *testing.T) {
 		if err := db.InsertConfiguration(ctx, cfg2); err != nil {
 			t.Fatalf("InsertConfiguration: %v", err)
 		}
-		c, b, err := db.FindGoldenBenchmark(ctx, "hw2", "eng2", "model2")
+		c, b, err := db.FindGoldenBenchmark(ctx, "hw2", "eng2", "model2", "text")
 		if err != nil {
 			t.Fatalf("FindGoldenBenchmark: %v", err)
 		}
@@ -638,6 +638,28 @@ func TestFindGoldenBenchmark(t *testing.T) {
 		}
 		if b != nil {
 			t.Error("expected nil benchmark for golden config without benchmarks")
+		}
+	})
+
+	t.Run("filters by modality", func(t *testing.T) {
+		if err := db.InsertBenchmarkResult(ctx, &BenchmarkResult{
+			ID: "bench-vlm-1", ConfigID: "cfg-golden-1", Concurrency: 1,
+			ThroughputTPS: 12.0, Modality: "vlm",
+		}); err != nil {
+			t.Fatalf("InsertBenchmarkResult(vlm): %v", err)
+		}
+		c, b, err := db.FindGoldenBenchmark(ctx, "hw1", "eng1", "model1", "vlm")
+		if err != nil {
+			t.Fatalf("FindGoldenBenchmark(vlm): %v", err)
+		}
+		if c == nil || b == nil {
+			t.Fatal("expected golden config with vlm benchmark")
+		}
+		if b.Modality != "vlm" {
+			t.Fatalf("benchmark modality = %q, want vlm", b.Modality)
+		}
+		if b.ID != "bench-vlm-1" {
+			t.Fatalf("benchmark id = %q, want bench-vlm-1", b.ID)
 		}
 	})
 }

@@ -137,30 +137,30 @@ type BenchmarkResult struct {
 	Notes           string    `json:"notes"`
 
 	// TTS/ASR shared
-	RTFP50           *float64 `json:"rtf_p50,omitempty"`
-	RTFP95           *float64 `json:"rtf_p95,omitempty"`
-	RTFMean          *float64 `json:"rtf_mean,omitempty"`
+	RTFP50  *float64 `json:"rtf_p50,omitempty"`
+	RTFP95  *float64 `json:"rtf_p95,omitempty"`
+	RTFMean *float64 `json:"rtf_mean,omitempty"`
 
 	// TTS
-	TTFAP50ms        *float64 `json:"ttfa_p50_ms,omitempty"`
-	TTFAP95ms        *float64 `json:"ttfa_p95_ms,omitempty"`
-	AudioThroughput  *float64 `json:"audio_throughput,omitempty"`
-	AvgInputChars    *int     `json:"avg_input_chars,omitempty"`
+	TTFAP50ms         *float64 `json:"ttfa_p50_ms,omitempty"`
+	TTFAP95ms         *float64 `json:"ttfa_p95_ms,omitempty"`
+	AudioThroughput   *float64 `json:"audio_throughput,omitempty"`
+	AvgInputChars     *int     `json:"avg_input_chars,omitempty"`
 	AvgAudioDurationS *float64 `json:"avg_audio_duration_s,omitempty"`
 
 	// ASR
-	ASRThroughput    *float64 `json:"asr_throughput,omitempty"`
-	AvgInputAudioS   *float64 `json:"avg_input_audio_s,omitempty"`
-	AvgOutputChars   *int     `json:"avg_output_chars,omitempty"`
+	ASRThroughput  *float64 `json:"asr_throughput,omitempty"`
+	AvgInputAudioS *float64 `json:"avg_input_audio_s,omitempty"`
+	AvgOutputChars *int     `json:"avg_output_chars,omitempty"`
 
 	// T2I
-	LatencyP50ms     *float64 `json:"latency_p50_ms,omitempty"`
-	LatencyP95ms     *float64 `json:"latency_p95_ms,omitempty"`
-	LatencyP99ms     *float64 `json:"latency_p99_ms,omitempty"`
-	ImagesPerSec     *float64 `json:"images_per_sec,omitempty"`
-	AvgSteps         *int     `json:"avg_steps,omitempty"`
-	ImageWidth       *int     `json:"image_width,omitempty"`
-	ImageHeight      *int     `json:"image_height,omitempty"`
+	LatencyP50ms *float64 `json:"latency_p50_ms,omitempty"`
+	LatencyP95ms *float64 `json:"latency_p95_ms,omitempty"`
+	LatencyP99ms *float64 `json:"latency_p99_ms,omitempty"`
+	ImagesPerSec *float64 `json:"images_per_sec,omitempty"`
+	AvgSteps     *int     `json:"avg_steps,omitempty"`
+	ImageWidth   *int     `json:"image_width,omitempty"`
+	ImageHeight  *int     `json:"image_height,omitempty"`
 
 	// T2V
 	VideoLatencyP50s  *float64 `json:"video_latency_p50_s,omitempty"`
@@ -2188,31 +2188,34 @@ func (d *DB) FindConfigByHash(ctx context.Context, hash string) (*Configuration,
 }
 
 // FindGoldenBenchmark returns the golden configuration and its best benchmark result
-// for the given hardware/engine/model triple. Uses a single JOIN query to avoid
+// for the given hardware/engine/model/modality tuple. Uses a single JOIN query to avoid
 // MaxOpenConns(1) deadlocks. Returns (nil, nil, nil) if no golden config exists.
-func (d *DB) FindGoldenBenchmark(ctx context.Context, hardware, engine, model string) (*Configuration, *BenchmarkResult, error) {
+func (d *DB) FindGoldenBenchmark(ctx context.Context, hardware, engine, model, modality string) (*Configuration, *BenchmarkResult, error) {
+	if strings.TrimSpace(modality) == "" {
+		modality = "text"
+	}
 	row := d.db.QueryRowContext(ctx,
 		`SELECT c.id, c.hardware_id, c.engine_id, c.model_id, COALESCE(c.partition_slot,''),
 		        c.config, c.config_hash, c.derived_from, c.status,
 		        COALESCE(c.tags,'[]'), COALESCE(c.source,'local'), COALESCE(c.device_id,''),
 		        c.created_at, c.updated_at,
-		        b.id, b.throughput_tps
+		        b.id, b.throughput_tps, b.ttft_ms_p95, b.power_draw_watts
 		 FROM configurations c
-		 LEFT JOIN benchmark_results b ON b.config_id = c.id
+		 LEFT JOIN benchmark_results b ON b.config_id = c.id AND b.modality = ?
 		 WHERE c.status = 'golden'
 		   AND c.hardware_id = ? AND c.engine_id = ? AND c.model_id = ?
 		 ORDER BY b.throughput_tps DESC
 		 LIMIT 1`,
-		hardware, engine, model)
+		modality, hardware, engine, model)
 
 	cfg := &Configuration{}
 	var tagsStr, derivedFrom, benchID sql.NullString
-	var throughput sql.NullFloat64
+	var throughput, ttft95, power sql.NullFloat64
 	err := row.Scan(
 		&cfg.ID, &cfg.HardwareID, &cfg.EngineID, &cfg.ModelID, &cfg.Slot,
 		&cfg.Config, &cfg.ConfigHash, &derivedFrom, &cfg.Status,
 		&tagsStr, &cfg.Source, &cfg.DeviceID, &cfg.CreatedAt, &cfg.UpdatedAt,
-		&benchID, &throughput)
+		&benchID, &throughput, &ttft95, &power)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -2226,7 +2229,14 @@ func (d *DB) FindGoldenBenchmark(ctx context.Context, hardware, engine, model st
 
 	var bench *BenchmarkResult
 	if benchID.Valid {
-		bench = &BenchmarkResult{ID: benchID.String, ConfigID: cfg.ID, ThroughputTPS: throughput.Float64}
+		bench = &BenchmarkResult{
+			ID:             benchID.String,
+			ConfigID:       cfg.ID,
+			Modality:       modality,
+			ThroughputTPS:  throughput.Float64,
+			TTFTP95ms:      ttft95.Float64,
+			PowerDrawWatts: power.Float64,
+		}
 	}
 	return cfg, bench, nil
 }
@@ -2440,19 +2450,19 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 	for rows.Next() {
 		b := &BenchmarkResult{}
 		var (
-			rtfP50, rtfP95, rtfMean                     sql.NullFloat64
+			rtfP50, rtfP95, rtfMean                      sql.NullFloat64
 			ttfaP50ms, ttfaP95ms, audioThroughput        sql.NullFloat64
-			avgInputChars                                 sql.NullInt64
-			avgAudioDurationS                             sql.NullFloat64
-			asrThroughput, avgInputAudioS                 sql.NullFloat64
-			avgOutputChars                                sql.NullInt64
-			latencyP50ms, latencyP95ms, latencyP99ms      sql.NullFloat64
-			imagesPerSec                                  sql.NullFloat64
-			avgSteps, imageWidth, imageHeight             sql.NullInt64
-			videoLatencyP50s, videoLatencyP95s             sql.NullFloat64
-			videosPerHour, avgVideoDurationS               sql.NullFloat64
-			avgFrames, videoFPS, videoWidth, videoHeight  sql.NullInt64
-			videoSteps                                    sql.NullInt64
+			avgInputChars                                sql.NullInt64
+			avgAudioDurationS                            sql.NullFloat64
+			asrThroughput, avgInputAudioS                sql.NullFloat64
+			avgOutputChars                               sql.NullInt64
+			latencyP50ms, latencyP95ms, latencyP99ms     sql.NullFloat64
+			imagesPerSec                                 sql.NullFloat64
+			avgSteps, imageWidth, imageHeight            sql.NullInt64
+			videoLatencyP50s, videoLatencyP95s           sql.NullFloat64
+			videosPerHour, avgVideoDurationS             sql.NullFloat64
+			avgFrames, videoFPS, videoWidth, videoHeight sql.NullInt64
+			videoSteps                                   sql.NullInt64
 		)
 		if err := rows.Scan(&b.ID, &b.ConfigID, &b.Concurrency, &b.InputLenBucket,
 			&b.OutputLenBucket, &b.Modality,

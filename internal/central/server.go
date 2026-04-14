@@ -450,6 +450,10 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats, _ := s.store.Stats(r.Context())
 	coverage, _ := s.store.CoverageMatrix(r.Context())
+	advisorConfigured := false
+	if adv, ok := s.advisor.(*Advisor); ok && adv != nil {
+		advisorConfigured = true
+	}
 
 	var coverageList []map[string]any
 	for _, c := range coverage {
@@ -464,6 +468,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"benchmarks":      stats.Benchmarks,
 		"knowledge_notes": stats.KnowledgeNotes,
 		"coverage":        coverageList,
+		"services": map[string]any{
+			"advisor_configured":  advisorConfigured,
+			"analyzer_configured": s.analyzer != nil,
+		},
 	})
 }
 

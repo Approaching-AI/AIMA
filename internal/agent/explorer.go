@@ -30,21 +30,21 @@ type ExplorerConfig struct {
 
 // ExplorerStatus reports the Explorer's current state.
 type ExplorerStatus struct {
-	Running            bool           `json:"running"`
-	Enabled            bool           `json:"enabled"`
-	Tier               int            `json:"tier"`
-	ActivePlan         *ExplorerPlan  `json:"active_plan,omitempty"`
-	Schedule           ScheduleConfig `json:"schedule"`
-	LastRun            time.Time      `json:"last_run,omitempty"`
-	Mode               string         `json:"mode"`
-	RoundsUsed         int            `json:"rounds_used"`
-	MaxRounds          int            `json:"max_rounds"`
-	TokensUsedToday    int            `json:"tokens_used_today"`
-	MaxTokensPerDay    int            `json:"max_tokens_per_day"`
-	MaxCycles          int            `json:"max_cycles"`
-	MaxTasks           int            `json:"max_tasks"`
-	LastPlanMetrics    *PlanMetrics   `json:"last_plan_metrics,omitempty"`
-	BlockedByDeploys   []DeployStatus `json:"blocked_by_deploys,omitempty"`
+	Running          bool           `json:"running"`
+	Enabled          bool           `json:"enabled"`
+	Tier             int            `json:"tier"`
+	ActivePlan       *ExplorerPlan  `json:"active_plan,omitempty"`
+	Schedule         ScheduleConfig `json:"schedule"`
+	LastRun          time.Time      `json:"last_run,omitempty"`
+	Mode             string         `json:"mode"`
+	RoundsUsed       int            `json:"rounds_used"`
+	MaxRounds        int            `json:"max_rounds"`
+	TokensUsedToday  int            `json:"tokens_used_today"`
+	MaxTokensPerDay  int            `json:"max_tokens_per_day"`
+	MaxCycles        int            `json:"max_cycles"`
+	MaxTasks         int            `json:"max_tasks"`
+	LastPlanMetrics  *PlanMetrics   `json:"last_plan_metrics,omitempty"`
+	BlockedByDeploys []DeployStatus `json:"blocked_by_deploys,omitempty"`
 }
 
 // PlanMetrics captures per-plan execution statistics.
@@ -364,21 +364,21 @@ func (e *Explorer) Status() ExplorerStatus {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return ExplorerStatus{
-		Running:            e.running,
-		Enabled:            e.config.Enabled,
-		Tier:               e.tier,
-		ActivePlan:         e.activePlan,
-		Schedule:           e.config.Schedule,
-		LastRun:            e.lastRun,
-		Mode:               e.config.Mode,
-		RoundsUsed:         e.roundsUsed,
-		MaxRounds:          e.config.MaxRounds,
-		TokensUsedToday:    e.tokensUsedToday,
-		MaxTokensPerDay:    e.config.MaxTokensPerDay,
-		MaxCycles:          e.config.MaxCycles,
-		MaxTasks:           e.config.MaxTasks,
-		LastPlanMetrics:    e.lastPlanMetrics,
-		BlockedByDeploys:   e.blockedByDeploys,
+		Running:          e.running,
+		Enabled:          e.config.Enabled,
+		Tier:             e.tier,
+		ActivePlan:       e.activePlan,
+		Schedule:         e.config.Schedule,
+		LastRun:          e.lastRun,
+		Mode:             e.config.Mode,
+		RoundsUsed:       e.roundsUsed,
+		MaxRounds:        e.config.MaxRounds,
+		TokensUsedToday:  e.tokensUsedToday,
+		MaxTokensPerDay:  e.config.MaxTokensPerDay,
+		MaxCycles:        e.config.MaxCycles,
+		MaxTasks:         e.config.MaxTasks,
+		LastPlanMetrics:  e.lastPlanMetrics,
+		BlockedByDeploys: e.blockedByDeploys,
 	}
 }
 
@@ -734,6 +734,9 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 					slog.Warn("explorer: persist PDCA plan failed", "error", err, "cycle", cycle+1)
 				}
 			}
+			e.mu.Lock()
+			e.activePlan = extraPlan
+			e.mu.Unlock()
 			e.executePlan(ctx, extraPlan)
 		}
 	}
@@ -911,13 +914,7 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 						Success: false,
 						Error:   "skipped: timeout before execution",
 					}
-					timeoutTask := TaskSpec{
-						Kind:         plan.Tasks[j].Kind,
-						Model:        plan.Tasks[j].Model,
-						Engine:       plan.Tasks[j].Engine,
-						EngineParams: plan.Tasks[j].Params,
-						Reason:       plan.Tasks[j].Reason,
-					}
+					timeoutTask := taskSpecFromPlanTask(plan.Tasks[j])
 					if _, werr := e.workspace.WriteExperimentResult(j+1, timeoutTask, harvestToExperimentResult(plan.Tasks[j].Status, time.Now(), 0, timeoutResult)); werr != nil {
 						slog.Debug("explorer: write timeout experiment result failed", "error", werr)
 					}
@@ -949,14 +946,7 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 				slog.Info("explorer: harvest action", "type", a.Type, "detail", a.Detail)
 			}
 			if e.workspace != nil {
-				expTask := TaskSpec{
-					Kind:         task.Kind,
-					Model:        task.Model,
-					Engine:       task.Engine,
-					EngineParams: task.Params,
-					Reason:       task.Reason,
-				}
-				if _, werr := e.workspace.WriteExperimentResult(i+1, expTask, harvestToExperimentResult(task.Status, time.Now(), 0, skipResult)); werr != nil {
+				if _, werr := e.workspace.WriteExperimentResult(i+1, taskSpecFromPlanTask(*task), harvestToExperimentResult(task.Status, time.Now(), 0, skipResult)); werr != nil {
 					slog.Debug("explorer: write skipped experiment result failed", "error", werr)
 				}
 			}
@@ -1000,14 +990,7 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 		// Write experiment result to workspace (for PDCA Check phase)
 		if e.workspace != nil {
 			expResult := harvestToExperimentResult(task.Status, taskStart, taskElapsed, result)
-			expTask := TaskSpec{
-				Kind:         task.Kind,
-				Model:        task.Model,
-				Engine:       task.Engine,
-				EngineParams: task.Params,
-				Reason:       task.Reason,
-			}
-			if _, werr := e.workspace.WriteExperimentResult(i+1, expTask, expResult); werr != nil {
+			if _, werr := e.workspace.WriteExperimentResult(i+1, taskSpecFromPlanTask(*task), expResult); werr != nil {
 				slog.Debug("explorer: write experiment result failed", "error", werr)
 			}
 		}
@@ -1214,6 +1197,17 @@ func benchmarkSpecToProfile(spec BenchmarkSpec) ExplorationBenchmarkProfile {
 	return p
 }
 
+func taskSpecFromPlanTask(task PlanTask) TaskSpec {
+	return TaskSpec{
+		Kind:         task.Kind,
+		Model:        task.Model,
+		Engine:       task.Engine,
+		EngineParams: task.Params,
+		Benchmark:    task.Benchmark,
+		Reason:       task.Reason,
+	}
+}
+
 // defaultBenchmarkProfile returns sensible benchmark parameters based on hardware capability.
 // D6: Explorer decides "how to test" (tactical), Planner decides "what to test" (strategic).
 func defaultBenchmarkProfile(hw HardwareInfo) ExplorationBenchmarkProfile {
@@ -1305,15 +1299,15 @@ func extractMaxModelLen(params map[string]any) int {
 	return 0
 }
 
-// adaptBenchmarkProfiles expands InputTokenLevels to cover up to maxModelLen
-// and filters out infeasible combos where input_tokens + max_tokens > maxModelLen.
+var benchmarkTokenLadder = []int{128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072}
+
+// adaptBenchmarkProfiles keeps planner intent but enriches sparse plans with a
+// small bounded set of extra context points after the model is confirmed up.
+// It never explodes a planner-authored matrix into a full context ladder.
 func adaptBenchmarkProfiles(profiles []ExplorationBenchmarkProfile, maxModelLen int) []ExplorationBenchmarkProfile {
 	if maxModelLen <= 0 || len(profiles) == 0 {
 		return profiles
 	}
-
-	// Standard token level ladder — doubles each step.
-	allLevels := []int{128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072}
 
 	result := make([]ExplorationBenchmarkProfile, 0, len(profiles))
 	for _, p := range profiles {
@@ -1322,42 +1316,120 @@ func adaptBenchmarkProfiles(profiles []ExplorationBenchmarkProfile, maxModelLen 
 			continue
 		}
 
-		minOutput := minInt(p.MaxTokenLevels)
+		minOutput := minPositiveInt(p.MaxTokenLevels)
 		if minOutput <= 0 {
-			minOutput = 256
+			minOutput = 128
 		}
-
-		// Build expanded input levels up to maxModelLen - minOutput.
 		maxInput := maxModelLen - minOutput
-		var expanded []int
-		for _, level := range allLevels {
-			if level > maxInput {
-				break
-			}
-			expanded = append(expanded, level)
+		if maxInput <= 0 {
+			maxInput = maxModelLen
 		}
-		if len(expanded) == 0 {
-			expanded = []int{128} // always test at least one level
-		}
-		p.InputTokenLevels = expanded
+		p.InputTokenLevels = boundedInputTokenLevels(p.InputTokenLevels, maxInput)
 
-		// Filter MaxTokenLevels to only include feasible values.
-		minInput := expanded[0]
-		var feasibleMax []int
-		for _, mt := range p.MaxTokenLevels {
-			if minInput+mt <= maxModelLen {
-				feasibleMax = append(feasibleMax, mt)
-			}
+		minInput := minPositiveInt(p.InputTokenLevels)
+		maxOutput := maxModelLen - minInput
+		if maxOutput <= 0 {
+			maxOutput = maxModelLen
 		}
-		if len(feasibleMax) == 0 {
-			// At minimum keep the smallest max_tokens
-			feasibleMax = []int{minInt(p.MaxTokenLevels)}
-		}
-		p.MaxTokenLevels = feasibleMax
+		p.MaxTokenLevels = feasibleOutputTokenLevels(p.MaxTokenLevels, maxOutput)
 
 		result = append(result, p)
 	}
 	return result
+}
+
+func boundedInputTokenLevels(existing []int, maxAllowed int) []int {
+	filtered := filterTokenLevelsAtOrBelow(existing, maxAllowed)
+	if len(filtered) == 0 {
+		if fallback := bestBenchmarkTokenLevel(maxAllowed); fallback > 0 {
+			return []int{fallback}
+		}
+		return []int{maxAllowed}
+	}
+	if len(filtered) >= 3 {
+		return filtered
+	}
+
+	selected := append([]int{}, filtered...)
+	for _, anchor := range []int{128, 512, 2048} {
+		if len(selected) >= 3 {
+			break
+		}
+		if anchor <= maxAllowed && !containsInt(selected, anchor) {
+			selected = append(selected, anchor)
+		}
+	}
+	return normalizeTokenLevels(selected)
+}
+
+func feasibleOutputTokenLevels(existing []int, maxAllowed int) []int {
+	filtered := filterTokenLevelsAtOrBelow(existing, maxAllowed)
+	if len(filtered) > 0 {
+		return filtered
+	}
+	if fallback := bestBenchmarkTokenLevel(maxAllowed); fallback > 0 {
+		return []int{fallback}
+	}
+	return []int{maxAllowed}
+}
+
+func filterTokenLevelsAtOrBelow(levels []int, maxAllowed int) []int {
+	if maxAllowed <= 0 {
+		return normalizeTokenLevels(levels)
+	}
+	filtered := make([]int, 0, len(levels))
+	for _, level := range levels {
+		if level > 0 && level <= maxAllowed {
+			filtered = append(filtered, level)
+		}
+	}
+	return normalizeTokenLevels(filtered)
+}
+
+func normalizeTokenLevels(levels []int) []int {
+	seen := make(map[int]bool, len(levels))
+	for _, level := range levels {
+		if level > 0 {
+			seen[level] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	ordered := make([]int, 0, len(seen))
+	for _, level := range benchmarkTokenLadder {
+		if seen[level] {
+			ordered = append(ordered, level)
+			delete(seen, level)
+		}
+	}
+	for _, level := range levels {
+		if seen[level] {
+			ordered = append(ordered, level)
+			delete(seen, level)
+		}
+	}
+	return ordered
+}
+
+func bestBenchmarkTokenLevel(maxAllowed int) int {
+	best := 0
+	for _, level := range benchmarkTokenLadder {
+		if level > maxAllowed {
+			break
+		}
+		best = level
+	}
+	return best
+}
+
+func minPositiveInt(vals []int) int {
+	for _, v := range normalizeTokenLevels(vals) {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func minInt(vals []int) int {
@@ -1371,6 +1443,15 @@ func minInt(vals []int) int {
 		}
 	}
 	return m
+}
+
+func containsInt(vals []int, target int) bool {
+	for _, value := range vals {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string) HarvestResult {

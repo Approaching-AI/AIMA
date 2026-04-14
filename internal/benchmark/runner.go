@@ -15,16 +15,16 @@ type RunConfig struct {
 	Model          string        `json:"model"`
 	APIKey         string        `json:"api_key,omitempty"`
 	Concurrency    int           `json:"concurrency"`
-	NumRequests    int           `json:"num_requests"`    // per round
+	NumRequests    int           `json:"num_requests"` // per round
 	MaxTokens      int           `json:"max_tokens"`
 	InputTokens    int           `json:"input_tokens"`
 	Temperature    float64       `json:"temperature"`
 	WarmupCount    int           `json:"warmup_count"`
 	Timeout        time.Duration `json:"timeout"`
-	Rounds         int           `json:"rounds"`            // measurement rounds (default 1)
-	MinOutputRatio float64       `json:"min_output_ratio"`  // retry if output < ratio * max_tokens (0 = disabled)
-	MaxRetries     int           `json:"max_retries"`       // per-request retries (default 0)
-	RetryDelay     time.Duration `json:"retry_delay"`       // initial retry delay (default 1s)
+	Rounds         int           `json:"rounds"`           // measurement rounds (default 1)
+	MinOutputRatio float64       `json:"min_output_ratio"` // retry if output < ratio * max_tokens (0 = disabled)
+	MaxRetries     int           `json:"max_retries"`      // per-request retries (default 0)
+	RetryDelay     time.Duration `json:"retry_delay"`      // initial retry delay (default 1s)
 }
 
 func (c *RunConfig) applyDefaults() {
@@ -119,19 +119,19 @@ type RunResult struct {
 	Samples []RequestSample `json:"-"`
 
 	// ---- TTS/ASR shared ----
-	RTFP50   float64 `json:"rtf_p50,omitempty"`
-	RTFP95   float64 `json:"rtf_p95,omitempty"`
-	RTFMean  float64 `json:"rtf_mean,omitempty"`
+	RTFP50  float64 `json:"rtf_p50,omitempty"`
+	RTFP95  float64 `json:"rtf_p95,omitempty"`
+	RTFMean float64 `json:"rtf_mean,omitempty"`
 
 	// ---- TTS specific ----
 	TTFAP50ms         float64 `json:"ttfa_p50_ms,omitempty"`
 	TTFAP95ms         float64 `json:"ttfa_p95_ms,omitempty"`
-	AudioThroughput   float64 `json:"audio_throughput,omitempty"`   // audio-seconds generated / wall-second
+	AudioThroughput   float64 `json:"audio_throughput,omitempty"` // audio-seconds generated / wall-second
 	AvgInputChars     int     `json:"avg_input_chars,omitempty"`
 	AvgAudioDurationS float64 `json:"avg_audio_duration_s,omitempty"`
 
 	// ---- ASR specific ----
-	ASRThroughput  float64 `json:"asr_throughput,omitempty"`   // audio-hours processed / wall-hour
+	ASRThroughput  float64 `json:"asr_throughput,omitempty"` // audio-hours processed / wall-hour
 	AvgInputAudioS float64 `json:"avg_input_audio_s,omitempty"`
 	AvgOutputChars int     `json:"avg_output_chars,omitempty"`
 
@@ -143,6 +143,14 @@ type RunResult struct {
 	AvgSteps     int     `json:"avg_steps,omitempty"`
 	ImageWidth   int     `json:"image_width,omitempty"`
 	ImageHeight  int     `json:"image_height,omitempty"`
+
+	// ---- Embedding specific ----
+	EmbeddingLatencyP50ms  float64 `json:"embedding_latency_p50_ms,omitempty"`
+	EmbeddingLatencyP95ms  float64 `json:"embedding_latency_p95_ms,omitempty"`
+	EmbeddingLatencyP99ms  float64 `json:"embedding_latency_p99_ms,omitempty"`
+	EmbeddingsPerSec       float64 `json:"embeddings_per_sec,omitempty"`
+	InputTokensPerSec      float64 `json:"input_tokens_per_sec,omitempty"`
+	AvgEmbeddingDimensions int     `json:"avg_embedding_dimensions,omitempty"`
 
 	// ---- T2V specific ----
 	VideoLatencyP50s  float64 `json:"video_latency_p50_s,omitempty"`
@@ -369,11 +377,49 @@ func aggregateByModality(modality string, samples []*Sample, totalDuration time.
 		aggregateTTSMetrics(samples, totalDuration, result)
 	case "asr":
 		aggregateASRMetrics(samples, totalDuration, result)
+	case "embedding":
+		aggregateEmbeddingMetrics(samples, totalDuration, result)
 	case "image_gen":
 		aggregateImageGenMetrics(samples, totalDuration, result)
 	case "video_gen":
 		aggregateVideoGenMetrics(samples, totalDuration, result)
 	}
+}
+
+func aggregateEmbeddingMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	latencyValues := make([]float64, len(successSamples))
+	var totalInputTokens, totalDims int
+	for i, s := range successSamples {
+		latencyValues[i] = s.LatencyMs
+		totalInputTokens += s.InputTokens
+		totalDims += s.EmbeddingDimensions
+	}
+	sort.Float64s(latencyValues)
+	result.EmbeddingLatencyP50ms = percentile(latencyValues, 50)
+	result.EmbeddingLatencyP95ms = percentile(latencyValues, 95)
+	result.EmbeddingLatencyP99ms = percentile(latencyValues, 99)
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		result.EmbeddingsPerSec = float64(len(successSamples)) / durationS
+		result.InputTokensPerSec = float64(totalInputTokens) / durationS
+		result.ThroughputTPS = result.EmbeddingsPerSec
+		result.QPS = result.EmbeddingsPerSec
+	}
+
+	result.AvgInputTokens = totalInputTokens / len(successSamples)
+	result.AvgEmbeddingDimensions = totalDims / len(successSamples)
+	result.AvgOutputTokens = result.AvgEmbeddingDimensions
 }
 
 func aggregateTTSMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {

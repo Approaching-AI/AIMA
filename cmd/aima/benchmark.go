@@ -57,6 +57,7 @@ func isUnifiedMemory(vramMiB, ramMiB int) bool {
 	ratio := float64(vramMiB) / float64(ramMiB)
 	return ratio > unifiedMemoryRatioLow && ratio < unifiedMemoryRatioHigh
 }
+
 var executeBenchmarkRun = benchpkg.Run
 
 // defaultChatRequester creates a ChatRequester from RunConfig for backward compatibility.
@@ -71,6 +72,15 @@ func defaultChatRequester(cfg benchpkg.RunConfig) *benchpkg.ChatRequester {
 		MinOutputRatio: cfg.MinOutputRatio,
 		MaxRetries:     cfg.MaxRetries,
 		RetryDelay:     cfg.RetryDelay,
+	}
+}
+
+func storageBenchmarkModality(modality string) string {
+	switch strings.ToLower(strings.TrimSpace(modality)) {
+	case "", "llm", "text":
+		return "text"
+	default:
+		return strings.ToLower(strings.TrimSpace(modality))
 	}
 }
 
@@ -346,16 +356,18 @@ func refreshPerfVectors(ctx context.Context, kStore *knowledge.Store) {
 // Returns (benchmarkID, configID, saved benchmark row) or error.
 // B12: Skip saving when throughput is zero — indicates no real inference happened.
 func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
-	result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency, inputTokens, maxTokens int, notes string) (string, string, *state.BenchmarkResult, error) {
+	modality string, result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency, inputTokens, maxTokens int, notes string) (string, string, *state.BenchmarkResult, error) {
 	if result.ThroughputTPS <= 0 {
 		return "", "", nil, fmt.Errorf("zero throughput — no inference service responded; benchmark not saved")
 	}
 	config := deployConfig
 	if len(config) == 0 {
-		config = map[string]any{
-			"concurrency":  concurrency,
-			"max_tokens":   maxTokens,
-			"input_tokens": inputTokens,
+		config = map[string]any{"concurrency": concurrency}
+		if inputTokens > 0 {
+			config["input_tokens"] = inputTokens
+		}
+		if storageBenchmarkModality(modality) != "embedding" && maxTokens > 0 {
+			config["max_tokens"] = maxTokens
 		}
 	}
 	configJSON, _ := json.Marshal(config)
@@ -388,7 +400,7 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		ID: benchmarkID, ConfigID: existingCfg.ID, Concurrency: concurrency,
 		InputLenBucket:  tokenBucket(result.AvgInputTokens),
 		OutputLenBucket: tokenBucket(result.AvgOutputTokens),
-		Modality:        "text",
+		Modality:        storageBenchmarkModality(modality),
 		TTFTP50ms:       result.TTFTP50ms, TTFTP95ms: result.TTFTP95ms, TTFTP99ms: result.TTFTP99ms,
 		TPOTP50ms: result.TPOTP50ms, TPOTP95ms: result.TPOTP95ms,
 		ThroughputTPS: result.ThroughputTPS, QPS: result.QPS,
@@ -412,13 +424,15 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 
 // maybeAutoPromote promotes a config to golden if its benchmark throughput beats
 // the current golden by >5%. Returns (promoted, oldGoldenID).
-// The modality parameter ensures promotion only competes within the same modality;
-// an empty modality defaults to "text" for backward compatibility.
+// Golden status is configuration-level today, not modality-level, so automatic
+// promotion is intentionally limited to text benchmarks until the schema grows
+// explicit modality-scoped golden state.
 func maybeAutoPromote(ctx context.Context, db *state.DB, newConfigID string, newThroughput float64, hardware, engine, model, modality string) (bool, string) {
-	if modality == "" {
-		modality = "text"
+	modality = storageBenchmarkModality(modality)
+	if modality != "text" {
+		return false, ""
 	}
-	goldenCfg, goldenBench, err := db.FindGoldenBenchmark(ctx, hardware, engine, model)
+	goldenCfg, goldenBench, err := db.FindGoldenBenchmark(ctx, hardware, engine, model, modality)
 	if err != nil {
 		slog.Warn("auto-promote: failed to query golden", "error", err)
 		return false, ""

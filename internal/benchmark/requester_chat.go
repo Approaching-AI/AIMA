@@ -20,6 +20,7 @@ type ChatRequester struct {
 	Model          string
 	MaxTokens      int
 	InputTokens    int
+	Prompt         string
 	Temperature    float64
 	APIKey         string
 	Timeout        time.Duration
@@ -211,13 +212,14 @@ func (r *ChatRequester) buildMessages() any {
 	if inputTokens <= 0 {
 		inputTokens = 128
 	}
+	prompt := buildPromptText(r.Prompt, inputTokens)
 
 	if len(r.ImageURLs) > 0 {
 		// VLM mode: construct multi-content message with image_url blocks
 		content := []map[string]any{
 			{
 				"type": "text",
-				"text": generatePrompt(inputTokens),
+				"text": prompt,
 			},
 		}
 		for _, url := range r.ImageURLs {
@@ -238,8 +240,36 @@ func (r *ChatRequester) buildMessages() any {
 
 	// LLM mode: simple text message
 	return []map[string]string{
-		{"role": "user", "content": generatePrompt(inputTokens)},
+		{"role": "user", "content": prompt},
 	}
+}
+
+func buildPromptText(prompt string, targetTokens int) string {
+	if strings.TrimSpace(prompt) == "" {
+		return generatePrompt(targetTokens)
+	}
+	targetChars := targetTokens * 4
+	if targetChars <= 0 {
+		targetChars = len(prompt)
+	}
+	base := fmt.Sprintf("[%d] %s", rand.Uint64(), strings.TrimSpace(prompt))
+	if len(base) >= targetChars {
+		return base[:targetChars]
+	}
+	need := targetChars - len(base)
+	if need > len(promptPadding) {
+		var sb strings.Builder
+		sb.Grow(targetChars)
+		sb.WriteString(base)
+		for sb.Len() < targetChars {
+			sb.WriteString(" ")
+			sb.WriteString(prompt)
+			sb.WriteString(" ")
+			sb.WriteString(promptPadding)
+		}
+		return sb.String()[:targetChars]
+	}
+	return base + promptPadding[:need]
 }
 
 // promptPadding is a pre-generated padding string (64KB) reused across calls.

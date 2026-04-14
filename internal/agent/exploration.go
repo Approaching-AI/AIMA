@@ -1006,7 +1006,74 @@ func (m *ExplorationManager) waitForInferenceReady(ctx context.Context, model st
 			return nil
 		}
 	}
+	if detail := m.summarizeInferenceReadinessFailure(ctx, model); detail != "" {
+		return fmt.Errorf("timeout waiting for inference endpoint %s (%v): %s", model, timeout, detail)
+	}
 	return fmt.Errorf("timeout waiting for inference endpoint %s (%v)", model, timeout)
+}
+
+func (m *ExplorationManager) summarizeInferenceReadinessFailure(ctx context.Context, model string) string {
+	if m.tools == nil || strings.TrimSpace(model) == "" {
+		return ""
+	}
+	logsArgs, _ := json.Marshal(map[string]any{"name": model, "tail": 120})
+	result, err := m.tools.ExecuteTool(ctx, "deploy.logs", logsArgs)
+	if err == nil {
+		err = toolResultError(result)
+	}
+	if err != nil || result == nil {
+		return ""
+	}
+	return summarizeDiagnosticErrorLines(result.Content)
+}
+
+func summarizeDiagnosticErrorLines(errorLines string) string {
+	lines := strings.Split(errorLines, "\n")
+	bestLine := ""
+	bestScore := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		score := diagnosticLineScore(trimmed)
+		if score > bestScore {
+			bestLine = trimmed
+			bestScore = score
+		}
+	}
+	return bestLine
+}
+
+func diagnosticLineScore(line string) int {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	switch {
+	case lower == "":
+		return 0
+	case strings.HasPrefix(lower, "error in cpuinfo:"):
+		return 0
+	case strings.Contains(lower, "outofmemoryerror"), strings.Contains(lower, "out of memory"):
+		return 130
+	case strings.Contains(lower, "keyerror:"),
+		strings.Contains(lower, "valueerror:"),
+		strings.Contains(lower, "assertionerror:"),
+		strings.Contains(lower, "typeerror:"),
+		strings.Contains(lower, "indexerror:"),
+		strings.Contains(lower, "filenotfounderror:"),
+		strings.Contains(lower, "modulenotfounderror:"),
+		strings.Contains(lower, "permission denied"),
+		strings.Contains(lower, "no such file"),
+		strings.Contains(lower, "not found"):
+		return 120
+	case strings.Contains(lower, "error:"),
+		strings.Contains(lower, "exception"),
+		strings.Contains(lower, "failed"),
+		strings.Contains(lower, "cannot"),
+		strings.Contains(lower, "panic"):
+		return 80
+	default:
+		return 10
+	}
 }
 
 // maybeCreateKnowledge writes a model YAML overlay when Explorer successfully
@@ -1059,6 +1126,21 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		if ru, ok := repCell["resource_usage"].(map[string]any); ok && len(ru) > 0 {
 			resourceUsage = ru
 		}
+		if benchmarkID, _ := repCell["benchmark_id"].(string); benchmarkID != "" {
+			result.BenchmarkID = benchmarkID
+		}
+		if configID, _ := repCell["config_id"].(string); configID != "" {
+			result.ConfigID = configID
+		}
+		if engineVersion, _ := repCell["engine_version"].(string); engineVersion != "" {
+			result.EngineVersion = engineVersion
+		}
+		if engineImage, _ := repCell["engine_image"].(string); engineImage != "" {
+			result.EngineImage = engineImage
+		}
+		if cfg, ok := repCell["deploy_config"].(map[string]any); ok && len(cfg) > 0 {
+			result.DeployConfig = cloneAnyMap(cfg)
+		}
 		// Marshal the representative cell's result and re-parse into envelope
 		wrapped, _ := json.Marshal(map[string]any{"result": repResult})
 		if err := json.Unmarshal(wrapped, &envelope); err != nil {
@@ -1081,9 +1163,14 @@ func (m *ExplorationManager) maybeCreateKnowledge(ctx context.Context, run *stat
 		return
 	}
 
-	// Start with the deploy config passed from ensureDeployed.
+	sourceConfig := deployCfg
+	if len(result.DeployConfig) > 0 {
+		sourceConfig = result.DeployConfig
+	}
+
+	// Start with the deploy config passed from ensureDeployed or benchmark output.
 	deployConfig := make(map[string]any)
-	for k, v := range deployCfg {
+	for k, v := range sourceConfig {
 		deployConfig[k] = v
 	}
 
@@ -1810,20 +1897,58 @@ func (m *ExplorationManager) executeBenchmarkMatrix(ctx context.Context, run *st
 		return nil, fmt.Errorf("benchmark matrix: no successful cells (total=%d)", totalCells)
 	}
 
-	combinedJSON, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"matrix_profiles": allCellsJSON,
 		"total_cells":     totalCells,
 		"success_cells":   successCells,
 		"deploy_config":   cloneAnyMap(deployConfig),
-	})
+	}
+	combinedJSON, _ := json.Marshal(payload)
+	if repCell, ok := extractRepresentativeCell(string(combinedJSON)); ok {
+		if repResult, ok := repCell["result"]; ok {
+			payload["result"] = repResult
+		}
+		if benchmarkID, _ := repCell["benchmark_id"].(string); benchmarkID != "" {
+			payload["benchmark_id"] = benchmarkID
+		}
+		if configID, _ := repCell["config_id"].(string); configID != "" {
+			payload["config_id"] = configID
+		}
+		if engineVersion, _ := repCell["engine_version"].(string); engineVersion != "" {
+			payload["engine_version"] = engineVersion
+		}
+		if engineImage, _ := repCell["engine_image"].(string); engineImage != "" {
+			payload["engine_image"] = engineImage
+		}
+		if usage, ok := repCell["resource_usage"].(map[string]any); ok && len(usage) > 0 {
+			payload["resource_usage"] = usage
+		}
+		if cfg, ok := repCell["deploy_config"].(map[string]any); ok && len(cfg) > 0 {
+			payload["deploy_config"] = cloneAnyMap(cfg)
+		}
+	}
+	combinedJSON, _ = json.Marshal(payload)
 
 	return &benchmarkStepResult{
-		ResponseJSON: string(combinedJSON),
-		MatrixJSON:   string(combinedJSON),
-		DeployConfig: cloneAnyMap(deployConfig),
-		TotalCells:   totalCells,
-		SuccessCells: successCells,
+		ResponseJSON:  string(combinedJSON),
+		MatrixJSON:    string(combinedJSON),
+		BenchmarkID:   firstNonEmptyJSON(payload, "benchmark_id"),
+		ConfigID:      firstNonEmptyJSON(payload, "config_id"),
+		EngineVersion: firstNonEmptyJSON(payload, "engine_version"),
+		EngineImage:   firstNonEmptyJSON(payload, "engine_image"),
+		ResourceUsage: cloneAnyMap(mapValue(payload, "resource_usage")),
+		DeployConfig:  cloneAnyMap(mapValue(payload, "deploy_config")),
+		TotalCells:    totalCells,
+		SuccessCells:  successCells,
 	}, nil
+}
+
+func mapValue(payload map[string]any, key string) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	value, _ := payload[key].(map[string]any)
+	return value
 }
 
 func (m *ExplorationManager) executeDeployStep(ctx context.Context, run *state.ExplorationRun, plan ExplorationPlan, stepKind string, stepIndex int) (*deploymentStepResult, error) {

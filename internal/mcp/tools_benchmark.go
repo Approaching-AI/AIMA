@@ -17,7 +17,7 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 			"model":{"type":"string","description":"Model name (e.g. qwen3.5-35b-a3b)"},
 			"device_id":{"type":"string","description":"Device ID from fleet (e.g. gb10)"},
 			"config":{"type":"object","description":"Engine config used (gpu_memory_utilization, max_model_len, etc.)"},
-			"modality":{"type":"string","description":"Benchmark modality: llm (default), vlm, tts, asr, image_gen, video_gen","enum":["llm","vlm","tts","asr","image_gen","video_gen"]},
+			"modality":{"type":"string","description":"Benchmark modality: llm (default), vlm, embedding, tts, asr, image_gen, video_gen","enum":["llm","vlm","embedding","tts","asr","image_gen","video_gen"]},
 			"concurrency":{"type":"integer","description":"Number of concurrent requests","default":1},
 			"input_len_bucket":{"type":"string","description":"Input length category (e.g. short, medium, long)"},
 			"output_len_bucket":{"type":"string","description":"Output length category"},
@@ -72,7 +72,7 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model name (must match a deployed model)"},`+
 				`"endpoint":{"type":"string","description":"OpenAI-compatible endpoint URL. Auto-detected from proxy if omitted."},`+
-				`"modality":{"type":"string","description":"Benchmark modality: llm (default), vlm, tts, asr, image_gen, video_gen","enum":["llm","vlm","tts","asr","image_gen","video_gen"]},`+
+				`"modality":{"type":"string","description":"Benchmark modality: llm (default), vlm, embedding, tts, asr, image_gen, video_gen","enum":["llm","vlm","embedding","tts","asr","image_gen","video_gen"]},`+
 				`"concurrency":{"type":"integer","description":"Number of concurrent requests (default: 1)"},`+
 				`"num_requests":{"type":"integer","description":"Total requests to send (default: 10)"},`+
 				`"max_tokens":{"type":"integer","description":"Max output tokens per request (default: 256)"},`+
@@ -93,7 +93,7 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 				`"texts":{"type":"array","items":{"type":"string"},"description":"[TTS] Test text corpus"},`+
 				`"audio_files":{"type":"array","items":{"type":"string"},"description":"[ASR] Audio file paths for transcription benchmark"},`+
 				`"language":{"type":"string","description":"[ASR] Recognition language (e.g. zh, en)"},`+
-				`"prompt":{"type":"string","description":"[T2I/T2V] Generation prompt"},`+
+				`"prompt":{"type":"string","description":"[LLM/VLM/embedding/T2I/T2V] Prompt override"},`+
 				`"width":{"type":"integer","description":"[T2I/T2V] Output width in pixels"},`+
 				`"height":{"type":"integer","description":"[T2I/T2V] Output height in pixels"},`+
 				`"steps":{"type":"integer","description":"[T2I/T2V] Inference steps"},`+
@@ -122,7 +122,7 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 		InputSchema: schema(
 			`"model":{"type":"string","description":"Model name"},`+
 				`"endpoint":{"type":"string","description":"OpenAI-compatible endpoint URL. Auto-detected from proxy if omitted."},`+
-				`"modality":{"type":"string","description":"Benchmark modality (default: llm)","enum":["llm","vlm","tts","asr","image_gen","video_gen"]},`+
+				`"modality":{"type":"string","description":"Benchmark modality (default: llm)","enum":["llm","vlm","embedding","tts","asr","image_gen","video_gen"]},`+
 				`"concurrency_levels":{"type":"array","items":{"type":"integer"},"description":"Concurrency levels to test (default: [1,4])"},`+
 				`"input_token_levels":{"type":"array","items":{"type":"integer"},"description":"Input lengths in tokens (default: [128,1024])"},`+
 				`"max_token_levels":{"type":"array","items":{"type":"integer"},"description":"Output lengths in tokens (default: [128,512])"},`+
@@ -158,11 +158,11 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 		Name:        "benchmark.list",
 		Description: "List benchmark results from the database. Filter by model, hardware, modality, or configuration ID.",
 		InputSchema: schema(
-			`"config_id":{"type":"string","description":"Filter by configuration ID"},`+
-				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},`+
-				`"model":{"type":"string","description":"Filter by model name"},`+
-				`"engine":{"type":"string","description":"Filter by engine type"},`+
-				`"modality":{"type":"string","description":"Filter by modality (default: all)","enum":["llm","vlm","tts","asr","image_gen","video_gen"]},`+
+			`"config_id":{"type":"string","description":"Filter by configuration ID"},` +
+				`"hardware":{"type":"string","description":"Filter by hardware profile ID"},` +
+				`"model":{"type":"string","description":"Filter by model name"},` +
+				`"engine":{"type":"string","description":"Filter by engine type"},` +
+				`"modality":{"type":"string","description":"Filter by modality (default: all)","enum":["llm","vlm","embedding","tts","asr","image_gen","video_gen"]},` +
 				`"limit":{"type":"integer","description":"Max results to return (default: 20)"}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ListBenchmarks == nil {

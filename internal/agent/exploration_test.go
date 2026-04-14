@@ -150,11 +150,44 @@ func TestExplorationManagerExecuteBenchmarkMatrix_PreservesArtifacts(t *testing.
 	if result.TotalCells != 1 || result.SuccessCells != 1 {
 		t.Fatalf("matrix counts = (%d,%d), want (1,1)", result.TotalCells, result.SuccessCells)
 	}
+	if result.BenchmarkID != "bench-001" || result.ConfigID != "cfg-001" {
+		t.Fatalf("top-level artifacts = (%q,%q), want (bench-001,cfg-001)", result.BenchmarkID, result.ConfigID)
+	}
+	if result.EngineVersion != "1.2.3" || result.EngineImage != "example/engine:1.2.3" {
+		t.Fatalf("engine metadata = (%q,%q), want propagated metadata", result.EngineVersion, result.EngineImage)
+	}
 	if !strings.Contains(result.MatrixJSON, "bench-001") || !strings.Contains(result.MatrixJSON, "deploy_config") {
 		t.Fatalf("MatrixJSON missing propagated metadata: %s", result.MatrixJSON)
 	}
+	if !strings.Contains(result.ResponseJSON, `"benchmark_id":"bench-001"`) || !strings.Contains(result.ResponseJSON, `"result":{"throughput_tps":123.4`) {
+		t.Fatalf("ResponseJSON missing representative summary: %s", result.ResponseJSON)
+	}
 	if !reflect.DeepEqual(matrixRequest["deploy_config"], map[string]any{"concurrency": float64(4), "max_tokens": float64(512)}) {
 		t.Fatalf("benchmark.matrix deploy_config = %#v, want ready deployment config", matrixRequest["deploy_config"])
+	}
+}
+
+func TestSummarizeInferenceReadinessFailure_UsesDeployLogs(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "deploy.logs" {
+				t.Fatalf("unexpected tool %q", name)
+			}
+			return &ToolResult{Content: "INFO booting\nValueError: ModelOptFp8Config only supports static FP8 quantization in SGLang\nINFO retrying"}, nil
+		},
+	}
+
+	manager := NewExplorationManager(db, nil, tools)
+	detail := manager.summarizeInferenceReadinessFailure(ctx, "glm-4-6v-flash-fp4")
+	if !strings.Contains(detail, "ModelOptFp8Config") {
+		t.Fatalf("detail = %q, want root-cause log line", detail)
 	}
 }
 

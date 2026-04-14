@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	reflect "reflect"
 	"strings"
 	"testing"
 	"time"
@@ -862,37 +863,26 @@ func TestAdaptBenchmarkProfiles(t *testing.T) {
 		},
 	}
 
-	t.Run("expands to 32K model", func(t *testing.T) {
-		result := adaptBenchmarkProfiles(base, 32768)
-		// Should include levels up to 32768 - minOutput
-		tp := result[0] // throughput profile, minOutput=128
-		// maxInput = 32768 - 128 = 32640 → levels up to 16384
-		found16k := false
-		for _, l := range tp.InputTokenLevels {
-			if l == 16384 {
-				found16k = true
-			}
-			if l > 32640 {
-				t.Errorf("input level %d exceeds maxInput 32640", l)
-			}
-		}
-		if !found16k {
-			t.Errorf("expected 16384 in input levels for 32K model, got %v", tp.InputTokenLevels)
+	t.Run("bounded enrichment keeps planner intent", func(t *testing.T) {
+		sparse := []ExplorationBenchmarkProfile{{
+			Label:             "plan",
+			ConcurrencyLevels: []int{1, 4},
+			InputTokenLevels:  []int{512},
+			MaxTokenLevels:    []int{128},
+			RequestsPerCombo:  3,
+		}}
+		result := adaptBenchmarkProfiles(sparse, 32768)
+		got := result[0].InputTokenLevels
+		want := []int{128, 512, 2048}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("InputTokenLevels = %v, want %v", got, want)
 		}
 	})
 
-	t.Run("expands to 128K model", func(t *testing.T) {
-		result := adaptBenchmarkProfiles(base, 131072)
-		tp := result[0]
-		// maxInput = 131072 - 128 = 130944 → levels up to 65536
-		found64k := false
-		for _, l := range tp.InputTokenLevels {
-			if l == 65536 {
-				found64k = true
-			}
-		}
-		if !found64k {
-			t.Errorf("expected 65536 in input levels for 128K model, got %v", tp.InputTokenLevels)
+	t.Run("does not explode to full ladder for large context models", func(t *testing.T) {
+		result := adaptBenchmarkProfiles(base, 32768)
+		if !reflect.DeepEqual(result[0].InputTokenLevels, base[0].InputTokenLevels) {
+			t.Fatalf("InputTokenLevels = %v, want original planner/profile levels %v", result[0].InputTokenLevels, base[0].InputTokenLevels)
 		}
 	})
 
@@ -902,7 +892,6 @@ func TestAdaptBenchmarkProfiles(t *testing.T) {
 			MaxTokenLevels:   []int{256, 2048, 8192},
 		}}
 		result := adaptBenchmarkProfiles(small, 4096)
-		// minInput=128, so max_tokens up to 4096-128=3968 → 256 and 2048 pass, 8192 filtered
 		for _, mt := range result[0].MaxTokenLevels {
 			if mt == 8192 {
 				t.Error("expected max_tokens 8192 to be filtered for 4096 context model")
@@ -925,10 +914,31 @@ func TestAdaptBenchmarkProfiles(t *testing.T) {
 		if len(result[0].InputTokenLevels) == 0 {
 			t.Error("expected at least one input level even for tiny model")
 		}
-		if result[0].InputTokenLevels[0] != 128 {
-			t.Errorf("expected first level to be 128, got %d", result[0].InputTokenLevels[0])
+		if result[0].InputTokenLevels[0] > 256 {
+			t.Errorf("expected first level to fit max context, got %d", result[0].InputTokenLevels[0])
 		}
 	})
+}
+
+func TestTaskSpecFromPlanTaskPreservesBenchmark(t *testing.T) {
+	task := PlanTask{
+		Kind:   "validate",
+		Model:  "Qwen2.5-Coder-3B-Instruct",
+		Engine: "sglang",
+		Params: map[string]any{"max_model_len": float64(8192)},
+		Benchmark: BenchmarkSpec{
+			Concurrency:      []int{1, 4},
+			InputTokens:      []int{512},
+			MaxTokens:        []int{128},
+			RequestsPerCombo: 3,
+		},
+		Reason: "preserve planner-authored benchmark",
+	}
+
+	got := taskSpecFromPlanTask(task)
+	if !reflect.DeepEqual(got.Benchmark, task.Benchmark) {
+		t.Fatalf("Benchmark = %#v, want %#v", got.Benchmark, task.Benchmark)
+	}
 }
 
 func TestExplorerParseExplorationResult_PreservesArtifactsAndMatrix(t *testing.T) {

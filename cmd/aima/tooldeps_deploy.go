@@ -441,7 +441,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if hwKey == "" {
 			hwKey = hwInfo.GPUArch
 		}
-		if golden, goldenBench, err := db.FindGoldenBenchmark(ctx, hwKey, resolved.Engine, rd.ModelName); err == nil && golden != nil && goldenBench != nil {
+		if golden, goldenBench, err := db.FindGoldenBenchmark(ctx, hwKey, resolved.Engine, rd.ModelName, "text"); err == nil && golden != nil && goldenBench != nil {
 			perfRef = map[string]any{
 				"source":         "benchmark",
 				"benchmark_id":   goldenBench.ID,

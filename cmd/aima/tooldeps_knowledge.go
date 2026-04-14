@@ -257,16 +257,8 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		if err != nil {
 			return nil, fmt.Errorf("read import file: %w", err)
 		}
-
-		var envelope struct {
-			SchemaVersion int `json:"schema_version"`
-			Data          struct {
-				Configurations   []*state.Configuration   `json:"configurations"`
-				BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
-				KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(data, &envelope); err != nil {
+		envelope, err := parseImportedKnowledgeEnvelope(data)
+		if err != nil {
 			return nil, fmt.Errorf("parse import JSON: %w", err)
 		}
 		if envelope.SchemaVersion != 1 {
@@ -303,16 +295,24 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 				tx.ExecContext(ctx, `DELETE FROM configurations WHERE id = ?`, c.ID)
 			}
 			tagsJSON, _ := json.Marshal(c.Tags)
+			createdAt := c.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = time.Now().UTC()
+			}
+			updatedAt := c.UpdatedAt
+			if updatedAt.IsZero() {
+				updatedAt = createdAt
+			}
 			var derivedFrom sql.NullString
 			if c.DerivedFrom != "" {
 				derivedFrom = sql.NullString{String: c.DerivedFrom, Valid: true}
 			}
 			_, insertErr := tx.ExecContext(ctx,
 				`INSERT INTO configurations (id, hardware_id, engine_id, model_id, partition_slot,
-					config, config_hash, derived_from, status, tags, source, device_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					config, config_hash, derived_from, status, tags, source, device_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				c.ID, c.HardwareID, c.EngineID, c.ModelID, c.Slot,
-				c.Config, c.ConfigHash, derivedFrom, c.Status, string(tagsJSON), c.Source, c.DeviceID)
+				c.Config, c.ConfigHash, derivedFrom, c.Status, string(tagsJSON), c.Source, c.DeviceID, createdAt, updatedAt)
 			if insertErr != nil {
 				errors = append(errors, fmt.Sprintf("config %s: %v", c.ID, insertErr))
 				continue
@@ -368,10 +368,14 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 				tx.ExecContext(ctx, `DELETE FROM knowledge_notes WHERE id = ?`, n.ID)
 			}
 			tagsJSON, _ := json.Marshal(n.Tags)
+			createdAt := n.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = time.Now().UTC()
+			}
 			_, insertErr := tx.ExecContext(ctx,
-				`INSERT INTO knowledge_notes (id, title, tags, hardware_profile, model, engine, content, confidence)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				n.ID, n.Title, string(tagsJSON), n.HardwareProfile, n.Model, n.Engine, n.Content, n.Confidence)
+				`INSERT INTO knowledge_notes (id, title, tags, hardware_profile, model, engine, content, confidence, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				n.ID, n.Title, string(tagsJSON), n.HardwareProfile, n.Model, n.Engine, n.Content, n.Confidence, createdAt)
 			if insertErr != nil {
 				errors = append(errors, fmt.Sprintf("note %s: %v", n.ID, insertErr))
 				continue
@@ -658,4 +662,236 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 		return json.Marshal(result)
 	}
+}
+
+type importedKnowledgeEnvelope struct {
+	SchemaVersion int `json:"schema_version"`
+	Data          struct {
+		Configurations   []*state.Configuration   `json:"configurations"`
+		BenchmarkResults []*state.BenchmarkResult `json:"benchmark_results"`
+		KnowledgeNotes   []*state.KnowledgeNote   `json:"knowledge_notes"`
+	} `json:"data"`
+}
+
+func parseImportedKnowledgeEnvelope(data []byte) (*importedKnowledgeEnvelope, error) {
+	var raw struct {
+		SchemaVersion int `json:"schema_version"`
+		Data          struct {
+			Configurations   []json.RawMessage `json:"configurations"`
+			BenchmarkResults []json.RawMessage `json:"benchmark_results"`
+			KnowledgeNotes   []json.RawMessage `json:"knowledge_notes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
+	env := &importedKnowledgeEnvelope{SchemaVersion: raw.SchemaVersion}
+	for _, item := range raw.Data.Configurations {
+		cfg, err := parseImportedConfiguration(item)
+		if err != nil {
+			return nil, fmt.Errorf("configuration: %w", err)
+		}
+		env.Data.Configurations = append(env.Data.Configurations, cfg)
+	}
+	for _, item := range raw.Data.BenchmarkResults {
+		bench, err := parseImportedBenchmarkResult(item)
+		if err != nil {
+			return nil, fmt.Errorf("benchmark_result: %w", err)
+		}
+		env.Data.BenchmarkResults = append(env.Data.BenchmarkResults, bench)
+	}
+	for _, item := range raw.Data.KnowledgeNotes {
+		note, err := parseImportedKnowledgeNote(item)
+		if err != nil {
+			return nil, fmt.Errorf("knowledge_note: %w", err)
+		}
+		env.Data.KnowledgeNotes = append(env.Data.KnowledgeNotes, note)
+	}
+	return env, nil
+}
+
+func parseImportedConfiguration(data json.RawMessage) (*state.Configuration, error) {
+	var raw struct {
+		ID          string          `json:"id"`
+		HardwareID  string          `json:"hardware_id"`
+		EngineID    string          `json:"engine_id"`
+		ModelID     string          `json:"model_id"`
+		Slot        string          `json:"slot"`
+		Config      json.RawMessage `json:"config"`
+		ConfigHash  string          `json:"config_hash"`
+		DerivedFrom string          `json:"derived_from"`
+		Status      string          `json:"status"`
+		Tags        []string        `json:"tags"`
+		Source      string          `json:"source"`
+		DeviceID    string          `json:"device_id"`
+		CreatedAt   string          `json:"created_at"`
+		UpdatedAt   string          `json:"updated_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	configJSON, err := normalizeImportedConfigJSON(raw.Config)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	createdAt, err := parseImportedTimestamp(raw.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("created_at: %w", err)
+	}
+	updatedAt, err := parseImportedTimestamp(raw.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("updated_at: %w", err)
+	}
+	return &state.Configuration{
+		ID:          raw.ID,
+		HardwareID:  raw.HardwareID,
+		EngineID:    raw.EngineID,
+		ModelID:     raw.ModelID,
+		Slot:        raw.Slot,
+		Config:      configJSON,
+		ConfigHash:  raw.ConfigHash,
+		DerivedFrom: raw.DerivedFrom,
+		Status:      raw.Status,
+		Tags:        raw.Tags,
+		Source:      raw.Source,
+		DeviceID:    raw.DeviceID,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}, nil
+}
+
+func parseImportedBenchmarkResult(data json.RawMessage) (*state.BenchmarkResult, error) {
+	var raw struct {
+		ID              string  `json:"id"`
+		ConfigID        string  `json:"config_id"`
+		Concurrency     int     `json:"concurrency"`
+		InputLenBucket  string  `json:"input_len_bucket"`
+		OutputLenBucket string  `json:"output_len_bucket"`
+		Modality        string  `json:"modality"`
+		TTFTP50ms       float64 `json:"ttft_p50_ms"`
+		TTFTP95ms       float64 `json:"ttft_p95_ms"`
+		TTFTP99ms       float64 `json:"ttft_p99_ms"`
+		TPOTP50ms       float64 `json:"tpot_p50_ms"`
+		TPOTP95ms       float64 `json:"tpot_p95_ms"`
+		ThroughputTPS   float64 `json:"throughput_tps"`
+		QPS             float64 `json:"qps"`
+		VRAMUsageMiB    int     `json:"vram_usage_mib"`
+		RAMUsageMiB     int     `json:"ram_usage_mib"`
+		PowerDrawWatts  float64 `json:"power_draw_watts"`
+		GPUUtilPct      float64 `json:"gpu_util_pct"`
+		CPUUsagePct     float64 `json:"cpu_usage_pct"`
+		ErrorRate       float64 `json:"error_rate"`
+		OOMOccurred     bool    `json:"oom_occurred"`
+		Stability       string  `json:"stability"`
+		DurationS       int     `json:"duration_s"`
+		SampleCount     int     `json:"sample_count"`
+		TestedAt        string  `json:"tested_at"`
+		AgentModel      string  `json:"agent_model"`
+		Notes           string  `json:"notes"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	testedAt, err := parseImportedTimestamp(raw.TestedAt)
+	if err != nil {
+		return nil, fmt.Errorf("tested_at: %w", err)
+	}
+	return &state.BenchmarkResult{
+		ID:              raw.ID,
+		ConfigID:        raw.ConfigID,
+		Concurrency:     raw.Concurrency,
+		InputLenBucket:  raw.InputLenBucket,
+		OutputLenBucket: raw.OutputLenBucket,
+		Modality:        raw.Modality,
+		TTFTP50ms:       raw.TTFTP50ms,
+		TTFTP95ms:       raw.TTFTP95ms,
+		TTFTP99ms:       raw.TTFTP99ms,
+		TPOTP50ms:       raw.TPOTP50ms,
+		TPOTP95ms:       raw.TPOTP95ms,
+		ThroughputTPS:   raw.ThroughputTPS,
+		QPS:             raw.QPS,
+		VRAMUsageMiB:    raw.VRAMUsageMiB,
+		RAMUsageMiB:     raw.RAMUsageMiB,
+		PowerDrawWatts:  raw.PowerDrawWatts,
+		GPUUtilPct:      raw.GPUUtilPct,
+		CPUUsagePct:     raw.CPUUsagePct,
+		ErrorRate:       raw.ErrorRate,
+		OOMOccurred:     raw.OOMOccurred,
+		Stability:       raw.Stability,
+		DurationS:       raw.DurationS,
+		SampleCount:     raw.SampleCount,
+		TestedAt:        testedAt,
+		AgentModel:      raw.AgentModel,
+		Notes:           raw.Notes,
+	}, nil
+}
+
+func parseImportedKnowledgeNote(data json.RawMessage) (*state.KnowledgeNote, error) {
+	var raw struct {
+		ID              string   `json:"id"`
+		Title           string   `json:"title"`
+		Tags            []string `json:"tags"`
+		HardwareProfile string   `json:"hardware_profile"`
+		Model           string   `json:"model"`
+		Engine          string   `json:"engine"`
+		Content         string   `json:"content"`
+		Confidence      string   `json:"confidence"`
+		CreatedAt       string   `json:"created_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	createdAt, err := parseImportedTimestamp(raw.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("created_at: %w", err)
+	}
+	return &state.KnowledgeNote{
+		ID:              raw.ID,
+		Title:           raw.Title,
+		Tags:            raw.Tags,
+		HardwareProfile: raw.HardwareProfile,
+		Model:           raw.Model,
+		Engine:          raw.Engine,
+		Content:         raw.Content,
+		Confidence:      raw.Confidence,
+		CreatedAt:       createdAt,
+	}, nil
+}
+
+func normalizeImportedConfigJSON(data json.RawMessage) (string, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		return "", nil
+	}
+	if trimmed[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return "", err
+		}
+		return decoded, nil
+	}
+	if !json.Valid(data) {
+		return "", fmt.Errorf("invalid JSON")
+	}
+	return string(data), nil
+}
+
+func parseImportedTimestamp(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05Z07",
+		"2006-01-02 15:04:05",
+	} {
+		if ts, err := time.Parse(layout, trimmed); err == nil {
+			return ts.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported timestamp %q", value)
 }

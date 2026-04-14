@@ -7,7 +7,7 @@ import (
 )
 
 // Requester is the interface between the benchmark runner and modality-specific
-// adapters. Each modality (LLM/VLM/TTS/ASR/T2I/T2V) implements a Requester.
+// adapters. Each modality (LLM/VLM/embedding/TTS/ASR/T2I/T2V) implements a Requester.
 // The runner only cares about concurrency scheduling, timing, and statistical
 // aggregation — it delegates all request construction and response parsing to
 // the Requester.
@@ -18,7 +18,7 @@ type Requester interface {
 	Do(ctx context.Context, endpoint string, seq int) (*Sample, error)
 
 	// Modality returns the modality identifier for this adapter.
-	// One of: "llm", "vlm", "tts", "asr", "image_gen", "video_gen".
+	// One of: "llm", "vlm", "embedding", "tts", "asr", "image_gen", "video_gen".
 	Modality() string
 
 	// WarmupRequests returns the number of warmup requests this modality needs.
@@ -38,6 +38,9 @@ type Sample struct {
 	TTFTMs       float64 // Time-to-First-Token (ms)
 	InputTokens  int
 	OutputTokens int
+
+	// ---- Embedding ----
+	EmbeddingDimensions int
 
 	// ---- TTS ----
 	TTFAMs         float64 // Time-to-First-Audio chunk (ms)
@@ -66,6 +69,7 @@ type Sample struct {
 // Compile-time interface compliance checks.
 var (
 	_ Requester = (*ChatRequester)(nil)
+	_ Requester = (*EmbeddingRequester)(nil)
 	_ Requester = (*AudioSpeechRequester)(nil)
 	_ Requester = (*TranscriptionRequester)(nil)
 	_ Requester = (*ImageGenRequester)(nil)
@@ -88,10 +92,12 @@ func baseEndpoint(endpoint string) string {
 	ep := strings.TrimRight(endpoint, "/")
 	for _, suffix := range []string{
 		"/v1/chat/completions",
+		"/v1/embeddings",
 		"/v1/audio/speech",
 		"/v1/audio/transcriptions",
 		"/v1/images/generations",
 		"/chat/completions",
+		"/embeddings",
 	} {
 		if strings.HasSuffix(ep, suffix) {
 			return strings.TrimSuffix(ep, suffix)

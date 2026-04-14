@@ -50,12 +50,11 @@ type ToolDeps struct {
 	ListPartitionStrategies func(ctx context.Context) (json.RawMessage, error)
 
 	// Benchmark
-	RecordBenchmark       func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	RunBenchmark          func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	RunBenchmarkMatrix    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	ListBenchmarks        func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	PromoteConfig         func(ctx context.Context, configID, status string) (json.RawMessage, error)
-	EnsureBenchmarkAssets func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	RecordBenchmark    func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	RunBenchmark       func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	RunBenchmarkMatrix func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ListBenchmarks     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	PromoteConfig      func(ctx context.Context, configID, status string) (json.RawMessage, error)
 
 	// Knowledge query (enhanced — powered by SQLite relational queries)
 	SearchConfigs      func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)

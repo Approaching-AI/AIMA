@@ -175,22 +175,4 @@ func registerBenchmarkTools(s *Server, deps *ToolDeps) {
 			return TextResult(string(data)), nil
 		},
 	})
-
-	// benchmark.ensure_assets
-	s.RegisterTool(&Tool{
-		Name:        "benchmark.ensure_assets",
-		Description: "Ensure benchmark test assets (audio files, images, texts) are available locally. Downloads from GitHub Release if needed.",
-		InputSchema: schema(
-			`"modalities":{"type":"array","items":{"type":"string"},"description":"Modalities needing assets: tts, asr, vlm"}`),
-		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
-			if deps.EnsureBenchmarkAssets == nil {
-				return ErrorResult("benchmark.ensure_assets not implemented"), nil
-			}
-			data, err := deps.EnsureBenchmarkAssets(ctx, params)
-			if err != nil {
-				return nil, fmt.Errorf("ensure benchmark assets: %w", err)
-			}
-			return TextResult(string(data)), nil
-		},
-	})
 }

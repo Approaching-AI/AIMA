@@ -98,6 +98,47 @@ func TestSaveBenchmarkResultPersistsEmbeddingModality(t *testing.T) {
 	}
 }
 
+func TestSaveBenchmarkResultPersistsSuccessfulZeroThroughputReranker(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, configID, saved, err := saveBenchmarkResult(ctx, db,
+		"nvidia-gb10-arm64", "sglang", "bge-reranker-v2-m3",
+		"reranker",
+		&benchpkg.RunResult{
+			SuccessfulReqs:     4,
+			TotalRequests:      4,
+			DurationMs:         1200,
+			QPS:                3.3,
+			ReranksPerSec:      3.3,
+			AvgInputTokens:     128,
+			AvgOutputTokens:    4,
+			RerankLatencyP50ms: 120,
+		},
+		nil, benchmarkSystemMetrics{}, 1, 128, 0, "reranker validate")
+	if err != nil {
+		t.Fatalf("saveBenchmarkResult: %v", err)
+	}
+	if saved == nil || saved.Modality != "reranker" {
+		t.Fatalf("saved = %#v, want reranker benchmark row", saved)
+	}
+
+	cfg, err := db.GetConfiguration(ctx, configID)
+	if err != nil {
+		t.Fatalf("GetConfiguration: %v", err)
+	}
+	if cfg.Config == "" {
+		t.Fatalf("Config should not be empty")
+	}
+	if saved.ThroughputTPS != 0 {
+		t.Fatalf("ThroughputTPS = %v, want 0 for zero-output reranker evidence", saved.ThroughputTPS)
+	}
+}
+
 func TestStorageBenchmarkModality(t *testing.T) {
 	tests := []struct {
 		input string
@@ -108,6 +149,7 @@ func TestStorageBenchmarkModality(t *testing.T) {
 		{input: "text", want: "text"},
 		{input: "vlm", want: "vlm"},
 		{input: "embedding", want: "embedding"},
+		{input: "reranker", want: "reranker"},
 	}
 	for _, tt := range tests {
 		if got := storageBenchmarkModality(tt.input); got != tt.want {
@@ -119,6 +161,9 @@ func TestStorageBenchmarkModality(t *testing.T) {
 func TestEffectiveMatrixMaxTokenLevels(t *testing.T) {
 	if got := effectiveMatrixMaxTokenLevels("embedding", []int{128, 512}); !reflect.DeepEqual(got, []int{0}) {
 		t.Fatalf("embedding levels = %v, want [0]", got)
+	}
+	if got := effectiveMatrixMaxTokenLevels("reranker", []int{128, 512}); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("reranker levels = %v, want [0]", got)
 	}
 	if got := effectiveMatrixMaxTokenLevels("llm", []int{128, 512}); !reflect.DeepEqual(got, []int{128, 512}) {
 		t.Fatalf("llm levels = %v, want unchanged", got)

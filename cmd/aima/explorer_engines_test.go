@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	state "github.com/jguan/aima/internal"
+	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/knowledge"
 )
 
@@ -102,7 +103,7 @@ func TestExplorerModalityBlockReason(t *testing.T) {
 		{"llm model + llm engine = OK", []string{"llm"}, "llm", "vllm", false},
 		{"llm model + image engine = BLOCKED", []string{"image"}, "llm", "z-image-diffusers", true},
 		{"empty supported types = OK (backward compat)", nil, "llm", "vllm", false},
-		{"empty model type = OK (backward compat)", []string{"llm"}, "", "vllm", false},
+		{"empty model type = BLOCKED", []string{"llm"}, "", "vllm", true},
 		{"both empty = OK", nil, "", "vllm", false},
 		{"multi-type engine with match", []string{"llm", "embedding"}, "embedding", "vllm", false},
 		{"multi-type engine without match", []string{"llm", "embedding"}, "tts", "vllm", true},
@@ -121,6 +122,46 @@ func TestExplorerModalityBlockReason(t *testing.T) {
 					tt.supportedTypes, tt.modelType, tt.engineType, reason)
 			}
 		})
+	}
+}
+
+func TestEnrichExplorerLocalModelUsesCatalogMetadata(t *testing.T) {
+	cat := &knowledge.Catalog{
+		ModelAssets: []knowledge.ModelAsset{
+			{
+				Metadata: knowledge.ModelMetadata{
+					Name:           "bge-reranker-v2-m3",
+					Type:           "reranker",
+					Family:         "bge",
+					ParameterCount: "568M",
+				},
+				Variants: []knowledge.ModelVariant{
+					{
+						Name:          "bge-reranker-v2-m3-fp16",
+						DefaultConfig: map[string]any{"max_model_len": float64(8192)},
+					},
+				},
+			},
+		},
+	}
+
+	got := enrichExplorerLocalModel(cat, agent.LocalModel{Name: "bge-reranker-v2-m3"})
+	if got.Type != "reranker" {
+		t.Fatalf("Type = %q, want reranker", got.Type)
+	}
+	if got.Family != "bge" {
+		t.Fatalf("Family = %q, want bge", got.Family)
+	}
+	if got.ParameterCount != "568M" {
+		t.Fatalf("ParameterCount = %q, want 568M", got.ParameterCount)
+	}
+	if got.MaxContextLen != 8192 {
+		t.Fatalf("MaxContextLen = %d, want 8192", got.MaxContextLen)
+	}
+
+	got = enrichExplorerLocalModel(cat, agent.LocalModel{Name: "bge-reranker-v2-m3-fp16"})
+	if got.Type != "reranker" {
+		t.Fatalf("variant Type = %q, want reranker", got.Type)
 	}
 }
 

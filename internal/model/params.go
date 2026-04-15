@@ -107,8 +107,10 @@ func detectModelType(arch string) string {
 	case "llava", "internvl", "phi3_vision", "qwen_vl", "glm_v", "minicpm_v":
 		return "vlm"
 	case "clip", "bert", "roberta", "xlm_roberta", "e5", "bge",
-		"jina", "sentence_t5", "colbert", "cross_encoder":
+		"jina", "sentence_t5", "colbert":
 		return "embedding"
+	case "cross_encoder":
+		return "reranker"
 	default:
 		return "llm"
 	}

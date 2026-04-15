@@ -223,6 +223,11 @@ func gatherExplorerComboFacts(
 				results[i] = indexedFact{idx: i, fact: fact}
 				return
 			}
+			if _, err := resolveLocalModelPathNoPull(item.model.Name, rd.Resolved, dataDir); err != nil {
+				fact.Reason = err.Error()
+				results[i] = indexedFact{idx: i, fact: fact}
+				return
+			}
 
 			fact.Status = "ready"
 			fact.Reason = "resolver and local no-pull runtime checks passed"
@@ -490,10 +495,14 @@ func explorerFormatBlockReason(modelFormat, engineType string, cat *knowledge.Ca
 
 // explorerModalityBlockReason checks if an engine supports the model's modality type.
 // Returns a non-empty reason string if the combo should be blocked, or "" if compatible.
-// Empty supportedTypes or empty modelType means no constraint (backward compat).
+// Empty supportedTypes means no constraint. Empty modelType is treated as unknown
+// and blocked so unresolved scans do not pollute the ready frontier.
 func explorerModalityBlockReason(supportedTypes []string, modelType, engineType string) string {
-	if len(supportedTypes) == 0 || modelType == "" {
+	if len(supportedTypes) == 0 {
 		return ""
+	}
+	if strings.TrimSpace(modelType) == "" {
+		return fmt.Sprintf("model type unknown: engine %s requires one of %v", engineType, supportedTypes)
 	}
 	for _, t := range supportedTypes {
 		if strings.EqualFold(t, modelType) {

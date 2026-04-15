@@ -238,6 +238,69 @@ func TestResolveWithFallbackDoesNotSynthesizeWhenCatalogModelLacksRequestedEngin
 	}
 }
 
+func TestResolveWithFallbackPrefersCompatibleScannedModelPath(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	modelPath := filepath.Join(t.TempDir(), "demo-model.gguf")
+	if err := os.WriteFile(modelPath, []byte("gguf"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := db.InsertModel(ctx, &state.Model{
+		ID:        "model-demo-gguf",
+		Name:      "demo-model",
+		Type:      "llm",
+		Path:      modelPath,
+		Format:    "gguf",
+		SizeBytes: 4 * 1024 * 1024,
+		Status:    "registered",
+	}); err != nil {
+		t.Fatalf("InsertModel: %v", err)
+	}
+
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{{
+			Metadata: knowledge.EngineMetadata{
+				Name:             "llamacpp-universal",
+				Type:             "llamacpp",
+				SupportedFormats: []string{"gguf"},
+			},
+			Hardware: knowledge.EngineHardware{GPUArch: "Ada"},
+			Runtime:  knowledge.EngineRuntime{Default: "native"},
+			Source: &knowledge.EngineSource{
+				Binary:    "llamacpp",
+				Platforms: []string{"linux/amd64"},
+			},
+		}},
+		ModelAssets: []knowledge.ModelAsset{{
+			Metadata: knowledge.ModelMetadata{Name: "demo-model", Type: "llm"},
+			Storage:  knowledge.ModelStorage{DefaultPathPattern: "/missing/demo-model"},
+			Variants: []knowledge.ModelVariant{{
+				Name:     "demo-model-llamacpp",
+				Engine:   "llamacpp",
+				Format:   "gguf",
+				Hardware: knowledge.ModelVariantHardware{GPUArch: "Ada"},
+			}},
+		}},
+	}
+
+	resolved, _, err := resolveWithFallback(ctx, cat, db, knowledge.HardwareInfo{
+		GPUArch:     "Ada",
+		Platform:    "linux/amd64",
+		RuntimeType: "native",
+	}, "demo-model", "llamacpp", nil, "")
+	if err != nil {
+		t.Fatalf("resolveWithFallback: %v", err)
+	}
+	if resolved.ModelPath != modelPath {
+		t.Fatalf("ModelPath = %q, want scanned path %q", resolved.ModelPath, modelPath)
+	}
+}
+
 func TestEnsureResolvedEngineProbePathPrependsLocalBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 	binaryPath := filepath.Join(tmpDir, "sglang-kt")

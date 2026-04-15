@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +65,7 @@ type PlanMetrics struct {
 // maxExplorationFailures is the threshold after which a model+engine combo
 // is considered permanently broken and excluded from future plans.
 const maxExplorationFailures = 2
+const recentExplorationHistoryLimit = 30
 
 // Explorer orchestrates autonomous knowledge discovery on edge devices.
 type Explorer struct {
@@ -1936,9 +1938,34 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 
 	// Recent exploration history
 	if e.db != nil {
-		runs, _ := e.db.ListExplorationRuns(ctx, "", 10)
+		runs, _ := e.db.ListExplorationRuns(ctx, "", recentExplorationHistoryLimit)
 		for _, r := range runs {
 			input.History = append(input.History, *r)
+		}
+
+		skipReasons := make(map[string]string)
+		recordSkip := func(model, engine, reason string) {
+			key := planTaskComboKey(model, engine)
+			if key == "" || strings.TrimSpace(reason) == "" {
+				return
+			}
+			if _, exists := skipReasons[key]; exists {
+				return
+			}
+			skipReasons[key] = reason
+		}
+
+		// Recent history should immediately remove exact combos from the ready
+		// frontier for the rest of this run, even before they become permanent.
+		for _, r := range input.History {
+			switch r.Status {
+			case "completed":
+				recordSkip(r.ModelID, r.EngineID, "recently completed")
+			case "failed":
+				recordSkip(r.ModelID, r.EngineID, "recently failed")
+			case "cancelled":
+				recordSkip(r.ModelID, r.EngineID, "recently cancelled")
+			}
 		}
 
 		// Prefill dedup: feed all explored combos to LLM so it avoids
@@ -1946,24 +1973,36 @@ func (e *Explorer) buildPlanInput(ctx context.Context, ev *ExplorerEvent) (*Plan
 		combos, _ := e.db.ListExploredCombos(ctx)
 		for _, c := range combos {
 			if c.Completed {
-				input.SkipCombos = append(input.SkipCombos, SkipCombo{
-					Model: c.Model, Engine: c.Engine, Reason: "completed",
-				})
+				recordSkip(c.Model, c.Engine, "completed")
 				continue
 			}
 			structural, _ := e.db.HasStructuralExplorationFailure(ctx, c.Model, c.Engine)
 			if structural {
-				input.SkipCombos = append(input.SkipCombos, SkipCombo{
-					Model: c.Model, Engine: c.Engine, Reason: "structural_failure",
-				})
+				recordSkip(c.Model, c.Engine, "structural_failure")
 			} else if c.FailCount >= maxExplorationFailures {
-				input.SkipCombos = append(input.SkipCombos, SkipCombo{
-					Model:  c.Model,
-					Engine: c.Engine,
-					Reason: fmt.Sprintf("failed:%d", c.FailCount),
-				})
+				recordSkip(c.Model, c.Engine, fmt.Sprintf("failed:%d", c.FailCount))
 			}
 		}
+		for key, reason := range skipReasons {
+			parts := strings.SplitN(key, "|", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			input.SkipCombos = append(input.SkipCombos, SkipCombo{
+				Model:  parts[0],
+				Engine: parts[1],
+				Reason: reason,
+			})
+		}
+		sort.Slice(input.SkipCombos, func(i, j int) bool {
+			if input.SkipCombos[i].Model != input.SkipCombos[j].Model {
+				return strings.ToLower(input.SkipCombos[i].Model) < strings.ToLower(input.SkipCombos[j].Model)
+			}
+			if input.SkipCombos[i].Engine != input.SkipCombos[j].Engine {
+				return strings.ToLower(input.SkipCombos[i].Engine) < strings.ToLower(input.SkipCombos[j].Engine)
+			}
+			return input.SkipCombos[i].Reason < input.SkipCombos[j].Reason
+		})
 	}
 
 	return input, nil

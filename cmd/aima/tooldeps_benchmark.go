@@ -525,7 +525,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 }
 
 func effectiveMatrixMaxTokenLevels(modality string, levels []int) []int {
-	if strings.EqualFold(modality, "embedding") {
+	if strings.EqualFold(modality, "embedding") || strings.EqualFold(modality, "reranker") {
 		return []int{0}
 	}
 	if len(levels) == 0 {
@@ -576,6 +576,14 @@ func buildRequester(modality string, cfg benchpkg.RunConfig, mp *modalityParams)
 		return req, nil
 	case "embedding":
 		return &benchpkg.EmbeddingRequester{
+			Model:       cfg.Model,
+			InputTokens: cfg.InputTokens,
+			Prompt:      mp.Prompt,
+			APIKey:      cfg.APIKey,
+			Timeout:     cfg.Timeout,
+		}, nil
+	case "reranker":
+		return &benchpkg.RerankRequester{
 			Model:       cfg.Model,
 			InputTokens: cfg.InputTokens,
 			Prompt:      mp.Prompt,

@@ -612,6 +612,44 @@ func TestLoadExperimentRecords(t *testing.T) {
 	}
 }
 
+func TestLoadExperimentRecordsRecoversMalformedResultYAML(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	if err := ws.writeFactDocument("experiments/001-bad.md", "# Experiment 001\n\n## Task\n```yaml\nkind: validate\nmodel: bad-model\nengine: vllm\n```\n\n## Result\n```yaml\nstatus: failed\nerror: \"broken\n```\n"); err != nil {
+		t.Fatalf("writeFactDocument: %v", err)
+	}
+
+	records, err := ws.LoadExperimentRecords()
+	if err != nil {
+		t.Fatalf("LoadExperimentRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records len=%d, want 1", len(records))
+	}
+	if records[0].Task.Model != "bad-model" {
+		t.Fatalf("Task.Model = %q, want bad-model", records[0].Task.Model)
+	}
+	if records[0].Result.Status != "invalid_record" {
+		t.Fatalf("Result.Status = %q, want invalid_record", records[0].Result.Status)
+	}
+	if !strings.Contains(records[0].Result.Error, "parse result yaml") {
+		t.Fatalf("Result.Error = %q, want parse result yaml", records[0].Result.Error)
+	}
+
+	if err := ws.RefreshFactDocuments(PlanInput{}); err != nil {
+		t.Fatalf("RefreshFactDocuments: %v", err)
+	}
+	ef, err := ws.ReadFile("experiment-facts.md")
+	if err != nil {
+		t.Fatalf("ReadFile experiment-facts.md: %v", err)
+	}
+	if !strings.Contains(ef, "invalid_record") {
+		t.Fatalf("experiment-facts.md = %q, want invalid_record row", ef)
+	}
+}
+
 func TestNormalizeSummaryMarkdown_AppendsRequiredSections(t *testing.T) {
 	got := normalizeSummaryMarkdown("# Exploration Summary\n\n## Key Findings\n\n- one fact\n")
 	for _, want := range []string{
@@ -700,6 +738,12 @@ func TestRefreshFactDocuments(t *testing.T) {
 	kb, _ := ws.ReadFile("knowledge-base.md")
 	if !strings.Contains(kb, "Knowledge Base") {
 		t.Error("knowledge-base.md missing header")
+	}
+	if !strings.Contains(kb, "Frontier Coverage") {
+		t.Error("knowledge-base.md missing Frontier Coverage section")
+	}
+	if !strings.Contains(kb, "prefer for new coverage") {
+		t.Error("knowledge-base.md missing frontier coverage guidance")
 	}
 
 	// Check index.md exists and encodes authority rules

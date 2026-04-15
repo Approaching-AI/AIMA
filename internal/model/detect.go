@@ -153,6 +153,9 @@ func buildModelInfo(dir string, entries []os.DirEntry, p ModelPattern, config ma
 	}
 	weightName := filepath.Base(weightPath)
 	quantization, quantSrc := detectQuantization(config, weightName, p.format)
+	if (mType == "" || mType == "embedding") && strings.Contains(strings.ToLower(name), "reranker") {
+		mType = "reranker"
+	}
 
 	return []*ModelInfo{
 		{

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	state "github.com/jguan/aima/internal"
 )
 
 func TestExplorer_EventTriggersPlanning(t *testing.T) {
@@ -123,6 +125,64 @@ func TestExplorer_BuildPlanInputGathersData(t *testing.T) {
 	}
 	if input.Event.Type != EventScheduledGapScan {
 		t.Errorf("event type = %q, want %q", input.Event.Type, EventScheduledGapScan)
+	}
+}
+
+func TestExplorer_BuildPlanInputSkipsRecentFailedCombos(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	for _, run := range []*state.ExplorationRun{
+		{
+			ID:          "run-failed",
+			Kind:        "validate",
+			Status:      "failed",
+			ModelID:     "qwen3-8b",
+			EngineID:    "vllm",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			StartedAt:   now,
+			CompletedAt: now,
+		},
+		{
+			ID:          "run-completed",
+			Kind:        "validate",
+			Status:      "completed",
+			ModelID:     "glm-4.1v",
+			EngineID:    "sglang",
+			CreatedAt:   now.Add(time.Second),
+			UpdatedAt:   now.Add(time.Second),
+			StartedAt:   now.Add(time.Second),
+			CompletedAt: now.Add(time.Second),
+		},
+	} {
+		if err := db.InsertExplorationRun(ctx, run); err != nil {
+			t.Fatalf("InsertExplorationRun(%s): %v", run.ID, err)
+		}
+	}
+
+	bus := NewEventBus()
+	e := NewExplorer(ExplorerConfig{Schedule: DefaultScheduleConfig()}, nil, nil, db, bus)
+
+	input, err := e.buildPlanInput(ctx, &ExplorerEvent{Type: EventScheduledGapScan})
+	if err != nil {
+		t.Fatalf("buildPlanInput: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, combo := range input.SkipCombos {
+		got[combo.Model+"|"+combo.Engine] = combo.Reason
+	}
+	if got["qwen3-8b|vllm"] != "recently failed" {
+		t.Fatalf("qwen3-8b|vllm reason = %q, want recently failed", got["qwen3-8b|vllm"])
+	}
+	if got["glm-4.1v|sglang"] != "recently completed" {
+		t.Fatalf("glm-4.1v|sglang reason = %q, want recently completed", got["glm-4.1v|sglang"])
 	}
 }
 

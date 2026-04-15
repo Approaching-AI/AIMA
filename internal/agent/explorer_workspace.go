@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -714,6 +715,27 @@ func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) s
 		fmt.Fprintf(&sb, "\n")
 	}
 
+	// Frontier coverage guidance
+	fmt.Fprintf(&sb, "## Frontier Coverage\n\n")
+	coverageRows := readyCoverageRows(input)
+	if len(coverageRows) == 0 {
+		fmt.Fprintf(&sb, "_No ready frontier coverage data_\n\n")
+	} else {
+		fmt.Fprintf(&sb, "| Model | Ready Engines | In Recent History | Guidance |\n")
+		fmt.Fprintf(&sb, "|-------|---------------|-------------------|----------|\n")
+		for _, row := range coverageRows {
+			recent := "no"
+			guidance := "prefer for new coverage"
+			if row.Recent {
+				recent = "yes"
+				guidance = "only pivot again if this narrows a specific blocker"
+			}
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n",
+				row.Model, strings.Join(row.Engines, ", "), recent, guidance)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
 	// Catalog Engine Capabilities
 	fmt.Fprintf(&sb, "## Catalog Engine Capabilities\n\n")
 	if len(input.LocalEngines) == 0 {
@@ -752,10 +774,7 @@ func (w *ExplorerWorkspace) LoadExperimentRecords() ([]ExperimentRecord, error) 
 		if err != nil {
 			return nil, fmt.Errorf("read experiment %s: %w", path, err)
 		}
-		task, result, err := parseExperimentRecordMarkdown(string(data))
-		if err != nil {
-			return nil, fmt.Errorf("parse experiment %s: %w", path, err)
-		}
+		task, result := recoverExperimentRecordMarkdown(string(data))
 		rel, _ := filepath.Rel(w.root, path)
 		records = append(records, ExperimentRecord{
 			Path:   filepath.ToSlash(rel),
@@ -766,33 +785,66 @@ func (w *ExplorerWorkspace) LoadExperimentRecords() ([]ExperimentRecord, error) 
 	return records, nil
 }
 
-func parseExperimentRecordMarkdown(md string) (TaskSpec, ExperimentResult, error) {
-	var task TaskSpec
-	var result ExperimentResult
-
-	taskSection := extractSection(md, "## Task")
-	taskBlock := yamlBlockRe.FindStringSubmatch(taskSection)
-	if len(taskBlock) >= 2 {
-		if err := yaml.Unmarshal([]byte(taskBlock[1]), &task); err != nil {
-			return TaskSpec{}, ExperimentResult{}, fmt.Errorf("parse task yaml: %w", err)
+func recoverExperimentRecordMarkdown(md string) (TaskSpec, ExperimentResult) {
+	task, taskErr := parseExperimentTaskMarkdown(md)
+	if taskErr != nil {
+		return TaskSpec{}, ExperimentResult{
+			Status: "invalid_record",
+			Error:  fmt.Sprintf("parse task yaml: %v", taskErr),
 		}
 	}
-
-	resultSection := extractSection(md, "## Result")
-	resultBlock := yamlBlockRe.FindStringSubmatch(resultSection)
-	if len(resultBlock) < 2 {
-		return task, result, fmt.Errorf("missing result yaml block")
+	result, resultErr := parseExperimentResultMarkdown(md)
+	if resultErr != nil {
+		result = ExperimentResult{
+			Status: "invalid_record",
+			Error:  fmt.Sprintf("parse result yaml: %v", resultErr),
+		}
 	}
-	if err := yaml.Unmarshal([]byte(resultBlock[1]), &result); err != nil {
-		return task, ExperimentResult{}, fmt.Errorf("parse result yaml: %w", err)
+	return task, result
+}
+
+func parseExperimentRecordMarkdown(md string) (TaskSpec, ExperimentResult, error) {
+	task, err := parseExperimentTaskMarkdown(md)
+	if err != nil {
+		return TaskSpec{}, ExperimentResult{}, err
+	}
+	result, err := parseExperimentResultMarkdown(md)
+	if err != nil {
+		return task, ExperimentResult{}, err
 	}
 	return task, result, nil
 }
 
+func parseExperimentTaskMarkdown(md string) (TaskSpec, error) {
+	var task TaskSpec
+	taskSection := extractSection(md, "## Task")
+	taskBlock := yamlBlockRe.FindStringSubmatch(taskSection)
+	if len(taskBlock) < 2 {
+		return task, nil
+	}
+	if err := yaml.Unmarshal([]byte(taskBlock[1]), &task); err != nil {
+		return TaskSpec{}, fmt.Errorf("parse task yaml: %w", err)
+	}
+	return task, nil
+}
+
+func parseExperimentResultMarkdown(md string) (ExperimentResult, error) {
+	var result ExperimentResult
+	resultSection := extractSection(md, "## Result")
+	resultBlock := yamlBlockRe.FindStringSubmatch(resultSection)
+	if len(resultBlock) < 2 {
+		return result, fmt.Errorf("missing result yaml block")
+	}
+	if err := yaml.Unmarshal([]byte(resultBlock[1]), &result); err != nil {
+		return ExperimentResult{}, fmt.Errorf("parse result yaml: %w", err)
+	}
+	return result, nil
+}
+
 func (w *ExplorerWorkspace) generateExperimentFacts(now string) string {
-	records, err := w.LoadExperimentRecords()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Experiment Facts\n\n_Generated: %s_\n\n", now)
+	records, err := w.LoadExperimentRecords()
 	if err != nil {
 		fmt.Fprintf(&sb, "_Unavailable: %v_\n", err)
 		return sb.String()
@@ -823,6 +875,66 @@ func (w *ExplorerWorkspace) generateExperimentFacts(now string) string {
 	fmt.Fprintf(&sb, "- If summary.md conflicts with this file, this file wins.\n")
 	fmt.Fprintf(&sb, "- A recommendation without a matching successful experiment in this file must stay provisional.\n")
 	return sb.String()
+}
+
+type coverageRow struct {
+	Model   string
+	Engines []string
+	Recent  bool
+}
+
+func readyCoverageRows(input PlanInput) []coverageRow {
+	if len(input.ComboFacts) == 0 {
+		return nil
+	}
+	skipSet := make(map[string]struct{}, len(input.SkipCombos))
+	for _, s := range input.SkipCombos {
+		skipSet[s.Model+"|"+s.Engine] = struct{}{}
+	}
+	recentModels := make(map[string]bool, len(input.History))
+	for _, h := range input.History {
+		model := strings.TrimSpace(h.ModelID)
+		if model != "" {
+			recentModels[model] = true
+		}
+	}
+	engineSetByModel := make(map[string]map[string]struct{})
+	for _, fact := range input.ComboFacts {
+		if fact.Status != "ready" {
+			continue
+		}
+		key := fact.Model + "|" + fact.Engine
+		if _, skipped := skipSet[key]; skipped {
+			continue
+		}
+		if _, ok := engineSetByModel[fact.Model]; !ok {
+			engineSetByModel[fact.Model] = make(map[string]struct{})
+		}
+		engineSetByModel[fact.Model][fact.Engine] = struct{}{}
+	}
+	rows := make([]coverageRow, 0, len(engineSetByModel))
+	for model, engines := range engineSetByModel {
+		engineList := make([]string, 0, len(engines))
+		for engine := range engines {
+			engineList = append(engineList, engine)
+		}
+		sort.Strings(engineList)
+		rows = append(rows, coverageRow{
+			Model:   model,
+			Engines: engineList,
+			Recent:  recentModels[model],
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Recent != rows[j].Recent {
+			return !rows[i].Recent
+		}
+		if len(rows[i].Engines) != len(rows[j].Engines) {
+			return len(rows[i].Engines) > len(rows[j].Engines)
+		}
+		return strings.ToLower(rows[i].Model) < strings.ToLower(rows[j].Model)
+	})
+	return rows
 }
 
 func comboFactCounts(input PlanInput) (ready, blocked, explored int) {
@@ -884,11 +996,13 @@ func defaultPlanTemplate() string {
 		"## Objective\n\n" +
 		"Summarize the next most valuable fact-grounded experiments for this device.\n\n" +
 		"## Fact Snapshot\n\n" +
-		"- Fill after reading index.md and available-combos.md.\n\n" +
+		"- Fill after reading index.md, available-combos.md, and knowledge-base.md frontier coverage.\n\n" +
 		"## Task Board\n\n" +
 		"- [ ] Read index.md\n" +
 		"- [ ] Read available-combos.md\n" +
+		"- [ ] Read knowledge-base.md frontier coverage\n" +
 		"- [ ] Read summary.md blockers and evidence\n" +
+		"- [ ] Give at least one slot to a ready model not seen in recent history when such models exist\n" +
 		"- [ ] Write only executable tasks from Ready Combos not on Do Not Retry This Cycle\n\n" +
 		"## Tasks\n" +
 		"```yaml\n[]\n```\n"

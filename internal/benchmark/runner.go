@@ -152,6 +152,12 @@ type RunResult struct {
 	InputTokensPerSec      float64 `json:"input_tokens_per_sec,omitempty"`
 	AvgEmbeddingDimensions int     `json:"avg_embedding_dimensions,omitempty"`
 
+	// ---- Reranker specific ----
+	RerankLatencyP50ms float64 `json:"rerank_latency_p50_ms,omitempty"`
+	RerankLatencyP95ms float64 `json:"rerank_latency_p95_ms,omitempty"`
+	ReranksPerSec      float64 `json:"reranks_per_sec,omitempty"`
+	AvgDocuments       int     `json:"avg_documents,omitempty"`
+
 	// ---- T2V specific ----
 	VideoLatencyP50s  float64 `json:"video_latency_p50_s,omitempty"`
 	VideoLatencyP95s  float64 `json:"video_latency_p95_s,omitempty"`
@@ -379,6 +385,8 @@ func aggregateByModality(modality string, samples []*Sample, totalDuration time.
 		aggregateASRMetrics(samples, totalDuration, result)
 	case "embedding":
 		aggregateEmbeddingMetrics(samples, totalDuration, result)
+	case "reranker":
+		aggregateRerankerMetrics(samples, totalDuration, result)
 	case "image_gen":
 		aggregateImageGenMetrics(samples, totalDuration, result)
 	case "video_gen":
@@ -420,6 +428,40 @@ func aggregateEmbeddingMetrics(samples []*Sample, totalDuration time.Duration, r
 	result.AvgInputTokens = totalInputTokens / len(successSamples)
 	result.AvgEmbeddingDimensions = totalDims / len(successSamples)
 	result.AvgOutputTokens = result.AvgEmbeddingDimensions
+}
+
+func aggregateRerankerMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {
+	var successSamples []*Sample
+	for _, s := range samples {
+		if s.Error == nil {
+			successSamples = append(successSamples, s)
+		}
+	}
+	if len(successSamples) == 0 {
+		return
+	}
+
+	latencyValues := make([]float64, len(successSamples))
+	var totalInputTokens, totalDocuments int
+	for i, s := range successSamples {
+		latencyValues[i] = s.LatencyMs
+		totalInputTokens += s.InputTokens
+		totalDocuments += s.OutputTokens
+	}
+	sort.Float64s(latencyValues)
+	result.RerankLatencyP50ms = percentile(latencyValues, 50)
+	result.RerankLatencyP95ms = percentile(latencyValues, 95)
+
+	durationS := totalDuration.Seconds()
+	if durationS > 0 {
+		result.ReranksPerSec = float64(len(successSamples)) / durationS
+		result.ThroughputTPS = result.ReranksPerSec
+		result.QPS = result.ReranksPerSec
+	}
+
+	result.AvgInputTokens = totalInputTokens / len(successSamples)
+	result.AvgDocuments = totalDocuments / len(successSamples)
+	result.AvgOutputTokens = result.AvgDocuments
 }
 
 func aggregateTTSMetrics(samples []*Sample, totalDuration time.Duration, result *RunResult) {

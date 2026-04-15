@@ -183,10 +183,11 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string, opts ...knowledge.ResolveOption) (*knowledge.ResolvedConfig, string, error) {
 	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, opts...)
 	if err == nil {
-		// Catalog hit — but ModelPath may be empty if no override was given.
-		// Look up DB for the actual registered path from scan/import.
-		if resolved.ModelPath == "" {
-			if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
+		// Catalog hit — prefer the actual scanned path when the catalog default
+		// is empty or no longer matches the files present on this device.
+		if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
+			pathReady := resolved.ModelPath != "" && model.PathLooksCompatible(resolved.ModelPath, resolved.ModelFormat, resolvedQuantizationHint(resolved))
+			if !pathReady {
 				if model.PathLooksCompatible(dbModel.Path, dbModel.Format, resolvedQuantizationHint(resolved)) {
 					resolved.ModelPath = dbModel.Path
 				} else {

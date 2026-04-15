@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
-	"github.com/jguan/aima/internal/model"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 
@@ -70,44 +68,18 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		resolved := rd.Resolved
 		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
 
-		modelPath := resolved.ModelPath
-		if modelPath == "" {
-			modelPath = filepath.Join(dataDir, "models", modelName)
-		}
-		requiredFormat := resolved.ModelFormat
-		requiredQuantization := resolvedQuantizationHint(resolved)
-		// Guard: if the resolved model path is empty or missing model files,
-		// search alternative locations. This handles the case where aima serve
-		// runs as root (HOME=/root) but deploy is invoked as a regular user,
-		// so $HOME/.aima/models differs from where the model was downloaded.
-		if !model.PathLooksCompatible(modelPath, requiredFormat, requiredQuantization) {
-			if alt := findModelDir(modelName, dataDir, requiredFormat, requiredQuantization); alt != "" {
-				slog.Info("model path fallback: using alternative location",
-					"original", modelPath, "resolved", alt)
-				modelPath = alt
-			} else {
-				if !allowAutoPull {
-					return nil, fmt.Errorf("model %s not found locally and auto-pull is disabled", modelName)
-				}
-				slog.Info("model not found locally, auto-pulling", "model", modelName)
-				if pullErr := pullModelCore(ctx, modelName, nil, nil); pullErr != nil {
-					return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
-				}
-				// Re-resolve model path after download
-				modelPath = filepath.Join(dataDir, "models", modelName)
-				if alt := findModelDir(modelName, dataDir, requiredFormat, requiredQuantization); alt != "" {
-					modelPath = alt
-				}
+		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
+		if modelPathErr != nil {
+			if !allowAutoPull {
+				return nil, modelPathErr
 			}
-		}
-		// Native binary engines require a single model file path; container engines
-		// take the directory. Collapse only file-style model directories (GGUF etc.);
-		// HuggingFace-style directories with config.json must stay as directories.
-		if resolved.Source != nil {
-			if fi, err := os.Stat(modelPath); err == nil && fi.IsDir() && dirRequiresSingleFileModelPath(modelPath) {
-				if f := findModelFileInDir(modelPath); f != "" {
-					modelPath = f
-				}
+			slog.Info("model not found locally, auto-pulling", "model", modelName)
+			if pullErr := pullModelCore(ctx, modelName, nil, nil); pullErr != nil {
+				return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
+			}
+			modelPath, modelPathErr = resolveLocalModelPathNoPull(modelName, resolved, dataDir)
+			if modelPathErr != nil {
+				return nil, modelPathErr
 			}
 		}
 

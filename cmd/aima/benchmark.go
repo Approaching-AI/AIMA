@@ -354,11 +354,13 @@ func refreshPerfVectors(ctx context.Context, kStore *knowledge.Store) {
 
 // saveBenchmarkResult saves a benchmark result and its configuration to the DB.
 // Returns (benchmarkID, configID, saved benchmark row) or error.
-// B12: Skip saving when throughput is zero — indicates no real inference happened.
 func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
 	modality string, result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency, inputTokens, maxTokens int, notes string) (string, string, *state.BenchmarkResult, error) {
-	if result.ThroughputTPS <= 0 {
-		return "", "", nil, fmt.Errorf("zero throughput — no inference service responded; benchmark not saved")
+	if result == nil {
+		return "", "", nil, fmt.Errorf("benchmark result is nil")
+	}
+	if result.SuccessfulReqs <= 0 && result.ThroughputTPS <= 0 && result.QPS <= 0 {
+		return "", "", nil, fmt.Errorf("no successful benchmark requests — benchmark not saved")
 	}
 	config := deployConfig
 	if len(config) == 0 {
@@ -366,7 +368,8 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		if inputTokens > 0 {
 			config["input_tokens"] = inputTokens
 		}
-		if storageBenchmarkModality(modality) != "embedding" && maxTokens > 0 {
+		storedModality := storageBenchmarkModality(modality)
+		if storedModality != "embedding" && storedModality != "reranker" && maxTokens > 0 {
 			config["max_tokens"] = maxTokens
 		}
 	}

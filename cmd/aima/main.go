@@ -638,21 +638,13 @@ func run() error {
 			result := make([]agent.LocalModel, 0, len(models))
 			for _, m := range models {
 				if m.Name != "" {
-					lm := agent.LocalModel{
+					lm := enrichExplorerLocalModel(cat, agent.LocalModel{
 						Name:          m.Name,
 						Format:        m.Format,
 						Type:          m.Type,
 						SizeBytes:     m.SizeBytes,
 						MaxContextLen: cat.ModelMaxContextLen(m.Name),
-					}
-					// Enrich from catalog YAML (INV-1: knowledge from YAML, not code)
-					for i := range cat.ModelAssets {
-						if strings.EqualFold(cat.ModelAssets[i].Metadata.Name, m.Name) {
-							lm.Family = cat.ModelAssets[i].Metadata.Family
-							lm.ParameterCount = cat.ModelAssets[i].Metadata.ParameterCount
-							break
-						}
-					}
+					})
 					result = append(result, lm)
 				}
 			}

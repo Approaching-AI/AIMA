@@ -156,6 +156,85 @@ func TestEmbeddingRequester_Basic(t *testing.T) {
 	}
 }
 
+func TestRerankRequester_Basic(t *testing.T) {
+	var requestPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"results":[{"index":0},{"index":1},{"index":2}],
+			"usage":{"total_tokens":96}
+		}`))
+	}))
+	defer ts.Close()
+
+	req := &RerankRequester{
+		Model:       "bge-reranker-v2-m3",
+		InputTokens: 128,
+		Prompt:      "Rank these deployment observations by relevance.",
+		Timeout:     10 * time.Second,
+	}
+
+	sample, err := req.Do(context.Background(), ts.URL, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sample.Error != nil {
+		t.Fatalf("unexpected sample error: %v", sample.Error)
+	}
+	if requestPath != "/v1/rerank" {
+		t.Fatalf("request path = %q, want /v1/rerank", requestPath)
+	}
+	if sample.InputTokens != 96 {
+		t.Fatalf("sample.InputTokens = %d, want 96", sample.InputTokens)
+	}
+	if sample.OutputTokens != 3 {
+		t.Fatalf("sample.OutputTokens = %d, want 3", sample.OutputTokens)
+	}
+}
+
+func TestRun_RerankerAggregation(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"index":0},{"index":1}],"usage":{"total_tokens":64}}`))
+	}))
+	defer ts.Close()
+
+	req := &RerankRequester{
+		Model:       "bge-reranker-v2-m3",
+		InputTokens: 128,
+		Prompt:      "Rank relevant evidence.",
+		Timeout:     10 * time.Second,
+	}
+
+	result, err := Run(context.Background(), RunConfig{
+		Endpoint:    ts.URL,
+		Model:       "bge-reranker-v2-m3",
+		NumRequests: 4,
+		WarmupCount: 0,
+		InputTokens: 128,
+		Timeout:     10 * time.Second,
+	}, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Modality != "reranker" {
+		t.Fatalf("Modality = %q, want reranker", result.Modality)
+	}
+	if result.SuccessfulReqs != 4 {
+		t.Fatalf("SuccessfulReqs = %d, want 4", result.SuccessfulReqs)
+	}
+	if result.ReranksPerSec <= 0 {
+		t.Fatalf("ReranksPerSec = %v, want > 0", result.ReranksPerSec)
+	}
+	if result.RerankLatencyP50ms <= 0 {
+		t.Fatalf("RerankLatencyP50ms = %v, want > 0", result.RerankLatencyP50ms)
+	}
+	if result.AvgDocuments != 2 {
+		t.Fatalf("AvgDocuments = %d, want 2", result.AvgDocuments)
+	}
+}
+
 func TestRun_Concurrency(t *testing.T) {
 	var concurrent int64
 	var maxConcurrent int64

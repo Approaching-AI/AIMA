@@ -964,6 +964,7 @@ func TestDetectModelType(t *testing.T) {
 		{"glm", "llm"},
 		{"llava", "vlm"},
 		{"internvl", "vlm"},
+		{"cross_encoder", "reranker"},
 	}
 
 	for _, tt := range tests {

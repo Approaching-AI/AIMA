@@ -19,7 +19,7 @@ func TestDeployRunPassesConfigOverrides(t *testing.T) {
 		gotNoPull bool
 	)
 	registerDeployTools(s, &ToolDeps{
-		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool, onPhase func(string, string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error) {
+		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool, onPhase func(string, string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(int64, int64)) (json.RawMessage, error) {
 			gotModel = model
 			gotEngine = engineType
 			gotSlot = slot

@@ -31,7 +31,7 @@ import (
 func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	pullModelCore func(ctx context.Context, name string, onStatus func(phase, msg string), onProgress func(downloaded, total int64)) error,
 	deployRunCore func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
-		onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error),
+		onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(downloaded, total int64)) (json.RawMessage, error),
 ) {
 	cat := ac.cat
 	db := ac.db

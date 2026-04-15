@@ -83,7 +83,7 @@ func newRunCmd(app *App) *cobra.Command {
 				}
 			}
 
-			data, err := app.ToolDeps.DeployRun(ctx, modelName, engineType, slot, configMap, noPull, onPhase, pr.onProgress)
+			data, err := app.ToolDeps.DeployRun(ctx, modelName, engineType, slot, configMap, noPull, onPhase, pr.onProgress, nil)
 			pr.finish()
 			if err != nil {
 				return err

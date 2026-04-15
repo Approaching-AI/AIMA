@@ -91,7 +91,7 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
 			// MCP has no streaming; pass nil for progress callbacks.
-			data, err := deps.DeployRun(ctx, p.Model, p.Engine, p.Slot, p.Config, p.NoPull, nil, nil)
+			data, err := deps.DeployRun(ctx, p.Model, p.Engine, p.Slot, p.Config, p.NoPull, nil, nil, nil)
 			if err != nil {
 				return nil, fmt.Errorf("deploy run %s: %w", p.Model, err)
 			}

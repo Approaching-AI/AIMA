@@ -21,7 +21,7 @@ func TestRunDeploy_MarksCompletedAfterReadyDeploy(t *testing.T) {
 
 	td := &mcp.ToolDeps{
 		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
-			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent),
+			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(int64, int64),
 		) (json.RawMessage, error) {
 			return json.RawMessage(`{"status":"ready","address":"127.0.0.1:6188"}`), nil
 		},
@@ -56,7 +56,7 @@ func TestRunDeploy_DoesNotMarkCompletedOnTimeout(t *testing.T) {
 
 	td := &mcp.ToolDeps{
 		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
-			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent),
+			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(int64, int64),
 		) (json.RawMessage, error) {
 			return json.RawMessage(`{"status":"timeout","message":"deployment started but not ready within 10 minutes"}`), nil
 		},

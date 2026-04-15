@@ -34,8 +34,17 @@ func initCatalog(ctx context.Context, db *state.DB, dataDir string) (*knowledge.
 		}
 		before := catalogSize(cat)
 		cat, staleWarnings := knowledge.MergeCatalogWithDigests(cat, overlayCat, factoryDigests, overlayFS)
+		// UAT noise reduction: per-file stale warnings spammed startup logs on
+		// machines with large overlays. Aggregate to a single summary line and
+		// emit individual warnings at Debug level for diagnostics.
 		for _, w := range staleWarnings {
-			slog.Warn(w)
+			slog.Debug("overlay stale detail", "detail", w)
+		}
+		if len(staleWarnings) > 0 {
+			slog.Info("catalog overlay has stale entries; review recommended",
+				"stale_count", len(staleWarnings),
+				"dir", overlayDir,
+			)
 		}
 		slog.Info("catalog overlay merged",
 			"dir", overlayDir,

@@ -23,7 +23,7 @@ import (
 func TestHandleOnboardingDeploy_DoesNotCompleteOnTimeout(t *testing.T) {
 	deps := &mcp.ToolDeps{
 		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
-			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent),
+			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(int64, int64),
 		) (json.RawMessage, error) {
 			return json.RawMessage(`{"status":"timeout","message":"deployment started but not ready within 10 minutes"}`), nil
 		},

@@ -73,7 +73,7 @@ func TestExecuteLineRunUsesRealCLIFlags(t *testing.T) {
 		gotConfig map[string]any
 		gotNoPull bool
 	)
-	app.ToolDeps.DeployRun = func(ctx context.Context, model, engineType, slot string, config map[string]any, noPull bool, onPhase func(string, string), onProgress func(engine.ProgressEvent)) (json.RawMessage, error) {
+	app.ToolDeps.DeployRun = func(ctx context.Context, model, engineType, slot string, config map[string]any, noPull bool, onPhase func(string, string), onProgress func(engine.ProgressEvent), onModelProgress func(int64, int64)) (json.RawMessage, error) {
 		gotEngine = engineType
 		gotModel = model
 		gotSlot = slot

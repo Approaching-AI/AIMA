@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,33 +11,62 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// dispatchOnboarding routes an onboarding action to either the remote MCP
+// endpoint (when --remote was supplied) or the in-process ToolDeps closure.
+// Both paths return the same JSON payload shape so the per-subcommand
+// printers can stay identical.
+func dispatchOnboarding(
+	ctx context.Context,
+	client *remoteOnboardingClient,
+	action string,
+	args map[string]any,
+	local func(ctx context.Context) (json.RawMessage, error),
+) (json.RawMessage, error) {
+	if client != nil && client.configured() {
+		return client.callOnboarding(ctx, action, args)
+	}
+	return local(ctx)
+}
+
 // newOnboardingCmd exposes the unified onboarding workflow as CLI subcommands.
-// Each subcommand is a thin wrapper that parses flags and delegates to the
-// matching ToolDeps.OnboardingX closure (same code path as Web UI / MCP).
+// Each subcommand is a thin wrapper that parses flags and delegates to either
+// the matching ToolDeps.OnboardingX closure (in-process — same code path as
+// Web UI / MCP) or, when --remote is set, the remote `aima serve` MCP
+// endpoint. This lets the CLI drive other devices in the fleet without
+// needing fleet.exec plumbing for the onboarding flow.
 func newOnboardingCmd(app *App) *cobra.Command {
+	client := &remoteOnboardingClient{}
 	cmd := &cobra.Command{
 		Use:   "onboarding",
 		Short: "Manage edge device onboarding (cold-start wizard)",
 		Long:  "Manage edge device onboarding. Same code path as the Web UI wizard and MCP onboarding tool.",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			client.endpoint = envOrFlag(client.endpoint, "AIMA_REMOTE")
+			client.apiKey = envOrFlag(client.apiKey, "AIMA_API_KEY")
+		},
 	}
-	cmd.AddCommand(newOnboardingStatusCmd(app))
-	cmd.AddCommand(newOnboardingScanCmd(app))
-	cmd.AddCommand(newOnboardingRecommendCmd(app))
-	cmd.AddCommand(newOnboardingInitCmd(app))
-	cmd.AddCommand(newOnboardingDeployCmd(app))
+	cmd.PersistentFlags().StringVar(&client.endpoint, "remote", "", "Remote `aima serve` MCP endpoint (e.g. http://host:6188). When set, run actions against the remote instead of in-process. Falls back to AIMA_REMOTE env.")
+	cmd.PersistentFlags().StringVar(&client.apiKey, "api-key", "", "Bearer API key for --remote. Falls back to AIMA_API_KEY env.")
+	cmd.AddCommand(newOnboardingStatusCmd(app, client))
+	cmd.AddCommand(newOnboardingScanCmd(app, client))
+	cmd.AddCommand(newOnboardingRecommendCmd(app, client))
+	cmd.AddCommand(newOnboardingInitCmd(app, client))
+	cmd.AddCommand(newOnboardingDeployCmd(app, client))
 	return cmd
 }
 
-func newOnboardingStatusCmd(app *App) *cobra.Command {
+func newOnboardingStatusCmd(app *App, client *remoteOnboardingClient) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show onboarding state (hardware, stack readiness, version)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.OnboardingStatus == nil {
-				return fmt.Errorf("onboarding.status not available")
-			}
-			data, err := app.ToolDeps.OnboardingStatus(cmd.Context())
+			data, err := dispatchOnboarding(cmd.Context(), client, "status", nil, func(ctx context.Context) (json.RawMessage, error) {
+				if app.ToolDeps.OnboardingStatus == nil {
+					return nil, fmt.Errorf("onboarding.status not available")
+				}
+				return app.ToolDeps.OnboardingStatus(ctx)
+			})
 			if err != nil {
 				return err
 			}
@@ -108,16 +138,18 @@ func newOnboardingStatusCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func newOnboardingScanCmd(app *App) *cobra.Command {
+func newOnboardingScanCmd(app *App, client *remoteOnboardingClient) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan engines, models, and central connectivity",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.OnboardingScan == nil {
-				return fmt.Errorf("onboarding.scan not available")
-			}
-			data, err := app.ToolDeps.OnboardingScan(cmd.Context())
+			data, err := dispatchOnboarding(cmd.Context(), client, "scan", nil, func(ctx context.Context) (json.RawMessage, error) {
+				if app.ToolDeps.OnboardingScan == nil {
+					return nil, fmt.Errorf("onboarding.scan not available")
+				}
+				return app.ToolDeps.OnboardingScan(ctx)
+			})
 			if err != nil {
 				return err
 			}
@@ -167,7 +199,7 @@ func newOnboardingScanCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func newOnboardingRecommendCmd(app *App) *cobra.Command {
+func newOnboardingRecommendCmd(app *App, client *remoteOnboardingClient) *cobra.Command {
 	var (
 		locale string
 		asJSON bool
@@ -176,10 +208,12 @@ func newOnboardingRecommendCmd(app *App) *cobra.Command {
 		Use:   "recommend",
 		Short: "Recommend model/engine combos fit for this hardware",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.OnboardingRecommend == nil {
-				return fmt.Errorf("onboarding.recommend not available")
-			}
-			data, err := app.ToolDeps.OnboardingRecommend(cmd.Context(), locale)
+			data, err := dispatchOnboarding(cmd.Context(), client, "recommend", map[string]any{"locale": locale}, func(ctx context.Context) (json.RawMessage, error) {
+				if app.ToolDeps.OnboardingRecommend == nil {
+					return nil, fmt.Errorf("onboarding.recommend not available")
+				}
+				return app.ToolDeps.OnboardingRecommend(ctx, locale)
+			})
 			if err != nil {
 				return err
 			}
@@ -237,7 +271,7 @@ func newOnboardingRecommendCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func newOnboardingInitCmd(app *App) *cobra.Command {
+func newOnboardingInitCmd(app *App, client *remoteOnboardingClient) *cobra.Command {
 	var (
 		tier          string
 		allowDownload bool
@@ -256,7 +290,7 @@ Tiers:
 
 This command installs system software. Use --yes to skip the confirmation prompt.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.OnboardingInit == nil {
+			if !client.configured() && app.ToolDeps.OnboardingInit == nil {
 				return fmt.Errorf("onboarding.init not available")
 			}
 
@@ -275,7 +309,11 @@ This command installs system software. Use --yes to skip the confirmation prompt
 				}
 			}
 
-			data, err := app.ToolDeps.OnboardingInit(cmd.Context(), tier, allowDownload)
+			data, err := dispatchOnboarding(cmd.Context(), client, "init",
+				map[string]any{"tier": tier, "allow_download": allowDownload},
+				func(ctx context.Context) (json.RawMessage, error) {
+					return app.ToolDeps.OnboardingInit(ctx, tier, allowDownload)
+				})
 			if err != nil {
 				return err
 			}
@@ -321,7 +359,7 @@ This command installs system software. Use --yes to skip the confirmation prompt
 	return cmd
 }
 
-func newOnboardingDeployCmd(app *App) *cobra.Command {
+func newOnboardingDeployCmd(app *App, client *remoteOnboardingClient) *cobra.Command {
 	var (
 		model           string
 		engineType      string
@@ -335,7 +373,7 @@ func newOnboardingDeployCmd(app *App) *cobra.Command {
 		Use:   "deploy",
 		Short: "Deploy a model using the onboarding pipeline",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if app.ToolDeps.OnboardingDeploy == nil {
+			if !client.configured() && app.ToolDeps.OnboardingDeploy == nil {
 				return fmt.Errorf("onboarding.deploy not available")
 			}
 			if strings.TrimSpace(model) == "" {
@@ -364,7 +402,17 @@ func newOnboardingDeployCmd(app *App) *cobra.Command {
 				}
 			}
 
-			data, err := app.ToolDeps.OnboardingDeploy(cmd.Context(), model, engineType, slot, overrides, noPull)
+			data, err := dispatchOnboarding(cmd.Context(), client, "deploy",
+				map[string]any{
+					"model":            model,
+					"engine":           engineType,
+					"slot":             slot,
+					"config_overrides": overrides,
+					"no_pull":          noPull,
+				},
+				func(ctx context.Context) (json.RawMessage, error) {
+					return app.ToolDeps.OnboardingDeploy(ctx, model, engineType, slot, overrides, noPull)
+				})
 			if err != nil {
 				return err
 			}

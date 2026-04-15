@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"fmt"
+	stdlog "log"
 	"log/slog"
 	"net"
 	"os"
@@ -12,6 +14,34 @@ import (
 
 	"github.com/hashicorp/mdns"
 )
+
+// mdnsLogFilter drops lines from hashicorp/mdns that correspond to malformed
+// packets emitted by other devices on the LAN (e.g. Windows/iOS bonjour quirks
+// around the DNS truncated bit). These are routine on shared networks and do
+// not indicate any problem with our advertiser.
+type mdnsLogFilter struct{}
+
+var mdnsSuppressedSubstrings = [][]byte{
+	[]byte("Failed to handle query"),
+	[]byte("truncated bit"),
+	[]byte("Failed to unpack packet"),
+}
+
+func (mdnsLogFilter) Write(p []byte) (int, error) {
+	for _, needle := range mdnsSuppressedSubstrings {
+		if bytes.Contains(p, needle) {
+			return len(p), nil
+		}
+	}
+	// Forward anything else to slog at Debug — we don't want mdns chatter in
+	// normal logs, but keep it reachable for troubleshooting.
+	slog.Debug("mdns", "line", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
+func newMDNSLogger() *stdlog.Logger {
+	return stdlog.New(mdnsLogFilter{}, "", 0)
+}
 
 // MDNSConfig configures the mDNS advertiser.
 type MDNSConfig struct {
@@ -58,7 +88,7 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 	ifaces := lanInterfaces()
 	if len(ifaces) == 0 {
 		// Fallback: single server on system default interface
-		server, err := mdns.NewServer(&mdns.Config{Zone: service})
+		server, err := mdns.NewServer(&mdns.Config{Zone: service, Logger: newMDNSLogger()})
 		if err != nil {
 			return nil, fmt.Errorf("mdns server: %w", err)
 		}
@@ -67,7 +97,7 @@ func StartMDNS(cfg MDNSConfig) (*MDNSAdvertiser, error) {
 
 	var servers []*mdns.Server
 	for _, iface := range ifaces {
-		server, err := mdns.NewServer(&mdns.Config{Zone: service, Iface: iface})
+		server, err := mdns.NewServer(&mdns.Config{Zone: service, Iface: iface, Logger: newMDNSLogger()})
 		if err != nil {
 			slog.Debug("mdns: skip interface for advertise", "iface", iface.Name, "error", err)
 			continue

@@ -218,7 +218,30 @@ func RunDeploy(
 		emit("step", data)
 	}
 
-	raw, err := td.DeployRun(ctx, model, engineType, slot, configOverrides, noPull, onPhase, onEngineProgress)
+	// Mirror engine_pull byte progress for the model_pull step. Without this
+	// the wizard progress bar froze at "downloading model..." while a multi-GB
+	// transfer ran for tens of minutes — UAT users assumed the deploy hung.
+	onModelProgress := func(downloaded, total int64) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		data := map[string]any{
+			"step": 2, "total": totalSteps,
+			"name": "model_pull", "status": "downloading",
+		}
+		if total > 0 {
+			data["downloaded_bytes"] = downloaded
+			data["total_bytes"] = total
+			data["progress"] = float64(downloaded) / float64(total)
+		} else if downloaded > 0 {
+			data["downloaded_bytes"] = downloaded
+		}
+		emit("step", data)
+	}
+
+	raw, err := td.DeployRun(ctx, model, engineType, slot, configOverrides, noPull, onPhase, onEngineProgress, onModelProgress)
 	if err != nil {
 		slog.Warn("onboarding deploy failed", "model", model, "error", err)
 		emit("error", map[string]any{"step": 3, "name": "deploy", "message": err.Error()})

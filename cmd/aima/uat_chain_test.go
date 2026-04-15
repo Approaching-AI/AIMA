@@ -122,7 +122,7 @@ func TestDeployDeleteRemovesProxyAndRecordsSnapshotAcrossRuntimeFallbacks(t *tes
 		proxy:    proxyServer,
 	}, deps,
 		func(context.Context, string, func(string, string), func(int64, int64)) error { return nil },
-		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent)) (json.RawMessage, error) {
+		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent), func(int64, int64)) (json.RawMessage, error) {
 			return nil, nil
 		},
 	)
@@ -193,7 +193,7 @@ func TestDeployDeleteFailsWhenDeploymentStillListedAfterDelete(t *testing.T) {
 		proxy:    proxy.NewServer(),
 	}, deps,
 		func(context.Context, string, func(string, string), func(int64, int64)) error { return nil },
-		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent)) (json.RawMessage, error) {
+		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent), func(int64, int64)) (json.RawMessage, error) {
 			return nil, nil
 		},
 	)
@@ -247,7 +247,7 @@ func TestDeployListAndStatusExposeTopLevelModelAndEngine(t *testing.T) {
 		proxy: proxy.NewServer(),
 	}, deps,
 		func(context.Context, string, func(string, string), func(int64, int64)) error { return nil },
-		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent)) (json.RawMessage, error) {
+		func(context.Context, string, string, string, map[string]any, bool, func(string, string), func(engine.ProgressEvent), func(int64, int64)) (json.RawMessage, error) {
 			return nil, nil
 		},
 	)

@@ -1194,7 +1194,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 	// Business logic lives here so CLI remains a thin presentation layer.
 	var deps *mcp.ToolDeps
 	deployRunCore := func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
-		onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent)) (json.RawMessage, error) {
+		onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(downloaded, total int64)) (json.RawMessage, error) {
 
 		notify := func(phase, msg string) {
 			if onPhase != nil {
@@ -1335,10 +1335,17 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			}
 		}
 
-		// Step 3: Pull model (non-fatal — may be local or pre-installed)
+		// Step 3: Pull model (non-fatal — may be local or pre-installed). Use
+		// pullModelCore directly so byte-level progress can flow back to the
+		// caller via onModelProgress (the deps.PullModel closure swallows it).
 		if !noPull {
 			notify("pulling_model", model)
-			if err := deps.PullModel(ctx, model); err != nil {
+			modelStatus := func(phase, msg string) {
+				if msg != "" {
+					notify("pulling_model", msg)
+				}
+			}
+			if err := pullModelCore(ctx, model, modelStatus, onModelProgress); err != nil {
 				notify("model_skip", err.Error())
 			}
 		}

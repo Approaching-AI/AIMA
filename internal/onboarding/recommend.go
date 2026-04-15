@@ -270,12 +270,17 @@ func computeFitScore(
 		score += 10
 	}
 
+	// Locally available assets dominate sort order. UAT showed deploying a
+	// recommended model that needed a 16 GB download was a poor first-run
+	// experience when several smaller, cached models existed. Boost both
+	// model and engine presence aggressively so the wizard's top picks are
+	// "deployable in seconds" rather than "deployable in an hour".
 	if modelAvailable {
-		score += 5
+		score += 30
 	}
 
 	if engineStatus.Installed {
-		score += 5
+		score += 15
 	}
 
 	if variant.Hardware.GPUCountMin > 1 {

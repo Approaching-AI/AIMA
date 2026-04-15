@@ -47,6 +47,22 @@ func RunInit(ctx context.Context, deps *Deps, tier string, allowDownload bool, s
 		return InitResult{}, events, fmt.Errorf("check stack status: %w", err)
 	}
 	if !stackStatus.NeedsInit {
+		// Emit per-component status so the wizard progress bar reflects the
+		// real stack state instead of jumping straight to "complete". UAT
+		// showed users couldn't tell whether docker/k3s were skipped because
+		// they were ready or because the init silently bailed out.
+		emit("init_component", map[string]any{
+			"name":    "docker",
+			"ready":   strings.EqualFold(stackStatus.Docker, "ready"),
+			"skipped": true,
+			"message": fmt.Sprintf("docker: %s", stackStatus.Docker),
+		})
+		emit("init_component", map[string]any{
+			"name":    "k3s",
+			"ready":   strings.EqualFold(stackStatus.K3S, "ready"),
+			"skipped": true,
+			"message": fmt.Sprintf("k3s: %s", stackStatus.K3S),
+		})
 		result := InitResult{AllReady: true, StackStatus: stackStatus, Tier: NormalizeInitTier(tier)}
 		emit("init_complete", map[string]any{
 			"all_ready":    true,

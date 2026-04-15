@@ -4,6 +4,7 @@ metadata:
   type: image_gen
   family: tongyi
   parameter_count: "12B"
+  released_at: "2025-12"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

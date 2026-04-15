@@ -4,6 +4,7 @@ metadata:
   type: embedding
   family: qwen
   parameter_count: "0.6B"
+  released_at: "2025-06"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

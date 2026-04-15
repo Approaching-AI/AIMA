@@ -4,6 +4,7 @@ metadata:
   type: llm
   family: qwen
   parameter_count: "80B"
+  released_at: "2026-01"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

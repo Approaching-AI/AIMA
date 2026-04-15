@@ -4,6 +4,7 @@ metadata:
   type: video_gen
   family: ltx
   parameter_count: "22B"
+  released_at: "2026-02"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/ltx-2.3"

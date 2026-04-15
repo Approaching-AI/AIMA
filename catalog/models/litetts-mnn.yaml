@@ -4,6 +4,7 @@ metadata:
   type: tts
   family: litetts
   parameter_count: "~50M"
+  released_at: "2024-12"
 storage:
   formats: [mnn]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

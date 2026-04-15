@@ -4,6 +4,7 @@ metadata:
   type: asr
   family: funasr
   parameter_count: "220M"
+  released_at: "2024-09"
 storage:
   formats: [onnx]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

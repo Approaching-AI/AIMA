@@ -4,6 +4,7 @@ metadata:
   type: asr
   family: qwen
   parameter_count: "1.7B"
+  released_at: "2025-09"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

@@ -4,6 +4,7 @@ metadata:
   type: image_gen
   family: flux
   parameter_count: "32B"
+  released_at: "2025-11"
 storage:
   formats: [safetensors, diffusers]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

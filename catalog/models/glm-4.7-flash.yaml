@@ -4,6 +4,7 @@ metadata:
   type: llm
   family: glm
   parameter_count: "30B"
+  released_at: "2025-11"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

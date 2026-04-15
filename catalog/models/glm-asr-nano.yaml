@@ -4,6 +4,7 @@ metadata:
   type: asr
   family: glm
   parameter_count: "0.3B"
+  released_at: "2025-08"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

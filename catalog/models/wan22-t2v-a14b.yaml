@@ -4,6 +4,7 @@ metadata:
   type: video_gen
   family: wan
   parameter_count: "27B"
+  released_at: "2025-11"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

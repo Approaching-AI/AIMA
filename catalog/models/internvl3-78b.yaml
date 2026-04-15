@@ -4,6 +4,7 @@ metadata:
   type: vlm
   family: internvl
   parameter_count: "78B"
+  released_at: "2025-04"
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

@@ -4,6 +4,7 @@ metadata:
   type: vlm
   family: qwen
   parameter_count: "9B"
+  released_at: "2025-09"
 openclaw:
   chat_provider: false
   request_patches:

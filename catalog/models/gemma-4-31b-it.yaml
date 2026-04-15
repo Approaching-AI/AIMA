@@ -4,6 +4,7 @@ metadata:
   type: llm
   family: gemma
   parameter_count: "31B"
+  released_at: "2025-10"
   license: apache-2.0
   description: "Google DeepMind Gemma 4 31B-it: dense 30.7B, hybrid attention (sliding window 1024 + global), head_size=512, 60 layers, vocab 262K"
 storage:

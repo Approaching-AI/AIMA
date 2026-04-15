@@ -4,6 +4,7 @@ metadata:
   type: vlm
   family: gemma
   parameter_count: "26B"
+  released_at: "2025-10"
   license: apache-2.0
   description: "Google DeepMind Gemma 4 26B A4B-it: MoE VLM, official BF16 safetensors, image/text input with text output"
 storage:

@@ -140,8 +140,12 @@ type ToolDeps struct {
 	OpenClawStatus func(ctx context.Context) (json.RawMessage, error)
 	OpenClawClaim  func(ctx context.Context, sections []string, dryRun bool) (json.RawMessage, error)
 
-	// Onboarding wizard
-	RecommendModels func(ctx context.Context) (json.RawMessage, error)
+	// Onboarding wizard (multi-action)
+	OnboardingStatus    func(ctx context.Context) (json.RawMessage, error)
+	OnboardingScan      func(ctx context.Context) (json.RawMessage, error)
+	OnboardingRecommend func(ctx context.Context, locale string) (json.RawMessage, error)
+	OnboardingInit      func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error)
+	OnboardingDeploy    func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error)
 
 	// Scenario
 	ScenarioList  func(ctx context.Context) (json.RawMessage, error)

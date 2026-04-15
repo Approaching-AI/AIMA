@@ -21,6 +21,7 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/model"
+	"github.com/jguan/aima/internal/onboarding"
 	"github.com/jguan/aima/internal/openclaw"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
@@ -1350,6 +1351,57 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 	buildDeployDeps(ac, deps, pullModelCore, deployRunCore)
 	buildKnowledgeDeps(ac, deps)
 	buildBenchmarkDeps(ac, deps, resolveEndpoint)
+
+	// Onboarding (multi-action MCP tool). The 5 closures below wrap the
+	// internal/onboarding package entry points; scan/init/deploy collect
+	// Event slices into the response JSON so MCP callers receive the full
+	// progress log in a single request-response cycle.
+	deps.OnboardingStatus = func(ctx context.Context) (json.RawMessage, error) {
+		obDeps := buildOnboardingDepsStruct(ac, deps)
+		result, err := onboarding.BuildStatus(ctx, obDeps)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OnboardingScan = func(ctx context.Context) (json.RawMessage, error) {
+		obDeps := buildOnboardingDepsStruct(ac, deps)
+		result, events, err := onboarding.RunScan(ctx, obDeps)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"result": result, "events": events})
+	}
+	deps.OnboardingRecommend = func(ctx context.Context, locale string) (json.RawMessage, error) {
+		obDeps := buildOnboardingDepsStruct(ac, deps)
+		if locale == "" {
+			locale = "en"
+		}
+		result, err := onboarding.Recommend(ctx, obDeps, locale)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OnboardingInit = func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error) {
+		obDeps := buildOnboardingDepsStruct(ac, deps)
+		if tier == "" {
+			tier = "auto"
+		}
+		result, events, err := onboarding.RunInit(ctx, obDeps, tier, allowDownload)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"result": result, "events": events})
+	}
+	deps.OnboardingDeploy = func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		obDeps := buildOnboardingDepsStruct(ac, deps)
+		result, events, err := onboarding.RunDeploy(ctx, obDeps, model, engineType, slot, configOverrides, noPull)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"result": result, "events": events})
+	}
 
 	return deps
 }

@@ -162,4 +162,5 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	registerScenarioTools(s, deps)
 	registerOpenClawTools(s, deps)
 	registerStackTools(s, deps)
+	registerOnboardingTools(s, deps)
 }

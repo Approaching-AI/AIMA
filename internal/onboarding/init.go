@@ -71,7 +71,12 @@ func RunInit(ctx context.Context, deps *Deps, tier string, allowDownload bool, s
 		return result, events, nil
 	}
 	if !stackStatus.CanAutoInit {
-		return InitResult{StackStatus: stackStatus}, events, fmt.Errorf("%s", stackStatus.InitBlockedReason)
+		reason := strings.TrimSpace(stackStatus.InitBlockedReason)
+		if reason == "" {
+			reason = fmt.Sprintf("stack init not supported on this platform (tier=%s, docker=%s, k3s=%s)",
+				NormalizeInitTier(tier), stackStatus.Docker, stackStatus.K3S)
+		}
+		return InitResult{StackStatus: stackStatus}, events, fmt.Errorf("stack init blocked: %s", reason)
 	}
 	if td.StackPreflight == nil || td.StackInit == nil {
 		return InitResult{StackStatus: stackStatus}, events, fmt.Errorf("stack init is not available")

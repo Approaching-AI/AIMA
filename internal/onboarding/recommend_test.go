@@ -9,19 +9,37 @@ import (
 )
 
 func TestComputeFitScore(t *testing.T) {
+	llmAsset := &knowledge.ModelAsset{}
+	llmAsset.Metadata.Name = "qwen3-8b"
+	llmAsset.Metadata.Type = "llm"
+	llmAsset.Metadata.ParameterCount = "8B"
+
+	llmBigAsset := &knowledge.ModelAsset{}
+	llmBigAsset.Metadata.Name = "qwen3-30b-a3b"
+	llmBigAsset.Metadata.Type = "llm"
+	llmBigAsset.Metadata.ParameterCount = "30B-A3B"
+
+	asrAsset := &knowledge.ModelAsset{}
+	asrAsset.Metadata.Name = "qwen3-asr-1.7b"
+	asrAsset.Metadata.Type = "asr"
+	asrAsset.Metadata.ParameterCount = "1.7B"
+
 	tests := []struct {
 		name           string
+		ma             *knowledge.ModelAsset
 		hw             knowledge.HardwareInfo
 		variant        *knowledge.ModelVariant
 		fit            *knowledge.FitReport
 		engineStatus   RecommendedEngineStatus
 		modelAvailable bool
 		goldenExists   bool
+		maxFitBillion  float64
 		wantMin        int
 		wantMax        int
 	}{
 		{
 			name: "exact arch + golden + local engine = high score",
+			ma:   llmBigAsset,
 			hw: knowledge.HardwareInfo{
 				GPUArch:    "Ada",
 				GPUVRAMMiB: 24576,
@@ -41,11 +59,36 @@ func TestComputeFitScore(t *testing.T) {
 			engineStatus:   RecommendedEngineStatus{Installed: true},
 			modelAvailable: true,
 			goldenExists:   true,
-			wantMin:        80,
-			wantMax:        100,
+			maxFitBillion:  30,
+			wantMin:        700,
+			wantMax:        1100,
+		},
+		{
+			name: "LLM ranks above ASR with same hardware fit",
+			ma:   llmAsset,
+			hw: knowledge.HardwareInfo{
+				GPUArch:    "Ada",
+				GPUVRAMMiB: 24576,
+				GPUCount:   1,
+			},
+			variant: &knowledge.ModelVariant{
+				Hardware: knowledge.ModelVariantHardware{
+					GPUArch:     "Ada",
+					VRAMMinMiB:  8000,
+					GPUCountMin: 1,
+				},
+			},
+			fit: &knowledge.FitReport{
+				Fit:         true,
+				Adjustments: make(map[string]any),
+			},
+			maxFitBillion: 30,
+			wantMin:       300,
+			wantMax:       500,
 		},
 		{
 			name: "multi-GPU requirement lowers score",
+			ma:   llmAsset,
 			hw: knowledge.HardwareInfo{
 				GPUArch:    "Ada",
 				GPUVRAMMiB: 24576,
@@ -62,14 +105,13 @@ func TestComputeFitScore(t *testing.T) {
 				Fit:         true,
 				Adjustments: make(map[string]any),
 			},
-			engineStatus:   RecommendedEngineStatus{Installed: false},
-			modelAvailable: false,
-			goldenExists:   false,
-			wantMin:        50,
-			wantMax:        70,
+			maxFitBillion: 30,
+			wantMin:       250,
+			wantMax:       450,
 		},
 		{
 			name: "no performance data still scores non-zero",
+			ma:   asrAsset,
 			hw: knowledge.HardwareInfo{
 				GPUArch:    "CUDA",
 				GPUVRAMMiB: 8192,
@@ -86,14 +128,13 @@ func TestComputeFitScore(t *testing.T) {
 				Fit:         true,
 				Adjustments: make(map[string]any),
 			},
-			engineStatus:   RecommendedEngineStatus{Installed: false},
-			modelAvailable: false,
-			goldenExists:   false,
-			wantMin:        50,
-			wantMax:        80,
+			maxFitBillion: 30,
+			wantMin:       150,
+			wantMax:       350,
 		},
 		{
 			name: "fit=false returns zero",
+			ma:   llmAsset,
 			hw: knowledge.HardwareInfo{
 				GPUArch:    "Ada",
 				GPUVRAMMiB: 4096,
@@ -114,6 +155,7 @@ func TestComputeFitScore(t *testing.T) {
 			engineStatus:   RecommendedEngineStatus{Installed: false},
 			modelAvailable: false,
 			goldenExists:   false,
+			maxFitBillion:  30,
 			wantMin:        0,
 			wantMax:        0,
 		},
@@ -121,7 +163,7 @@ func TestComputeFitScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := computeFitScore(tt.hw, tt.variant, tt.fit, tt.engineStatus, tt.modelAvailable, tt.goldenExists)
+			score := computeFitScore(tt.ma, tt.hw, tt.variant, tt.fit, tt.engineStatus, tt.modelAvailable, tt.goldenExists, tt.maxFitBillion)
 			if score < tt.wantMin || score > tt.wantMax {
 				t.Errorf("computeFitScore() = %d, want [%d, %d]", score, tt.wantMin, tt.wantMax)
 			}

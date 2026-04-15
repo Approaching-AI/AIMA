@@ -150,6 +150,7 @@ type ModelRecommendation struct {
 	Family       string `json:"family"`
 	ParamCount   string `json:"parameter_count"`
 	ActiveParams string `json:"active_params,omitempty"`
+	ReleasedAt   string `json:"released_at,omitempty"`
 
 	Variant *RecommendedVariant `json:"variant,omitempty"`
 	Engine  *RecommendedEngine  `json:"engine,omitempty"`

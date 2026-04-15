@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/knowledge"
@@ -45,21 +47,62 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	installedEngines := buildInstalledEngineMap(ctx, db)
 	localModels := buildLocalModelMap(ctx, db)
 
-	// Step 4: Iterate all catalog model assets and build recommendations
+	// Step 4a: First pass — compute the largest model (by parameter count, in
+	// billions) that actually fits this hardware. The number anchors the
+	// "largest fittable" bonus in the second pass so the wizard prefers a
+	// model that uses the box's capacity instead of always picking the
+	// smallest one. A box with two RTX 4090s (49 GB total) will end up with
+	// a maxFit of ~120B for MoE variants, ~30B for dense ones — that becomes
+	// the reference scale for everyone else.
+	maxFitBillion := 0.0
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		_, variant, _, err := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
+		if err != nil || variant == nil {
+			continue
+		}
+		engineAsset := cat.FindEngineByName(variant.Engine, hwInfo)
+		resolved := buildMinimalResolvedConfig(variant, engineAsset, hwInfo)
+		fit := knowledge.CheckFit(resolved, hwInfo)
+		if !fit.Fit {
+			continue
+		}
+		if b := parseParamBillion(ma.Metadata.ParameterCount); b > maxFitBillion {
+			maxFitBillion = b
+		}
+	}
+
+	// Step 4b: Second pass — evaluate every model with the new spread-wide
+	// scoring formula (modality bonus, recency bonus, largest-fittable bonus).
 	var recs []ModelRecommendation
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
 
-		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, localModels, locale)
+		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, localModels, locale, maxFitBillion)
 		if !ok {
 			continue
 		}
 		recs = append(recs, rec)
 	}
 
-	// Step 5: Sort by fit_score descending
+	// Step 5: Sort by fit_score desc, then param size desc (largest first
+	// when scores tie), then released_at desc (newer wins next), then name
+	// asc (stable). The chained tiebreakers eliminate the random-map ordering
+	// that UAT users complained about ("the list reorders every refresh").
 	sort.Slice(recs, func(i, j int) bool {
-		return recs[i].FitScore > recs[j].FitScore
+		a, b := recs[i], recs[j]
+		if a.FitScore != b.FitScore {
+			return a.FitScore > b.FitScore
+		}
+		ap, bp := parseParamBillion(a.ParamCount), parseParamBillion(b.ParamCount)
+		if ap != bp {
+			return ap > bp
+		}
+		ad, bd := parseReleasedAt(a.ReleasedAt), parseReleasedAt(b.ReleasedAt)
+		if !ad.Equal(bd) {
+			return ad.After(bd)
+		}
+		return a.ModelName < b.ModelName
 	})
 
 	// Step 6: Return top 20
@@ -90,6 +133,7 @@ func evaluateModelAsset(
 	installedEngines map[string]*state.Engine,
 	localModels map[string]*state.Model,
 	locale string,
+	maxFitBillion float64,
 ) (ModelRecommendation, bool) {
 	modelName := ma.Metadata.Name
 
@@ -127,7 +171,7 @@ func evaluateModelAsset(
 		}
 	}
 
-	score := computeFitScore(hwInfo, variant, fit, engineStatus, modelAvailable, goldenExists)
+	score := computeFitScore(ma, hwInfo, variant, fit, engineStatus, modelAvailable, goldenExists, maxFitBillion)
 
 	reason := buildRecommendationReason(ma, variant, engineType, fit, perf, hwInfo, locale)
 
@@ -159,6 +203,7 @@ func evaluateModelAsset(
 		Family:       ma.Metadata.Family,
 		ParamCount:   ma.Metadata.ParameterCount,
 		ActiveParams: activeParams,
+		ReleasedAt:   ma.Metadata.ReleasedAt,
 		Variant: &RecommendedVariant{
 			Name:           variant.Name,
 			Format:         variant.Format,
@@ -247,63 +292,186 @@ func buildMinimalResolvedConfig(variant *knowledge.ModelVariant, engine *knowled
 	return rc
 }
 
-// computeFitScore calculates a 0-100 score for how well a model fits the hardware.
+// computeFitScore returns an unbounded integer score so meaningful gaps are
+// preserved (the previous 0-100 clamp produced ten-way ties at 100). Higher
+// is better. Components:
+//
+//	+100 base for any model that fits
+//	+modality bonus (LLM dominates, then VLM/embedding/asr/tts)
+//	+local-asset bonuses (cached weights, installed engine, golden config)
+//	+hardware-match bonuses (arch, vram sweet-spot)
+//	+largest-fittable bonus (proportional to params/maxFit on this box)
+//	+recency bonus (newer release date wins)
+//	-multi-gpu penalty (per extra GPU required)
+//	-vram-oversubscribed penalty
 func computeFitScore(
+	ma *knowledge.ModelAsset,
 	hw knowledge.HardwareInfo,
 	variant *knowledge.ModelVariant,
 	fit *knowledge.FitReport,
 	engineStatus RecommendedEngineStatus,
 	modelAvailable bool,
 	goldenExists bool,
+	maxFitBillion float64,
 ) int {
 	if !fit.Fit {
 		return 0
 	}
 
-	score := 50 // Base: hardware matches
+	score := 100 // Base: hardware fits
+
+	score += modalityWeight(ma.Metadata.Type)
+
+	if modelAvailable {
+		score += 200
+	}
+	if engineStatus.Installed {
+		score += 100
+	}
+	if goldenExists {
+		score += 80
+	}
 
 	if variant.Hardware.GPUArch == hw.GPUArch {
-		score += 20
-	}
-
-	if goldenExists {
-		score += 10
-	}
-
-	// Locally available assets dominate sort order. UAT showed deploying a
-	// recommended model that needed a 16 GB download was a poor first-run
-	// experience when several smaller, cached models existed. Boost both
-	// model and engine presence aggressively so the wizard's top picks are
-	// "deployable in seconds" rather than "deployable in an hour".
-	if modelAvailable {
-		score += 30
-	}
-
-	if engineStatus.Installed {
-		score += 15
-	}
-
-	if variant.Hardware.GPUCountMin > 1 {
-		score -= 10
+		score += 60
 	}
 
 	if hw.GPUVRAMMiB > 0 && variant.Hardware.VRAMMinMiB > 0 {
 		utilization := float64(variant.Hardware.VRAMMinMiB) / float64(hw.GPUVRAMMiB) * 100
-		if utilization >= 60 && utilization <= 85 {
-			score += 10
-		} else if utilization > 95 {
-			score -= 5
+		switch {
+		case utilization <= 50:
+			score += 20
+		case utilization <= 85:
+			score += 50
+		case utilization <= 95:
+			score += 30
+		default:
+			score -= 50
 		}
+	}
+
+	score += largestFittableBonus(ma, maxFitBillion)
+	score += recencyBonus(ma.Metadata.ReleasedAt)
+
+	if variant.Hardware.GPUCountMin > 1 {
+		score -= 30 * (variant.Hardware.GPUCountMin - 1)
 	}
 
 	if score < 0 {
 		score = 0
 	}
-	if score > 100 {
-		score = 100
-	}
-
 	return score
+}
+
+// modalityWeight implements the "LLM first" rule by giving each modality
+// a different additive bonus. LLM dominates because that is the default
+// answer for a fresh edge box; the other modalities still receive points
+// so they can surface when no LLM fits.
+func modalityWeight(modelType string) int {
+	switch strings.ToLower(strings.TrimSpace(modelType)) {
+	case "llm":
+		return 200
+	case "vlm":
+		return 150
+	case "embedding", "rerank":
+		return 90
+	case "asr", "tts":
+		return 60
+	case "image", "video", "t2i", "t2v", "i2v":
+		return 70
+	default:
+		return 40
+	}
+}
+
+// largestFittableBonus rewards the largest model that still fits the box.
+// Bonus scales linearly with params/maxFit, capped at +120. A 30B model
+// on a box whose maxFit is 30B gets the full +120; a 4B model on the same
+// box gets +16. Falls back to 0 when params are unparseable.
+func largestFittableBonus(ma *knowledge.ModelAsset, maxFitBillion float64) int {
+	if maxFitBillion <= 0 {
+		return 0
+	}
+	b := parseParamBillion(ma.Metadata.ParameterCount)
+	if b <= 0 {
+		return 0
+	}
+	ratio := b / maxFitBillion
+	if ratio > 1 {
+		ratio = 1
+	}
+	return int(ratio * 120)
+}
+
+// recencyBonus rewards newer models. A model released this month gets the
+// full +100; the bonus drops by ~3 points per month and reaches 0 around
+// 33 months. Models without released_at metadata get no bonus (and no
+// penalty) so the catalog can be backfilled incrementally without
+// destabilizing rankings.
+func recencyBonus(releasedAt string) int {
+	t := parseReleasedAt(releasedAt)
+	if t.IsZero() {
+		return 0
+	}
+	months := int(time.Since(t).Hours() / 24 / 30)
+	if months < 0 {
+		months = 0
+	}
+	bonus := 100 - months*3
+	if bonus < 0 {
+		bonus = 0
+	}
+	return bonus
+}
+
+// parseParamBillion turns a free-form parameter_count string ("8B", "1.7B",
+// "220M", "30B-A3B" for MoE) into a count in billions. Returns 0 if the
+// value is unparseable so callers can branch on "missing".
+func parseParamBillion(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	// MoE annotations like "30B-A3B" or "122B-A10B" — keep the leading
+	// total-params number, drop the active-params suffix.
+	if idx := strings.Index(strings.ToUpper(s), "-A"); idx > 0 {
+		s = s[:idx]
+	}
+	upper := strings.ToUpper(s)
+	multiplier := 1.0
+	switch {
+	case strings.HasSuffix(upper, "B"):
+		multiplier = 1.0
+		s = upper[:len(upper)-1]
+	case strings.HasSuffix(upper, "M"):
+		multiplier = 0.001
+		s = upper[:len(upper)-1]
+	case strings.HasSuffix(upper, "T"):
+		multiplier = 1000
+		s = upper[:len(upper)-1]
+	default:
+		return 0
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0
+	}
+	return v * multiplier
+}
+
+// parseReleasedAt accepts YYYY-MM, YYYY-MM-DD, or YYYY. Returns zero time
+// when unparseable so the recency bonus degrades gracefully.
+func parseReleasedAt(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02", "2006-01", "2006"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // checkEngineStatus checks whether an engine is installed locally.

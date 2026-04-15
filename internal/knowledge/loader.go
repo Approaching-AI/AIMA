@@ -326,6 +326,10 @@ type ModelMetadata struct {
 	Type           string `yaml:"type"`
 	Family         string `yaml:"family"`
 	ParameterCount string `yaml:"parameter_count"`
+	// ReleasedAt is the model's public release date in YYYY-MM or YYYY-MM-DD
+	// form. Optional; when populated it feeds the onboarding recommend recency
+	// bonus so newer models float to the top of the wizard's first-run list.
+	ReleasedAt string `yaml:"released_at,omitempty"`
 }
 
 type OpenClawHints struct {

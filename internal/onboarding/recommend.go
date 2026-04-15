@@ -13,10 +13,9 @@ import (
 
 // Recommend iterates all catalog model assets, matches them against detected
 // hardware, and returns ranked recommendations with full metadata suitable for
-// onboarding UI cards. The locale parameter is reserved for a future i18n pass
-// (Step 5) and is currently ignored — all strings are English.
+// onboarding UI cards. The locale parameter ("zh", "en", ...) controls the
+// language of user-facing reason strings. Unknown locales fall back to English.
 func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult, error) {
-	_ = locale // reserved for Step 5 i18n
 	if deps == nil || deps.Cat == nil {
 		return RecommendResult{}, fmt.Errorf("catalog not loaded")
 	}
@@ -51,7 +50,7 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
 
-		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, localModels)
+		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, localModels, locale)
 		if !ok {
 			continue
 		}
@@ -90,6 +89,7 @@ func evaluateModelAsset(
 	hwProfile string,
 	installedEngines map[string]*state.Engine,
 	localModels map[string]*state.Model,
+	locale string,
 ) (ModelRecommendation, bool) {
 	modelName := ma.Metadata.Name
 
@@ -129,7 +129,7 @@ func evaluateModelAsset(
 
 	score := computeFitScore(hwInfo, variant, fit, engineStatus, modelAvailable, goldenExists)
 
-	reason := buildRecommendationReason(ma, variant, engineType, fit, perf, hwInfo)
+	reason := buildRecommendationReason(ma, variant, engineType, fit, perf, hwInfo, locale)
 
 	dlSource, dlRepo := extractDownloadSource(ma, variant)
 
@@ -424,7 +424,52 @@ func performanceSource(perf knowledge.ExpectedPerf) string {
 	return "unknown"
 }
 
+// reasonMessages is the i18n table for user-facing recommendation reasons.
+// Keys are stable identifiers; values are format strings (Printf-style) or
+// plain text. Unknown locales fall back to English.
+var reasonMessages = map[string]map[string]string{
+	"en": {
+		"moe_active":        "MoE architecture, only %s active params",
+		"single_gpu":        "fits in single GPU",
+		"multi_gpu":         "requires %d GPUs",
+		"vram_light":        "lightweight VRAM usage",
+		"vram_good":         "good VRAM utilization",
+		"vram_tight":        "tight VRAM fit",
+		"tps_expected":      "~%.0f tok/s expected",
+		"may_not_fit":       "may not fit: %s",
+		"generic_compat":    "compatible with %s via %s",
+	},
+	"zh": {
+		"moe_active":        "MoE 架构，仅 %s 激活参数",
+		"single_gpu":        "单卡即可运行",
+		"multi_gpu":         "需要 %d 张 GPU",
+		"vram_light":        "显存占用轻量",
+		"vram_good":         "显存利用率良好",
+		"vram_tight":        "显存紧张",
+		"tps_expected":      "预计 ~%.0f tok/s",
+		"may_not_fit":       "可能无法运行：%s",
+		"generic_compat":    "兼容 %s，引擎 %s",
+	},
+}
+
+// tr looks up a localized message by key. Falls back to English if the
+// locale or key is unknown. Returns the key itself as a last resort so
+// missing translations are visible rather than silent.
+func tr(locale, key string) string {
+	if m, ok := reasonMessages[locale]; ok {
+		if v, ok := m[key]; ok {
+			return v
+		}
+	}
+	if v, ok := reasonMessages["en"][key]; ok {
+		return v
+	}
+	return key
+}
+
 // buildRecommendationReason generates a human-readable recommendation reason.
+// The locale parameter selects the language of the reason strings; unknown
+// locales fall back to English.
 func buildRecommendationReason(
 	ma *knowledge.ModelAsset,
 	variant *knowledge.ModelVariant,
@@ -432,41 +477,42 @@ func buildRecommendationReason(
 	fit *knowledge.FitReport,
 	perf knowledge.ExpectedPerf,
 	hw knowledge.HardwareInfo,
+	locale string,
 ) string {
 	var parts []string
 
 	activeParams := extractActiveParams(ma)
 	if activeParams != "" {
-		parts = append(parts, fmt.Sprintf("MoE architecture, only %s active params", activeParams))
+		parts = append(parts, fmt.Sprintf(tr(locale, "moe_active"), activeParams))
 	}
 
 	if variant.Hardware.GPUCountMin <= 1 {
-		parts = append(parts, "fits in single GPU")
+		parts = append(parts, tr(locale, "single_gpu"))
 	} else {
-		parts = append(parts, fmt.Sprintf("requires %d GPUs", variant.Hardware.GPUCountMin))
+		parts = append(parts, fmt.Sprintf(tr(locale, "multi_gpu"), variant.Hardware.GPUCountMin))
 	}
 
 	if hw.GPUVRAMMiB > 0 && variant.Hardware.VRAMMinMiB > 0 {
 		util := float64(variant.Hardware.VRAMMinMiB) / float64(hw.GPUVRAMMiB) * 100
 		if util <= 50 {
-			parts = append(parts, "lightweight VRAM usage")
+			parts = append(parts, tr(locale, "vram_light"))
 		} else if util <= 85 {
-			parts = append(parts, "good VRAM utilization")
+			parts = append(parts, tr(locale, "vram_good"))
 		} else {
-			parts = append(parts, "tight VRAM fit")
+			parts = append(parts, tr(locale, "vram_tight"))
 		}
 	}
 
 	if perf.TokensPerSecond[1] > 0 {
-		parts = append(parts, fmt.Sprintf("~%.0f tok/s expected", perf.TokensPerSecond[1]))
+		parts = append(parts, fmt.Sprintf(tr(locale, "tps_expected"), perf.TokensPerSecond[1]))
 	}
 
 	if !fit.Fit {
-		parts = append(parts, "may not fit: "+fit.Reason)
+		parts = append(parts, fmt.Sprintf(tr(locale, "may_not_fit"), fit.Reason))
 	}
 
 	if len(parts) == 0 {
-		return fmt.Sprintf("compatible with %s via %s", hw.GPUArch, engineType)
+		return fmt.Sprintf(tr(locale, "generic_compat"), hw.GPUArch, engineType)
 	}
 	return strings.Join(parts, ", ")
 }

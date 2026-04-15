@@ -347,6 +347,9 @@ func run() error {
 
 		// Onboarding wizard API endpoints
 		mux.HandleFunc("GET /ui/api/onboarding-status", func(w http.ResponseWriter, r *http.Request) {
+			if !requireOnboardingRead(ac, w, r) {
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-cache")
 			data, err := buildOnboardingStatusJSON(r.Context(), ac, deps)

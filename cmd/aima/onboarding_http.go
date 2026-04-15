@@ -27,6 +27,24 @@ func requireOnboardingMutation(ac *appContext, w http.ResponseWriter, r *http.Re
 	return true
 }
 
+// requireOnboardingRead gates GET endpoints that expose hardware/stack state.
+// It enforces same-origin + optional bearer auth but skips the JSON
+// content-type check (GET requests carry no body). This prevents cross-origin
+// reads (e.g. <img src> probes) from leaking hardware fingerprints.
+func requireOnboardingRead(ac *appContext, w http.ResponseWriter, r *http.Request) bool {
+	if !sameOriginOnboardingRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	if ac != nil && ac.proxy != nil {
+		if key := strings.TrimSpace(ac.proxy.APIKey()); key != "" && !proxy.CheckBearerAuth(r.Header.Get("Authorization"), key) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return false
+		}
+	}
+	return true
+}
+
 func sameOriginOnboardingRequest(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {

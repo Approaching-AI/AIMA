@@ -198,12 +198,18 @@ func defaultOnboardingInitCapability(deps *mcp.ToolDeps) (bool, string) {
 
 // buildVersion checks the current version against the latest GitHub release.
 // Failures are silent; the response will contain only the current version.
+//
+// INV-8 (Offline-first): outbound HTTP to GitHub is OFF by default. Callers
+// must opt in via SQLite config key `version.check_upstream=true`. Local
+// SQLite cache reads always work (no network), so a previously-cached result
+// is still surfaced even when outbound fetch is disabled.
 func buildVersion(ctx context.Context, deps *mcp.ToolDeps) VersionInfo {
 	result := VersionInfo{
 		Current: buildinfo.Version,
 	}
 
-	// Try to load cached version check
+	// Try to load cached version check (always allowed — reading local SQLite
+	// is not network traffic).
 	if deps != nil && deps.GetConfig != nil {
 		cached, ok := loadVersionCheckCache(ctx, deps)
 		if ok {
@@ -213,6 +219,11 @@ func buildVersion(ctx context.Context, deps *mcp.ToolDeps) VersionInfo {
 			result.UpgradeAvailable = isNewerVersion(result.Current, result.Latest)
 			return result
 		}
+	}
+
+	// INV-8 gate: only fetch from GitHub when explicitly opted-in.
+	if !versionCheckUpstreamEnabled(ctx, deps) {
+		return result
 	}
 
 	// Fetch from GitHub
@@ -250,6 +261,24 @@ func BuildVersion(ctx context.Context, deps *Deps) VersionInfo {
 		return buildVersion(ctx, nil)
 	}
 	return buildVersion(ctx, deps.ToolDeps)
+}
+
+// versionCheckUpstreamEnabled returns true only if the caller explicitly
+// opted in to outbound version checks via SQLite config. Default: false
+// (INV-8 offline-first).
+func versionCheckUpstreamEnabled(ctx context.Context, deps *mcp.ToolDeps) bool {
+	if deps == nil || deps.GetConfig == nil {
+		return false
+	}
+	val, err := deps.GetConfig(ctx, "version.check_upstream")
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // loadVersionCheckCache returns the cached version check if it exists and is still valid.

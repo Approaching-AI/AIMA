@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -125,6 +126,56 @@ func TestComputeFitScore(t *testing.T) {
 				t.Errorf("computeFitScore() = %d, want [%d, %d]", score, tt.wantMin, tt.wantMax)
 			}
 		})
+	}
+}
+
+func TestBuildRecommendationReason_Localization(t *testing.T) {
+	ma := &knowledge.ModelAsset{}
+	ma.Metadata.Name = "qwen3-8b"
+	variant := &knowledge.ModelVariant{
+		Hardware: knowledge.ModelVariantHardware{
+			GPUArch:     "Ada",
+			VRAMMinMiB:  8000,
+			GPUCountMin: 1,
+		},
+	}
+	fit := &knowledge.FitReport{Fit: true}
+	perf := knowledge.ExpectedPerf{TokensPerSecond: [2]float64{40, 60}}
+	hw := knowledge.HardwareInfo{
+		GPUArch:    "Ada",
+		GPUVRAMMiB: 24576,
+	}
+
+	en := buildRecommendationReason(ma, variant, "vllm", fit, perf, hw, "en")
+	zh := buildRecommendationReason(ma, variant, "vllm", fit, perf, hw, "zh")
+	fr := buildRecommendationReason(ma, variant, "vllm", fit, perf, hw, "fr")
+
+	if en == "" || zh == "" || fr == "" {
+		t.Fatalf("unexpected empty reason: en=%q zh=%q fr=%q", en, zh, fr)
+	}
+	if en == zh {
+		t.Errorf("expected en and zh to differ, both = %q", en)
+	}
+	if fr != en {
+		t.Errorf("expected unknown locale to fall back to English, got fr=%q en=%q", fr, en)
+	}
+	if !strings.Contains(en, "fits in single GPU") {
+		t.Errorf("expected English reason to contain 'fits in single GPU', got %q", en)
+	}
+	if !strings.Contains(zh, "单卡") {
+		t.Errorf("expected Chinese reason to contain '单卡', got %q", zh)
+	}
+}
+
+func TestTr_FallbackChain(t *testing.T) {
+	if got := tr("zh", "single_gpu"); got != "单卡即可运行" {
+		t.Errorf("tr(zh, single_gpu) = %q, want 单卡即可运行", got)
+	}
+	if got := tr("unknown", "single_gpu"); got != "fits in single GPU" {
+		t.Errorf("tr(unknown, single_gpu) = %q, want English fallback", got)
+	}
+	if got := tr("en", "no_such_key"); got != "no_such_key" {
+		t.Errorf("tr(en, no_such_key) = %q, want key as last-resort", got)
 	}
 }
 

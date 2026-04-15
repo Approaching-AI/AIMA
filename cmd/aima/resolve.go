@@ -205,7 +205,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	// Also trigger synthetic rebuild when the model exists in catalog but has
 	// no variant for the requested engine — Explorer needs this to discover
 	// working configs for engine+model combos not yet cataloged.
-	if !rebuildSynthetic && strings.Contains(err.Error(), "no variant of model") {
+	if !rebuildSynthetic && strings.Contains(err.Error(), "no variant of model") && !cat.HasCatalogModel(modelName) {
 		rebuildSynthetic = true
 	}
 	if !rebuildSynthetic && cat.HasSyntheticModel(modelName) {

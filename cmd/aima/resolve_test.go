@@ -161,6 +161,83 @@ func TestResolveWithFallbackDoesNotRebuildUnsupportedCatalogVariant(t *testing.T
 	}
 }
 
+func TestResolveWithFallbackDoesNotSynthesizeWhenCatalogModelLacksRequestedEngine(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.InsertModel(ctx, &state.Model{
+		ID:         "model-catalog-only",
+		Name:       "catalog-only-model",
+		Type:       "llm",
+		Path:       "/models/catalog-only-model",
+		Format:     "safetensors",
+		SizeBytes:  16 * 1024 * 1024 * 1024,
+		Status:     "registered",
+		ModelClass: "dense",
+	}); err != nil {
+		t.Fatalf("InsertModel: %v", err)
+	}
+
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{
+			{
+				Metadata: knowledge.EngineMetadata{
+					Name:             "vllm-nightly-blackwell",
+					Type:             "vllm-nightly",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Image:    knowledge.EngineImage{Name: "vllm/vllm-openai", Tag: "qwen3_5-cu130", Platforms: []string{"linux/arm64"}},
+				Hardware: knowledge.EngineHardware{GPUArch: "Blackwell"},
+				Runtime:  knowledge.EngineRuntime{Default: "container"},
+			},
+			{
+				Metadata: knowledge.EngineMetadata{
+					Name:             "vllm-blackwell",
+					Type:             "vllm",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Image:    knowledge.EngineImage{Name: "vllm/vllm-openai", Tag: "v0.19.0-aarch64-cu130", Platforms: []string{"linux/arm64"}},
+				Hardware: knowledge.EngineHardware{GPUArch: "Blackwell"},
+				Runtime:  knowledge.EngineRuntime{Default: "container"},
+			},
+		},
+		ModelAssets: []knowledge.ModelAsset{
+			{
+				Metadata: knowledge.ModelMetadata{Name: "catalog-only-model", Type: "llm"},
+				Variants: []knowledge.ModelVariant{
+					{
+						Name:   "catalog-only-model-nightly",
+						Engine: "vllm-nightly",
+						Format: "safetensors",
+						Hardware: knowledge.ModelVariantHardware{
+							GPUArch: "Blackwell",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, _, err = resolveWithFallback(ctx, cat, db, knowledge.HardwareInfo{
+		GPUArch:    "Blackwell",
+		GPUVRAMMiB: 65536,
+		Platform:   "linux/arm64",
+	}, "catalog-only-model", "vllm", nil, "")
+	if err == nil {
+		t.Fatal("expected error for missing catalog variant")
+	}
+	if !strings.Contains(err.Error(), "no variant of model") {
+		t.Fatalf("error = %v, want missing variant error", err)
+	}
+	if cat.HasSyntheticModel("catalog-only-model") {
+		t.Fatal("catalog-backed model should not gain synthetic variants for a missing requested engine")
+	}
+}
+
 func TestEnsureResolvedEngineProbePathPrependsLocalBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 	binaryPath := filepath.Join(tmpDir, "sglang-kt")

@@ -1263,6 +1263,19 @@ func (c *Catalog) HasSyntheticModel(name string) bool {
 	return false
 }
 
+// HasCatalogModel reports whether the catalog contains a non-synthetic model
+// asset with the given name.
+func (c *Catalog) HasCatalogModel(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.ModelAssets {
+		if strings.EqualFold(c.ModelAssets[i].Metadata.Name, name) {
+			return !c.ModelAssets[i].synthetic
+		}
+	}
+	return false
+}
+
 // UpsertSyntheticModel stores a synthetic model asset, replacing an older
 // synthetic entry with the same name while leaving catalog-backed assets intact.
 func (c *Catalog) UpsertSyntheticModel(ma ModelAsset) {

@@ -15,27 +15,36 @@ import (
 	"github.com/hashicorp/mdns"
 )
 
-// mdnsLogFilter drops lines from hashicorp/mdns that correspond to malformed
-// packets emitted by other devices on the LAN (e.g. Windows/iOS bonjour quirks
-// around the DNS truncated bit). These are routine on shared networks and do
-// not indicate any problem with our advertiser.
+// mdnsLogFilter re-routes lines from hashicorp/mdns. It uses an allow-list of
+// known-noisy patterns caused by malformed packets from other LAN devices
+// (Windows/iOS Bonjour quirks around the DNS truncated bit) — those drop to
+// Debug. Anything NOT on the allow-list surfaces at Warn so a novel library
+// error isn't silently swallowed. The old deny-list masked every unknown
+// message at Debug, which defeated the point of having logs at all.
 type mdnsLogFilter struct{}
 
-var mdnsSuppressedSubstrings = [][]byte{
-	[]byte("Failed to handle query"),
-	[]byte("truncated bit"),
-	[]byte("Failed to unpack packet"),
+// mdnsKnownNoise is the allow-list of substrings that we have confirmed are
+// harmless LAN chatter. When expanding this, document the original message
+// and why it is safe to demote.
+var mdnsKnownNoise = [][]byte{
+	[]byte("Failed to handle query"),     // malformed query from another host
+	[]byte("truncated bit"),              // DNS TC flag quirks from iOS/Windows
+	[]byte("Failed to unpack packet"),    // corrupt LAN packets, not our problem
+	[]byte("mdns: Closing"),              // routine shutdown message
+	[]byte("mdns: Failed to send"),       // transient socket write errors on iface shutdown
 }
 
 func (mdnsLogFilter) Write(p []byte) (int, error) {
-	for _, needle := range mdnsSuppressedSubstrings {
+	line := strings.TrimRight(string(p), "\n")
+	for _, needle := range mdnsKnownNoise {
 		if bytes.Contains(p, needle) {
+			slog.Debug("mdns", "line", line)
 			return len(p), nil
 		}
 	}
-	// Forward anything else to slog at Debug — we don't want mdns chatter in
-	// normal logs, but keep it reachable for troubleshooting.
-	slog.Debug("mdns", "line", strings.TrimRight(string(p), "\n"))
+	// Unknown message → surface at Warn. If it turns out to be additional
+	// harmless noise, append the substring to mdnsKnownNoise.
+	slog.Warn("mdns: unexpected log line", "line", line)
 	return len(p), nil
 }
 

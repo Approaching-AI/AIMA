@@ -128,7 +128,7 @@ func meaningfulBenchmarkResult(summary map[string]any) bool {
 	if summary == nil {
 		return false
 	}
-	if tp := readFloatField(summary, "throughput_tps"); tp > 0 {
+	if primaryBenchmarkRate(summary) > 0 {
 		return true
 	}
 	if reqs := readFloatField(summary, "successful_requests"); reqs > 0 {

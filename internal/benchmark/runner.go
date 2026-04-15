@@ -584,6 +584,8 @@ func aggregateImageGenMetrics(samples []*Sample, totalDuration time.Duration, re
 	durationS := totalDuration.Seconds()
 	if durationS > 0 {
 		result.ImagesPerSec = float64(totalImages) / durationS
+		result.ThroughputTPS = result.ImagesPerSec
+		result.QPS = result.ImagesPerSec
 	}
 
 	result.AvgSteps = totalSteps / len(successSamples)

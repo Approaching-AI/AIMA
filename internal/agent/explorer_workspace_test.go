@@ -530,6 +530,33 @@ func TestWriteExperimentResult_NoOutputStatus(t *testing.T) {
 	}
 }
 
+func TestWriteExperimentResult_AllocatesUniqueOrdinal(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	task := TaskSpec{Kind: "validate", Model: "test-model", Engine: "vllm"}
+	result := ExperimentResult{Status: "completed"}
+
+	first, err := ws.WriteExperimentResult(1, task, result)
+	if err != nil {
+		t.Fatalf("first WriteExperimentResult: %v", err)
+	}
+	second, err := ws.WriteExperimentResult(1, task, result)
+	if err != nil {
+		t.Fatalf("second WriteExperimentResult: %v", err)
+	}
+	if first == second {
+		t.Fatalf("paths should differ, got %q", first)
+	}
+	if !strings.Contains(first, "001-test-model-vllm.md") {
+		t.Fatalf("first path = %q, want 001 ordinal", first)
+	}
+	if !strings.Contains(second, "002-test-model-vllm.md") {
+		t.Fatalf("second path = %q, want 002 ordinal", second)
+	}
+}
+
 func TestParsePlanFromWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	ws := NewExplorerWorkspace(dir)
@@ -647,6 +674,63 @@ func TestLoadExperimentRecordsRecoversMalformedResultYAML(t *testing.T) {
 	}
 	if !strings.Contains(ef, "invalid_record") {
 		t.Fatalf("experiment-facts.md = %q, want invalid_record row", ef)
+	}
+}
+
+func TestGenerateExperimentFacts_ClassifiesSignals(t *testing.T) {
+	dir := t.TempDir()
+	ws := NewExplorerWorkspace(dir)
+	_ = ws.Init()
+
+	if _, err := ws.WriteExperimentResult(1, TaskSpec{
+		Kind: "validate", Model: "ok-model", Engine: "vllm-nightly",
+	}, ExperimentResult{
+		Status:       "completed",
+		MatrixCells:  2,
+		SuccessCells: 2,
+		Benchmarks: []BenchmarkEntry{{
+			Concurrency:   1,
+			InputTokens:   128,
+			MaxTokens:     256,
+			ThroughputTPS: 110,
+			BenchmarkID:   "bench-ok",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteExperimentResult ok-model: %v", err)
+	}
+	if _, err := ws.WriteExperimentResult(2, TaskSpec{
+		Kind: "validate", Model: "no-output-model", Engine: "vllm-nightly",
+	}, ExperimentResult{
+		Status:       "failed",
+		Error:        "benchmark matrix: no successful cells (total=6)",
+		MatrixCells:  6,
+		SuccessCells: 0,
+		Benchmarks: []BenchmarkEntry{{
+			Concurrency: 1, InputTokens: 128, MaxTokens: 256, ThroughputTPS: 0,
+		}},
+	}); err != nil {
+		t.Fatalf("WriteExperimentResult no-output-model: %v", err)
+	}
+	if _, err := ws.WriteExperimentResult(3, TaskSpec{
+		Kind: "validate", Model: "deploy-fail-model", Engine: "sglang",
+	}, ExperimentResult{
+		Status: "failed",
+		Error:  "pre-flight deploy: wait for deployed endpoint deploy-fail-model: timeout waiting for inference endpoint",
+	}); err != nil {
+		t.Fatalf("WriteExperimentResult deploy-fail-model: %v", err)
+	}
+
+	if err := ws.RefreshFactDocuments(PlanInput{}); err != nil {
+		t.Fatalf("RefreshFactDocuments: %v", err)
+	}
+	ef, err := ws.ReadFile("experiment-facts.md")
+	if err != nil {
+		t.Fatalf("ReadFile experiment-facts.md: %v", err)
+	}
+	for _, want := range []string{"| Signal |", "benchmark_ok", "inference_no_output", "deploy_failed", "Best Rate"} {
+		if !strings.Contains(ef, want) {
+			t.Fatalf("experiment-facts.md missing %q: %s", want, ef)
+		}
 	}
 }
 

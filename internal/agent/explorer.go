@@ -2384,7 +2384,7 @@ func benchmarkEntriesFromMatrixJSON(matrixJSON string) []BenchmarkEntry {
 				Error:         cell.Error,
 			}
 			if cell.Result != nil {
-				entry.ThroughputTPS = readFloatField(cell.Result, "throughput_tps")
+				entry.ThroughputTPS = primaryBenchmarkRate(cell.Result)
 				entry.TTFTP95Ms = readFloatField(cell.Result, "ttft_p95_ms")
 				entry.TPOTP95Ms = readFloatField(cell.Result, "tpot_p95_ms")
 			}
@@ -2404,11 +2404,27 @@ func readFloatField(summary map[string]any, key string) float64 {
 	return 0
 }
 
+func primaryBenchmarkRate(summary map[string]any) float64 {
+	for _, key := range []string{
+		"throughput_tps",
+		"images_per_sec",
+		"reranks_per_sec",
+		"embeddings_per_sec",
+		"asr_throughput",
+		"qps",
+	} {
+		if value := readFloatField(summary, key); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 func readBenchmarkMetrics(summary map[string]any, result *HarvestResult) {
 	if result == nil {
 		return
 	}
-	if tp := readFloatField(summary, "throughput_tps"); tp > 0 {
+	if tp := primaryBenchmarkRate(summary); tp > 0 {
 		result.Throughput = tp
 	}
 	if ttft := readFloatField(summary, "ttft_p95_ms"); ttft > 0 {

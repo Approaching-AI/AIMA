@@ -1252,6 +1252,16 @@ func TestExplorerAgentPlanner_AnalyzeRejectsInvalidValidatedConfidence(t *testin
 			wantFeedback:    "",
 		},
 		{
+			name: "validated_with_zero_latency_but_matching_success_experiment",
+			summary: strings.ReplaceAll(validSummary,
+				"    latency_p50_ms: 35\n",
+				"    latency_p50_ms: 0\n"),
+			addExperiment:   true,
+			experimentModel: "test-model",
+			wantErr:         false,
+			wantFeedback:    "",
+		},
+		{
 			name:            "validated_without_benchmark_evidence",
 			summary:         invalidSummary,
 			addExperiment:   false,
@@ -1317,6 +1327,40 @@ func TestExplorerAgentPlanner_AnalyzeRejectsInvalidValidatedConfidence(t *testin
 				}
 			}
 		})
+	}
+}
+
+func TestExplorerAgentPlannerFilterTaskSpecs_RebalancesCoverage(t *testing.T) {
+	planner := &ExplorerAgentPlanner{maxTasks: 2}
+	input := PlanInput{
+		LocalModels: []LocalModel{
+			{Name: "qwen3-8b", Family: "qwen"},
+			{Name: "GLM-4.6V-Flash-FP4", Family: "glm"},
+		},
+		History: []ExplorationRun{
+			{ModelID: "qwen3-8b", EngineID: "vllm", Status: "failed"},
+		},
+		ComboFacts: []ComboFact{
+			{Model: "qwen3-8b", Engine: "vllm", Status: "ready"},
+			{Model: "qwen3-8b", Engine: "sglang", Status: "ready"},
+			{Model: "GLM-4.6V-Flash-FP4", Engine: "vllm-nightly", Status: "ready"},
+		},
+	}
+	tasks := []TaskSpec{
+		{Kind: "validate", Model: "qwen3-8b", Engine: "vllm"},
+		{Kind: "validate", Model: "qwen3-8b", Engine: "sglang"},
+		{Kind: "validate", Model: "GLM-4.6V-Flash-FP4", Engine: "vllm-nightly"},
+	}
+
+	filtered := planner.filterTaskSpecs(input, tasks)
+	if len(filtered) != 2 {
+		t.Fatalf("filtered len=%d, want 2", len(filtered))
+	}
+	if filtered[0].Model != "GLM-4.6V-Flash-FP4" {
+		t.Fatalf("first task model=%q, want unexplored GLM first", filtered[0].Model)
+	}
+	if filtered[1].Model != "qwen3-8b" {
+		t.Fatalf("second task model=%q, want qwen3-8b", filtered[1].Model)
 	}
 }
 

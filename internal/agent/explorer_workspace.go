@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -853,28 +854,57 @@ func (w *ExplorerWorkspace) generateExperimentFacts(now string) string {
 		fmt.Fprintf(&sb, "_No experiments yet._\n")
 		return sb.String()
 	}
-	fmt.Fprintf(&sb, "| Experiment | Model | Engine | Status | Benchmarks | Best TPS | Success Cells | Error |\n")
-	fmt.Fprintf(&sb, "|------------|-------|--------|--------|------------|----------|---------------|-------|\n")
+	fmt.Fprintf(&sb, "| Experiment | Model | Engine | Status | Signal | Benchmarks | Best Rate | Success Cells | Error |\n")
+	fmt.Fprintf(&sb, "|------------|-------|--------|--------|--------|------------|-----------|---------------|-------|\n")
 	for _, rec := range records {
-		bestTPS := 0.0
+		bestRate := 0.0
 		for _, bench := range rec.Result.Benchmarks {
-			if bench.ThroughputTPS > bestTPS {
-				bestTPS = bench.ThroughputTPS
+			if bench.ThroughputTPS > bestRate {
+				bestRate = bench.ThroughputTPS
 			}
 		}
 		errText := strings.TrimSpace(rec.Result.Error)
 		if errText == "" {
 			errText = "—"
 		}
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %d | %.1f | %d/%d | %s |\n",
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %d | %.1f | %d/%d | %s |\n",
 			filepath.Base(rec.Path), rec.Task.Model, rec.Task.Engine, rec.Result.Status,
-			len(rec.Result.Benchmarks), bestTPS, rec.Result.SuccessCells, rec.Result.MatrixCells, errText)
+			experimentSignal(rec), len(rec.Result.Benchmarks), bestRate, rec.Result.SuccessCells, rec.Result.MatrixCells, errText)
 	}
 	fmt.Fprintf(&sb, "\n## Hard Facts\n\n")
 	fmt.Fprintf(&sb, "- Treat this file as the machine-generated digest of experiments/*.md.\n")
 	fmt.Fprintf(&sb, "- If summary.md conflicts with this file, this file wins.\n")
+	fmt.Fprintf(&sb, "- `Signal=benchmark_ok` means the combo completed with usable benchmark evidence.\n")
+	fmt.Fprintf(&sb, "- `Signal=inference_no_output` means deploy reached benchmark execution but produced no usable outputs.\n")
 	fmt.Fprintf(&sb, "- A recommendation without a matching successful experiment in this file must stay provisional.\n")
 	return sb.String()
+}
+
+func experimentSignal(rec ExperimentRecord) string {
+	status := strings.ToLower(strings.TrimSpace(rec.Result.Status))
+	switch status {
+	case "invalid_record":
+		return "invalid_record"
+	case "completed":
+		if rec.Result.SuccessCells > 0 || rec.Result.BenchmarkID != "" || rec.Result.ConfigID != "" {
+			return "benchmark_ok"
+		}
+	}
+	if len(rec.Result.Benchmarks) > 0 && rec.Result.SuccessCells == 0 {
+		return "inference_no_output"
+	}
+	errText := strings.ToLower(strings.TrimSpace(rec.Result.Error))
+	switch {
+	case strings.Contains(errText, "pre-flight deploy"),
+		strings.Contains(errText, "wait for deployed"),
+		strings.Contains(errText, "deploy apply"),
+		strings.Contains(errText, "stalled at"):
+		return "deploy_failed"
+	case status != "":
+		return status
+	default:
+		return "unknown"
+	}
 }
 
 type coverageRow struct {
@@ -1100,6 +1130,10 @@ type BenchmarkEntry struct {
 // Uses writeFactDocument to bypass the read-only guard (experiments/ is AIMA-owned).
 // Returns the relative path written.
 func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, result ExperimentResult) (string, error) {
+	ordinal, err := w.allocateExperimentOrdinal(index)
+	if err != nil {
+		return "", err
+	}
 	taskYAML, err := yaml.Marshal(task)
 	if err != nil {
 		return "", fmt.Errorf("marshal task: %w", err)
@@ -1110,7 +1144,7 @@ func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, resu
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Experiment %03d: %s / %s\n\n", index, task.Model, task.Engine)
+	fmt.Fprintf(&sb, "# Experiment %03d: %s / %s\n\n", ordinal, task.Model, task.Engine)
 
 	fmt.Fprintf(&sb, "## Task\n\n```yaml\n%s```\n\n", string(taskYAML))
 	fmt.Fprintf(&sb, "## Result\n\n```yaml\n%s```\n\n", string(resultYAML))
@@ -1120,7 +1154,7 @@ func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, resu
 	if len(result.Benchmarks) == 0 {
 		fmt.Fprintf(&sb, "_No benchmark data_\n\n")
 	} else {
-		fmt.Fprintf(&sb, "| Profile | Concurrency | Input Tokens | Max Tokens | Throughput (TPS) | TTFT P95 (ms) | TPOT P95 (ms) | Status |\n")
+		fmt.Fprintf(&sb, "| Profile | Concurrency | Input Tokens | Max Tokens | Throughput | TTFT P95 (ms) | TPOT P95 (ms) | Status |\n")
 		fmt.Fprintf(&sb, "|---------|-------------|--------------|------------|------------------|---------------|---------------|--------|\n")
 		for _, b := range result.Benchmarks {
 			status := "ok"
@@ -1142,11 +1176,55 @@ func (w *ExplorerWorkspace) WriteExperimentResult(index int, task TaskSpec, resu
 
 	fmt.Fprintf(&sb, "## Agent Notes\n\n_To be filled by agent after analysis._\n")
 
-	rel := fmt.Sprintf("experiments/%03d-%s-%s.md", index, task.Model, task.Engine)
+	rel := fmt.Sprintf("experiments/%03d-%s-%s.md", ordinal, task.Model, task.Engine)
 	if err := w.writeFactDocument(rel, sb.String()); err != nil {
 		return "", err
 	}
 	return rel, nil
+}
+
+func (w *ExplorerWorkspace) allocateExperimentOrdinal(preferred int) (int, error) {
+	if preferred <= 0 {
+		preferred = 1
+	}
+	pattern, err := w.safePath("experiments/*.md")
+	if err != nil {
+		return 0, err
+	}
+	paths, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("glob experiments: %w", err)
+	}
+	maxOrdinal := 0
+	for _, path := range paths {
+		name := filepath.Base(path)
+		ordinal := leadingExperimentOrdinal(name)
+		if ordinal > maxOrdinal {
+			maxOrdinal = ordinal
+		}
+	}
+	if maxOrdinal >= preferred {
+		return maxOrdinal + 1, nil
+	}
+	return preferred, nil
+}
+
+func leadingExperimentOrdinal(name string) int {
+	if name == "" {
+		return 0
+	}
+	end := 0
+	for end < len(name) && name[end] >= '0' && name[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(name[:end])
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // ParsePlan reads plan.md and returns the task list.

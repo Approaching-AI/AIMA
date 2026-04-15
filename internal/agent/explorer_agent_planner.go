@@ -228,7 +228,7 @@ func (p *ExplorerAgentPlanner) filterTaskSpecs(input PlanInput, tasks []TaskSpec
 		task.EngineParams = sanitizeTaskEngineParams(task.Engine, task.EngineParams, allowedParams)
 		filtered = append(filtered, task)
 	}
-	return filtered
+	return rebalanceTaskSpecs(input, filtered, p.maxTasks)
 }
 
 func allowedEngineParams(engines []LocalEngine) map[string]map[string]struct{} {
@@ -278,8 +278,24 @@ func sanitizeTaskEngineParams(engine string, params map[string]any, allowedByEng
 	return sanitized
 }
 
-func hasBenchmarkEvidence(perf PerfSummary) bool {
-	return perf.ThroughputTPS > 0 && perf.LatencyP50Ms > 0
+func hasSummaryBenchmarkSignal(perf PerfSummary) bool {
+	return perf.ThroughputTPS > 0 || perf.LatencyP50Ms > 0
+}
+
+func hasMatchingExperimentEvidence(result ExperimentResult) bool {
+	completed := strings.EqualFold(strings.TrimSpace(result.Status), "completed")
+	if completed && (result.SuccessCells > 0 || result.BenchmarkID != "" || result.ConfigID != "") {
+		return true
+	}
+	for _, bench := range result.Benchmarks {
+		if bench.ThroughputTPS > 0 {
+			return true
+		}
+		if completed && (bench.BenchmarkID != "" || bench.ConfigID != "") {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *ExplorerAgentPlanner) validateRecommendationConfidence() error {
@@ -297,11 +313,8 @@ func (p *ExplorerAgentPlanner) validateRecommendationConfidence() error {
 	evidence := make(map[string]bool, len(records))
 	for _, rec := range records {
 		key := strings.ToLower(strings.TrimSpace(rec.Task.Model)) + "|" + strings.ToLower(strings.TrimSpace(rec.Task.Engine))
-		for _, bench := range rec.Result.Benchmarks {
-			if bench.ThroughputTPS > 0 {
-				evidence[key] = true
-				break
-			}
+		if hasMatchingExperimentEvidence(rec.Result) {
+			evidence[key] = true
 		}
 	}
 	for _, cfg := range configs {
@@ -310,14 +323,14 @@ func (p *ExplorerAgentPlanner) validateRecommendationConfidence() error {
 		case "", "provisional":
 			continue
 		case "tuned":
-			if !hasBenchmarkEvidence(cfg.Performance) {
+			if !hasSummaryBenchmarkSignal(cfg.Performance) {
 				return fmt.Errorf("summary recommendation %s/%s marked tuned without benchmark evidence", cfg.Model, cfg.Engine)
 			}
 			if len(records) > 0 && !evidence[key] {
 				return fmt.Errorf("summary recommendation %s/%s marked tuned without matching successful experiment", cfg.Model, cfg.Engine)
 			}
 		case "validated":
-			if !hasBenchmarkEvidence(cfg.Performance) {
+			if !hasSummaryBenchmarkSignal(cfg.Performance) {
 				return fmt.Errorf("summary recommendation %s/%s marked validated without benchmark evidence", cfg.Model, cfg.Engine)
 			}
 			if len(records) > 0 && !evidence[key] {
@@ -328,6 +341,95 @@ func (p *ExplorerAgentPlanner) validateRecommendationConfidence() error {
 		}
 	}
 	return nil
+}
+
+func rebalanceTaskSpecs(input PlanInput, tasks []TaskSpec, maxTasks int) []TaskSpec {
+	if len(tasks) <= 1 {
+		return tasks
+	}
+	recentModels := make(map[string]bool, len(input.History))
+	for _, h := range input.History {
+		model := strings.TrimSpace(h.ModelID)
+		if model != "" {
+			recentModels[model] = true
+		}
+	}
+	familyByModel := make(map[string]string, len(input.LocalModels))
+	for _, model := range input.LocalModels {
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			continue
+		}
+		family := strings.TrimSpace(model.Family)
+		if family == "" {
+			family = inferModelFamily(name)
+		}
+		familyByModel[name] = family
+	}
+
+	selected := make([]TaskSpec, 0, len(tasks))
+	used := make([]bool, len(tasks))
+	familyCounts := make(map[string]int, len(tasks))
+	appendTask := func(idx int) bool {
+		if idx < 0 || idx >= len(tasks) || used[idx] {
+			return false
+		}
+		used[idx] = true
+		selected = append(selected, tasks[idx])
+		if family := taskSpecFamily(tasks[idx], familyByModel); family != "" {
+			familyCounts[family]++
+		}
+		return maxTasks > 0 && len(selected) >= maxTasks
+	}
+
+	for i, task := range tasks {
+		if recentModels[strings.TrimSpace(task.Model)] {
+			continue
+		}
+		if appendTask(i) {
+			return selected
+		}
+		break
+	}
+	for i, task := range tasks {
+		if used[i] {
+			continue
+		}
+		if family := taskSpecFamily(task, familyByModel); family != "" && familyCounts[family] > 0 {
+			continue
+		}
+		if appendTask(i) {
+			return selected
+		}
+	}
+	for i, task := range tasks {
+		if used[i] {
+			continue
+		}
+		if family := taskSpecFamily(task, familyByModel); family != "" && familyCounts[family] >= 2 {
+			continue
+		}
+		if appendTask(i) {
+			return selected
+		}
+	}
+	for i := range tasks {
+		if appendTask(i) {
+			return selected
+		}
+	}
+	return selected
+}
+
+func taskSpecFamily(task TaskSpec, familyByModel map[string]string) string {
+	model := strings.TrimSpace(task.Model)
+	if model == "" {
+		return ""
+	}
+	if family := strings.TrimSpace(familyByModel[model]); family != "" {
+		return family
+	}
+	return inferModelFamily(model)
 }
 
 func (p *ExplorerAgentPlanner) captureAssistantOnlyOutput(phase string, tools *ExplorerToolExecutor, resp *Response) error {
@@ -439,7 +541,7 @@ func (p *ExplorerAgentPlanner) Analyze(ctx context.Context) (string, []TaskSpec,
 		// from self-correcting in subsequent cycles.
 		slog.Warn("explorer agent: validation guard feedback (non-fatal)", "error", err)
 		if p.workspace != nil {
-			feedback := fmt.Sprintf("\n\n## Validation Guard Feedback\n\n⚠️ %s\n\nDo NOT use `validated` or `tuned` confidence when throughput_tps is 0 or null. Downgrade to `provisional`.\n", err.Error())
+			feedback := fmt.Sprintf("\n\n## Validation Guard Feedback\n\n⚠️ %s\n\nDo NOT use `validated` or `tuned` confidence unless summary.md shows benchmark-backed performance and experiment-facts.md contains a matching successful experiment. Downgrade to `provisional` when evidence is missing or only partial.\n", err.Error())
 			_ = p.workspace.AppendFile("summary.md", feedback)
 		}
 	}
@@ -519,6 +621,7 @@ const planPhaseSystemPrompt = `你是 AIMA Explorer 的规划代理。你在一�
 - 先做 validate，只有已有 baseline 或明确理由时才做 tune
 - 保持任务多样性，但不要浪费在重复失败组合上
 - 如果存在“未出现在 Recent History 的 Ready 模型”，至少先给其中一个模型分配任务，再考虑继续围绕最近已探索模型做跨引擎 pivot
+- 当存在其他未探索 Ready 模型或 family 时，同一 model family 本轮最多保留 2 个任务
 - reason 必须说明这个实验为什么值得做，并且它为什么没有被 blocker / denylist 拦住
 
 plan.md 必须保留这些 section：
@@ -568,6 +671,7 @@ const checkPhaseSystemPrompt = `你是 AIMA Explorer 的分析代理。刚执行
 - 只有在下一轮仍有高价值 Ready Combos 时，才返回 verdict=”continue”
 - **环境性失败判定**：如果本轮所有失败都属于环境/基础设施问题（Docker pull 失败、网络超时、端口冲突、镜像不存在、容器启动崩溃、OOM kill、驱动不兼容等），且没有新的可行 Ready Combos 能绕过这些环境问题，必须返回 verdict=”done”。重试不会修复环境问题，继续只会浪费 token。
 - **绝对禁止**：当 throughput_tps 为 0、null 或缺失时，confidence 不允许写 validated 或 tuned，必须写 provisional。这是硬约束，系统会自动拦截违规。
+- **非文本模态**：不要把 image/asr/tts 强行解释成 token TPS；如果事实文件给出的成功信号是 modality-specific throughput，就把它作为 primary throughput 写入 throughput_tps 字段，并在 note 里明确单位。
 - **失败模式诊断**：分析 benchmark 矩阵中 status=no-output 的 cell 时，注意区分 input_tokens 单独超限 vs input_tokens+max_tokens 之和超过 max_model_len。对比同模型不同 max_tokens 的 cell 来定位真实边界。
 - 你必须通过工具更新 summary.md，并调用 done(verdict)
 
@@ -646,4 +750,5 @@ const actPhaseSystemPrompt = `你是 AIMA Explorer 的行动规划代理。你�
 - 针对 summary.md 里的具体发现行动，并明确说明它对应的 Ready Combo 和 blocker 规避理由
 - 优先解决真实 bug、缩小可行区间、或验证候选 golden config
 - 如果仍有未在 Recent History 里出现的 Ready 模型，至少保留一个任务给这些模型；不要把整轮都花在同一个已探索模型族的继续 pivot 上
+- 当存在其他未探索 Ready 模型或 family 时，同一 model family 最多追加 2 个任务
 - 保留 plan.md 的结构：## Objective / ## Fact Snapshot / ## Task Board / ## Tasks`

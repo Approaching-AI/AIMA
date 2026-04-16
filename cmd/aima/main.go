@@ -390,6 +390,7 @@ func run() error {
 			_, _ = w.Write(data)
 		})
 		mux.HandleFunc("POST /ui/api/onboarding-deploy", handleOnboardingDeploy(ac, deps))
+		mux.HandleFunc("POST /ui/api/onboarding-stop-container", handleStopContainer(ac))
 
 		// Start power sampling goroutine (30s interval, 7-day retention)
 		go func() {
@@ -1261,7 +1262,11 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		}
 
 		// Step 1: Resolve via dry-run
-		notify("resolving", model)
+		resolveMsg := fmt.Sprintf("resolving engine for %s", model)
+		if engineType != "" {
+			resolveMsg = fmt.Sprintf("checking engine %s", engineType)
+		}
+		notify("resolving", resolveMsg)
 		dryRunData, err := deps.DeployDryRun(ctx, engineType, model, slot, configOverrides)
 		if err != nil {
 			return nil, fmt.Errorf("resolve: %w", err)

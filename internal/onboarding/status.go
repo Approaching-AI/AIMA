@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +78,14 @@ func BuildStatus(ctx context.Context, deps *Deps) (StatusResult, error) {
 
 	// (d) Version check
 	status.Version = buildVersion(ctx, td)
+
+	// (e) GPU occupancy — detect non-AIMA containers consuming GPU
+	if hw != nil && hw.GPU != nil {
+		occ := detectGPUOccupancy(ctx)
+		if len(occ) > 0 {
+			status.GPUOccupancy = occ
+		}
+	}
 
 	return status, nil
 }
@@ -397,4 +407,160 @@ func truncateReleaseNotes(body string, maxLen int) string {
 		return body
 	}
 	return body[:maxLen] + "..."
+}
+
+// detectGPUOccupancy finds running Docker containers that use GPU resources but
+// were not deployed by AIMA (i.e. missing the aima.dev/engine label). This lets
+// the onboarding wizard warn the user about pre-existing GPU consumers and offer
+// to stop them before attempting a deployment.
+func detectGPUOccupancy(ctx context.Context) []GPUProcess {
+	detectCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// List all running containers that request GPU (--gpus or NVIDIA runtime).
+	// We exclude containers that have the aima.dev/engine label (managed by AIMA).
+	out, err := exec.CommandContext(detectCtx, "docker", "ps",
+		"--format", "{{json .}}",
+		"--filter", "status=running",
+	).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+
+	type dockerEntry struct {
+		Names  string `json:"Names"`
+		Image  string `json:"Image"`
+		Labels string `json:"Labels"`
+	}
+
+	var procs []GPUProcess
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var e dockerEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		// Skip AIMA-managed containers
+		if strings.Contains(e.Labels, "aima.dev/engine") {
+			continue
+		}
+		// Check if the container has GPU access via docker inspect
+		if !containerUsesGPU(detectCtx, e.Names) {
+			continue
+		}
+		gpuMem := containerGPUMemMiB(detectCtx, e.Names)
+		procs = append(procs, GPUProcess{
+			Name:      e.Names,
+			Type:      "container",
+			Image:     e.Image,
+			GPUMemMiB: gpuMem,
+		})
+	}
+	return procs
+}
+
+// containerUsesGPU checks whether a container has GPU device requests or uses
+// the nvidia runtime.
+func containerUsesGPU(ctx context.Context, name string) bool {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", name,
+		"--format", "{{json .HostConfig.DeviceRequests}} {{.HostConfig.Runtime}}",
+	).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	s := string(out)
+	return strings.Contains(s, "nvidia") || strings.Contains(s, "gpu")
+}
+
+// containerGPUMemMiB tries to estimate GPU memory used by a container by
+// looking at nvidia-smi process entries. Returns 0 if unavailable.
+func containerGPUMemMiB(ctx context.Context, name string) int {
+	// Get the container's main PID
+	pidOut, err := exec.CommandContext(ctx, "docker", "inspect", name,
+		"--format", "{{.State.Pid}}",
+	).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	containerPID := strings.TrimSpace(string(pidOut))
+	if containerPID == "" || containerPID == "0" {
+		return 0
+	}
+
+	// Query nvidia-smi for GPU memory by PID. The container's processes are
+	// children of the container PID, so we search all nvidia-smi pids and
+	// match by checking if they belong to this container's cgroup.
+	smiOut, err := exec.CommandContext(ctx, "nvidia-smi",
+		"--query-compute-apps=pid,used_gpu_memory",
+		"--format=csv,noheader,nounits",
+	).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+
+	totalMiB := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(smiOut)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), ",", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		pid := strings.TrimSpace(parts[0])
+		memStr := strings.TrimSpace(parts[1])
+
+		// Check if this PID belongs to the container
+		cgroupPath := fmt.Sprintf("/proc/%s/cgroup", pid)
+		cgroupData, err := os.ReadFile(cgroupPath)
+		if err != nil {
+			// Fallback: check if PID is a child of the container PID
+			if isChildOfPID(ctx, pid, containerPID) {
+				mem, _ := strconv.Atoi(memStr)
+				totalMiB += mem
+			}
+			continue
+		}
+		if strings.Contains(string(cgroupData), name) {
+			mem, _ := strconv.Atoi(memStr)
+			totalMiB += mem
+		}
+	}
+	return totalMiB
+}
+
+// isChildOfPID checks if childPID is a descendant of parentPID by walking /proc.
+func isChildOfPID(ctx context.Context, childPID, parentPID string) bool {
+	current := childPID
+	for i := 0; i < 10; i++ { // max depth
+		statPath := fmt.Sprintf("/proc/%s/stat", current)
+		data, err := os.ReadFile(statPath)
+		if err != nil {
+			return false
+		}
+		// /proc/PID/stat format: pid (comm) state ppid ...
+		fields := strings.Fields(string(data))
+		if len(fields) < 4 {
+			return false
+		}
+		// Find ppid — it's the first numeric field after the closing paren of comm
+		ppidIdx := -1
+		for j, f := range fields {
+			if strings.HasSuffix(f, ")") {
+				ppidIdx = j + 2 // state is j+1, ppid is j+2
+				break
+			}
+		}
+		if ppidIdx < 0 || ppidIdx >= len(fields) {
+			return false
+		}
+		ppid := fields[ppidIdx]
+		if ppid == parentPID {
+			return true
+		}
+		if ppid == "1" || ppid == "0" {
+			return false
+		}
+		current = ppid
+	}
+	return false
 }

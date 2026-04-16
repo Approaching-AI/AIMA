@@ -63,12 +63,21 @@ type VersionInfo struct {
 	ReleaseNotesSummary string `json:"release_notes_summary,omitempty"`
 }
 
+// GPUProcess describes a non-AIMA process or container consuming GPU resources.
+type GPUProcess struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"` // "container" or "process"
+	Image     string `json:"image,omitempty"`
+	GPUMemMiB int    `json:"gpu_mem_mib,omitempty"`
+}
+
 // StatusResult is the full onboarding status response.
 type StatusResult struct {
 	OnboardingCompleted bool            `json:"onboarding_completed"`
 	Hardware            Hardware        `json:"hardware"`
 	StackStatus         StackStatusInfo `json:"stack_status"`
 	Version             VersionInfo     `json:"version"`
+	GPUOccupancy        []GPUProcess    `json:"gpu_occupancy,omitempty"`
 }
 
 // ScanEngineEntry describes one discovered engine (binary/image).

@@ -5,6 +5,8 @@ metadata:
   type: vllm-nightly
   version: "nightly"
   supported_model_types: [llm, vlm, embedding]
+  status: blocked
+  status_reason: "image vllm/vllm-openai:qwen3_5-cu130 does not exist in any registry"
 hardware:
   gpu_arch: Blackwell
   vram_min_mib: 4096

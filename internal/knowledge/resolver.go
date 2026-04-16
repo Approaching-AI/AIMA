@@ -291,25 +291,33 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 }
 
 func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, error) {
-	compatible := func(ea *EngineAsset) bool {
-		if hw.RuntimeType != "native" {
-			return true
-		}
-		if ea.Source == nil {
-			return false
-		}
-		return ea.Source.Supports(hw.Platform)
-	}
-
 	// Prefer exact metadata.name match, then metadata.type.
 	// Within each class, prefer exact gpu_arch match over wildcard.
+	// Blocked engines are skipped; if ALL matches are blocked, report why.
 	var nameWildcard, typeWildcard *EngineAsset
+	var blockedReason string
 	for i := range c.EngineAssets {
 		ea := &c.EngineAssets[i]
-		if !compatible(ea) {
+		nameMatch := strings.EqualFold(ea.Metadata.Name, engineType)
+		typeMatch := strings.EqualFold(ea.Metadata.Type, engineType)
+		if !nameMatch && !typeMatch {
 			continue
 		}
-		if strings.EqualFold(ea.Metadata.Name, engineType) {
+		// Skip blocked engines but remember the reason for error reporting
+		if strings.EqualFold(ea.Metadata.Status, "blocked") {
+			if blockedReason == "" {
+				blockedReason = ea.Metadata.StatusReason
+				if blockedReason == "" {
+					blockedReason = "engine " + ea.Metadata.Name + " is blocked"
+				}
+			}
+			continue
+		}
+		// Skip native-only incompatibility
+		if hw.RuntimeType == "native" && (ea.Source == nil || !ea.Source.Supports(hw.Platform)) {
+			continue
+		}
+		if nameMatch {
 			if ea.Hardware.GPUArch == hw.GPUArch {
 				return ea, nil
 			}
@@ -317,7 +325,7 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 				nameWildcard = ea
 			}
 		}
-		if strings.EqualFold(ea.Metadata.Type, engineType) {
+		if typeMatch {
 			if ea.Hardware.GPUArch == hw.GPUArch {
 				return ea, nil
 			}
@@ -331,6 +339,9 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 	}
 	if typeWildcard != nil {
 		return typeWildcard, nil
+	}
+	if blockedReason != "" {
+		return nil, fmt.Errorf("engine %q for gpu_arch %q is blocked: %s", engineType, hw.GPUArch, blockedReason)
 	}
 	return nil, fmt.Errorf("no engine asset for type %q gpu_arch %q", engineType, hw.GPUArch)
 }
@@ -379,6 +390,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			continue
 		}
 		var candidates []engineCandidate
+		var lastBlockedErr string // Track blocked engine errors for useful reporting
 
 		for _, v := range ma.Variants {
 			if strings.TrimSpace(v.Compatibility.UnsupportedReason) != "" {
@@ -393,7 +405,26 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			}
 			engine, err := c.findEngine(v.Engine, hw)
 			if err != nil {
+				if strings.Contains(err.Error(), "blocked") {
+					lastBlockedErr = err.Error()
+				}
 				continue
+			}
+
+			// Format compatibility: skip engines that don't support the variant's format.
+			// Without this, InferEngineType may select llamacpp for a safetensors model,
+			// which Resolve() then rejects at the format check — a confusing late failure.
+			if v.Format != "" && len(engine.Metadata.SupportedFormats) > 0 {
+				formatOK := false
+				for _, sf := range engine.Metadata.SupportedFormats {
+					if strings.EqualFold(sf, v.Format) {
+						formatOK = true
+						break
+					}
+				}
+				if !formatOK {
+					continue
+				}
 			}
 
 			fitsRawVRAM := hw.GPUVRAMMiB == 0 || v.Hardware.VRAMMinMiB == 0 || v.Hardware.VRAMMinMiB <= hw.GPUVRAMMiB
@@ -440,6 +471,9 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 		}
 
 		if len(candidates) == 0 {
+			if lastBlockedErr != "" {
+				return "", fmt.Errorf("no compatible engine for model %q: %s", modelName, lastBlockedErr)
+			}
 			return "", fmt.Errorf("no compatible engine for model %q on gpu_arch %q (vram %d MiB)", modelName, hw.GPUArch, hw.GPUVRAMMiB)
 		}
 
@@ -833,17 +867,37 @@ const FallbackEngine = "llamacpp"
 
 // FormatToEngine returns the engine type for a given model file format,
 // derived from the catalog's engine assets (supported_formats field).
+// Prefers general-purpose engines (supporting llm/vlm) over specialized ones
+// (e.g. ASR-only) so that safetensors → vllm instead of mooer.
 // Returns "" if no engine declares support for the format.
 func (c *Catalog) FormatToEngine(format string) string {
 	lower := strings.ToLower(format)
+	var firstMatch string
 	for _, ea := range c.EngineAssets {
 		for _, f := range ea.Metadata.SupportedFormats {
 			if strings.EqualFold(f, lower) {
-				return ea.Metadata.Type
+				if engineSupportsModelType(ea.Metadata.SupportedModelTypes, "llm") {
+					return ea.Metadata.Type
+				}
+				if firstMatch == "" {
+					firstMatch = ea.Metadata.Type
+				}
+				break
 			}
 		}
 	}
-	return ""
+	return firstMatch
+}
+
+// engineSupportsModelType checks if an engine's supported_model_types list
+// contains the given type (case-insensitive).
+func engineSupportsModelType(supported []string, modelType string) bool {
+	for _, s := range supported {
+		if strings.EqualFold(s, modelType) {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultEngine returns the fallback engine type from the catalog.

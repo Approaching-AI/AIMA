@@ -2272,6 +2272,23 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.support-skip-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-smooth);
+  white-space: nowrap;
+}
+.support-skip-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
 .support-disconnect-btn {
   align-self: center;
   padding: 8px 24px;
@@ -2351,7 +2368,7 @@ body {
   z-index: 9999;
   background: var(--bg-primary);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   overflow-y: auto;
   padding: var(--spacing-lg);
@@ -2359,6 +2376,7 @@ body {
 .wiz-container {
   width: 100%;
   max-width: 800px;
+  margin: auto 0;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
@@ -2854,14 +2872,16 @@ body {
         <div class="wiz-header">
           <h2 x-text="t('wiz_title')"></h2>
           <p x-text="t('wiz_subtitle')"></p>
-          <!-- Phase dots -->
+          <!-- Phase dots — dynamic: hide init when not needed -->
           <div class="wiz-phase-indicator" style="margin-top:12px">
-            <template x-for="ph in ['detecting','init','scanning','choosing','deploying']" :key="ph">
+            <template x-for="ph in wizDotPhases()" :key="ph">
               <div class="wiz-phase-dot"
                 :class="{
-                  active: onboardingPhase === ph,
-                  done: wizPhaseIndex(onboardingPhase) > wizPhaseIndex(ph)
-                }"></div>
+                  active: wizDotActive(ph),
+                  done: wizDotDone(ph)
+                }"
+                :style="wizDotDone(ph) ? 'cursor:pointer' : ''"
+                @click="wizDotDone(ph) && wizGoToPhase(ph)"></div>
             </template>
           </div>
         </div>
@@ -2925,6 +2945,33 @@ body {
               </div>
             </div>
           </div>
+          <!-- GPU Occupancy Warning -->
+          <template x-if="onboardingData && onboardingData.gpu_occupancy && onboardingData.gpu_occupancy.length > 0">
+            <div class="wiz-card" style="margin-top:16px;border-color:var(--warning)">
+              <div class="wiz-card-title" style="color:var(--warning)">
+                <span class="wiz-icon">&#x26A0;</span>
+                <span x-text="t('wiz_gpu_occupied')"></span>
+              </div>
+              <p style="color:var(--text-dim);font-size:13px;margin-bottom:12px" x-text="t('wiz_gpu_occupied_desc')"></p>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <template x-for="(proc, pi) in onboardingData.gpu_occupancy" :key="pi">
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-panel);border:var(--panel-border);border-radius:var(--radius-sm)">
+                    <div>
+                      <div style="font-size:14px;font-weight:600;color:var(--text)" x-text="proc.name"></div>
+                      <div style="font-size:12px;color:var(--text-dim)">
+                        <span x-text="proc.image"></span>
+                        <span x-show="proc.gpu_mem_mib > 0" x-text="' \u00B7 GPU ' + (proc.gpu_mem_mib / 1024).toFixed(1) + ' GB'"></span>
+                      </div>
+                    </div>
+                    <button class="wiz-btn wiz-btn-secondary" style="font-size:12px;padding:6px 14px;white-space:nowrap"
+                      :style="proc._stopping ? 'opacity:0.5;pointer-events:none' : ''"
+                      @click="wizStopContainer(proc, pi)"
+                      x-text="proc._stopping ? t('wiz_stopping') : t('wiz_stop_container')"></button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
           <div class="wiz-actions" style="margin-top:16px">
             <template x-if="wizNeedsInit()">
               <button class="wiz-btn wiz-btn-primary" @click="wizEnterInit()" x-text="t('wiz_continue_setup')"></button>
@@ -3022,7 +3069,7 @@ body {
                   <span x-text="item.name"></span>
                 </div>
               </template>
-              <div class="wiz-scan-item" x-show="onboardingScanLog.length === 0">
+              <div class="wiz-scan-item" x-show="!onboardingScanDone && onboardingScanLog.length === 0">
                 <span class="wiz-spinner"></span>
                 <span x-text="t('wiz_scanning_engines')"></span>
               </div>
@@ -3033,6 +3080,22 @@ body {
               <span class="wiz-badge" :class="onboardingScanResults.centralConnected ? 'ready' : 'missing'"
                 x-text="onboardingScanResults.centralConnected ? t('wiz_scan_central_connected') : t('wiz_scan_central_offline')"></span>
             </div>
+            <!-- Scan summary + continue (shown when scan completes) -->
+            <template x-if="onboardingScanDone">
+              <div style="margin-top:16px;padding:12px;background:var(--bg-panel);border-radius:var(--radius-sm)">
+                <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px" x-text="t('wiz_scan_complete')"></div>
+                <div style="font-size:13px;color:var(--text-dim)">
+                  <span x-text="t('wiz_engine_label') + ': ' + onboardingScanResults.engines.length"></span>
+                  <span style="margin-left:16px" x-text="t('models') + ': ' + onboardingScanResults.models.length"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+          <div class="wiz-actions" style="margin-top:16px">
+            <button class="wiz-btn wiz-btn-secondary" @click="onboardingPhase = 'detecting'" x-text="t('wiz_back')"></button>
+            <template x-if="onboardingScanDone">
+              <button class="wiz-btn wiz-btn-primary" @click="onboardingPhase = 'choosing'" x-text="t('wiz_continue')"></button>
+            </template>
           </div>
         </div>
 
@@ -3056,6 +3119,7 @@ body {
             </div>
           </div>
           <div class="wiz-actions" style="margin-top:16px">
+            <button class="wiz-btn wiz-btn-secondary" @click="onboardingPhase = 'scanning'" x-text="t('wiz_back')"></button>
             <button class="wiz-btn wiz-btn-secondary" @click="wizSkip()">Skip</button>
           </div>
         </div>
@@ -3161,6 +3225,27 @@ body {
             </div>
             <!-- Error -->
             <div class="wiz-error" x-show="(onboardingDeployProgress || {}).error" x-text="(onboardingDeployProgress || {}).error"></div>
+            <!-- GPU Occupancy in deploy error state — let user stop services and retry -->
+            <template x-if="(onboardingDeployProgress || {}).error && onboardingData && onboardingData.gpu_occupancy && onboardingData.gpu_occupancy.length > 0">
+              <div style="margin-top:12px;padding:14px;background:var(--bg-panel);border:1px solid var(--warning);border-radius:var(--radius-sm)">
+                <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:8px" x-text="t('wiz_gpu_occupied')"></div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <template x-for="(proc, pi) in onboardingData.gpu_occupancy" :key="'deploy-'+pi">
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-primary);border-radius:var(--radius-sm)">
+                      <div>
+                        <span style="font-size:13px;font-weight:600;color:var(--text)" x-text="proc.name"></span>
+                        <span style="font-size:11px;color:var(--text-dim);margin-left:6px" x-text="proc.image"></span>
+                      </div>
+                      <button class="wiz-btn wiz-btn-secondary" style="font-size:11px;padding:4px 12px"
+                        @click="wizStopContainer(proc, pi)"
+                        x-text="proc._stopping ? t('wiz_stopping') : t('wiz_stop_container')"></button>
+                    </div>
+                  </template>
+                </div>
+                <button class="wiz-btn wiz-btn-primary" style="margin-top:10px;font-size:13px"
+                  @click="wizRetryDeploy()" x-text="t('wiz_retry_deploy')"></button>
+              </div>
+            </template>
           </div>
           <div class="wiz-actions" style="margin-top:16px">
             <button class="wiz-btn wiz-btn-secondary" @click="wizCancelDeploy()" x-text="t('wiz_cancel')"></button>
@@ -3588,6 +3673,7 @@ body {
                   :placeholder="supportPageInputPlaceholder()"
                   :disabled="supportPageInputDisabled()">
                 <button @click="submitSupportInput()" :disabled="!supportPageCanSubmit()" x-text="supportPageButtonLabel()"></button>
+                <button x-show="supportPagePrompt" @click="skipSupportConnect()" class="support-skip-btn" x-text="t('support_skip')"></button>
               </div>
 
               <button class="support-disconnect-btn" x-show="supportConnected" @click="disconnectSupport()" x-text="supportDisconnectLabel()"></button>
@@ -3995,6 +4081,7 @@ body {
                   :placeholder="supportPageInputPlaceholder()"
                   :disabled="supportPageInputDisabled()">
                 <button @click="submitSupportInput()" :disabled="!supportPageCanSubmit()" x-text="supportPageButtonLabel()"></button>
+                <button x-show="supportPagePrompt" @click="skipSupportConnect()" class="support-skip-btn" x-text="t('support_skip')"></button>
               </div>
               <button class="support-disconnect-btn" x-show="supportConnected" @click="disconnectSupport()" x-text="supportDisconnectLabel()"></button>
             </div>
@@ -4313,7 +4400,7 @@ var I18N = {
     support_enter_desc: 'Describe what you need help with...',
     support_connecting: 'Connecting to AIMA-Service...',
     support_enter_invite: 'Device registration requires an invite code or worker code. Please enter it below:',
-    support_enter_recovery: 'This device was previously registered. Please enter your saved recovery code:',
+    support_enter_recovery: 'This device was previously registered. A recovery code is needed to re-link it.\n\nWhere to find your recovery code:\n1. Check the email or message from when this device was first set up\n2. Ask the person who originally configured this device\n3. Visit the admin panel at aimaserver.com to reset the registration\n\nYou can also skip this step and connect later.',
     support_device_id: 'Device ID',
     support_active_task: 'Active Task',
     support_no_task: 'No active task',
@@ -4325,6 +4412,7 @@ var I18N = {
     support_amount_budget: 'Amount Budget',
     support_tasks_remaining: 'Tasks Remaining',
     support_budget_pending: 'Available after linking',
+    support_skip: 'Skip for now',
     support_share_heading: 'Share',
     support_share_ready: 'Share text ready',
     support_share_empty: 'Referral info appears after linking',
@@ -4438,6 +4526,13 @@ var I18N = {
     wiz_loading: 'Checking system status...',
     wiz_no_recommendations: 'No recommendations available for this hardware configuration.',
     wiz_deploy_error: 'Deployment failed. Please check logs and try again.',
+    wiz_gpu_busy: 'GPU memory is occupied by other running services. Please stop existing deployments (e.g. via "docker stop") to free GPU memory, then try again.',
+    wiz_gpu_occupied: 'GPU is in use',
+    wiz_gpu_occupied_desc: 'The following services are currently using GPU resources. You can stop them to free GPU memory for new deployments, or continue with reduced capacity.',
+    wiz_stop_container: 'Stop',
+    wiz_stopping: 'Stopping...',
+    wiz_retry_deploy: 'Retry Deploy',
+    wiz_engine_blocked: 'This model cannot run on current hardware — the required engine is not available.',
   },
   zh: {
     system_online: '\u7CFB\u7EDF\u5728\u7EBF',
@@ -4531,7 +4626,7 @@ var I18N = {
     support_enter_desc: '\u63CF\u8FF0\u4F60\u9700\u8981\u7684\u5E2E\u52A9...',
     support_connecting: '\u6B63\u5728\u8FDE\u7EBF\u7075\u673A\u4E91...',
     support_enter_invite: '\u8BBE\u5907\u6CE8\u518C\u9700\u8981\u9080\u8BF7\u7801\u6216 Worker \u63A5\u5165\u7801\uFF0C\u8BF7\u5728\u4E0B\u65B9\u8F93\u5165\uFF1A',
-    support_enter_recovery: '\u6B64\u8BBE\u5907\u4E4B\u524D\u5DF2\u6CE8\u518C\uFF0C\u8BF7\u8F93\u5165\u5DF2\u4FDD\u5B58\u7684\u6062\u590D\u7801\uFF1A',
+    support_enter_recovery: '\u6B64\u8BBE\u5907\u4E4B\u524D\u5DF2\u6CE8\u518C\u8FC7\uFF0C\u9700\u8981\u6062\u590D\u7801\u624D\u80FD\u91CD\u65B0\u8FDE\u7EBF\u3002\n\n\u5982\u4F55\u627E\u5230\u6062\u590D\u7801\uFF1A\n1. \u67E5\u770B\u8BBE\u5907\u9996\u6B21\u8BBE\u7F6E\u65F6\u6536\u5230\u7684\u90AE\u4EF6\u6216\u6D88\u606F\n2. \u8BE2\u95EE\u6700\u521D\u914D\u7F6E\u6B64\u8BBE\u5907\u7684\u4EBA\n3. \u8BBF\u95EE\u7BA1\u7406\u540E\u53F0 aimaserver.com \u91CD\u7F6E\u8BBE\u5907\u6CE8\u518C\n\n\u4E5F\u53EF\u4EE5\u8DF3\u8FC7\u6B64\u6B65\uFF0C\u7A0D\u540E\u518D\u8FDE\u7EBF\u3002',
     support_device_id: '\u8BBE\u5907 ID',
     support_active_task: '\u5F53\u524D\u4EFB\u52A1',
     support_no_task: '\u65E0\u6D3B\u52A8\u4EFB\u52A1',
@@ -4543,6 +4638,7 @@ var I18N = {
     support_amount_budget: '\u91D1\u989D\u989D\u5EA6',
     support_tasks_remaining: '\u5269\u4F59\u989D\u5EA6',
     support_budget_pending: '\u8FDE\u7EBF\u540E\u663E\u793A',
+    support_skip: '\u6682\u65F6\u8DF3\u8FC7',
     support_share_heading: '\u9080\u8BF7\u5206\u4EAB',
     support_share_ready: '\u5206\u4EAB\u6587\u6848\u5DF2\u5C31\u7EEA',
     support_share_empty: '\u8FDE\u7EBF\u540E\u663E\u793A\u63A8\u8350\u4FE1\u606F',
@@ -4656,6 +4752,13 @@ var I18N = {
     wiz_loading: '\u68C0\u67E5\u7CFB\u7EDF\u72B6\u6001...',
     wiz_no_recommendations: '\u65E0\u6CD5\u4E3A\u5F53\u524D\u786C\u4EF6\u914D\u7F6E\u63D0\u4F9B\u63A8\u8350\u3002',
     wiz_deploy_error: '\u90E8\u7F72\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u65E5\u5FD7\u5E76\u91CD\u8BD5\u3002',
+    wiz_gpu_busy: 'GPU \u663E\u5B58\u5DF2\u88AB\u5176\u4ED6\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\u5360\u7528\u3002\u8BF7\u5148\u505C\u6B62\u5DF2\u6709\u7684\u90E8\u7F72\uFF08\u5982\u901A\u8FC7 docker stop\uFF09\u91CA\u653E GPU \u663E\u5B58\uFF0C\u7136\u540E\u518D\u8BD5\u3002',
+    wiz_gpu_occupied: 'GPU \u6B63\u5728\u88AB\u5360\u7528',
+    wiz_gpu_occupied_desc: '\u4EE5\u4E0B\u670D\u52A1\u6B63\u5728\u4F7F\u7528 GPU \u8D44\u6E90\u3002\u60A8\u53EF\u4EE5\u505C\u6B62\u5B83\u4EEC\u4EE5\u91CA\u653E GPU \u663E\u5B58\u7528\u4E8E\u65B0\u90E8\u7F72\uFF0C\u6216\u7EE7\u7EED\u4F7F\u7528\u5269\u4F59\u5BB9\u91CF\u3002',
+    wiz_stop_container: '\u505C\u6B62',
+    wiz_stopping: '\u505C\u6B62\u4E2D...',
+    wiz_retry_deploy: '\u91CD\u8BD5\u90E8\u7F72',
+    wiz_engine_blocked: '\u8BE5\u6A21\u578B\u65E0\u6CD5\u5728\u5F53\u524D\u786C\u4EF6\u4E0A\u8FD0\u884C\u2014\u2014\u6240\u9700\u5F15\u64CE\u4E0D\u53EF\u7528\u3002\u8BF7\u9009\u62E9\u5176\u4ED6\u6A21\u578B\u3002',
     cli_help_header: 'CLI \u6A21\u5F0F \u2014 \u53EF\u7528 MCP \u5DE5\u5177',
     cli_help_usage: '\u7528\u6CD5: /cli <\u5DE5\u5177\u540D> [\u53C2\u6570]\n  /cli hardware.detect\n  /cli model.list\n  /cli deploy.apply engine=vllm model=qwen3-8b\n  /cli system.config {"key":"llm.model"}',
     cli_unknown_tool: '\u672A\u77E5\u5DE5\u5177: ',
@@ -5217,6 +5320,7 @@ function aimaApp() {
     onboardingData: null,
     onboardingScanResults: { engines: [], models: [], centralConnected: false },
     onboardingScanLog: [],
+    onboardingScanDone: false,
     onboardingRecommendations: [],
     onboardingRecommendLoading: false,
     onboardingDeployModel: null,
@@ -5603,10 +5707,60 @@ function aimaApp() {
       return this.onboardingPhase !== 'complete' && this.onboardingPhase !== '';
     },
 
+    wizDotPhases() {
+      if (this.wizNeedsInit()) {
+        return ['detecting', 'init', 'scanning', 'choosing', 'deploying'];
+      }
+      return ['detecting', 'scanning', 'choosing', 'recommend', 'deploying'];
+    },
     wizPhaseIndex(ph) {
       var phases = ['loading', 'detecting', 'init', 'scanning', 'choosing', 'recommend', 'local', 'deploying', 'done', 'complete'];
       var idx = phases.indexOf(ph);
       return idx >= 0 ? idx : -1;
+    },
+    wizDotIndex(ph) {
+      return this.wizDotPhases().indexOf(ph);
+    },
+    wizPhaseToDot(ph) {
+      // Map sub-phases to their parent dot
+      if (ph === 'local') return this.wizNeedsInit() ? 'choosing' : 'recommend';
+      if (ph === 'recommend' && this.wizNeedsInit()) return 'choosing';
+      if (ph === 'done' || ph === 'complete') return 'deploying';
+      if (ph === 'loading') return 'detecting';
+      return ph;
+    },
+    wizDotActive(dotPh) {
+      return this.wizPhaseToDot(this.onboardingPhase) === dotPh;
+    },
+    wizDotDone(dotPh) {
+      var curIdx = this.wizDotIndex(this.wizPhaseToDot(this.onboardingPhase));
+      var dotIdx = this.wizDotIndex(dotPh);
+      return dotIdx >= 0 && curIdx > dotIdx;
+    },
+    wizGoToPhase(ph) {
+      // Navigate back to a completed phase
+      if (ph === 'detecting') {
+        this.onboardingPhase = 'detecting';
+        // Refresh GPU occupancy data when going back to detecting
+        this.wizRefreshGpuOccupancy();
+      }
+      else if (ph === 'init') { this.onboardingPhase = 'init'; }
+      else if (ph === 'scanning') { this.wizStartScan(); }
+      else if (ph === 'choosing') { this.onboardingPhase = 'choosing'; }
+      else if (ph === 'recommend') { this.onboardingPhase = 'choosing'; }
+    },
+
+    wizRefreshGpuOccupancy() {
+      var self = this;
+      var headers = {};
+      if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+      fetch('/ui/api/onboarding-status', { headers: headers }).then(function(resp) {
+        if (resp.ok) return resp.json();
+      }).then(function(data) {
+        if (data && self.onboardingData) {
+          self.onboardingData.gpu_occupancy = data.gpu_occupancy || [];
+        }
+      }).catch(function() {});
     },
 
     async initOnboarding() {
@@ -5875,10 +6029,48 @@ function aimaApp() {
       this.onboardingPhase = 'detecting';
     },
 
+    wizStopContainer(proc, index) {
+      if (proc._stopping) return;
+      var self = this;
+      // Use direct property set for Alpine reactivity
+      self.onboardingData.gpu_occupancy[index]._stopping = true;
+      var headers = { 'Content-Type': 'application/json' };
+      if (self.apiKey) headers['Authorization'] = 'Bearer ' + self.apiKey;
+      fetch('/ui/api/onboarding-stop-container', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({ name: proc.name })
+      }).then(function(resp) {
+        if (resp.ok) {
+          self.onboardingData.gpu_occupancy.splice(index, 1);
+        } else {
+          return resp.json().catch(function() { return {}; }).then(function(err) {
+            alert(err.error || 'Failed to stop container');
+            self.onboardingData.gpu_occupancy[index]._stopping = false;
+          });
+        }
+      }).catch(function(e) {
+        alert('Failed to stop: ' + e.message);
+        if (self.onboardingData && self.onboardingData.gpu_occupancy && self.onboardingData.gpu_occupancy[index]) {
+          self.onboardingData.gpu_occupancy[index]._stopping = false;
+        }
+      });
+    },
+
+    wizRetryDeploy() {
+      // Re-run the same deploy with the current model
+      if (this._lastDeployRequest) {
+        this.wizDeploy(this._lastDeployRequest);
+      } else {
+        this.onboardingPhase = 'choosing';
+      }
+    },
+
     // SCANNING phase: SSE connection
     async wizStartScan() {
       this.onboardingPhase = 'scanning';
       this.onboardingScanLog = [];
+      this.onboardingScanDone = false;
       this.onboardingScanResults = { engines: [], models: [], centralConnected: false };
       var self = this;
       try {
@@ -5921,9 +6113,9 @@ function aimaApp() {
         }
       }
       this._wizScanAbort = null;
-      // Auto-advance to choosing
+      // Mark scan as done (user clicks continue to advance)
       if (this.onboardingPhase === 'scanning') {
-        this.onboardingPhase = 'choosing';
+        this.onboardingScanDone = true;
       }
     },
 
@@ -5944,7 +6136,7 @@ function aimaApp() {
         // Don't overwrite the arrays we built incrementally from engine_found/model_found events.
         if (data.central_connected !== undefined) this.onboardingScanResults.centralConnected = data.central_connected;
         this.onboardingScanLog.push({ type: 'done', name: this.t('wiz_scan_complete') });
-        this.onboardingPhase = 'choosing';
+        this.onboardingScanDone = true;
       }
     },
 
@@ -5972,6 +6164,7 @@ function aimaApp() {
 
     // DEPLOY phase (from recommend or local)
     async wizDeploy(rec) {
+      this._lastDeployRequest = rec;
       this.onboardingPhase = 'deploying';
       this.onboardingDeployModel = rec.model_name || rec.model || rec.name || '';
       this.onboardingDeployEndpoint = '';
@@ -6067,7 +6260,16 @@ function aimaApp() {
         if (data.endpoint) this.onboardingDeployEndpoint = data.endpoint;
         this.onboardingPhase = 'done';
       } else if (event === 'error') {
-        this.onboardingDeployProgress.error = data.message || this.t('wiz_deploy_error');
+        var msg = data.message || this.t('wiz_deploy_error');
+        // Make GPU memory errors actionable
+        if (msg.toLowerCase().includes('gpu memory insufficient') || msg.toLowerCase().includes('gpu memory')) {
+          msg = this.t('wiz_gpu_busy');
+        }
+        // Make engine blocked / incompatible errors clearer
+        if (msg.toLowerCase().includes('is blocked') || msg.toLowerCase().includes('no compatible engine')) {
+          msg = this.t('wiz_engine_blocked') + ' (' + msg + ')';
+        }
+        this.onboardingDeployProgress.error = msg;
         // Mark current active step as error
         for (var i = 0; i < steps.length; i++) {
           if (steps[i].status === 'active') { steps[i].status = 'error'; break; }
@@ -6629,7 +6831,10 @@ function aimaApp() {
     },
 
     supportRecoveryPromptText() {
-      return this.supportManifestText(this.supportManifestOnboarding('recovery_prompt'), this.t('support_enter_recovery'));
+      const manifestText = this.supportManifestText(this.supportManifestOnboarding('recovery_prompt'), '');
+      const localText = this.t('support_enter_recovery');
+      if (manifestText) return manifestText + '\n\n' + localText;
+      return localText;
     },
 
     supportDisconnectLabel() {
@@ -7259,7 +7464,7 @@ function aimaApp() {
             duration: duration
           });
           const promptText = needsRecovery
-            ? 'This device was previously registered. Please enter your saved recovery code:\n此设备之前已经注册过，请输入已保存的恢复码：'
+            ? 'This device was previously registered. A recovery code is needed to re-link it.\n\nWhere to find it:\n1. Check the email/message from when this device was first set up\n2. Ask the person who originally configured this device\n3. Visit aimaserver.com to reset the registration\n\n此设备之前已注册过，需要恢复码才能重新连线。\n\n如何找到恢复码：\n1. 查看设备首次设置时收到的邮件或消息\n2. 询问最初配置此设备的人\n3. 访问 aimaserver.com 管理后台重置设备注册'
             : 'Device registration requires an invite code or worker code. Please enter it below:\n设备注册需要邀请码或 Worker 接入码，请在下方输入：';
           this.messages.push({ role: 'ai', text: promptText });
           this.scrollChat();
@@ -7491,6 +7696,15 @@ function aimaApp() {
       this.supportState.activeTask = null;
       this.supportState.messages = [];
       await this.pollSystemStatus();
+    },
+
+    skipSupportConnect() {
+      this.supportPagePrompt = null;
+      this.supportPageCode = '';
+      this.supportPageConnecting = false;
+      this.supportPageError = '';
+      this.appendSupportPageMessage(this.t('support_skip'), 'info');
+      this.currentView = 'chat';
     },
 
     submitSupportInput() {

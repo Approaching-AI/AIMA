@@ -200,6 +200,8 @@ type EngineMetadata struct {
 	Default             bool     `yaml:"default,omitempty" json:"default,omitempty"`
 	SupportedFormats    []string `yaml:"supported_formats,omitempty"    json:"supported_formats,omitempty"`
 	SupportedModelTypes []string `yaml:"supported_model_types,omitempty" json:"supported_model_types,omitempty"`
+	Status              string   `yaml:"status,omitempty"        json:"status,omitempty"`
+	StatusReason        string   `yaml:"status_reason,omitempty" json:"status_reason,omitempty"`
 }
 
 type EngineImage struct {

@@ -44,7 +44,7 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 		"profile", hwProfile)
 
 	// Step 3: Build lookup maps for installed engines and local models
-	installedEngines := buildInstalledEngineMap(ctx, db)
+	installedEngines, allEngines := buildInstalledEngineMap(ctx, db)
 	localModels := buildLocalModelMap(ctx, db)
 
 	// Step 4a: First pass — compute the largest model (by parameter count, in
@@ -62,6 +62,9 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 			continue
 		}
 		engineAsset := cat.FindEngineByName(variant.Engine, hwInfo)
+		if !engineDeployable(engineAsset, hwInfo.Platform, allEngines) {
+			continue
+		}
 		resolved := buildMinimalResolvedConfig(variant, engineAsset, hwInfo)
 		fit := knowledge.CheckFit(resolved, hwInfo)
 		if !fit.Fit {
@@ -78,7 +81,7 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
 
-		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, localModels, locale, maxFitBillion)
+		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, allEngines, localModels, locale, maxFitBillion)
 		if !ok {
 			continue
 		}
@@ -131,6 +134,7 @@ func evaluateModelAsset(
 	hwInfo knowledge.HardwareInfo,
 	hwProfile string,
 	installedEngines map[string]*state.Engine,
+	allEngines []*state.Engine,
 	localModels map[string]*state.Model,
 	locale string,
 	maxFitBillion float64,
@@ -145,14 +149,51 @@ func evaluateModelAsset(
 
 	engineAsset := cat.FindEngineByName(engineType, hwInfo)
 
+	engineStatus := checkEngineStatus(engineType, engineAsset, installedEngines)
+
+	// Verify the engine is actually deployable on this platform. An engine
+	// is deployable if its exact image:tag exists locally OR it has a valid
+	// download source for the current OS/arch. This catches cases where the
+	// engine type was "installed" via a container scan (e.g. zhiwen-llama-box
+	// registered as type "llamacpp") but the catalog engine asset has no
+	// image/binary for this platform.
+	if !engineDeployable(engineAsset, hwInfo.Platform, allEngines) {
+		if altVariant, altEngineType, altAsset, altStatus, ok := findDeployableEngineVariant(cat, ma, hwInfo, installedEngines, allEngines); ok {
+			slog.Debug("onboarding recommend: switched to deployable engine variant",
+				"model", modelName,
+				"original_engine", engineType,
+				"deployable_engine", altEngineType)
+			variant = altVariant
+			engineType = altEngineType
+			engineAsset = altAsset
+			engineStatus = altStatus
+		} else {
+			slog.Debug("onboarding recommend: no deployable engine for any variant",
+				"model", modelName, "platform", hwInfo.Platform)
+			return ModelRecommendation{}, false
+		}
+	} else if !engineStatus.Installed {
+		// Engine is deployable (pullable) but not yet installed. Prefer a
+		// variant whose engine is both deployable AND already installed.
+		if altVariant, altEngineType, altAsset, altStatus, ok := findDeployableEngineVariant(cat, ma, hwInfo, installedEngines, allEngines); ok {
+			slog.Debug("onboarding recommend: prefer installed+deployable engine variant",
+				"model", modelName,
+				"original_engine", engineType,
+				"installed_engine", altEngineType)
+			variant = altVariant
+			engineType = altEngineType
+			engineAsset = altAsset
+			engineStatus = altStatus
+		}
+		// If no installed alternative, keep the original (it's deployable, just needs pull)
+	}
+
 	resolved := buildMinimalResolvedConfig(variant, engineAsset, hwInfo)
 	fit := knowledge.CheckFit(resolved, hwInfo)
 
 	perf := variant.ParsedExpectedPerf()
 
-	engineStatus := checkEngineStatus(engineType, engineAsset, installedEngines)
-
-	localModel := localModels[strings.ToLower(modelName)]
+	localModel := findLocalModel(strings.ToLower(modelName), localModels)
 	modelAvailable := localModel != nil
 
 	goldenExists := false
@@ -510,27 +551,159 @@ func checkEngineStatus(engineType string, engineAsset *knowledge.EngineAsset, in
 	return status
 }
 
-// buildInstalledEngineMap returns a map of engine type (lowercase) -> Engine record.
-func buildInstalledEngineMap(ctx context.Context, db *state.DB) map[string]*state.Engine {
+// engineDeployable checks whether a catalog engine asset can actually be
+// deployed on the given platform. An engine is deployable if:
+//   - Its exact image:tag is already present locally (container), OR
+//   - Its Image.Platforms includes the current platform (container pullable), OR
+//   - Its Source supports the platform (native binary downloadable)
+//
+// This prevents recommending models paired with engines that will fail at
+// deploy time (e.g. llamacpp on linux/arm64 where no binary/container exists).
+func engineDeployable(engineAsset *knowledge.EngineAsset, platform string, allEngines []*state.Engine) bool {
+	if engineAsset == nil || platform == "" {
+		return false
+	}
+
+	// Blocked engines are never deployable
+	if strings.EqualFold(engineAsset.Metadata.Status, "blocked") {
+		return false
+	}
+
+	// Check 1: engine image already present locally (exact image:tag match).
+	// Uses the full engine slice (not the type-keyed map) because multiple
+	// engines can share the same type key and the map loses all but the last.
+	if engineAsset.Image.Name != "" {
+		wantBase := imageBasename(engineAsset.Image.Name)
+		wantTag := engineAsset.Image.Tag
+		if wantTag == "" {
+			wantTag = "latest"
+		}
+		for _, eng := range allEngines {
+			engBase := imageBasename(eng.Image)
+			if engBase == wantBase && eng.Tag == wantTag {
+				return true
+			}
+		}
+		// Also check compatible tags
+		for _, compatTag := range engineAsset.Image.CompatibleTags {
+			for _, eng := range allEngines {
+				if imageBasename(eng.Image) == wantBase && eng.Tag == compatTag {
+					return true
+				}
+			}
+		}
+	}
+
+	// Check 2: container image can be pulled for this platform
+	for _, p := range engineAsset.Image.Platforms {
+		if p == platform {
+			return true
+		}
+	}
+
+	// Check 3: native binary source supports this platform
+	if engineAsset.Source != nil && engineAsset.Source.Supports(platform) {
+		return true
+	}
+
+	return false
+}
+
+// imageBasename extracts the last path segment of a container image name.
+// "nvcr.io/nvidia/vllm" → "vllm", "ghcr.io/ggml-org/llama.cpp" → "llama.cpp"
+func imageBasename(image string) string {
+	if idx := strings.LastIndex(image, "/"); idx >= 0 {
+		return strings.ToLower(image[idx+1:])
+	}
+	return strings.ToLower(image)
+}
+
+// findDeployableEngineVariant searches through a model's variants for one whose
+// engine can actually be deployed on this platform. Prefers variants whose
+// engine is both deployable AND already installed locally (faster startup).
+// Returns false if no variant has a deployable engine on the current hardware.
+func findDeployableEngineVariant(
+	cat *knowledge.Catalog,
+	ma *knowledge.ModelAsset,
+	hwInfo knowledge.HardwareInfo,
+	installedEngines map[string]*state.Engine,
+	allEngines []*state.Engine,
+) (*knowledge.ModelVariant, string, *knowledge.EngineAsset, RecommendedEngineStatus, bool) {
+	type candidate struct {
+		variant     *knowledge.ModelVariant
+		engineType  string
+		engineAsset *knowledge.EngineAsset
+		status      RecommendedEngineStatus
+	}
+	var bestInstalled, bestPullable *candidate
+
+	for i := range ma.Variants {
+		v := &ma.Variants[i]
+		if strings.TrimSpace(v.Compatibility.UnsupportedReason) != "" {
+			continue
+		}
+		if v.Hardware.GPUArch != hwInfo.GPUArch && v.Hardware.GPUArch != "*" {
+			continue
+		}
+		if v.Hardware.GPUCountMin > 0 && hwInfo.GPUCount > 0 && hwInfo.GPUCount < v.Hardware.GPUCountMin {
+			continue
+		}
+		engineAsset := cat.FindEngineByName(v.Engine, hwInfo)
+		if !engineDeployable(engineAsset, hwInfo.Platform, allEngines) {
+			continue
+		}
+		// Verify hardware fit
+		resolved := buildMinimalResolvedConfig(v, engineAsset, hwInfo)
+		fit := knowledge.CheckFit(resolved, hwInfo)
+		if !fit.Fit {
+			continue
+		}
+		status := checkEngineStatus(v.Engine, engineAsset, installedEngines)
+		c := &candidate{variant: v, engineType: v.Engine, engineAsset: engineAsset, status: status}
+		if status.Installed && bestInstalled == nil {
+			bestInstalled = c
+		}
+		if bestPullable == nil {
+			bestPullable = c
+		}
+	}
+
+	// Prefer installed engine (already local, no download needed)
+	if bestInstalled != nil {
+		return bestInstalled.variant, bestInstalled.engineType, bestInstalled.engineAsset, bestInstalled.status, true
+	}
+	if bestPullable != nil {
+		return bestPullable.variant, bestPullable.engineType, bestPullable.engineAsset, bestPullable.status, true
+	}
+	return nil, "", nil, RecommendedEngineStatus{}, false
+}
+
+// buildInstalledEngineMap returns a type-based lookup map AND a full slice of
+// all available engines. The map is for checkEngineStatus (type-based matching);
+// the slice is for engineDeployable (exact image:tag matching that needs ALL
+// engines, not just the last-one-wins per type key).
+func buildInstalledEngineMap(ctx context.Context, db *state.DB) (map[string]*state.Engine, []*state.Engine) {
 	m := make(map[string]*state.Engine)
 	if db == nil {
-		return m
+		return m, nil
 	}
 	engines, err := db.ListEngines(ctx)
 	if err != nil {
 		slog.Warn("onboarding recommend: failed to list engines", "error", err)
-		return m
+		return m, nil
 	}
+	var all []*state.Engine
 	for _, e := range engines {
 		if e == nil || !e.Available {
 			continue
 		}
+		all = append(all, e)
 		m[strings.ToLower(e.Type)] = e
 		if e.Image != "" {
 			m[strings.ToLower(e.Image)] = e
 		}
 	}
-	return m
+	return m, all
 }
 
 // buildLocalModelMap returns a map of model name (lowercase) -> Model record.
@@ -551,6 +724,23 @@ func buildLocalModelMap(ctx context.Context, db *state.DB) map[string]*state.Mod
 		m[strings.ToLower(mdl.Name)] = mdl
 	}
 	return m
+}
+
+// findLocalModel looks up a catalog model name in the local model map.
+// First tries exact match, then prefix match (e.g. catalog "qwen3-30b-a3b"
+// matches local "qwen3-30b-a3b-instruct-2507"). This handles naming
+// differences between the catalog and model files on disk.
+func findLocalModel(catalogName string, localModels map[string]*state.Model) *state.Model {
+	if m, ok := localModels[catalogName]; ok {
+		return m
+	}
+	// Prefix match: local model name starts with catalog name
+	for key, m := range localModels {
+		if strings.HasPrefix(key, catalogName+"-") || strings.HasPrefix(key, catalogName+"_") {
+			return m
+		}
+	}
+	return nil
 }
 
 // extractDownloadSource finds the best download source for a model.

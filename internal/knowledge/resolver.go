@@ -3,8 +3,11 @@ package knowledge
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 )
+
+var modelLookupSeparatorRE = regexp.MustCompile(`[-_\s.]+`)
 
 // HardwareInfo describes the detected hardware for config resolution.
 // Zero-valued fields mean "unknown" and are skipped during validation,
@@ -112,6 +115,7 @@ type ResourceEstimate struct {
 // Resolve finds the best config by merging L0 (engine defaults) -> model variant defaults -> L1 (user overrides).
 // L2 (knowledge notes from DB) is not applied here; it is merged by the caller when available.
 func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOverrides map[string]any, opts ...ResolveOption) (*ResolvedConfig, error) {
+	modelName = c.resolveCatalogModelName(modelName)
 	var ropts resolveOpts
 	for _, o := range opts {
 		o(&ropts)
@@ -370,6 +374,7 @@ func WithGoldenConfig(fn GoldenConfigFunc) ResolveOption {
 // Priority: collect all candidates that can run (format + VRAM fit or offload),
 // then rank by amplifier.performance_multiplier (descending), cold_start as tiebreaker.
 func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...ResolveOption) (string, error) {
+	modelName = c.resolveCatalogModelName(modelName)
 	var ropts resolveOpts
 	for _, o := range opts {
 		o(&ropts)
@@ -494,6 +499,7 @@ func effectiveVRAM(hw HardwareInfo, vramMultiplier float64) int {
 // in call sites. Returns (ma, nil, engineType, err) when the model exists but no variant
 // matches, allowing the caller to fall back to global sources.
 func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*ModelAsset, *ModelVariant, string, error) {
+	modelName = c.resolveCatalogModelName(modelName)
 	engineType, err := c.InferEngineType(modelName, hw)
 	if err != nil {
 		// Model found but no compatible engine — return model asset for global source fallback.
@@ -846,6 +852,42 @@ func (c *Catalog) FormatToEngine(format string) string {
 	return ""
 }
 
+func normalizeModelLookupKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = modelLookupSeparatorRE.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if strings.HasPrefix(name, "gptq-") {
+		name = strings.TrimPrefix(name, "gptq-")
+	}
+	for strings.Contains(name, "--") {
+		name = strings.ReplaceAll(name, "--", "-")
+	}
+	return strings.Trim(name, "-")
+}
+
+func (c *Catalog) resolveCatalogModelName(modelName string) string {
+	trimmed := strings.TrimSpace(modelName)
+	if trimmed == "" {
+		return trimmed
+	}
+	normalized := normalizeModelLookupKey(trimmed)
+	if normalized == "" {
+		return trimmed
+	}
+	switch normalized {
+	case "qwen3-embedding-0-6b":
+		return "qwen3-emb-0.6b"
+	case "qwen3-8b-junhowie":
+		return "qwen3-8b"
+	}
+	for _, ma := range c.ModelAssets {
+		if normalizeModelLookupKey(ma.Metadata.Name) == normalized {
+			return ma.Metadata.Name
+		}
+	}
+	return trimmed
+}
+
 // DefaultEngine returns the fallback engine type from the catalog.
 // Priority: explicit default: true in metadata, then first wildcard gpu_arch engine.
 func (c *Catalog) DefaultEngine() string {
@@ -1016,12 +1058,21 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 		meta.Type = "llm"
 	}
 	inferredEngineType := c.FormatToEngine(meta.Format)
+	if syntheticDisallowMooer(meta) && strings.EqualFold(inferredEngineType, "mooer") {
+		inferredEngineType = "vllm"
+	}
 	if inferredEngineType == "" {
 		inferredEngineType = c.DefaultEngine()
+	}
+	if syntheticDisallowMooer(meta) && strings.EqualFold(inferredEngineType, "mooer") {
+		inferredEngineType = "vllm"
 	}
 
 	estimatedVRAM := estimateVRAMMiB(meta)
 	defaultEngine := c.DefaultEngine()
+	if syntheticDisallowMooer(meta) && strings.EqualFold(defaultEngine, "mooer") {
+		defaultEngine = "vllm"
+	}
 
 	var variants []ModelVariant
 	var targetedHW *ModelVariantHardware
@@ -1096,6 +1147,9 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 		if re == "" || re == inferredEngineType || re == defaultEngine {
 			continue
 		}
+		if syntheticDisallowMooer(meta) && strings.EqualFold(re, "mooer") {
+			continue
+		}
 		if targetedHW != nil {
 			// Build engine-specific config using raw values, not copied vLLM params.
 			gmuRaw, _ := targetedCfg["_gmu"].(float64)
@@ -1140,6 +1194,18 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 		},
 		Variants:  variants,
 		synthetic: true,
+	}
+}
+
+func syntheticDisallowMooer(meta ScanMetadata) bool {
+	if !strings.EqualFold(meta.Format, "safetensors") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(meta.Type)) {
+	case "llm", "embedding":
+		return true
+	default:
+		return false
 	}
 }
 

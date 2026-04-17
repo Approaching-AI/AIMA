@@ -123,6 +123,7 @@ type Configuration struct {
 type BenchmarkResult struct {
 	ID              string    `json:"id"`
 	ConfigID        string    `json:"config_id"`
+	AdvisoryID      string    `json:"advisory_id,omitempty"`
 	Concurrency     int       `json:"concurrency"`
 	InputLenBucket  string    `json:"input_len_bucket"`
 	OutputLenBucket string    `json:"output_len_bucket"`
@@ -385,6 +386,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v14: multi-modal benchmark columns (TTS/ASR/T2I/T2V)
 	if err := d.migrateV14(ctx); err != nil {
 		return fmt.Errorf("migrate v14: %w", err)
+	}
+	// v15: benchmark_results.advisory_id links validation benches to central advisory
+	if err := d.migrateV15(ctx); err != nil {
+		return fmt.Errorf("migrate v15: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1179,6 +1184,35 @@ func (d *DB) migrateV14(ctx context.Context) error {
 	}
 
 	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 14"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+// migrateV15 adds benchmark_results.advisory_id so Explorer can tag benches
+// generated from an advisory validation run and close the central feedback loop.
+func (d *DB) migrateV15(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 15 {
+		return nil
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('benchmark_results') WHERE name='advisory_id'`).Scan(&count); err != nil {
+		return fmt.Errorf("check benchmark_results.advisory_id column: %w", err)
+	}
+	if count == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE benchmark_results ADD COLUMN advisory_id TEXT`); err != nil {
+			return fmt.Errorf("add benchmark_results.advisory_id: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_br_advisory ON benchmark_results(advisory_id)`); err != nil {
+		return fmt.Errorf("create idx_br_advisory: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 15"); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
@@ -2284,6 +2318,22 @@ func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) erro
 	return nil
 }
 
+// UpdateBenchmarkAdvisoryID stamps an advisory_id onto an existing benchmark row.
+// Used by Explorer's advisory-validation path to link validation benches back to
+// the central advisory that triggered them, so Central can close the feedback loop.
+func (d *DB) UpdateBenchmarkAdvisoryID(ctx context.Context, benchmarkID, advisoryID string) error {
+	if benchmarkID == "" || advisoryID == "" {
+		return nil
+	}
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE benchmark_results SET advisory_id = ? WHERE id = ?`,
+		advisoryID, benchmarkID)
+	if err != nil {
+		return fmt.Errorf("stamp advisory_id on benchmark %s: %w", benchmarkID, err)
+	}
+	return nil
+}
+
 // InsertConfigurationAndBenchmarkResult writes a configuration (if new) and its
 // benchmark result in a single transaction. This preserves the v0.4 §10.1
 // invariant that every benchmark_results.config_id references an existing
@@ -2317,7 +2367,7 @@ func (d *DB) InsertConfigurationAndBenchmarkResult(ctx context.Context, existing
 	return tx.Commit()
 }
 
-const insertBenchmarkResultSQL = `INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
+const insertBenchmarkResultSQL = `INSERT INTO benchmark_results (id, config_id, advisory_id, concurrency, input_len_bucket, output_len_bucket, modality,
     ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
     throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
     error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes,
@@ -2327,13 +2377,13 @@ const insertBenchmarkResultSQL = `INSERT INTO benchmark_results (id, config_id, 
     latency_p50_ms, latency_p95_ms, latency_p99_ms, images_per_sec, avg_steps, image_width, image_height,
     video_latency_p50_s, video_latency_p95_s, videos_per_hour, avg_video_duration_s,
     avg_frames, video_fps, video_width, video_height, video_steps)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func insertBenchmarkResultArgs(b *BenchmarkResult) []any {
 	return []any{
-		b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
+		b.ID, b.ConfigID, nullStr(b.AdvisoryID), b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
 		b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
 		b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct, b.CPUUsagePct,
 		b.ErrorRate, b.OOMOccurred, b.Stability, b.DurationS, b.SampleCount, b.AgentModel, b.Notes,
@@ -2482,7 +2532,7 @@ func (d *DB) ListConfigurations(ctx context.Context, hardware, model, engine str
 
 // ListBenchmarkResults returns benchmark results, optionally filtered by config IDs.
 func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit int) ([]*BenchmarkResult, error) {
-	query := `SELECT id, config_id, concurrency, COALESCE(input_len_bucket,''),
+	query := `SELECT id, config_id, COALESCE(advisory_id,''), concurrency, COALESCE(input_len_bucket,''),
 	                 COALESCE(output_len_bucket,''), COALESCE(modality,'text'),
 	                 ttft_ms_p50, ttft_ms_p95, COALESCE(ttft_ms_p99,0),
 	                 COALESCE(tpot_ms_p50,0), COALESCE(tpot_ms_p95,0),
@@ -2538,7 +2588,7 @@ func (d *DB) ListBenchmarkResults(ctx context.Context, configIDs []string, limit
 			avgFrames, videoFPS, videoWidth, videoHeight sql.NullInt64
 			videoSteps                                   sql.NullInt64
 		)
-		if err := rows.Scan(&b.ID, &b.ConfigID, &b.Concurrency, &b.InputLenBucket,
+		if err := rows.Scan(&b.ID, &b.ConfigID, &b.AdvisoryID, &b.Concurrency, &b.InputLenBucket,
 			&b.OutputLenBucket, &b.Modality,
 			&b.TTFTP50ms, &b.TTFTP95ms, &b.TTFTP99ms, &b.TPOTP50ms, &b.TPOTP95ms,
 			&b.ThroughputTPS, &b.QPS,

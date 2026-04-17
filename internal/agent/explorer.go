@@ -1181,6 +1181,16 @@ func (e *Explorer) executeAdvisoryValidation(ctx context.Context, advisory advis
 	taskElapsed := time.Since(taskStart)
 	plan.Tasks[0].Status = taskStatusFromHarvest(result)
 
+	// Stamp the bench row with the advisory ID so Central's feedback ingest can
+	// attribute the evidence. Best-effort: stamping is not load-bearing for the
+	// feedback POST itself (which uses advisory.ID), only for downstream audit.
+	if e.db != nil && result.BenchmarkID != "" && advisory.ID != "" {
+		if err := e.db.UpdateBenchmarkAdvisoryID(ctx, result.BenchmarkID, advisory.ID); err != nil {
+			slog.Debug("explorer: stamp advisory_id on benchmark failed", "error", err,
+				"benchmark_id", result.BenchmarkID, "advisory_id", advisory.ID)
+		}
+	}
+
 	harvester := e.currentHarvester()
 	if harvester != nil {
 		actions := harvester.Harvest(ctx, HarvestInput{Task: task, Result: result})

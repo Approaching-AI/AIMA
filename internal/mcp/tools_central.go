@@ -112,24 +112,30 @@ func registerCentralTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// central.scenario — generate/list via action param
+	// central.scenario — generate/list/feedback via action param
 	s.RegisterTool(&Tool{
 		Name:        "central.scenario",
-		Description: "Central server scenarios. action=generate: request the central server to generate an AI-powered multi-model deployment scenario. action=list: list deployment scenarios from the central server filtered by hardware or source.",
+		Description: "Central server scenarios. action=generate: request the central server to generate an AI-powered multi-model deployment scenario. action=list: list deployment scenarios from the central server filtered by hardware or source. action=feedback: report the outcome after applying a scenario so the central server can close the feedback loop.",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["generate","list"],"description":"Scenario action"},`+
+			`"action":{"type":"string","enum":["generate","list","feedback"],"description":"Scenario action"},`+
 				`"hardware":{"type":"string","description":"Hardware profile, e.g. 'nvidia-gb10-arm64' (required for generate, optional filter for list)"},`+
 				`"models":{"type":"array","items":{"type":"string"},"description":"Model names to include, e.g. ['qwen3-8b','glm-4.7-flash'] (required for generate)"},`+
 				`"goal":{"type":"string","description":"Optimization goal: 'balanced', 'low-latency', 'maximize-models' (for generate)"},`+
-				`"source":{"type":"string","description":"Filter by source: 'advisor', 'user', 'analyzer' (for list)"}`,
+				`"source":{"type":"string","description":"Filter by source: 'advisor', 'user', 'analyzer' (for list)"},`+
+				`"scenario_id":{"type":"string","description":"Scenario ID (required for feedback)"},`+
+				`"status":{"type":"string","enum":["applied","rejected","deferred","failed"],"description":"Outcome status (required for feedback)"},`+
+				`"reason":{"type":"string","description":"Human-readable note accompanying the feedback (optional)"}`,
 			"action"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			var p struct {
-				Action   string   `json:"action"`
-				Hardware string   `json:"hardware"`
-				Models   []string `json:"models"`
-				Goal     string   `json:"goal"`
-				Source   string   `json:"source"`
+				Action     string   `json:"action"`
+				Hardware   string   `json:"hardware"`
+				Models     []string `json:"models"`
+				Goal       string   `json:"goal"`
+				Source     string   `json:"source"`
+				ScenarioID string   `json:"scenario_id"`
+				Status     string   `json:"status"`
+				Reason     string   `json:"reason"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -156,8 +162,20 @@ func registerCentralTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("central.scenario list: %w", err)
 				}
 				return TextResult(string(data)), nil
+			case "feedback":
+				if deps.ScenarioFeedback == nil {
+					return ErrorResult("scenario.feedback not configured — set central.endpoint first"), nil
+				}
+				if p.ScenarioID == "" || p.Status == "" {
+					return ErrorResult("scenario_id and status are required for action=feedback"), nil
+				}
+				data, err := deps.ScenarioFeedback(ctx, p.ScenarioID, p.Status, p.Reason)
+				if err != nil {
+					return nil, fmt.Errorf("central.scenario feedback for %s: %w", p.ScenarioID, err)
+				}
+				return TextResult(string(data)), nil
 			default:
-				return ErrorResult(fmt.Sprintf("unknown action %q; supported: generate, list", p.Action)), nil
+				return ErrorResult(fmt.Sprintf("unknown action %q; supported: generate, list, feedback", p.Action)), nil
 			}
 		},
 	})

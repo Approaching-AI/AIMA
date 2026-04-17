@@ -110,7 +110,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 		deviceID, _ := deps.GetConfig(ctx, "device.id")
 		hwTarget := edgeHardwareTarget(ctx, ac)
-		ingestPayload, exportStats, err := buildCentralIngestPayload(exportData, deviceID, hwTarget.GPUArch)
+		ingestPayload, exportStats, err := buildCentralIngestPayload(exportData, deviceID, hwTarget.GPUArch, hwTarget.HardwareProfile)
 		if err != nil {
 			return nil, fmt.Errorf("build ingest payload: %w", err)
 		}
@@ -389,6 +389,45 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		})
 	}
 
+	deps.ScenarioFeedback = func(ctx context.Context, scenarioID, feedbackStatus, reason string) (json.RawMessage, error) {
+		endpoint := centralEndpoint(ctx, deps.GetConfig)
+		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
+		status, accepted, err := normalizeScenarioFeedbackStatus(feedbackStatus)
+		if err != nil {
+			return nil, err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"status":   status,
+			"feedback": reason,
+			"accepted": accepted,
+		})
+		req, err := http.NewRequestWithContext(ctx, "POST",
+			endpoint+"/api/v1/scenarios/"+scenarioID+"/feedback",
+			strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		resp, err := syncHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("send scenario feedback: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("central returned %d: %s", resp.StatusCode, string(body))
+		}
+		return json.Marshal(map[string]any{
+			"scenario_id":        scenarioID,
+			"requested_status":   feedbackStatus,
+			"normalized_status":  status,
+			"feedback_submitted": true,
+		})
+	}
+
 	deps.RequestAdvise = func(ctx context.Context, model, engine, intent string) (json.RawMessage, error) {
 		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")
@@ -613,7 +652,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 }
 
-func buildCentralIngestPayload(exportData []byte, deviceID, gpuArch string) ([]byte, map[string]int, error) {
+func buildCentralIngestPayload(exportData []byte, deviceID, gpuArch, hwProfile string) ([]byte, map[string]int, error) {
 	var exportEnvelope struct {
 		Stats map[string]int `json:"stats"`
 		Data  struct {
@@ -628,7 +667,7 @@ func buildCentralIngestPayload(exportData []byte, deviceID, gpuArch string) ([]b
 
 	configs := make([]json.RawMessage, 0, len(exportEnvelope.Data.Configurations))
 	for _, raw := range exportEnvelope.Data.Configurations {
-		normalized, err := normalizeCentralIngestConfig(raw)
+		normalized, err := normalizeCentralIngestConfig(raw, hwProfile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("normalize config: %w", err)
 		}
@@ -636,12 +675,13 @@ func buildCentralIngestPayload(exportData []byte, deviceID, gpuArch string) ([]b
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"schema_version":  1,
-		"device_id":       deviceID,
-		"gpu_arch":        gpuArch,
-		"configurations":  configs,
-		"benchmarks":      exportEnvelope.Data.BenchmarkResults,
-		"knowledge_notes": exportEnvelope.Data.KnowledgeNotes,
+		"schema_version":   1,
+		"device_id":        deviceID,
+		"gpu_arch":         gpuArch,
+		"hardware_profile": hwProfile,
+		"configurations":   configs,
+		"benchmarks":       exportEnvelope.Data.BenchmarkResults,
+		"knowledge_notes":  exportEnvelope.Data.KnowledgeNotes,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal ingest payload: %w", err)
@@ -649,7 +689,7 @@ func buildCentralIngestPayload(exportData []byte, deviceID, gpuArch string) ([]b
 	return payload, exportEnvelope.Stats, nil
 }
 
-func normalizeCentralIngestConfig(raw json.RawMessage) (json.RawMessage, error) {
+func normalizeCentralIngestConfig(raw json.RawMessage, hwProfile string) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
@@ -657,7 +697,20 @@ func normalizeCentralIngestConfig(raw json.RawMessage) (json.RawMessage, error) 
 	if cfgRaw, ok := fields["config"]; ok {
 		fields["config"] = normalizeEmbeddedJSONValue(cfgRaw)
 	}
+	// Inject hardware_profile per-config when the edge-local export omits it
+	// (edge schema stores hardware profile in the `hardware` column).
+	if hwProfile != "" {
+		if existing, ok := fields["hardware_profile"]; !ok || isJSONEmptyString(existing) {
+			encoded, _ := json.Marshal(hwProfile)
+			fields["hardware_profile"] = encoded
+		}
+	}
 	return json.Marshal(fields)
+}
+
+func isJSONEmptyString(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || string(trimmed) == `""` || string(trimmed) == "null"
 }
 
 func normalizeEmbeddedJSONValue(raw json.RawMessage) json.RawMessage {
@@ -791,6 +844,26 @@ func normalizeFeedbackStatus(status string) (normalized string, accepted bool, e
 		return "rejected", false, nil
 	default:
 		return "", false, fmt.Errorf("unsupported advisory feedback status %q: use validated or rejected", status)
+	}
+}
+
+// normalizeScenarioFeedbackStatus accepts the four scenario outcome statuses
+// that Central's handleScenarioFeedback recognizes. `applied` means the edge
+// deployed the scenario; `rejected` / `deferred` / `failed` are terminal
+// non-success states. The bool is purely for the `accepted` convenience
+// field and is true only for `applied`.
+func normalizeScenarioFeedbackStatus(status string) (normalized string, accepted bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "applied", "accepted":
+		return "applied", true, nil
+	case "rejected":
+		return "rejected", false, nil
+	case "deferred":
+		return "deferred", false, nil
+	case "failed":
+		return "failed", false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported scenario feedback status %q: use applied, rejected, deferred, or failed", status)
 	}
 }
 

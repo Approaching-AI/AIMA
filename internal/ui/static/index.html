@@ -5842,7 +5842,9 @@ function aimaApp() {
       return this.onboardingData.stack_status.init_tier_recommendation || 'docker';
     },
     wizInitCommand() {
-      return this.wizInitTier() === 'k3s' ? 'sudo aima init --k3s' : 'sudo aima init';
+      return this.wizInitTier() === 'k3s'
+        ? 'sudo $(command -v aima) onboarding init --tier k3s'
+        : 'sudo $(command -v aima) onboarding init --tier docker';
     },
     wizInitBlockedReason() {
       if (!this.onboardingData || !this.onboardingData.stack_status) return '';

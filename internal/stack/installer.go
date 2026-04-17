@@ -120,6 +120,8 @@ type Installer struct {
 	podQuerier PodQuerier
 }
 
+var lookupPath = exec.LookPath
+
 // NewInstaller creates a stack installer.
 func NewInstaller(runner CommandRunner, dataDir string) *Installer {
 	platform := runtime.GOOS + "-" + runtime.GOARCH
@@ -197,7 +199,7 @@ func (inst *Installer) PreCheck(ctx context.Context, components []knowledge.Stac
 		if allActive {
 			continue
 		}
-		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo aima init", comp.Metadata.Name)
+		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo $(command -v aima) onboarding init --tier auto", comp.Metadata.Name)
 	}
 
 	return nil
@@ -680,14 +682,12 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	args := collectArgs(comp, hwProfile)
 	env := collectEnv(comp, hwProfile)
 
-	resolvedBinary := resolveSystemdBinaryPath(binary)
-
 	// Copy binary to /usr/local/bin/ so it's accessible to all users.
 	// This matches the K3S official install script convention.
 	systemBinary := filepath.Join("/usr/local/bin", name)
-	if err := copyFile(resolvedBinary, systemBinary, 0o755); err != nil {
+	if err := copyFile(binary, systemBinary, 0o755); err != nil {
 		slog.Warn("failed to copy binary to system path, using original", "error", err)
-		systemBinary = resolvedBinary
+		systemBinary = binary
 	} else {
 		slog.Info("installed binary to system path", "path", systemBinary)
 	}
@@ -789,19 +789,6 @@ WantedBy=multi-user.target
 
 	slog.Info("daemon installed as systemd service", "name", name, "unit", unitPath)
 	return nil
-}
-
-func resolveSystemdBinaryPath(binary string) string {
-	if binary == "" {
-		return binary
-	}
-	if filepath.IsAbs(binary) {
-		return binary
-	}
-	if resolved, err := exec.LookPath(binary); err == nil && resolved != "" {
-		return resolved
-	}
-	return binary
 }
 
 // installArchive installs a component from a .tar.gz archive:
@@ -1079,11 +1066,7 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 		return fmt.Errorf("empty verify command for %s", comp.Metadata.Name)
 	}
 
-	// Resolve binary from dist/ if not in PATH
-	binary := parts[0]
-	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
-		binary = localPath
-	}
+	binary := resolveVerificationBinary(parts[0], inst.distDir)
 
 	for time.Now().Before(deadline) {
 		out, err := inst.runner.Run(ctx, binary, parts[1:]...)
@@ -1100,6 +1083,20 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 	}
 
 	return fmt.Errorf("timeout waiting for %s to become ready", comp.Metadata.Name)
+}
+
+func resolveVerificationBinary(binary, distDir string) string {
+	// Prefer the currently installed/PATH-resolved binary when available.
+	// Dist/ may contain stale bootstrap artifacts from a previous init run and
+	// should only be used as a fallback when the binary is not otherwise
+	// discoverable on the host.
+	if lookedUp, err := lookupPath(binary); err == nil {
+		return lookedUp
+	}
+	if localPath := filepath.Join(distDir, binary); fileExists(localPath) {
+		return localPath
+	}
+	return binary
 }
 
 func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackComponent, hwProfile string) ComponentStatus {

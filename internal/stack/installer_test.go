@@ -110,6 +110,35 @@ func TestStatusNotInstalled(t *testing.T) {
 	}
 }
 
+func TestStatusPrefersInstalledBinaryOverDistArtifact(t *testing.T) {
+	tmp := t.TempDir()
+	distDir := filepath.Join(tmp, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		t.Fatalf("mkdir distDir: %v", err)
+	}
+	realDocker := filepath.Join(tmp, "system-docker")
+	if err := os.WriteFile(realDocker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write real docker: %v", err)
+	}
+	// Stale artifact exists in dist/ but should not be preferred over PATH.
+	if err := os.WriteFile(filepath.Join(distDir, "docker"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write dist docker: %v", err)
+	}
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "docker" {
+			return realDocker, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
+
+	resolved := resolveVerificationBinary("docker", distDir)
+	if resolved != realDocker {
+		t.Fatalf("resolveVerificationBinary = %q, want %q", resolved, realDocker)
+	}
+}
+
 func TestInitSkipsReadyComponent(t *testing.T) {
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -840,33 +869,6 @@ func TestInstallDaemonSystemdUnitContent(t *testing.T) {
 	}
 	if env["EXTRA"] != "val" {
 		t.Errorf("EXTRA = %q, want %q", env["EXTRA"], "val")
-	}
-}
-
-func TestResolveSystemdBinaryPathPrefersLookPathForBareCommand(t *testing.T) {
-	tempDir := t.TempDir()
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin dir: %v", err)
-	}
-
-	installed := filepath.Join(binDir, "aima")
-	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write installed binary: %v", err)
-	}
-
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
-
-	if got := resolveSystemdBinaryPath("aima"); got != installed {
-		t.Fatalf("resolveSystemdBinaryPath(aima) = %q, want %q", got, installed)
-	}
-}
-
-func TestResolveSystemdBinaryPathKeepsAbsolutePath(t *testing.T) {
-	path := "/usr/local/bin/aima"
-	if got := resolveSystemdBinaryPath(path); got != path {
-		t.Fatalf("resolveSystemdBinaryPath(%q) = %q, want unchanged", path, got)
 	}
 }
 

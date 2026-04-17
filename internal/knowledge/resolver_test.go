@@ -420,7 +420,7 @@ func TestResolveCatalogModelName(t *testing.T) {
 	}{
 		{"alias exact case", "Qwen3-Embedding-0.6B", "qwen3-emb-0.6b"},
 		{"alias lowercase", "qwen3-embedding-0.6b", "qwen3-emb-0.6b"},
-		{"alias with gptq strip", "gptq-Qwen3-8B-junhowie", "qwen3-8b"},
+		{"quant-prefixed alias", "gptq-Qwen3-8B-junhowie", "qwen3-8b"},
 		{"canonical name passthrough", "qwen3-8b", "qwen3-8b"},
 		{"canonical name different case", "LLaMA-3.1-8B", "llama-3.1-8b"},
 		{"no match returns input", "some-unknown-model", "some-unknown-model"},

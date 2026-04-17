@@ -916,13 +916,14 @@ func engineSupportsModelType(supported []string, modelType string) bool {
 	return false
 }
 
+// normalizeModelLookupKey lowercases, collapses separators, and trims a model
+// name into a canonical lookup form. It does NOT strip any domain-specific
+// prefixes (quantization tags, uploader handles, etc.) — those should be
+// expressed as explicit Aliases on the catalog ModelAsset so adding coverage
+// stays a YAML-only change (honors INV-1/2).
 func normalizeModelLookupKey(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = modelLookupSeparatorRE.ReplaceAllString(name, "-")
-	name = strings.Trim(name, "-")
-	if strings.HasPrefix(name, "gptq-") {
-		name = strings.TrimPrefix(name, "gptq-")
-	}
 	for strings.Contains(name, "--") {
 		name = strings.ReplaceAll(name, "--", "-")
 	}

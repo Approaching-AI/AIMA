@@ -15,10 +15,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   - `internal/cli/root.go` — `--invite-code` persistent flag; `AIMA_INVITE_CODE` env var takes priority
   - `internal/cli/device.go` + `internal/mcp/tools_device.go` — `aima device register/status/renew/reset` CLI + 4 new MCP tools (bringing the total to 60)
   - `cmd/aima/tooldeps_integration.go` — all 10 outbound Central closures gate on `cloud.RequireRegistered`; URLs carry `?device_id=` query param
+- **Model `metadata.aliases` in catalog YAML** — `ModelAsset` now honors a `metadata.aliases` list so scan-name → canonical-name matching is catalog-driven, not hardcoded. `qwen3-emb-0.6b.yaml` gains `Qwen3-Embedding-0.6B` / `qwen3-embedding-0.6b`; `qwen3-8b.yaml` gains `Qwen3-8B-junhowie` / `gptq-Qwen3-8B-junhowie`. Adding a new alias is now a YAML-only change (honors INV-1/2).
 
 ### Changed
 
 - **Central Knowledge Server strict mode** — every scoped endpoint now requires `device_id` query parameter, returning 400 when missing; `/healthz` and `/api/v1/stats` remain exempt. Edge is expected to have completed aima-service registration before issuing any Central request. See `aima-central-knowledge` commit history for the server-side implementation.
+- **Onboarding engine selection hardened (#36)** — `FormatToEngine` prefers general-purpose LLM engines over specialized ones (safetensors → vllm instead of mooer-asr); `InferEngineType` enforces format compatibility; blocked engines (status: blocked) now fail fast instead of hanging a 15-minute docker pull. Three `vllm-nightly-*` assets marked blocked where the referenced image `qwen3_5-cu130` does not exist.
+- **Onboarding wizard UX (#36)** — GPU occupancy panel with Stop buttons for non-AIMA containers, clickable phase dots for back-nav, scan-complete summary + Back/Continue buttons, actionable engine-blocked / GPU-busy error copy, and a "Skip for now" button on the support page.
+- **Knowledge resolver scan-name resolution (#39, refactored)** — `resolveCatalogModelName` matches scan inputs (`Qwen3-Embedding-0.6B`, `gptq-Qwen3-8B-junhowie`) against catalog via the new `Aliases` field. Synthetic fallback no longer auto-selects the ASR-only `mooer` engine for `safetensors` llm/embedding models; redundant guard checks in `BuildSyntheticModelAsset` collapsed into a single `substituteDisallowedMooer` helper.
+
+### Fixed
+
+- **`aima init` systemd unit ExecStart path (#38)** — the stable installer was writing a user-dir binary path (e.g. `/home/qujing/aima`) into `aima-serve.service`, causing `203/EXEC` startup failure even after docker/k3s installed successfully. Bare command names are now resolved via `exec.LookPath`; absolute paths pass through unchanged.
 
 ## [v0.3.4] - 2026-04-09
 

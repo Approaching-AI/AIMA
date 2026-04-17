@@ -692,6 +692,7 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	}
 
 	// T3: DB-based dedup (replaces history-slice dedup in planners)
+	proposedTasks := len(plan.Tasks)
 	if e.db != nil {
 		var dedupFiltered []PlanTask
 		for _, t := range plan.Tasks {
@@ -719,7 +720,18 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 		plan.Tasks = dedupFiltered
 	}
 
-	slog.Info("explorer: plan generated", "tasks", len(plan.Tasks), "id", plan.ID, "tier", plan.Tier)
+	slog.Info("explorer: plan generated",
+		"id", plan.ID,
+		"tier", plan.Tier,
+		"reasoning", plan.Reasoning,
+		"tasks", len(plan.Tasks),
+		"task_list", planTaskSummaries(plan.Tasks),
+		"llm_tokens", planTokens,
+		"proposed_tasks", proposedTasks,
+		"dedup_dropped", proposedTasks-len(plan.Tasks),
+		"ready_combos_seen", readyCombos,
+		"blocked_combos_seen", blockedCombos,
+		"knowledge_gaps", len(input.Gaps))
 	if len(plan.Tasks) == 0 {
 		slog.Info("explorer: no tasks to execute after filtering")
 		// N1: empty plan still counts as a budget round — prevents infinite
@@ -1068,6 +1080,20 @@ func (e *Explorer) advisoryTaskAllowed(ctx context.Context, task PlanTask) (bool
 		}
 	}
 	return true, ""
+}
+
+// planTaskSummaries renders a short "kind:model/engine" per task so the
+// "explorer: plan generated" log line carries the decision trace without
+// callers having to post-join events.
+func planTaskSummaries(tasks []PlanTask) []string {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, fmt.Sprintf("%s:%s/%s", t.Kind, t.Model, t.Engine))
+	}
+	return out
 }
 
 func taskStatusFromHarvest(result HarvestResult) string {
@@ -1961,21 +1987,22 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	}
 
 	status, err := e.explMgr.StartAndWait(ctx, req)
-	if err != nil {
-		return HarvestResult{
-			Success:   false,
-			Cancelled: errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
-			Error:     err.Error(),
-		}
+	cancelled := err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+	if status == nil {
+		return HarvestResult{Success: false, Cancelled: cancelled, Error: err.Error()}
 	}
-
 	result := e.parseExplorationResult(status)
-	if status.Run.Status == "failed" {
+	switch {
+	case err != nil:
+		result.Success = false
+		result.Cancelled = cancelled
+		result.Error = err.Error()
+		return result
+	case status.Run.Status == "failed":
 		result.Success = false
 		result.Error = status.Run.Error
 		return result
-	}
-	if status.Run.Status == "cancelled" {
+	case status.Run.Status == "cancelled":
 		result.Success = false
 		result.Cancelled = true
 		result.Error = status.Run.Error

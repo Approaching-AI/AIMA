@@ -464,8 +464,10 @@ func comboBlockedBySummary(model, engine string, blockers []ConfirmedBlocker, de
 }
 
 func confirmedBlockerMatches(b ConfirmedBlocker, model, engine string) bool {
-	modelEq := strings.EqualFold(strings.TrimSpace(b.Model), strings.TrimSpace(model))
-	engineEq := strings.EqualFold(strings.TrimSpace(b.Engine), strings.TrimSpace(engine))
+	bModel := strings.TrimSpace(b.Model)
+	bEngine := strings.TrimSpace(b.Engine)
+	modelEq := strings.EqualFold(bModel, strings.TrimSpace(model))
+	engineEq := strings.EqualFold(bEngine, strings.TrimSpace(engine))
 	switch strings.ToLower(strings.TrimSpace(b.Scope)) {
 	case "combo":
 		return modelEq && engineEq
@@ -473,16 +475,26 @@ func confirmedBlockerMatches(b ConfirmedBlocker, model, engine string) bool {
 		return modelEq
 	case "engine":
 		return engineEq
-	default:
-		if b.Model != "" && b.Engine != "" {
-			return modelEq && engineEq
-		}
-		if b.Model != "" {
-			return modelEq
-		}
-		if b.Engine != "" {
+	}
+	// Free-form scope text: the agent often writes phrases like "sglang on GB10"
+	// or "vllm (standard) on GB10 for Qwen models" to express engine-wide intent
+	// while still naming a single triggering model. Honor that intent: if the
+	// scope text references the engine but NOT the model, treat as engine-wide.
+	if scopeText := strings.ToLower(strings.TrimSpace(b.Scope)); scopeText != "" && bEngine != "" {
+		mentionsEngine := strings.Contains(scopeText, strings.ToLower(bEngine))
+		mentionsModel := bModel != "" && strings.Contains(scopeText, strings.ToLower(bModel))
+		if mentionsEngine && !mentionsModel {
 			return engineEq
 		}
+	}
+	if bModel != "" && bEngine != "" {
+		return modelEq && engineEq
+	}
+	if bModel != "" {
+		return modelEq
+	}
+	if bEngine != "" {
+		return engineEq
 	}
 	return false
 }

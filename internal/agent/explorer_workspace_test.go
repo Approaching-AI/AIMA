@@ -289,6 +289,54 @@ func TestParseSummaryMachineReadableSections(t *testing.T) {
 	}
 }
 
+func TestConfirmedBlockerMatches(t *testing.T) {
+	tests := []struct {
+		name    string
+		blocker ConfirmedBlocker
+		model   string
+		engine  string
+		want    bool
+	}{
+		{
+			name:    "scope=combo matches only exact pair",
+			blocker: ConfirmedBlocker{Scope: "combo", Model: "Qwen2.5-7B", Engine: "vllm"},
+			model:   "Qwen2.5-7B", engine: "vllm", want: true,
+		},
+		{
+			name:    "scope=combo does not match different model on same engine",
+			blocker: ConfirmedBlocker{Scope: "combo", Model: "Qwen2.5-7B", Engine: "vllm"},
+			model:   "GLM-4.5", engine: "vllm", want: false,
+		},
+		{
+			name:    "scope=engine matches all combos with that engine",
+			blocker: ConfirmedBlocker{Scope: "engine", Engine: "sglang"},
+			model:   "anything", engine: "sglang", want: true,
+		},
+		{
+			name:    "free-form scope mentioning engine only propagates engine-wide",
+			blocker: ConfirmedBlocker{Scope: "sglang on GB10", Model: "GLM-4.6V-Flash-FP4", Engine: "sglang"},
+			model:   "GLM-4.7-Flash-NVFP4", engine: "sglang", want: true,
+		},
+		{
+			name:    "free-form scope mentioning model stays combo-only",
+			blocker: ConfirmedBlocker{Scope: "qwen2.5-0.5b + llamacpp", Model: "qwen2.5-0.5b", Engine: "llamacpp"},
+			model:   "other-model", engine: "llamacpp", want: false,
+		},
+		{
+			name:    "free-form engine-wide does not leak to a different engine",
+			blocker: ConfirmedBlocker{Scope: "sglang on GB10", Model: "GLM-4.6V-Flash-FP4", Engine: "sglang"},
+			model:   "anything", engine: "vllm", want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := confirmedBlockerMatches(tc.blocker, tc.model, tc.engine); got != tc.want {
+				t.Fatalf("confirmedBlockerMatches = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtractSection(t *testing.T) {
 	tests := []struct {
 		name    string

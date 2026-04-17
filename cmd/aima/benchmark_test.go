@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -18,6 +19,7 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
+	deployConfig := map[string]any{"tp_size": 2, "gmu": 0.9}
 	benchmarkID, configID, _, err := saveBenchmarkResult(ctx, db,
 		"nvidia-rtx4090-x86", "sglang-kt", "qwen3-4b",
 		"llm",
@@ -29,7 +31,7 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 			AvgOutputTokens: 256,
 			TotalRequests:   8,
 		},
-		nil, benchmarkSystemMetrics{}, 2, 2048, 256, "explorer validate")
+		deployConfig, benchmarkSystemMetrics{}, 2, "explorer validate")
 	if err != nil {
 		t.Fatalf("saveBenchmarkResult: %v", err)
 	}
@@ -41,13 +43,15 @@ func TestSaveBenchmarkResultPersistsDeployConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConfiguration: %v", err)
 	}
-	if cfg.Config != `{"concurrency":2,"input_tokens":2048,"max_tokens":256}` &&
-		cfg.Config != `{"concurrency":2,"max_tokens":256,"input_tokens":2048}` &&
-		cfg.Config != `{"input_tokens":2048,"concurrency":2,"max_tokens":256}` &&
-		cfg.Config != `{"input_tokens":2048,"max_tokens":256,"concurrency":2}` &&
-		cfg.Config != `{"max_tokens":256,"concurrency":2,"input_tokens":2048}` &&
-		cfg.Config != `{"max_tokens":256,"input_tokens":2048,"concurrency":2}` {
-		t.Fatalf("Config JSON = %s, want benchmark config {concurrency,input_tokens,max_tokens}", cfg.Config)
+	// Post-S2: Config JSON reflects the deploy-level engine params that are
+	// shared across every matrix cell, not the per-cell benchmark profile
+	// (concurrency / input_tokens / max_tokens). Accept any key ordering.
+	var got map[string]any
+	if uerr := json.Unmarshal([]byte(cfg.Config), &got); uerr != nil {
+		t.Fatalf("Config JSON not valid JSON: %v (%s)", uerr, cfg.Config)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"tp_size": float64(2), "gmu": 0.9}) {
+		t.Fatalf("Config = %v, want deploy-level params", got)
 	}
 
 	results, err := db.ListBenchmarkResults(ctx, []string{configID}, 10)
@@ -81,7 +85,7 @@ func TestSaveBenchmarkResultPersistsEmbeddingModality(t *testing.T) {
 			TotalRequests:          6,
 			DurationMs:             1000,
 		},
-		nil, benchmarkSystemMetrics{}, 1, 256, 0, "embedding validate")
+		nil, benchmarkSystemMetrics{}, 1, "embedding validate")
 	if err != nil {
 		t.Fatalf("saveBenchmarkResult: %v", err)
 	}
@@ -119,7 +123,7 @@ func TestSaveBenchmarkResultPersistsSuccessfulZeroThroughputReranker(t *testing.
 			AvgOutputTokens:    4,
 			RerankLatencyP50ms: 120,
 		},
-		nil, benchmarkSystemMetrics{}, 1, 128, 0, "reranker validate")
+		nil, benchmarkSystemMetrics{}, 1, "reranker validate")
 	if err != nil {
 		t.Fatalf("saveBenchmarkResult: %v", err)
 	}

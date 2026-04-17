@@ -400,10 +400,18 @@ func parseYAMLListSection(section string, out any) (bool, error) {
 // Uses writeFactDocument to bypass the read-only guard (these are AIMA-owned files).
 func (w *ExplorerWorkspace) RefreshFactDocuments(input PlanInput) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
+
+	// Close the v0.4 frontier loop (2026-04-16 coverage spec §2): pull
+	// confirmed blockers and do-not-retry entries out of the agent-authored
+	// summary.md so this cycle's available-combos.md reflects them. Without
+	// this, an earlier cycle's "validated-broken" combo keeps reappearing in
+	// Ready and the next PDCA wastes another round retrying it.
+	blockers, denies := w.loadSummaryConstraints()
+
 	docs := map[string]string{
 		"index.md":            w.generateIndex(input, now),
 		"device-profile.md":   w.generateDeviceProfile(input, now),
-		"available-combos.md": w.generateAvailableCombos(input, now),
+		"available-combos.md": w.generateAvailableCombos(input, now, blockers, denies),
 		"knowledge-base.md":   w.generateKnowledgeBase(input, now),
 		"experiment-facts.md": w.generateExperimentFacts(now),
 	}
@@ -415,11 +423,91 @@ func (w *ExplorerWorkspace) RefreshFactDocuments(input PlanInput) error {
 	return nil
 }
 
+// loadSummaryConstraints reads agent-authored blockers and retry-denies from
+// summary.md. Returns empty slices when summary.md is missing or malformed —
+// the downstream combo generator treats "no constraints" as safe fallback.
+func (w *ExplorerWorkspace) loadSummaryConstraints() ([]ConfirmedBlocker, []RetryDenyEntry) {
+	md, err := w.ReadFile("summary.md")
+	if err != nil {
+		return nil, nil
+	}
+	blockers, _ := parseConfirmedBlockers(md)
+	denies, _ := parseDoNotRetryThisCycle(md)
+	return blockers, denies
+}
+
+// combo matches a (model, engine) pair against a confirmed-blocker entry.
+// Scope "combo" matches the exact pair. Scope "model" / "engine" / "" match
+// family-wide: a model-scoped blocker removes every combo with that model,
+// and engine-scoped blocker removes every combo with that engine. This
+// mirrors the 2026-04-16 spec §2 "structural failure" escalation rule.
+func comboBlockedBySummary(model, engine string, blockers []ConfirmedBlocker, denies []RetryDenyEntry) (bool, string) {
+	for _, b := range blockers {
+		if confirmedBlockerMatches(b, model, engine) {
+			reason := strings.TrimSpace(b.Reason)
+			if reason == "" {
+				reason = "confirmed blocker (from summary.md)"
+			}
+			return true, reason
+		}
+	}
+	for _, d := range denies {
+		if retryDenyMatches(d, model, engine) {
+			reason := strings.TrimSpace(d.Reason)
+			if reason == "" {
+				reason = "do not retry this cycle (from summary.md)"
+			}
+			return true, reason
+		}
+	}
+	return false, ""
+}
+
+func confirmedBlockerMatches(b ConfirmedBlocker, model, engine string) bool {
+	modelEq := strings.EqualFold(strings.TrimSpace(b.Model), strings.TrimSpace(model))
+	engineEq := strings.EqualFold(strings.TrimSpace(b.Engine), strings.TrimSpace(engine))
+	switch strings.ToLower(strings.TrimSpace(b.Scope)) {
+	case "combo":
+		return modelEq && engineEq
+	case "model":
+		return modelEq
+	case "engine":
+		return engineEq
+	default:
+		if b.Model != "" && b.Engine != "" {
+			return modelEq && engineEq
+		}
+		if b.Model != "" {
+			return modelEq
+		}
+		if b.Engine != "" {
+			return engineEq
+		}
+	}
+	return false
+}
+
+func retryDenyMatches(d RetryDenyEntry, model, engine string) bool {
+	modelSet := strings.TrimSpace(d.Model) != ""
+	engineSet := strings.TrimSpace(d.Engine) != ""
+	modelEq := strings.EqualFold(strings.TrimSpace(d.Model), strings.TrimSpace(model))
+	engineEq := strings.EqualFold(strings.TrimSpace(d.Engine), strings.TrimSpace(engine))
+	switch {
+	case modelSet && engineSet:
+		return modelEq && engineEq
+	case modelSet:
+		return modelEq
+	case engineSet:
+		return engineEq
+	}
+	return false
+}
+
 func (w *ExplorerWorkspace) generateIndex(input PlanInput, now string) string {
 	readyCombos, blockedCombos, exploredCombos := comboFactCounts(input)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Explorer Index\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Explorer Index\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 	fmt.Fprintf(&sb, "This workspace is the Explorer's file-based memory. Read this file first in every phase.\n\n")
 
 	fmt.Fprintf(&sb, "## Mission\n\n")
@@ -498,7 +586,7 @@ func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) s
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Device Profile\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Device Profile\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 
 	// Hardware section
 	fmt.Fprintf(&sb, "## Hardware\n\n")
@@ -566,10 +654,12 @@ func (w *ExplorerWorkspace) generateDeviceProfile(input PlanInput, now string) s
 	return sb.String()
 }
 
-// generateAvailableCombos produces available-combos.md classifying all model×engine pairs.
-func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string) string {
+// generateAvailableCombos produces available-combos.md classifying all
+// model×engine pairs, demoting any pair covered by summary.md blockers or
+// retry-denies from Ready into Blocked so the v0.4 frontier loop converges.
+func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string, blockers []ConfirmedBlocker, denies []RetryDenyEntry) string {
 	if len(input.ComboFacts) > 0 {
-		return w.generateResolvedAvailableCombos(input, now)
+		return w.generateResolvedAvailableCombos(input, now, blockers, denies)
 	}
 
 	hw := input.Hardware
@@ -613,12 +703,17 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string)
 				continue
 			}
 
+			if blocked, reason := comboBlockedBySummary(m.Name, e.Type, blockers, denies); blocked {
+				incompatible = append(incompatible, comboRow{m.Name, e.Type, reason})
+				continue
+			}
+
 			unexplored = append(unexplored, comboRow{m.Name, e.Type, ""})
 		}
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 	fmt.Fprintf(&sb, "_Resolver-backed combo facts unavailable; this is a coarse compatibility fallback._\n\n")
 
 	fmt.Fprintf(&sb, "## Ready Combos\n\n")
@@ -657,7 +752,7 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string)
 	return sb.String()
 }
 
-func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now string) string {
+func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now string, blockers []ConfirmedBlocker, denies []RetryDenyEntry) string {
 	skipSet, modelSkipSet := splitSkipCombos(input.SkipCombos)
 	pendingReasons := pendingWorkSummaryByCombo(input.PendingWork)
 
@@ -675,6 +770,12 @@ func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now
 			continue
 		}
 		if fact.Status == "ready" {
+			if blockedBySummary, reason := comboBlockedBySummary(fact.Model, fact.Engine, blockers, denies); blockedBySummary {
+				fact.Status = "blocked"
+				fact.Reason = reason
+				blocked = append(blocked, fact)
+				continue
+			}
 			if reason := strings.TrimSpace(pendingReasons[key]); reason != "" {
 				fact.Reason = reason
 			}
@@ -685,7 +786,7 @@ func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Available Combos\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 	fmt.Fprintf(&sb, "This document is authoritative for new scheduling. Only rows under `## Ready Combos` may appear in new tasks.\n")
 	fmt.Fprintf(&sb, "This document is refreshed before each PDCA phase; plan.md snapshots may refer to an earlier state.\n\n")
 
@@ -704,7 +805,7 @@ func (w *ExplorerWorkspace) generateResolvedAvailableCombos(input PlanInput, now
 // generateKnowledgeBase produces knowledge-base.md with advisories, history, and engine catalog capabilities.
 func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Knowledge Base\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Knowledge Base\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 
 	// Advisories
 	fmt.Fprintf(&sb, "## Advisories\n\n")
@@ -732,6 +833,10 @@ func (w *ExplorerWorkspace) generateKnowledgeBase(input PlanInput, now string) s
 				h.ModelID, h.EngineID, h.Kind, h.Status, h.Goal)
 		}
 		fmt.Fprintf(&sb, "\n")
+		fmt.Fprintf(&sb, "_Showing the last %d exploration events only. "+
+			"Older benchmarks and configurations live in the SQLite archive "+
+			"(`configurations` / `benchmark_results` tables), queryable via "+
+			"the `query` tool (`search`, `compare`, `aggregate`)._\n\n", len(input.History))
 	}
 
 	// Frontier coverage guidance
@@ -875,7 +980,7 @@ func parseExperimentResultMarkdown(md string) (ExperimentResult, error) {
 
 func (w *ExplorerWorkspace) generateExperimentFacts(now string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Experiment Facts\n\n_Generated: %s_\n\n", now)
+	fmt.Fprintf(&sb, "# Experiment Facts\n\n_Generated: %s · Agent: read-only · AIMA: regenerates each cycle_\n\n", now)
 	records, err := w.LoadExperimentRecords()
 	if err != nil {
 		fmt.Fprintf(&sb, "_Unavailable: %v_\n", err)
@@ -1406,6 +1511,97 @@ func (w *ExplorerWorkspace) ExtractRecommendations() ([]RecommendedConfig, error
 		return nil, fmt.Errorf("read summary.md: %w", err)
 	}
 	return parseRecommendedConfigs(md)
+}
+
+// ForceDowngradeRecommendations rewrites the YAML block under
+// "## Recommended Configurations" in summary.md so that every config whose
+// (model, engine) key appears in downgrades has `confidence: provisional`.
+// Also appends a note to each downgraded entry recording why, and a trailing
+// "Validation Guard" section listing the reasons. Returns the list of keys that
+// were actually rewritten (may be a subset of downgrades if no matching entry
+// is present in the current summary).
+//
+// downgrades maps "<model>|<engine>" (lower-cased, trimmed) → reason string.
+func (w *ExplorerWorkspace) ForceDowngradeRecommendations(downgrades map[string]string) ([]string, error) {
+	if len(downgrades) == 0 {
+		return nil, nil
+	}
+	md, err := w.ReadFile("summary.md")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read summary.md: %w", err)
+	}
+
+	section := extractSection(md, "## Recommended Configurations")
+	if section == "" {
+		return nil, nil
+	}
+	loc := yamlBlockRe.FindStringSubmatchIndex(section)
+	if len(loc) < 4 {
+		return nil, nil
+	}
+	yamlBody := section[loc[2]:loc[3]]
+
+	var configs []RecommendedConfig
+	if err := yaml.Unmarshal([]byte(yamlBody), &configs); err != nil {
+		return nil, fmt.Errorf("parse recommendations yaml: %w", err)
+	}
+
+	applied := make([]string, 0, len(downgrades))
+	appliedReasons := make(map[string]string, len(downgrades))
+	for i := range configs {
+		key := strings.ToLower(strings.TrimSpace(configs[i].Model)) + "|" + strings.ToLower(strings.TrimSpace(configs[i].Engine))
+		reason, ok := downgrades[key]
+		if !ok {
+			continue
+		}
+		configs[i].Confidence = "provisional"
+		notePrefix := "validation_guard: downgraded to provisional (" + reason + ")"
+		if strings.TrimSpace(configs[i].Note) == "" {
+			configs[i].Note = notePrefix
+		} else if !strings.Contains(configs[i].Note, "validation_guard:") {
+			configs[i].Note = notePrefix + "; " + configs[i].Note
+		}
+		applied = append(applied, key)
+		appliedReasons[key] = reason
+	}
+	if len(applied) == 0 {
+		return nil, nil
+	}
+
+	newYAML, err := yaml.Marshal(configs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal downgraded recommendations: %w", err)
+	}
+
+	// Splice the new yaml body back into summary.md at the same position.
+	sectionStart := strings.Index(md, "## Recommended Configurations")
+	if sectionStart < 0 {
+		return nil, nil
+	}
+	absStart := sectionStart + len("## Recommended Configurations") + loc[2]
+	absEnd := sectionStart + len("## Recommended Configurations") + loc[3]
+	updated := md[:absStart] + string(newYAML) + md[absEnd:]
+
+	// Append a trailing guard note if not already present for these keys this cycle.
+	guardHeading := "## Validation Guard"
+	if !strings.Contains(updated, guardHeading) {
+		var sb strings.Builder
+		sb.WriteString("\n\n")
+		sb.WriteString(guardHeading)
+		sb.WriteString("\n\nAIMA downgraded the following recommendations to `provisional` because evidence was missing:\n\n")
+		for _, k := range applied {
+			sb.WriteString("- " + k + ": " + appliedReasons[k] + "\n")
+		}
+		updated += sb.String()
+	}
+
+	if err := w.writeFactDocument("summary.md", updated); err != nil {
+		return nil, err
+	}
+	return applied, nil
 }
 
 // extractSection returns the content from a markdown heading until the next

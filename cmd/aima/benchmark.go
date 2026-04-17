@@ -188,14 +188,29 @@ func runBenchmarkWithMetricsAndRequester(ctx context.Context, cfg benchpkg.RunCo
 		metrics = collectBenchmarkSystemMetrics(ctx)
 	}
 
-	// On unified memory systems, report delta from baseline instead of peak absolute
-	// to better approximate model's actual memory footprint.
-	if isUnifiedMemory(baseline.VRAMUsageMiB, baseline.RAMUsageMiB) {
+	// Apply M2 honesty rule: only report memory numbers we can actually
+	// attribute to this benchmark run. The host-level probe (nvidia-smi,
+	// mthreads-smi, /proc) sees every tenant on the device; for containerised
+	// or remote engines the raw peak can reflect unrelated workloads, so we
+	// always report delta-over-baseline. If the peak never rose above the
+	// baseline, the probe is unreliable for this run and we emit 0 (NULL in
+	// the DB via COALESCE), rather than a misleading absolute value.
+	if metrics.VRAMUsageMiB > 0 || baseline.VRAMUsageMiB > 0 {
 		if metrics.VRAMUsageMiB > baseline.VRAMUsageMiB {
-			metrics.VRAMUsageMiB = metrics.VRAMUsageMiB - baseline.VRAMUsageMiB
+			metrics.VRAMUsageMiB -= baseline.VRAMUsageMiB
+		} else {
+			slog.Debug("benchmark metrics: VRAM probe did not observe engine delta, dropping",
+				"baseline_mib", baseline.VRAMUsageMiB, "peak_mib", metrics.VRAMUsageMiB)
+			metrics.VRAMUsageMiB = 0
 		}
+	}
+	if metrics.RAMUsageMiB > 0 || baseline.RAMUsageMiB > 0 {
 		if metrics.RAMUsageMiB > baseline.RAMUsageMiB {
-			metrics.RAMUsageMiB = metrics.RAMUsageMiB - baseline.RAMUsageMiB
+			metrics.RAMUsageMiB -= baseline.RAMUsageMiB
+		} else {
+			slog.Debug("benchmark metrics: RAM probe did not observe engine delta, dropping",
+				"baseline_mib", baseline.RAMUsageMiB, "peak_mib", metrics.RAMUsageMiB)
+			metrics.RAMUsageMiB = 0
 		}
 	}
 
@@ -355,7 +370,7 @@ func refreshPerfVectors(ctx context.Context, kStore *knowledge.Store) {
 // saveBenchmarkResult saves a benchmark result and its configuration to the DB.
 // Returns (benchmarkID, configID, saved benchmark row) or error.
 func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, model string,
-	modality string, result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency, inputTokens, maxTokens int, notes string) (string, string, *state.BenchmarkResult, error) {
+	modality string, result *benchpkg.RunResult, deployConfig map[string]any, metrics benchmarkSystemMetrics, concurrency int, notes string) (string, string, *state.BenchmarkResult, error) {
 	if result == nil {
 		return "", "", nil, fmt.Errorf("benchmark result is nil")
 	}
@@ -372,16 +387,14 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 	if result.ThroughputTPS <= 0 && result.QPS <= 0 && result.ReranksPerSec <= 0 {
 		return "", "", nil, fmt.Errorf("benchmark has no throughput/QPS signal — not saved")
 	}
+	// v0.4 §10.1: configurations are deploy-level. Never mix cell-level
+	// benchmark params (concurrency/input_tokens/max_tokens) into the hash —
+	// doing so multiplies one deploy into one config row per matrix cell and
+	// corrupts frontier/dedup. Empty deploy config is acceptable (all cells
+	// share a single anchor configuration for this model×engine×hardware).
 	config := deployConfig
-	if len(config) == 0 {
-		config = map[string]any{"concurrency": concurrency}
-		if inputTokens > 0 {
-			config["input_tokens"] = inputTokens
-		}
-		storedModality := storageBenchmarkModality(modality)
-		if storedModality != "embedding" && storedModality != "reranker" && maxTokens > 0 {
-			config["max_tokens"] = maxTokens
-		}
+	if config == nil {
+		config = map[string]any{}
 	}
 	configJSON, _ := json.Marshal(config)
 	configHash := fmt.Sprintf("%x", sha256.Sum256(
@@ -391,26 +404,28 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 	if err != nil {
 		return "", "", nil, fmt.Errorf("find config: %w", err)
 	}
+	var newCfg *state.Configuration
+	configID := ""
 	if existingCfg == nil {
-		existingCfg = &state.Configuration{
+		newCfg = &state.Configuration{
 			ID: configHash[:16], HardwareID: hardware,
 			EngineID: engineID, ModelID: model,
 			Config: string(configJSON), ConfigHash: configHash,
 			Status: "experiment", Source: "benchmark",
 		}
-		if err := db.InsertConfiguration(ctx, existingCfg); err != nil {
-			return "", "", nil, fmt.Errorf("create configuration: %w", err)
-		}
+		configID = newCfg.ID
+	} else {
+		configID = existingCfg.ID
 	}
 
 	benchmarkID := fmt.Sprintf("%x", sha256.Sum256(
-		[]byte(existingCfg.ID+"|"+fmt.Sprintf("%d", time.Now().UnixNano()))))[:16]
+		[]byte(configID+"|"+fmt.Sprintf("%d", time.Now().UnixNano()))))[:16]
 
 	if metrics == (benchmarkSystemMetrics{}) {
 		metrics = collectBenchmarkSystemMetrics(ctx)
 	}
 	br := &state.BenchmarkResult{
-		ID: benchmarkID, ConfigID: existingCfg.ID, Concurrency: concurrency,
+		ID: benchmarkID, ConfigID: configID, Concurrency: concurrency,
 		InputLenBucket:  tokenBucket(result.AvgInputTokens),
 		OutputLenBucket: tokenBucket(result.AvgOutputTokens),
 		Modality:        storageBenchmarkModality(modality),
@@ -426,13 +441,14 @@ func saveBenchmarkResult(ctx context.Context, db *state.DB, hardware, engineID, 
 		SampleCount:    result.TotalRequests,
 		DurationS:      int(result.DurationMs / 1000),
 		TestedAt:       time.Now(),
-		Stability:      stabilityFromCV(result.TTFTCVPct),
+		Stability:      deriveStability(result.TTFTCVPct, result.ErrorRate),
 		Notes:          notes,
 	}
-	if err := db.InsertBenchmarkResult(ctx, br); err != nil {
+	// v0.4 §10.1 invariant: config + benchmark must land together or neither.
+	if err := db.InsertConfigurationAndBenchmarkResult(ctx, existingCfg, newCfg, br); err != nil {
 		return "", "", nil, fmt.Errorf("save benchmark result: %w", err)
 	}
-	return benchmarkID, existingCfg.ID, br, nil
+	return benchmarkID, configID, br, nil
 }
 
 // maybeAutoPromote promotes a config to golden if its benchmark throughput beats
@@ -575,8 +591,14 @@ func tokenBucket(tokens int) string {
 	}
 }
 
-// stabilityFromCV derives a stability label from coefficient of variation (percentage).
-func stabilityFromCV(cvPct float64) string {
+// deriveStability derives a stability label from TTFT coefficient of variation
+// and error rate. High error rates short-circuit to "unstable" regardless of
+// latency variance — a cell that fails more than half of its requests cannot
+// be called stable even if the few successes clustered tightly.
+func deriveStability(cvPct, errorRate float64) string {
+	if errorRate >= 0.5 {
+		return "unstable"
+	}
 	switch {
 	case cvPct <= 15:
 		return "stable"

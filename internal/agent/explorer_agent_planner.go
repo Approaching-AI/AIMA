@@ -493,36 +493,54 @@ func (p *ExplorerAgentPlanner) validateRecommendationConfidence() error {
 			evidence[key] = true
 		}
 	}
+	// Collect downgrades to apply in a single pass. An unknown confidence value
+	// is the only hard error — everything else the guard can self-heal by
+	// forcing the confidence back to `provisional`, which keeps the PDCA loop
+	// running and ensures we never write unbacked `validated`/`tuned` data to
+	// the L2c overlay or central.
+	downgrades := make(map[string]string, len(configs))
+	var firstErr error
 	for _, cfg := range configs {
 		key := strings.ToLower(strings.TrimSpace(cfg.Model)) + "|" + strings.ToLower(strings.TrimSpace(cfg.Engine))
-		switch strings.ToLower(strings.TrimSpace(cfg.Confidence)) {
+		level := strings.ToLower(strings.TrimSpace(cfg.Confidence))
+		switch level {
 		case "", "provisional":
 			continue
-		case "tuned":
-			if !hasSummaryBenchmarkSignal(cfg.Performance) {
-				return fmt.Errorf("summary recommendation %s/%s marked tuned without benchmark evidence", cfg.Model, cfg.Engine)
+		case "tuned", "validated":
+			var reason string
+			switch {
+			case !hasSummaryBenchmarkSignal(cfg.Performance):
+				reason = fmt.Sprintf("%s/%s marked %s without benchmark evidence", cfg.Model, cfg.Engine, level)
+			case len(records) > 0 && !evidence[key]:
+				reason = fmt.Sprintf("%s/%s marked %s without matching successful experiment", cfg.Model, cfg.Engine, level)
+			case len(records) > 0 && !hasMatchingLatencyEvidence(cfg.Performance, records, cfg.Model, cfg.Engine):
+				reason = fmt.Sprintf("%s/%s latency is not grounded by a matching benchmark scenario", cfg.Model, cfg.Engine)
 			}
-			if len(records) > 0 && !evidence[key] {
-				return fmt.Errorf("summary recommendation %s/%s marked tuned without matching successful experiment", cfg.Model, cfg.Engine)
-			}
-			if len(records) > 0 && !hasMatchingLatencyEvidence(cfg.Performance, records, cfg.Model, cfg.Engine) {
-				return fmt.Errorf("summary recommendation %s/%s latency is not grounded by a matching benchmark scenario", cfg.Model, cfg.Engine)
-			}
-		case "validated":
-			if !hasSummaryBenchmarkSignal(cfg.Performance) {
-				return fmt.Errorf("summary recommendation %s/%s marked validated without benchmark evidence", cfg.Model, cfg.Engine)
-			}
-			if len(records) > 0 && !evidence[key] {
-				return fmt.Errorf("summary recommendation %s/%s marked validated without matching successful experiment", cfg.Model, cfg.Engine)
-			}
-			if len(records) > 0 && !hasMatchingLatencyEvidence(cfg.Performance, records, cfg.Model, cfg.Engine) {
-				return fmt.Errorf("summary recommendation %s/%s latency is not grounded by a matching benchmark scenario", cfg.Model, cfg.Engine)
+			if reason != "" {
+				downgrades[key] = reason
 			}
 		default:
-			return fmt.Errorf("summary recommendation %s/%s has unknown confidence %q", cfg.Model, cfg.Engine, cfg.Confidence)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("summary recommendation %s/%s has unknown confidence %q", cfg.Model, cfg.Engine, cfg.Confidence)
+			}
 		}
 	}
-	return nil
+	if len(downgrades) > 0 {
+		applied, err := p.workspace.ForceDowngradeRecommendations(downgrades)
+		if err != nil {
+			return fmt.Errorf("force-downgrade recommendations: %w", err)
+		}
+		for _, k := range applied {
+			slog.Warn("validation_guard: downgraded recommendation to provisional",
+				"key", k, "reason", downgrades[k])
+		}
+		// Surface a single aggregated error so the caller can still emit the
+		// Validation Guard Feedback message into summary.md for the next cycle.
+		if firstErr == nil {
+			firstErr = fmt.Errorf("downgraded %d recommendation(s) to provisional (evidence missing)", len(applied))
+		}
+	}
+	return firstErr
 }
 
 func rebalanceTaskSpecs(input PlanInput, tasks []TaskSpec, maxTasks int) []TaskSpec {

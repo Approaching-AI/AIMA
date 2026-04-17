@@ -141,6 +141,9 @@ func (h *Harvester) Harvest(ctx context.Context, input HarvestInput) []HarvestAc
 				Detail: fmt.Sprintf("FAILED: %s", err.Error()),
 			})
 		} else {
+			slog.Info("harvester sync push succeeded",
+				"model", input.Task.Model, "engine", input.Task.Engine,
+				"benchmark_id", input.Result.BenchmarkID, "config_id", input.Result.ConfigID)
 			actions = append(actions, HarvestAction{Type: "sync_push", Detail: "incremental push"})
 		}
 	}

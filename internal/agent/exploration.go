@@ -61,6 +61,7 @@ type ExplorationPlan struct {
 	Goal              string                        `json:"goal"`
 	Target            ExplorationTarget             `json:"target"`
 	SourceRef         string                        `json:"source_ref,omitempty"`
+	EngineParams      map[string]any                `json:"engine_params,omitempty"`
 	SearchSpace       map[string][]any              `json:"search_space,omitempty"`
 	Constraints       ExplorationConstraints        `json:"constraints,omitempty"`
 	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
@@ -193,6 +194,7 @@ type ExplorationStart struct {
 	RequestedBy       string                        `json:"requested_by,omitempty"`
 	ApprovalMode      string                        `json:"approval_mode,omitempty"`
 	SourceRef         string                        `json:"source_ref,omitempty"`
+	EngineParams      map[string]any                `json:"engine_params,omitempty"`
 	SearchSpace       map[string][]any              `json:"search_space,omitempty"`
 	Constraints       ExplorationConstraints        `json:"constraints,omitempty"`
 	BenchmarkProfiles []ExplorationBenchmarkProfile `json:"benchmark_profiles,omitempty"`
@@ -885,9 +887,19 @@ func (m *ExplorationManager) ensureDeployed(ctx context.Context, run *state.Expl
 		"engine":    plan.Target.Engine,
 		"auto_pull": false, // Explorer must never download — only use locally available resources.
 	}
-	// Flatten SearchSpace into config overrides for deploy.
-	if len(plan.SearchSpace) > 0 {
-		config := make(map[string]any, len(plan.SearchSpace))
+	// Merge planner-authored engine_params and SearchSpace into deploy config.
+	// SearchSpace entries win over EngineParams for the same key: tune tasks
+	// already flatten their engine_params into SearchSpace upstream, so the
+	// overlap is deliberate and search_space always represents the resolved
+	// point to probe.
+	if len(plan.EngineParams) > 0 || len(plan.SearchSpace) > 0 {
+		config := make(map[string]any, len(plan.EngineParams)+len(plan.SearchSpace))
+		for k, v := range plan.EngineParams {
+			if v == nil {
+				continue
+			}
+			config[k] = v
+		}
 		for k, vals := range plan.SearchSpace {
 			if len(vals) > 0 {
 				config[k] = vals[0]
@@ -1900,6 +1912,7 @@ func (m *ExplorationManager) newRun(ctx context.Context, req ExplorationStart) (
 		Goal:              req.Goal,
 		SourceRef:         req.SourceRef,
 		Target:            req.Target,
+		EngineParams:      req.EngineParams,
 		SearchSpace:       req.SearchSpace,
 		Constraints:       req.Constraints,
 		BenchmarkProfiles: req.BenchmarkProfiles,

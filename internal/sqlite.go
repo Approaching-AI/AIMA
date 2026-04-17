@@ -2277,20 +2277,62 @@ func (d *DB) FindGoldenBenchmark(ctx context.Context, hardware, engine, model, m
 }
 
 func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) error {
-	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
-		    ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
-		    throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
-		    error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes,
-		    rtf_p50, rtf_p95, rtf_mean,
-		    ttfa_p50_ms, ttfa_p95_ms, audio_throughput, avg_input_chars, avg_audio_duration_s,
-		    asr_throughput, avg_input_audio_s, avg_output_chars,
-		    latency_p50_ms, latency_p95_ms, latency_p99_ms, images_per_sec, avg_steps, image_width, image_height,
-		    video_latency_p50_s, video_latency_p95_s, videos_per_hour, avg_video_duration_s,
-		    avg_frames, video_fps, video_width, video_height, video_steps)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := d.db.ExecContext(ctx, insertBenchmarkResultSQL, insertBenchmarkResultArgs(b)...)
+	if err != nil {
+		return fmt.Errorf("insert benchmark %s: %w", b.ID, err)
+	}
+	return nil
+}
+
+// InsertConfigurationAndBenchmarkResult writes a configuration (if new) and its
+// benchmark result in a single transaction. This preserves the v0.4 §10.1
+// invariant that every benchmark_results.config_id references an existing
+// configurations row — partial writes leave dangling foreign keys.
+// If existingConfig is non-nil, only the benchmark row is inserted (the config
+// was already present from a prior cell in the same matrix).
+func (d *DB) InsertConfigurationAndBenchmarkResult(ctx context.Context, existingConfig, newConfig *Configuration, b *BenchmarkResult) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if existingConfig == nil {
+		if newConfig == nil {
+			return fmt.Errorf("configuration required for benchmark result")
+		}
+		tagsJSON, _ := json.Marshal(newConfig.Tags)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO configurations (id, hardware_id, engine_id, model_id, partition_slot, config, config_hash, derived_from, status, tags, source, device_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			newConfig.ID, newConfig.HardwareID, newConfig.EngineID, newConfig.ModelID, newConfig.Slot,
+			newConfig.Config, newConfig.ConfigHash, nullStr(newConfig.DerivedFrom), newConfig.Status,
+			string(tagsJSON), newConfig.Source, newConfig.DeviceID); err != nil {
+			return fmt.Errorf("insert configuration %s: %w", newConfig.ID, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, insertBenchmarkResultSQL, insertBenchmarkResultArgs(b)...); err != nil {
+		return fmt.Errorf("insert benchmark %s: %w", b.ID, err)
+	}
+	return tx.Commit()
+}
+
+const insertBenchmarkResultSQL = `INSERT INTO benchmark_results (id, config_id, concurrency, input_len_bucket, output_len_bucket, modality,
+    ttft_ms_p50, ttft_ms_p95, ttft_ms_p99, tpot_ms_p50, tpot_ms_p95,
+    throughput_tps, qps, vram_usage_mib, ram_usage_mib, power_draw_watts, gpu_utilization_pct, cpu_usage_pct,
+    error_rate, oom_occurred, stability, duration_s, sample_count, agent_model, notes,
+    rtf_p50, rtf_p95, rtf_mean,
+    ttfa_p50_ms, ttfa_p95_ms, audio_throughput, avg_input_chars, avg_audio_duration_s,
+    asr_throughput, avg_input_audio_s, avg_output_chars,
+    latency_p50_ms, latency_p95_ms, latency_p99_ms, images_per_sec, avg_steps, image_width, image_height,
+    video_latency_p50_s, video_latency_p95_s, videos_per_hour, avg_video_duration_s,
+    avg_frames, video_fps, video_width, video_height, video_steps)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+func insertBenchmarkResultArgs(b *BenchmarkResult) []any {
+	return []any{
 		b.ID, b.ConfigID, b.Concurrency, b.InputLenBucket, b.OutputLenBucket, b.Modality,
 		b.TTFTP50ms, b.TTFTP95ms, b.TTFTP99ms, b.TPOTP50ms, b.TPOTP95ms,
 		b.ThroughputTPS, b.QPS, b.VRAMUsageMiB, b.RAMUsageMiB, b.PowerDrawWatts, b.GPUUtilPct, b.CPUUsagePct,
@@ -2300,11 +2342,8 @@ func (d *DB) InsertBenchmarkResult(ctx context.Context, b *BenchmarkResult) erro
 		b.ASRThroughput, b.AvgInputAudioS, b.AvgOutputChars,
 		b.LatencyP50ms, b.LatencyP95ms, b.LatencyP99ms, b.ImagesPerSec, b.AvgSteps, b.ImageWidth, b.ImageHeight,
 		b.VideoLatencyP50s, b.VideoLatencyP95s, b.VideosPerHour, b.AvgVideoDurationS,
-		b.AvgFrames, b.VideoFPS, b.VideoWidth, b.VideoHeight, b.VideoSteps)
-	if err != nil {
-		return fmt.Errorf("insert benchmark %s: %w", b.ID, err)
+		b.AvgFrames, b.VideoFPS, b.VideoWidth, b.VideoHeight, b.VideoSteps,
 	}
-	return nil
 }
 
 // Config

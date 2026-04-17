@@ -261,7 +261,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 			var err error
 			benchmarkID, configID, savedBench, err = saveBenchmarkResult(ctx, db,
 				p.Hardware, p.Engine, p.Model, modality, result, deployConfig, observedMetrics,
-				cfg.Concurrency, cfg.InputTokens, cfg.MaxTokens, p.Notes)
+				cfg.Concurrency, p.Notes)
 			if err != nil {
 				return nil, err
 			}
@@ -449,7 +449,7 @@ func buildBenchmarkDeps(ac *appContext, deps *mcp.ToolDeps, resolveEndpoint func
 						save := p.Save == nil || *p.Save
 						if save && p.Hardware != "" && p.Engine != "" {
 							notes := fmt.Sprintf("matrix: conc=%d in=%d out=%d", conc, inTok, maxTok)
-							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, modality, result, deployConfig, observedMetrics, conc, inTok, maxTok, notes)
+							benchmarkID, configID, _, saveErr := saveBenchmarkResult(ctx, db, p.Hardware, p.Engine, p.Model, modality, result, deployConfig, observedMetrics, conc, notes)
 							if saveErr != nil {
 								slog.Warn("benchmark matrix: save failed", "error", saveErr, "concurrency", conc, "input_tokens", inTok, "max_tokens", maxTok)
 							} else {

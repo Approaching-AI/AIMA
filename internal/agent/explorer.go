@@ -1318,8 +1318,18 @@ func (e *Explorer) executePlan(ctx context.Context, plan *ExplorerPlan) {
 		if e.cleanupModelDeploy != nil && task.Model != "" {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			if err := e.cleanupModelDeploy(cleanupCtx, task.Model); err != nil {
-				slog.Warn("explorer: task-boundary cleanup failed",
-					"model", task.Model, "error", err)
+				// "deployment not found" is the common case after a successful
+				// validate (exploration manager already released the lease) and
+				// after many failed deploys (nothing was ever created). Only
+				// surface as WARN when the error is likely actionable.
+				msg := err.Error()
+				if strings.Contains(msg, "not found") || strings.Contains(msg, "no deployment") {
+					slog.Debug("explorer: task-boundary cleanup skipped (already torn down)",
+						"model", task.Model, "detail", msg)
+				} else {
+					slog.Warn("explorer: task-boundary cleanup failed",
+						"model", task.Model, "error", err)
+				}
 			}
 			cancel()
 		}
@@ -1837,6 +1847,13 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	if len(task.SearchSpace) > 0 {
 		searchSpace = cloneSearchSpace(task.SearchSpace)
 	}
+	var engineParams map[string]any
+	if len(task.Params) > 0 {
+		engineParams = make(map[string]any, len(task.Params))
+		for k, v := range task.Params {
+			engineParams[k] = v
+		}
+	}
 
 	req := ExplorationStart{
 		Kind:      task.Kind,
@@ -1856,6 +1873,9 @@ func (e *Explorer) executeTask(ctx context.Context, task PlanTask, planID string
 	}
 	if searchSpace != nil {
 		req.SearchSpace = searchSpace
+	}
+	if engineParams != nil {
+		req.EngineParams = engineParams
 	}
 
 	var taskModelMeta *LocalModel

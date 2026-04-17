@@ -1269,11 +1269,18 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			}
 		}
 
-		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig) (json.RawMessage, error) {
+		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration) (json.RawMessage, error) {
 			notify("waiting", deployName)
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
-			timer := time.NewTimer(10 * time.Minute)
+			// deployTimeout caps how long we wait for /health and optional warmup.
+			// Callers pass engine.Startup.HealthCheck.TimeoutS when the engine
+			// specifies one (vllm-nightly sets 600s to cover the transformers
+			// pip-install on first boot); default to 10m otherwise.
+			if deployTimeout <= 0 {
+				deployTimeout = 10 * time.Minute
+			}
+			timer := time.NewTimer(deployTimeout)
 			defer timer.Stop()
 
 			for {
@@ -1283,7 +1290,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				case <-timer.C:
 					return json.Marshal(map[string]any{
 						"name": deployName, "status": "timeout",
-						"message": "deployment started but not ready within 10 minutes",
+						"message": fmt.Sprintf("deployment started but not ready within %s", deployTimeout),
 					})
 				case <-ticker.C:
 					statusData, err := deps.DeployStatus(ctx, deployName)
@@ -1399,10 +1406,14 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 					}
 					hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 					warmup := knowledge.WarmupConfig{}
+					deployTimeout := time.Duration(0)
 					if asset := cat.FindEngineByName(plan.Engine, hwInfo); asset != nil {
 						warmup = asset.Startup.Warmup
+						if t := asset.Startup.HealthCheck.TimeoutS; t > 0 {
+							deployTimeout = time.Duration(t) * time.Second
+						}
 					}
-					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup)
+					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout)
 				}
 			}
 		}
@@ -1445,10 +1456,14 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		}
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 		warmup := knowledge.WarmupConfig{}
+		deployTimeout := time.Duration(0)
 		if asset := cat.FindEngineByName(plan.Engine, hwInfo); asset != nil {
 			warmup = asset.Startup.Warmup
+			if t := asset.Startup.HealthCheck.TimeoutS; t > 0 {
+				deployTimeout = time.Duration(t) * time.Second
+			}
 		}
-		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup)
+		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup, deployTimeout)
 	}
 
 	deps = &mcp.ToolDeps{}

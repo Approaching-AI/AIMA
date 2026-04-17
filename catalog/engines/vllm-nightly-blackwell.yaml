@@ -31,14 +31,26 @@ startup:
     max_model_len: 128000
     enable_chunked_prefill: false
   health_check:
-    timeout_s: 600
+    # 1200s covers transformers pip-install on first boot (~3-4m) + NVFP4
+    # model load for 50+ GiB models (~5-6m). Tune runs with 5 configs × this
+    # cold-start will still blow a 30m cap; cap ready configs to small sweeps.
+    timeout_s: 1200
+  warmup:
+    # /health returning 200 only means the HTTP listener is up; vLLM can
+    # still be compiling graphs or loading weights. A one-token chat
+    # completion round-trip is the real inference-ready signal. Timeout
+    # headroom must cover nvfp4 quant weight load on arm64.
+    enabled: true
+    prompt: "ping"
+    max_tokens: 1
+    timeout_s: 60
 amplifier:
   features:
     - triton_attention
   performance_gain: "2-4x throughput vs naive serving, nightly with latest model support"
 time_constraints:
-  cold_start_s: [120, 240]
-  model_switch_s: [120, 240]
+  cold_start_s: [120, 600]
+  model_switch_s: [120, 600]
 power_constraints:
   typical_draw_watts: [40, 80]
 runtime:

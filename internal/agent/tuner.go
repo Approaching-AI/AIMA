@@ -306,6 +306,8 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		var deploySummary struct {
 			Address string         `json:"address"`
 			Config  map[string]any `json:"config"`
+			Status  string         `json:"status"`
+			Message string         `json:"message"`
 		}
 		if err := json.Unmarshal([]byte(deployResult.Content), &deploySummary); err != nil {
 			t.markProgress(session, i+1)
@@ -320,7 +322,11 @@ func (t *Tuner) run(ctx context.Context, session *TuningSession, candidates []ma
 		}
 		if endpoint == "" {
 			t.markProgress(session, i+1)
-			slog.Warn("tuning: deploy result missing ready endpoint, skipping config")
+			// Surface deploy status/message so timeout vs other empty-address
+			// causes are distinguishable without re-reading the deploy code.
+			slog.Warn("tuning: deploy result missing ready endpoint, skipping config",
+				"deploy_status", deploySummary.Status,
+				"deploy_message", deploySummary.Message)
 			continue
 		}
 		deployConfig := deploySummary.Config

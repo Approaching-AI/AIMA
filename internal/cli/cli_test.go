@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -548,5 +551,77 @@ func TestDeployListCmd(t *testing.T) {
 	}
 	if !strings.Contains(output, `"engine": "vllm"`) {
 		t.Fatalf("deploy list output missing top-level engine: %s", output)
+	}
+}
+
+// TestExplorerCmdRemoteDispatch locks in the New-Bug-1 fix: when --remote is
+// set, `aima explorer {trigger,status,config}` must issue a tools/call
+// against the remote MCP endpoint instead of falling through to the in-process
+// event bus (which is dead once the CLI exits).
+func TestExplorerCmdRemoteDispatch(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantAction string
+		wantKey    string // only for config subcommand
+	}{
+		{name: "trigger", args: []string{"explorer", "trigger"}, wantAction: "trigger"},
+		{name: "status", args: []string{"explorer", "status"}, wantAction: "status"},
+		{name: "config-set", args: []string{"explorer", "config", "--action", "set", "--key", "max_rounds", "--value", "3"}, wantAction: "config", wantKey: "max_rounds"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotAction, gotConfigAction, gotKey string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var rpc struct {
+					Params struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					} `json:"params"`
+				}
+				_ = json.Unmarshal(body, &rpc)
+				if rpc.Params.Name != "explorer" {
+					t.Errorf("tool name = %q, want explorer", rpc.Params.Name)
+				}
+				gotAction, _ = rpc.Params.Arguments["action"].(string)
+				gotConfigAction, _ = rpc.Params.Arguments["config_action"].(string)
+				gotKey, _ = rpc.Params.Arguments["key"].(string)
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]}}`))
+			}))
+			defer srv.Close()
+
+			app := testApp(t)
+			// Intentionally leave ToolDeps.Explorer* nil — if remote dispatch
+			// is broken, the CLI will fall through and hit "explorer not
+			// available", failing the test.
+			app.ToolDeps.ExplorerStatus = nil
+			app.ToolDeps.ExplorerTrigger = nil
+			app.ToolDeps.ExplorerConfig = nil
+
+			root := NewRootCmd(app)
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetErr(&buf)
+			args := append([]string{"--remote", srv.URL}, tc.args...)
+			root.SetArgs(args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("%s: %v\n%s", tc.name, err, buf.String())
+			}
+
+			if gotAction != tc.wantAction {
+				t.Fatalf("action = %q, want %q", gotAction, tc.wantAction)
+			}
+			if tc.wantAction == "config" {
+				if gotConfigAction != "set" {
+					t.Fatalf("config_action = %q, want set", gotConfigAction)
+				}
+				if gotKey != tc.wantKey {
+					t.Fatalf("key = %q, want %q", gotKey, tc.wantKey)
+				}
+			}
+		})
 	}
 }

@@ -45,6 +45,46 @@ func TestExplorer_DetectTier(t *testing.T) {
 	}
 }
 
+// TestExplorer_RunScheduledSync locks in the Bug-10 fix: the SyncInterval
+// tick must drive a direct sync_push independent of harvest outcomes so
+// central-unreachable is never silent.
+func TestExplorer_RunScheduledSync(t *testing.T) {
+	t.Run("no syncPush wired is a quiet no-op", func(t *testing.T) {
+		e := &Explorer{}
+		// Must not panic with nil syncPush.
+		e.runScheduledSync(context.Background())
+	})
+
+	t.Run("success path calls syncPush once", func(t *testing.T) {
+		var calls atomic.Int32
+		e := &Explorer{
+			syncPush: func(ctx context.Context) error {
+				calls.Add(1)
+				return nil
+			},
+		}
+		e.runScheduledSync(context.Background())
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("syncPush calls = %d, want 1", got)
+		}
+	})
+
+	t.Run("failure path does not panic when syncPush errors", func(t *testing.T) {
+		var calls atomic.Int32
+		e := &Explorer{
+			syncPush: func(ctx context.Context) error {
+				calls.Add(1)
+				return fmt.Errorf("push to central: dial tcp: connection refused")
+			},
+		}
+		// No panic expected; operator visibility comes from the slog WARN.
+		e.runScheduledSync(context.Background())
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("syncPush calls = %d, want 1", got)
+		}
+	})
+}
+
 func TestExplorer_Status(t *testing.T) {
 	bus := NewEventBus()
 	e := NewExplorer(ExplorerConfig{

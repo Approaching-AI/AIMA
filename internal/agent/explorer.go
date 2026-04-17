@@ -603,6 +603,13 @@ func (e *Explorer) handleEvent(ctx context.Context, ev ExplorerEvent) {
 	case EventCentralScenario:
 		e.handleScenario(ctx, ev)
 		return
+	case EventScheduledSync:
+		// Bug-10: push knowledge on every SyncInterval tick, independent of
+		// whether a PDCA cycle produced new successful tasks. Before this, a
+		// fully-failing cycle left central-unreachable completely silent
+		// because the only sync_push call lived inside Harvester.Harvest.
+		e.runScheduledSync(ctx)
+		return
 	}
 
 	e.mu.RLock()
@@ -2964,6 +2971,22 @@ func (e *Explorer) computePlanMetrics(plans []*ExplorerPlan, elapsed time.Durati
 		m.AvgTaskDurationS = elapsed.Seconds() / float64(executed)
 	}
 	return m
+}
+
+// runScheduledSync pushes local knowledge to the central store on every
+// SyncInterval tick. Emits INFO on success, WARN with the wrapped error (which
+// carries the target endpoint on network failures) when it fails — so a
+// misconfigured or unreachable central is never silent.
+func (e *Explorer) runScheduledSync(ctx context.Context) {
+	if e.syncPush == nil {
+		slog.Debug("explorer: scheduled.sync skipped — no sync push configured")
+		return
+	}
+	if err := e.syncPush(ctx); err != nil {
+		slog.Warn("explorer: scheduled sync push failed", "error", err)
+		return
+	}
+	slog.Info("explorer: scheduled sync push succeeded")
 }
 
 func (e *Explorer) refreshTier(ctx context.Context) bool {

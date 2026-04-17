@@ -1,0 +1,90 @@
+2026/04/17 09:29:04 INFO catalog overlay merged dir=/home/qujing/.aima/catalog overlay_assets=6 new_assets=6
+2026/04/17 09:29:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/17 09:29:04 INFO explorer started tier=1
+2026/04/17 09:29:04 INFO starting proxy server addr=127.0.0.1:6188
+2026/04/17 09:29:04 INFO proxy server starting addr=127.0.0.1:6188
+2026/04/17 09:29:04 INFO mDNS broadcasting service=_llm._tcp port=6188
+2026/04/17 09:29:04 INFO starting MCP server (HTTP) addr=127.0.0.1:9090
+2026/04/17 09:29:05 INFO startup engine scan completed
+2026/04/17 09:29:13 INFO tool mode probed result=enabled
+2026/04/17 09:32:11 INFO explorer event received type=scheduled.gap_scan
+2026/04/17 09:32:11 INFO explorer: building plan input
+2026/04/17 09:32:12 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=Qwen2.5-Omni-7B format=safetensors
+2026/04/17 09:32:12 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=FLUX.2-dev format=safetensors
+2026/04/17 09:32:13 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=Qwen3.5-122B-A10B-FP8 format=safetensors
+2026/04/17 09:32:13 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=GLM-5-NVFP4 format=safetensors
+2026/04/17 09:32:13 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=GLM-4.5-Air-FP8 format=safetensors
+2026/04/17 09:32:13 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=Step-3.5-Flash-FP8 format=safetensors
+2026/04/17 09:32:13 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=MiniMax-M2.5 format=safetensors
+2026/04/17 09:32:14 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=GLM-4.7-Flash-NVFP4 format=safetensors
+2026/04/17 09:32:14 WARN model not in catalog — auto-detect fallback in use; consider adding a model YAML model=MiniCPM-o-4_5 format=safetensors
+2026/04/17 09:32:14 INFO explorer: plan input ready knowledge_gaps=46 ready_combos=3 blocked_combos=109 deploys=0 models=30 engines=6 history=30 hw=nvidia-gb10-arm64
+2026/04/17 09:32:14 INFO explorer: generating plan tier=2
+2026/04/17 09:32:14 INFO explorer agent: phase request phase=plan turn=0
+2026/04/17 09:32:21 INFO explorer agent: phase request phase=plan turn=1
+2026/04/17 09:32:58 INFO explorer agent: phase request phase=plan turn=2
+2026/04/17 09:36:02 INFO explorer agent: phase request phase=plan turn=3
+2026/04/17 09:36:06 INFO explorer agent: phase done phase=plan verdict=done turn=3
+2026/04/17 09:36:06 INFO explorer: plan generated id=11282994 tier=2 reasoning=agent-planned tasks=2 task_list="[tune:GLM-4.5-Air-nvfp4/vllm-nightly validate:GLM-4.5-Air-nvfp4/vllm-nightly]" llm_tokens=94846 proposed_tasks=2 dedup_dropped=0 ready_combos_seen=3 blocked_combos_seen=109 knowledge_gaps=46
+2026/04/17 09:36:06 INFO explorer: executing task kind=tune model=GLM-4.5-Air-nvfp4 engine=vllm-nightly progress=1/2
+2026/04/17 09:36:07 INFO tuning: testing config progress=1/5 config="map[gpu_memory_utilization:0.7 max_model_len:16896]"
+2026/04/17 09:36:07 INFO waitForGPURelease: deployment no longer holding GPU name=GLM-4.5-Air-nvfp4 phase=""
+2026/04/17 09:36:12 WARN deploy fitness warning="unified memory system has swap enabled (16383 MiB); high gmu may cause swap thrashing instead of clean OOM-kill"
+2026/04/17 09:36:16 INFO docker deploy name=glm-4-5-air-nvfp4-vllm-nightly args="run -d --name glm-4-5-air-nvfp4-vllm-nightly --restart unless-stopped --ipc=host --label aima.dev/host-port=8000 --label aima.dev/engine=vllm-nightly --label aima.dev/model=GLM-4.5-Air-nvfp4 --label aima.dev/slot=primary --label aima.dev/served-model=GLM-4.5-Air-nvfp4 --label aima.dev/parameter_count=unknown --label aima.dev/port=8000 --label aima.dev/port=8000 --publish 8000:8000 --health-cmd if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 5 http://localhost:8000/health >/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; elif command -v python >/dev/null 2>&1; then python -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; else exit 1; fi || exit 1 --health-interval 10s --health-timeout 5s --health-start-period 600s --health-retries 3 --env LD_LIBRARY_PATH=/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 --env NVIDIA_VISIBLE_DEVICES=all --env NVIDIA_DRIVER_CAPABILITIES=all --env VLLM_ATTENTION_BACKEND=TRITON_ATTN --gpus all --volume /mnt/data/models/GLM-4.5-Air-nvfp4:/models:ro --entrypoint vllm vllm/vllm-openai:qwen3_5-cu130 serve /models --port 8000 --gpu-memory-utilization 0.7 --max-model-len 16896 --served-model-name GLM-4.5-Air-nvfp4"
+2026/04/17 09:36:24 INFO openclaw sync complete llm=1 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 09:46:17 WARN tuning: deploy result missing ready endpoint, skipping config
+2026/04/17 09:46:17 INFO tuning: testing config progress=2/5 config="map[gpu_memory_utilization:0.75 max_model_len:16896]"
+2026/04/17 09:46:19 INFO waitForGPURelease: deployment no longer holding GPU name=GLM-4.5-Air-nvfp4 phase=""
+2026/04/17 09:46:23 WARN deploy fitness warning="unified memory system has swap enabled (16383 MiB); high gmu may cause swap thrashing instead of clean OOM-kill"
+2026/04/17 09:46:24 INFO openclaw sync complete llm=0 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 09:46:29 INFO docker deploy name=glm-4-5-air-nvfp4-vllm-nightly args="run -d --name glm-4-5-air-nvfp4-vllm-nightly --restart unless-stopped --ipc=host --label aima.dev/host-port=8000 --label aima.dev/engine=vllm-nightly --label aima.dev/model=GLM-4.5-Air-nvfp4 --label aima.dev/slot=primary --label aima.dev/served-model=GLM-4.5-Air-nvfp4 --label aima.dev/parameter_count=unknown --label aima.dev/port=8000 --label aima.dev/port=8000 --publish 8000:8000 --health-cmd if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 5 http://localhost:8000/health >/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; elif command -v python >/dev/null 2>&1; then python -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; else exit 1; fi || exit 1 --health-interval 10s --health-timeout 5s --health-start-period 600s --health-retries 3 --env VLLM_ATTENTION_BACKEND=TRITON_ATTN --env NVIDIA_VISIBLE_DEVICES=all --env NVIDIA_DRIVER_CAPABILITIES=all --env LD_LIBRARY_PATH=/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 --gpus all --volume /mnt/data/models/GLM-4.5-Air-nvfp4:/models:ro --entrypoint vllm vllm/vllm-openai:qwen3_5-cu130 serve /models --port 8000 --gpu-memory-utilization 0.75 --max-model-len 16896 --served-model-name GLM-4.5-Air-nvfp4"
+2026/04/17 09:46:34 INFO openclaw sync complete llm=1 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 09:55:10 WARN tuning: benchmark failed, skipping config error="benchmark run: benchmark has no throughput/QPS signal — not saved"
+2026/04/17 09:55:10 INFO tuning: testing config progress=3/5 config="map[gpu_memory_utilization:0.8 max_model_len:16896]"
+2026/04/17 09:55:12 INFO waitForGPURelease: deployment no longer holding GPU name=GLM-4.5-Air-nvfp4 phase=""
+2026/04/17 09:55:14 INFO openclaw sync complete llm=0 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 09:55:16 WARN deploy fitness warning="unified memory system has swap enabled (16383 MiB); high gmu may cause swap thrashing instead of clean OOM-kill"
+2026/04/17 09:55:23 INFO docker deploy name=glm-4-5-air-nvfp4-vllm-nightly args="run -d --name glm-4-5-air-nvfp4-vllm-nightly --restart unless-stopped --ipc=host --label aima.dev/slot=primary --label aima.dev/served-model=GLM-4.5-Air-nvfp4 --label aima.dev/parameter_count=unknown --label aima.dev/port=8000 --label aima.dev/host-port=8000 --label aima.dev/engine=vllm-nightly --label aima.dev/model=GLM-4.5-Air-nvfp4 --label aima.dev/port=8000 --publish 8000:8000 --health-cmd if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 5 http://localhost:8000/health >/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; elif command -v python >/dev/null 2>&1; then python -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; else exit 1; fi || exit 1 --health-interval 10s --health-timeout 5s --health-start-period 600s --health-retries 3 --env NVIDIA_VISIBLE_DEVICES=all --env NVIDIA_DRIVER_CAPABILITIES=all --env LD_LIBRARY_PATH=/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 --env VLLM_ATTENTION_BACKEND=TRITON_ATTN --gpus all --volume /mnt/data/models/GLM-4.5-Air-nvfp4:/models:ro --entrypoint vllm vllm/vllm-openai:qwen3_5-cu130 serve /models --port 8000 --gpu-memory-utilization 0.8 --max-model-len 16896 --served-model-name GLM-4.5-Air-nvfp4"
+2026/04/17 09:55:34 INFO openclaw sync complete llm=1 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 10:05:24 WARN tuning: deploy result missing ready endpoint, skipping config
+2026/04/17 10:05:24 INFO tuning: testing config progress=4/5 config="map[gpu_memory_utilization:0.85 max_model_len:16896]"
+2026/04/17 10:05:26 INFO waitForGPURelease: deployment no longer holding GPU name=GLM-4.5-Air-nvfp4 phase=""
+2026/04/17 10:05:30 WARN deploy fitness warning="unified memory system has swap enabled (16383 MiB); high gmu may cause swap thrashing instead of clean OOM-kill"
+2026/04/17 10:05:34 INFO openclaw sync complete llm=0 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 10:05:36 INFO docker deploy name=glm-4-5-air-nvfp4-vllm-nightly args="run -d --name glm-4-5-air-nvfp4-vllm-nightly --restart unless-stopped --ipc=host --label aima.dev/slot=primary --label aima.dev/served-model=GLM-4.5-Air-nvfp4 --label aima.dev/parameter_count=unknown --label aima.dev/port=8000 --label aima.dev/host-port=8000 --label aima.dev/engine=vllm-nightly --label aima.dev/model=GLM-4.5-Air-nvfp4 --label aima.dev/port=8000 --publish 8000:8000 --health-cmd if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 5 http://localhost:8000/health >/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; elif command -v python >/dev/null 2>&1; then python -c \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)\"; else exit 1; fi || exit 1 --health-interval 10s --health-timeout 5s --health-start-period 600s --health-retries 3 --env LD_LIBRARY_PATH=/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 --env VLLM_ATTENTION_BACKEND=TRITON_ATTN --env NVIDIA_VISIBLE_DEVICES=all --env NVIDIA_DRIVER_CAPABILITIES=all --gpus all --volume /mnt/data/models/GLM-4.5-Air-nvfp4:/models:ro --entrypoint vllm vllm/vllm-openai:qwen3_5-cu130 serve /models --port 8000 --gpu-memory-utilization 0.85 --max-model-len 16896 --served-model-name GLM-4.5-Air-nvfp4"
+2026/04/17 10:05:44 INFO openclaw sync complete llm=1 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 10:06:07 WARN audit log write failed tool=deploy.run error="log action deploy.run: context canceled"
+2026/04/17 10:06:07 WARN tuning: deploy failed, skipping config error="deploy run GLM-4.5-Air-nvfp4: context canceled"
+2026/04/17 10:06:07 INFO explorer: task finished kind=tune model=GLM-4.5-Air-nvfp4 engine=vllm-nightly success=false elapsed=30m0.657888713s throughput=0
+2026/04/17 10:06:08 INFO explorer: skipping task (prior deploy failure in this plan) kind=validate model=GLM-4.5-Air-nvfp4 engine=vllm-nightly prior_error="exploration 52e4d30ff71cf1fd timed out after 30m0s"
+2026/04/17 10:06:11 INFO explorer: PDCA Check phase cycle=1
+2026/04/17 10:06:11 INFO explorer agent: phase request phase=check turn=0
+2026/04/17 10:06:14 INFO openclaw sync complete llm=0 vlm=0 asr=0 tts=false image_gen=0 config=/home/qujing/.openclaw/openclaw.json
+2026/04/17 10:06:17 INFO explorer agent: phase request phase=check turn=1
+2026/04/17 10:06:32 INFO explorer agent: phase request phase=check turn=2
+2026/04/17 10:07:53 INFO explorer agent: phase request phase=check turn=3
+2026/04/17 10:13:28 INFO explorer agent: phase request phase=check turn=4
+2026/04/17 10:13:40 INFO explorer agent: phase done phase=check verdict=done turn=4
+2026/04/17 10:13:40 INFO explorer: PDCA verdict verdict=done extra_tasks=0 cycle=1
+2026/04/17 10:31:09 INFO explorer event received type=scheduled.gap_scan
+2026/04/17 10:31:09 INFO explorer: building plan input
+2026/04/17 10:31:12 INFO explorer: plan input ready knowledge_gaps=46 ready_combos=2 blocked_combos=104 deploys=0 models=30 engines=6 history=30 hw=nvidia-gb10-arm64
+2026/04/17 10:31:12 INFO explorer: generating plan tier=2
+2026/04/17 10:31:12 INFO explorer agent: phase request phase=plan turn=0
+2026/04/17 10:31:18 INFO explorer agent: phase request phase=plan turn=1
+2026/04/17 10:31:36 INFO explorer agent: phase request phase=plan turn=2
+2026/04/17 10:32:10 INFO explorer agent: phase request phase=plan turn=3
+2026/04/17 10:32:58 INFO explorer agent: phase request phase=plan turn=4
+2026/04/17 10:33:01 INFO explorer agent: phase done phase=plan verdict="" turn=4
+2026/04/17 10:33:01 INFO explorer: plan generated id=fafd13a7 tier=2 reasoning=agent-planned tasks=0 task_list=[] llm_tokens=120739 proposed_tasks=0 dedup_dropped=0 ready_combos_seen=2 blocked_combos_seen=104 knowledge_gaps=46
+2026/04/17 10:33:01 INFO explorer: no tasks to execute after filtering
+2026/04/17 11:12:39 INFO explorer event received type=scheduled.gap_scan
+2026/04/17 11:12:39 INFO explorer: building plan input
+2026/04/17 11:12:43 INFO explorer: plan input ready knowledge_gaps=46 ready_combos=2 blocked_combos=104 deploys=0 models=30 engines=6 history=30 hw=nvidia-gb10-arm64
+2026/04/17 11:12:43 INFO explorer: generating plan tier=2
+2026/04/17 11:12:43 INFO explorer agent: phase request phase=plan turn=0
+2026/04/17 11:12:45 INFO explorer agent: phase request phase=plan turn=1
+2026/04/17 11:13:24 INFO explorer agent: phase request phase=plan turn=2
+2026/04/17 11:13:26 INFO explorer agent: phase done phase=plan verdict="" turn=2
+2026/04/17 11:13:26 INFO explorer: plan generated id=c42ce726 tier=2 reasoning=agent-planned tasks=0 task_list=[] llm_tokens=61363 proposed_tasks=0 dedup_dropped=0 ready_combos_seen=2 blocked_combos_seen=104 knowledge_gaps=46
+2026/04/17 11:13:26 INFO explorer: no tasks to execute after filtering

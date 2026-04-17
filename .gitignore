@@ -22,6 +22,11 @@ hardware-reference/
 
 # Playwright CLI artifacts
 .playwright-cli/
+.playwright-mcp/
+
+# Local personal workspaces (not shared)
+marketing/
+screenshots/
 
 # OS
 .DS_Store

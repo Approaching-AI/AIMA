@@ -99,7 +99,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	// Knowledge sync (K6)
-	syncHTTPClient := &http.Client{Timeout: 120 * time.Second}
+	// 600s accommodates LLM reasoning models (advise/scenario generate) that can exceed 2 min.
+	syncHTTPClient := &http.Client{Timeout: 600 * time.Second}
 	deps.SyncPush = func(ctx context.Context) (json.RawMessage, error) {
 		endpoint := centralEndpoint(ctx, deps.GetConfig)
 		apiKey, _ := deps.GetConfig(ctx, "central.api_key")

@@ -398,6 +398,103 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 	}
 }
 
+func TestResolveCatalogModelName(t *testing.T) {
+	cat := &Catalog{
+		ModelAssets: []ModelAsset{
+			{Metadata: ModelMetadata{Name: "qwen3-emb-0.6b"}},
+			{Metadata: ModelMetadata{Name: "qwen3-8b"}},
+		},
+	}
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"Qwen3-Embedding-0.6B", "qwen3-emb-0.6b"},
+		{"gptq-Qwen3-8B-junhowie", "qwen3-8b"},
+	}
+
+	for _, tt := range tests {
+		if got := cat.resolveCatalogModelName(tt.in); got != tt.want {
+			t.Fatalf("resolveCatalogModelName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestBuildSyntheticModelAssetDisallowsMooerForNonASRSafetensors(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "mooer-test", Type: "mooer", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "MUSA"},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					Default: true, SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "MUSA"},
+			},
+		},
+	}
+	hw := HardwareInfo{GPUArch: "MUSA", GPUVRAMMiB: 32768}
+
+	llm := cat.BuildSyntheticModelAsset(ScanMetadata{
+		Name: "synthetic-llm", Type: "llm", Format: "safetensors",
+	}, hw)
+	if llm.Variants[0].Engine != "vllm" {
+		t.Fatalf("llm synthetic engine = %q, want vllm", llm.Variants[0].Engine)
+	}
+	for _, v := range llm.Variants {
+		if v.Engine == "mooer" {
+			t.Fatalf("llm synthetic should not include mooer fallback: %+v", llm.Variants)
+		}
+	}
+
+	emb := cat.BuildSyntheticModelAsset(ScanMetadata{
+		Name: "synthetic-emb", Type: "embedding", Format: "safetensors",
+	}, hw)
+	if emb.Variants[0].Engine != "vllm" {
+		t.Fatalf("embedding synthetic engine = %q, want vllm", emb.Variants[0].Engine)
+	}
+	for _, v := range emb.Variants {
+		if v.Engine == "mooer" {
+			t.Fatalf("embedding synthetic should not include mooer fallback: %+v", emb.Variants)
+		}
+	}
+}
+
+func TestBuildSyntheticModelAssetKeepsMooerForASR(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "mooer-test", Type: "mooer", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "MUSA"},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					Default: true, SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "MUSA"},
+			},
+		},
+	}
+	hw := HardwareInfo{GPUArch: "MUSA", GPUVRAMMiB: 32768}
+	asr := cat.BuildSyntheticModelAsset(ScanMetadata{
+		Name: "synthetic-asr", Type: "asr", Format: "safetensors",
+	}, hw)
+	if asr.Variants[0].Engine != "mooer" {
+		t.Fatalf("asr synthetic engine = %q, want mooer", asr.Variants[0].Engine)
+	}
+}
+
 func TestEstimateVRAMMiB(t *testing.T) {
 	tests := []struct {
 		name string

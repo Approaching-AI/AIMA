@@ -843,6 +843,33 @@ func TestInstallDaemonSystemdUnitContent(t *testing.T) {
 	}
 }
 
+func TestResolveSystemdBinaryPathPrefersLookPathForBareCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+
+	installed := filepath.Join(binDir, "aima")
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write installed binary: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	if got := resolveSystemdBinaryPath("aima"); got != installed {
+		t.Fatalf("resolveSystemdBinaryPath(aima) = %q, want %q", got, installed)
+	}
+}
+
+func TestResolveSystemdBinaryPathKeepsAbsolutePath(t *testing.T) {
+	path := "/usr/local/bin/aima"
+	if got := resolveSystemdBinaryPath(path); got != path {
+		t.Fatalf("resolveSystemdBinaryPath(%q) = %q, want unchanged", path, got)
+	}
+}
+
 func TestCheckComponentSystemdHint(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd hint test only runs on Linux")

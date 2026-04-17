@@ -22,6 +22,7 @@ import (
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/openclaw"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/support"
 )
 
 func newServeCmd(app *App) *cobra.Command {
@@ -116,6 +117,12 @@ func newServeCmd(app *App) *cobra.Command {
 			}
 
 			if app.Support != nil {
+				// Auto-register this edge with aima-service on first boot (or retry
+				// after a prior failure). Runs in the background with exponential
+				// backoff; does not block server startup, so offline edges still
+				// serve local traffic while waiting for network recovery.
+				go app.Support.StartRegistrationWorker(ctx, support.BootstrapOptions{})
+
 				go func() {
 					if err := app.Support.RunBackground(ctx); err != nil && !errors.Is(err, context.Canceled) {
 						slog.Warn("support supervisor stopped", "error", err)

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jguan/aima/internal/cloud"
 )
 
 func (s *Service) loadState(ctx context.Context) deviceState {
@@ -55,6 +57,33 @@ func (s *Service) saveState(ctx context.Context, state deviceState) error {
 	for key, value := range entries {
 		if err := s.store.SetConfig(ctx, key, value); err != nil {
 			return fmt.Errorf("save support state %s: %w", key, err)
+		}
+	}
+	return s.mirrorCanonical(ctx, state)
+}
+
+// mirrorCanonical writes the identity half of deviceState to the canonical
+// device.* config keys consumed by internal/cloud and outbound Central calls.
+// This keeps the rest of AIMA on one surface while the support package still
+// owns its own support.state.* namespace for task/budget/message state.
+func (s *Service) mirrorCanonical(ctx context.Context, state deviceState) error {
+	canonical := map[string]string{
+		cloud.ConfigDeviceID:       state.DeviceID,
+		cloud.ConfigDeviceToken:    state.Token,
+		cloud.ConfigRecoveryCode:   state.RecoveryCode,
+		cloud.ConfigTokenExpiresAt: state.TokenExpiresAt,
+		cloud.ConfigReferralCode:   state.ReferralCode,
+	}
+	// Derive registration_state from presence of device_id + token so a single
+	// source of truth (support saveState) can't disagree with the canonical
+	// state key. Callers that want explicit failed/pending states set the key
+	// directly in bootstrap.go.
+	if state.DeviceID != "" && state.Token != "" {
+		canonical[cloud.ConfigRegistrationState] = cloud.StateRegistered
+	}
+	for key, value := range canonical {
+		if err := s.store.SetConfig(ctx, key, value); err != nil {
+			return fmt.Errorf("mirror canonical %s: %w", key, err)
 		}
 	}
 	return nil

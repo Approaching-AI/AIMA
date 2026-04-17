@@ -233,13 +233,48 @@ func TestPullAdvisoriesToEventBusWithoutEventBusStillReturnsItems(t *testing.T) 
 func TestBuildSyncURLEncodesSince(t *testing.T) {
 	t.Parallel()
 
-	got, err := buildSyncURL("http://localhost:18080", "2026-04-07 07:37:48")
+	got, err := buildSyncURL("http://localhost:18080", "2026-04-07 07:37:48", "dev-42")
 	if err != nil {
 		t.Fatalf("buildSyncURL: %v", err)
 	}
-	want := "http://localhost:18080/api/v1/sync?since=2026-04-07+07%3A37%3A48"
+	want := "http://localhost:18080/api/v1/sync?device_id=dev-42&since=2026-04-07+07%3A37%3A48"
 	if got != want {
 		t.Fatalf("buildSyncURL = %q, want %q", got, want)
+	}
+}
+
+func TestBuildSyncURLWithoutDeviceIDOmitsParam(t *testing.T) {
+	t.Parallel()
+
+	got, err := buildSyncURL("http://localhost:18080", "", "")
+	if err != nil {
+		t.Fatalf("buildSyncURL: %v", err)
+	}
+	want := "http://localhost:18080/api/v1/sync"
+	if got != want {
+		t.Fatalf("buildSyncURL = %q, want %q", got, want)
+	}
+}
+
+func TestWithDeviceIDAppendsQueryParam(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		inURL    string
+		deviceID string
+		want     string
+	}{
+		{"no-existing-query", "https://c/api/v1/ingest", "dev-1", "https://c/api/v1/ingest?device_id=dev-1"},
+		{"with-existing-query", "https://c/api/v1/advisories?hardware=abc", "dev-2", "https://c/api/v1/advisories?hardware=abc&device_id=dev-2"},
+		{"empty-device-id-unchanged", "https://c/api/v1/ingest?x=1", "", "https://c/api/v1/ingest?x=1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withDeviceID(tc.inURL, tc.deviceID); got != tc.want {
+				t.Errorf("withDeviceID = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

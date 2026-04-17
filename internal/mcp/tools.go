@@ -157,6 +157,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	registerCentralTools(s, deps)
 	registerDataTools(s, deps)
 	registerAgentTools(s, deps)
+	registerDeviceTools(s, deps)
 	registerAutomationTools(s, deps)
 	registerFleetTools(s, deps)
 	registerScenarioTools(s, deps)

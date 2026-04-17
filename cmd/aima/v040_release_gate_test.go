@@ -238,6 +238,11 @@ func newReleaseGateEdgeHarness(t *testing.T, endpoint, apiKey string) (*appConte
 	if err := db.SetConfig(ctx, "central.api_key", apiKey); err != nil {
 		t.Fatalf("SetConfig central.api_key: %v", err)
 	}
+	// Simulate a registered edge: canonical device.id is required by all
+	// outbound Central calls since the aima-service device-registry wiring.
+	if err := db.SetConfig(ctx, "device.id", "dev-release-gate"); err != nil {
+		t.Fatalf("SetConfig device.id: %v", err)
+	}
 
 	ac := &appContext{
 		db:       db,

@@ -252,6 +252,7 @@ func run() error {
 	}
 
 	deps.SupportAskForHelp = supportSvc.AskForHelpJSON
+	wireDeviceDeps(deps, supportSvc)
 	// 9e. Fleet management: registry + client + REST routes + MCP tools
 	fleetRegistry := fleet.NewRegistry(proxy.DefaultPort)
 	fleetClient := fleet.NewClient(os.Getenv("AIMA_API_KEY"))

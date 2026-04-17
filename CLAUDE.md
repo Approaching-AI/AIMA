@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 56 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 60 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -45,16 +45,20 @@ Central 已部署到 `aima-oversea` 服务器，作为 aima-service docker-compo
 
 ### Edge ↔ Central API 端点速查
 
-| Method | Path | Edge 用途 | Edge 调用位置 |
-|--------|------|-----------|---------------|
-| POST | `/api/v1/ingest` | 推送 configs/benchmarks/notes | `SyncPush()` in `tooldeps_integration.go` |
-| GET | `/api/v1/sync?since=` | 增量拉取知识 | `SyncPull()` in `tooldeps_integration.go` |
-| GET | `/api/v1/stats` | 连通性检查 | `SyncStatus()` in `tooldeps_integration.go` |
-| POST | `/api/v1/advise` | 请求 LLM 推荐 | `RequestAdvise()` in `tooldeps_integration.go` |
-| GET | `/api/v1/advisories` | 拉取待处理推荐 | `SyncPullAdvisories()` in `tooldeps_integration.go` |
-| POST | `/api/v1/advisories/{id}/feedback` | 反馈验证/拒绝 | `AdvisoryFeedback()` in `tooldeps_integration.go` |
-| POST | `/api/v1/scenarios/generate` | 生成部署方案 | `RequestScenario()` in `tooldeps_integration.go` |
-| GET | `/api/v1/scenarios` | 拉取方案 | `ListCentralScenarios()` in `tooldeps_integration.go` |
+**严格模式（自 aima-service 设备身份打通起）**：除 `/stats` 和 `/healthz` 外，所有端点都**必须**携带 `?device_id=X` query 参数，缺失返回 400。edge 侧通过 `internal/cloud.RequireRegistered` 在每次出云调用前读 `device.id` 配置键，未注册时直接失败、不发出网络请求。
+
+| Method | Path | 必须 device_id | Edge 用途 | Edge 调用位置 |
+|--------|------|:-:|-----------|---------------|
+| POST | `/api/v1/ingest` | ✓ | 推送 configs/benchmarks/notes | `SyncPush()` in `tooldeps_integration.go` |
+| GET | `/api/v1/sync?since=&device_id=` | ✓ | 增量拉取知识 | `SyncPull()` in `tooldeps_integration.go` |
+| GET | `/api/v1/stats` | — | 连通性检查（豁免） | `SyncStatus()` in `tooldeps_integration.go` |
+| POST | `/api/v1/advise` | ✓ | 请求 LLM 推荐 | `RequestAdvise()` in `tooldeps_integration.go` |
+| GET | `/api/v1/advisories` | ✓ | 拉取待处理推荐 | `SyncPullAdvisories()` in `tooldeps_integration.go` |
+| POST | `/api/v1/advisories/{id}/feedback` | ✓ | 反馈验证/拒绝 | `AdvisoryFeedback()` in `tooldeps_integration.go` |
+| POST | `/api/v1/scenarios/generate` | ✓ | 生成部署方案 | `RequestScenario()` in `tooldeps_integration.go` |
+| GET | `/api/v1/scenarios` | ✓ | 拉取方案 | `ListCentralScenarios()` in `tooldeps_integration.go` |
+
+**Device-level 过滤（当前仅 Configurations 层）**：`QueryConfigurations` 和 `sync` 按 `device_id` 列真正过滤；`advisories` / `scenarios` 是"硬件类级"数据，依旧按 `hardware` 过滤，`device_id` 在这两个端点上只用作 strict-mode 的存在性校验。
 
 ### 跨 Repo 联调
 
@@ -63,11 +67,65 @@ Central 已部署到 `aima-oversea` 服务器，作为 aima-service docker-compo
 cd /Users/jguan/projects/aima-central-knowledge
 CENTRAL_API_KEY=test-key go run ./cmd/central/
 
-# 2. 配置 Edge 连接 (在 AIMA repo)
-# 通过 system.config MCP tool 设置 central.endpoint 和 central.api_key
-# 或直接 curl 测试：
+# 2. 配置 Edge 连接 (在 AIMA repo) + 注册身份
+aima --invite-code <CODE> device register   # 或 AIMA_INVITE_CODE=<CODE> aima device register
+aima device status                          # 确认 registered
+
+# 3. 直接 curl 测试（/stats 豁免, 其他必须带 device_id）：
 curl http://localhost:8080/api/v1/stats | jq .
+curl 'http://localhost:8080/api/v1/advisories?device_id=dev-XXX' -H "Authorization: Bearer test-key"
 ```
+
+## ====== aima-service 设备身份打通 (v0.3.x Phase 1) ======
+
+Edge 在首次启动（且能联网）时通过 **aima-service 的 device-registry** 签发一个 `device_id + token + recovery_code`，作为整台设备在云上的永久身份。Central 所有出云请求都携带这个 `device_id`，打通"两套云后端各自一套身份"的分裂。
+
+| 项目 | 说明 |
+|------|------|
+| **aima-service repo** | `/Users/jguan/projects/aima-service`（Python/FastAPI + Rust gateway + gRPC） |
+| **注册端点** | `POST <aima-service>/api/v1/devices/self-register` — 返回 `{device_id, token, recovery_code, token_expires_at, poll_interval_seconds, budget, referral_code}` |
+| **token 续期** | `POST /api/v1/devices/{device_id}/renew-token` |
+| **长轮询反向通道** | `POST /api/v1/devices/{device_id}/poll`（phase 2 才接） |
+| **默认 endpoint** | `support.endpoint` 配置键控制，默认 `https://aimaserver.com`（= aima-service） |
+
+### 身份在 edge 侧怎么存
+
+支持服务（`internal/support/`）复用为 aima-service client。注册成功后同时写两套键：
+- 自有命名空间（不对外）：`support.state.device_id`、`support.state.token` 等
+- **canonical 命名空间（整个 AIMA 读这个）**：`device.id`、`device.token`、`device.recovery_code`、`device.token_expires_at`、`device.registration_state`（`unregistered`/`pending`/`registered`/`failed`）
+
+用 `internal/cloud` 包统一读：
+```go
+deviceID, err := cloud.RequireRegistered(ctx, deps.GetConfig)  // ErrNotRegistered 若未注册
+```
+
+### 关键调用入口
+
+- 首启动注册（非阻塞、退避重试）：`serve.go` 启动末尾 `go app.Support.StartRegistrationWorker(ctx, support.BootstrapOptions{})`
+- 手动触发：`aima device register --invite-code XXX`
+- 查看状态：`aima device status`
+- 强制续期：`aima device renew`
+- 清除身份（危险）：`aima device reset --confirm`
+- MCP tools 等价：`device.register` / `device.status` / `device.renew` / `device.reset`
+
+### invite_code 来源三优先级
+
+1. `--invite-code` CLI 根 flag（持久化到 `support.invite_code`）
+2. `AIMA_INVITE_CODE` env var（直接读取，不持久化）
+3. 旧 `AIMA_SUPPORT_INVITE_CODE` env 兜底；再不行用包内的 `DefaultInviteCode = "channel-aima"`
+
+### Phase 1 范围 vs Phase 2 预留
+
+- **Phase 1（已完成）**：身份注册、token 续期、`device.id` 在所有 Central 出云调用流转、Central 严格模式 400
+- **Phase 2（未来）**：接 aima-service 长轮询通道 `/poll` + `/result`，让云端可以下发命令到 edge（通过 MCP dispatcher 派发）；该能力在 `internal/support/support.go` 已有实现（`RunBackground`），只是默认不启用（需要 `support.enabled=true`）
+
+### 关键文件
+
+- `internal/cloud/device.go` — canonical identity 读写入口
+- `internal/support/bootstrap.go` — `Bootstrap()` + `StartRegistrationWorker()` + `RenewToken()` + `ResetIdentity()`
+- `internal/support/state.go::mirrorCanonical` — 双写 canonical 键的镜像点
+- `cmd/aima/tooldeps_device.go` — device.* MCP tool 闭包
+- `cmd/aima/tooldeps_integration.go::withDeviceID` — URL 追加 `?device_id=` 助手
 
 ## ====== Remote Test Lab (Heterogeneous Hardware) ======
 
@@ -301,7 +359,7 @@ Before starting any v1.0-targeted work, read that doc first. Keep it updated as 
 
 ### Current State (v0.3.0)
 
-56 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 30 engine YAMLs, 28 model YAMLs, 3 deployment scenarios.
+60 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 30 engine YAMLs, 28 model YAMLs, 3 deployment scenarios.
 OpenClaw full-stack integration (local TTS cloning end-to-end). Smart Agent routing with model ranking.
 Engine Profile system with SGLang-KT support. AMD RDNA3 (W7900D) 8-GPU validated.
 God file refactor: `cmd/aima/main.go` split into 46 modules. ZeroClaw removal.
@@ -310,6 +368,7 @@ Central knowledge server (已拆分至 `aima-central-knowledge` 独立 repo). TU
 Knowledge query engine complete (6 query types). Agent: patrol + self-healing with auto-diagnosis/recovery.
 L2c golden config injection in resolve chain. Time constraint engine filtering.
 Explorer Agent Planner: 文档驱动 PDCA 工作流（ExplorerWorkspace + 7 bash 风格工具 + 知识库查询），替代单次 JSON prompt。Engine discovery 从 catalog 匹配解耦。
+aima-service 设备身份打通（Phase 1）：`internal/cloud/` canonical identity surface；`internal/support/Bootstrap` 首启动自动注册 + token 续期；Central strict mode（所有出云端点要求 `?device_id=`）；`aima device register/status/renew/reset` + 4 个 MCP tools。
 
 ### v0.3.0 Completed — "Edge Intelligence"
 

@@ -84,6 +84,15 @@ type ToolDeps struct {
 	RollbackRestore   func(ctx context.Context, id int64) (json.RawMessage, error)
 	SupportAskForHelp func(ctx context.Context, description, endpoint, inviteCode, workerCode, recoveryCode, referralCode string) (json.RawMessage, error)
 
+	// Device identity — aima-service self-register lifecycle. Every outbound
+	// Central/aima-service call resolves device_id via DeviceStatus' canonical
+	// keys, so these four tools are how operators bootstrap and troubleshoot
+	// an edge's cloud identity.
+	DeviceRegister func(ctx context.Context, inviteCode, recoveryCode string, force bool) (json.RawMessage, error)
+	DeviceStatus   func(ctx context.Context) (json.RawMessage, error)
+	DeviceRenew    func(ctx context.Context) (json.RawMessage, error)
+	DeviceReset    func(ctx context.Context, confirm bool) (json.RawMessage, error)
+
 	// System
 	SystemStatus func(ctx context.Context) (json.RawMessage, error)
 	GetConfig    func(ctx context.Context, key string) (string, error)

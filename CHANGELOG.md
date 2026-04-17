@@ -3,6 +3,23 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **aima-service Device Registry Integration (Phase 1)** — edge devices now obtain a unified cloud identity (`device_id` + `token` + `recovery_code`) from the `aima-service` device-registry on first boot, flowing that identity through every Central Knowledge Server call. Registration runs as a non-blocking background goroutine with exponential backoff, so offline edges continue to serve local traffic while waiting for network recovery.
+  - `internal/cloud/device.go` — canonical identity surface (`device.*` config keys, `RequireRegistered`, `ReadIdentity`)
+  - `internal/support/bootstrap.go` — `Service.Bootstrap` first-boot entry point, `StartRegistrationWorker` for startup, `RenewToken` / `ResetIdentity` for operator control
+  - `internal/support/state.go::mirrorCanonical` — saveState mirrors identity into `device.*` keys so the rest of AIMA reads one source of truth
+  - `internal/cli/serve.go` — registration worker launched alongside existing support supervisor
+  - `internal/cli/root.go` — `--invite-code` persistent flag; `AIMA_INVITE_CODE` env var takes priority
+  - `internal/cli/device.go` + `internal/mcp/tools_device.go` — `aima device register/status/renew/reset` CLI + 4 new MCP tools (bringing the total to 60)
+  - `cmd/aima/tooldeps_integration.go` — all 10 outbound Central closures gate on `cloud.RequireRegistered`; URLs carry `?device_id=` query param
+
+### Changed
+
+- **Central Knowledge Server strict mode** — every scoped endpoint now requires `device_id` query parameter, returning 400 when missing; `/healthz` and `/api/v1/stats` remain exempt. Edge is expected to have completed aima-service registration before issuing any Central request. See `aima-central-knowledge` commit history for the server-side implementation.
+
 ## [v0.3.4] - 2026-04-09
 
 ### Added

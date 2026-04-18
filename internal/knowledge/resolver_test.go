@@ -1784,6 +1784,82 @@ func TestFindEngineByName_WildcardPreferredOverMismatch(t *testing.T) {
 	}
 }
 
+// TestFindEngine_BlockedButLocalImageCached covers the unblock-on-local-cache
+// path: an engine marked `status: blocked` (typically because its image was
+// removed from public registries) should still be selectable when the device
+// has the image in its local runtime. Without an image checker, the engine
+// stays blocked.
+func TestFindEngine_BlockedButLocalImageCached(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name:         "vllm-nightly-blackwell",
+					Type:         "vllm-nightly",
+					Version:      "nightly",
+					Status:       "blocked",
+					StatusReason: "image vllm/vllm-openai:qwen3_5-cu130 does not exist in any registry",
+				},
+				Hardware: EngineHardware{GPUArch: "Blackwell"},
+				Image:    EngineImage{Name: "vllm/vllm-openai", Tag: "qwen3_5-cu130"},
+			},
+		},
+	}
+	hw := HardwareInfo{GPUArch: "Blackwell"}
+
+	t.Run("no checker keeps engine blocked", func(t *testing.T) {
+		ea, err := cat.findEngine("vllm-nightly", hw, nil)
+		if err == nil || ea != nil {
+			t.Fatalf("expected blocked error, got engine=%v err=%v", ea, err)
+		}
+		if !strings.Contains(err.Error(), "blocked") {
+			t.Fatalf("err should mention blocked, got: %v", err)
+		}
+	})
+
+	t.Run("checker returning false keeps engine blocked", func(t *testing.T) {
+		opts := &resolveOpts{LocalImageChecker: func(ref string) bool { return false }}
+		ea, err := cat.findEngine("vllm-nightly", hw, opts)
+		if err == nil || ea != nil {
+			t.Fatalf("expected blocked error, got engine=%v err=%v", ea, err)
+		}
+	})
+
+	t.Run("checker returning true for matching ref unblocks engine", func(t *testing.T) {
+		var queriedRef string
+		opts := &resolveOpts{LocalImageChecker: func(ref string) bool {
+			queriedRef = ref
+			return ref == "vllm/vllm-openai:qwen3_5-cu130"
+		}}
+		ea, err := cat.findEngine("vllm-nightly", hw, opts)
+		if err != nil {
+			t.Fatalf("expected unblock, got err=%v", err)
+		}
+		if ea == nil || ea.Metadata.Name != "vllm-nightly-blackwell" {
+			t.Fatalf("engine = %v, want vllm-nightly-blackwell", ea)
+		}
+		if queriedRef != "vllm/vllm-openai:qwen3_5-cu130" {
+			t.Fatalf("checker queried ref = %q, want image:tag joined", queriedRef)
+		}
+	})
+
+	t.Run("engine without image name stays blocked even with checker", func(t *testing.T) {
+		catNoImage := &Catalog{
+			EngineAssets: []EngineAsset{
+				{
+					Metadata: EngineMetadata{Name: "eng-blocked", Type: "eng", Status: "blocked"},
+					Hardware: EngineHardware{GPUArch: "Blackwell"},
+				},
+			},
+		}
+		opts := &resolveOpts{LocalImageChecker: func(ref string) bool { return true }}
+		ea, err := catNoImage.findEngine("eng", hw, opts)
+		if err == nil || ea != nil {
+			t.Fatalf("expected blocked (no image ref to check), got engine=%v err=%v", ea, err)
+		}
+	})
+}
+
 func TestGPUCountFiltering(t *testing.T) {
 	// Build a catalog with a multi-GPU variant (gpu_count_min: 2) and a single-GPU fallback.
 	cat := &Catalog{

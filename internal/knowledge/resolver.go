@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"strings"
@@ -142,7 +143,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		engineType = inferred
 	}
 
-	engine, err := c.findEngine(engineType, selectionHW)
+	engine, err := c.findEngine(engineType, selectionHW, &ropts)
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +296,12 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	return resolved, nil
 }
 
-func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, error) {
+func (c *Catalog) findEngine(engineType string, hw HardwareInfo, ropts *resolveOpts) (*EngineAsset, error) {
 	// Prefer exact metadata.name match, then metadata.type.
 	// Within each class, prefer exact gpu_arch match over wildcard.
-	// Blocked engines are skipped; if ALL matches are blocked, report why.
+	// Blocked engines are skipped unless the caller provides a local-image
+	// checker and the engine's image is cached locally (typical cause:
+	// upstream registry removed a tag that an edge device pulled earlier).
 	var nameWildcard, typeWildcard *EngineAsset
 	var blockedReason string
 	for i := range c.EngineAssets {
@@ -308,15 +311,18 @@ func (c *Catalog) findEngine(engineType string, hw HardwareInfo) (*EngineAsset, 
 		if !nameMatch && !typeMatch {
 			continue
 		}
-		// Skip blocked engines but remember the reason for error reporting
+		// Skip blocked engines but remember the reason for error reporting,
+		// UNLESS a local-image checker unblocks the engine for this device.
 		if strings.EqualFold(ea.Metadata.Status, "blocked") {
-			if blockedReason == "" {
-				blockedReason = ea.Metadata.StatusReason
+			if !engineUnblockedByLocalImage(ea, ropts) {
 				if blockedReason == "" {
-					blockedReason = "engine " + ea.Metadata.Name + " is blocked"
+					blockedReason = ea.Metadata.StatusReason
+					if blockedReason == "" {
+						blockedReason = "engine " + ea.Metadata.Name + " is blocked"
+					}
 				}
+				continue
 			}
-			continue
 		}
 		// Skip native-only incompatibility
 		if hw.RuntimeType == "native" && (ea.Source == nil || !ea.Source.Supports(hw.Platform)) {
@@ -364,12 +370,39 @@ type engineCandidate struct {
 // Returns nil map if no golden config exists (graceful degradation).
 type GoldenConfigFunc func(hardware, engine, model string) map[string]any
 
+// engineUnblockedByLocalImage decides whether a blocked engine should be
+// reconsidered because its image is already present in the local runtime. Used
+// by findEngine to recover gracefully when an upstream registry removes a tag
+// that an edge device has cached. When the checker returns true, we WARN to
+// keep the decision visible in serve.log and fall through to normal matching.
+func engineUnblockedByLocalImage(ea *EngineAsset, ropts *resolveOpts) bool {
+	if ropts == nil || ropts.LocalImageChecker == nil {
+		return false
+	}
+	if ea.Image.Name == "" {
+		return false
+	}
+	ref := ea.Image.Name
+	if ea.Image.Tag != "" {
+		ref += ":" + ea.Image.Tag
+	}
+	if !ropts.LocalImageChecker(ref) {
+		return false
+	}
+	slog.Warn("engine marked blocked but image cached locally — using it anyway",
+		"engine", ea.Metadata.Name,
+		"image", ref,
+		"status_reason", ea.Metadata.StatusReason)
+	return true
+}
+
 // ResolveOption configures optional constraints for engine selection.
 type ResolveOption func(*resolveOpts)
 
 type resolveOpts struct {
-	MaxColdStartS int
-	GoldenConfig  GoldenConfigFunc
+	MaxColdStartS     int
+	GoldenConfig      GoldenConfigFunc
+	LocalImageChecker func(imageRef string) bool
 }
 
 // WithMaxColdStart filters engines whose cold start exceeds the given seconds.
@@ -380,6 +413,15 @@ func WithMaxColdStart(s int) ResolveOption {
 // WithGoldenConfig injects L2c (benchmark-promoted optimal) config lookup into the resolve chain.
 func WithGoldenConfig(fn GoldenConfigFunc) ResolveOption {
 	return func(o *resolveOpts) { o.GoldenConfig = fn }
+}
+
+// WithLocalImageChecker lets engines with status=blocked pass through when
+// their container image is present in the local runtime cache. Typical trigger:
+// upstream registry removed a tag that an edge device has already pulled.
+// When the checker returns true for a blocked engine, findEngine emits a WARN
+// and continues matching as if it were not blocked.
+func WithLocalImageChecker(fn func(imageRef string) bool) ResolveOption {
+	return func(o *resolveOpts) { o.LocalImageChecker = fn }
 }
 
 // InferEngineType picks the best engine for a model on the given hardware.
@@ -409,7 +451,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			if v.Hardware.GPUCountMin > 0 && hw.GPUCount > 0 && hw.GPUCount < v.Hardware.GPUCountMin {
 				continue
 			}
-			engine, err := c.findEngine(v.Engine, hw)
+			engine, err := c.findEngine(v.Engine, hw, &ropts)
 			if err != nil {
 				if strings.Contains(err.Error(), "blocked") {
 					lastBlockedErr = err.Error()
@@ -545,7 +587,9 @@ func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*Mod
 		}
 		return nil, nil, "", err
 	}
-	engine, ferr := c.findEngine(engineType, hw)
+	// Pull path doesn't benefit from local-image unblocking; passing nil keeps
+	// blocked semantics strict for downloads.
+	engine, ferr := c.findEngine(engineType, hw, nil)
 	if ferr != nil {
 		return nil, nil, engineType, ferr
 	}

@@ -103,6 +103,15 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		return queryGoldenOverrides(ctx, kStore, hardware, engine, model)
 	}))
 
+	// Allow engines marked `status: blocked` (typically because upstream
+	// removed the image tag from public registries) to pass through when the
+	// image is already cached locally. Edge devices that pulled an engine
+	// image before its upstream removal should keep using it until the
+	// catalog status is refreshed from a working source.
+	resolveOpts = append(resolveOpts, knowledge.WithLocalImageChecker(func(ref string) bool {
+		return engine.ImageExistsInDocker(ctx, ref, &execRunner{})
+	}))
+
 	resolved, canonicalName, err := resolveWithFallback(ctx, resolveCat, db, hwInfo, modelName, engineType, overrides, dataDir, resolveOpts...)
 	if err != nil {
 		return nil, err

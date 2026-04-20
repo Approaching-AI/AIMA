@@ -3,49 +3,72 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [v0.4.0] - TBD — "Knowledge Autonomy"
+
+162 commits since v0.3.3. v0.4 closes the Edge↔Central automation loop first sketched in `docs/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md`: Explorer now autonomously discovers work, executes benchmark/tune tasks, harvests knowledge, and syncs upstream; Central generates advisories and scenarios with a stable lifecycle; the edge device has a unified cloud identity via `aima-service`.
+
+v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never tagged) is folded into this release.
 
 ### Added
 
-- **aima-service Device Registry Integration (Phase 1)** — edge devices now obtain a unified cloud identity (`device_id` + `token` + `recovery_code`) from the `aima-service` device-registry on first boot, flowing that identity through every Central Knowledge Server call. Registration runs as a non-blocking background goroutine with exponential backoff, so offline edges continue to serve local traffic while waiting for network recovery.
-  - `internal/cloud/device.go` — canonical identity surface (`device.*` config keys, `RequireRegistered`, `ReadIdentity`)
-  - `internal/support/bootstrap.go` — `Service.Bootstrap` first-boot entry point, `StartRegistrationWorker` for startup, `RenewToken` / `ResetIdentity` for operator control
-  - `internal/support/state.go::mirrorCanonical` — saveState mirrors identity into `device.*` keys so the rest of AIMA reads one source of truth
-  - `internal/cli/serve.go` — registration worker launched alongside existing support supervisor
-  - `internal/cli/root.go` — `--invite-code` persistent flag; `AIMA_INVITE_CODE` env var takes priority
-  - `internal/cli/device.go` + `internal/mcp/tools_device.go` — `aima device register/status/renew/reset` CLI + 4 new MCP tools (bringing the total to 60)
-  - `cmd/aima/tooldeps_integration.go` — all 10 outbound Central closures gate on `cloud.RequireRegistered`; URLs carry `?device_id=` query param
-- **Model `metadata.aliases` in catalog YAML** — `ModelAsset` now honors a `metadata.aliases` list so scan-name → canonical-name matching is catalog-driven, not hardcoded. `qwen3-emb-0.6b.yaml` gains `Qwen3-Embedding-0.6B` / `qwen3-embedding-0.6b`; `qwen3-8b.yaml` gains `Qwen3-8B-junhowie` / `gptq-Qwen3-8B-junhowie`. Adding a new alias is now a YAML-only change (honors INV-1/2).
+- **v0.4 Knowledge Autonomy core** — Explorer orchestrator with tier detection, Scheduler (gap-scan/sync/audit timer loops with quiet hours), in-process EventBus (pub/sub for `deploy.completed`, `patrol.alert.oom/idle`, `model.discovered`, `central.advisory`, `central.scenario`), Planner interface (`RulePlanner` for Tier 1, replaced by `ExplorerAgentPlanner` for Tier 2), Harvester (template + LLM modes, `maybeAutoPromote` with zero-throughput guard), `exploration_plans` SQLite table (migrateV12).
+- **Explorer Agent Planner** — document-driven PDCA agent workflow (`ExplorerAgentPlanner`) replaces the single-shot JSON LLM planner. LLM operates as a research agent reading/writing documents in `~/.aima/explorer/` workspace via 7 bash-like tools (cat/ls/write/append/grep/query/done), with three-phase Chinese system prompts (Plan/Check/Act). `ExplorerWorkspace` manages fact documents (`device-profile.md`, `available-combos.md`, `knowledge-base.md`), analysis documents (`plan.md`, `summary.md`), and experiment results (`experiments/*.md`) with read-only guards and path safety. `query` tool wired to SQLite knowledge store (search/compare/gaps/aggregate) enables LLM to pull historical benchmark data during planning. `AnalyzablePlanner` extends `Planner` with `Analyze()` for PDCA Check+Act phases.
+- **Explorer evidence contract (2026-04-16 design)** — `PendingWork` derivation from durable local facts (`configurations` + `benchmark_results` + `exploration_runs`) keeps completed combos in Ready frontier when baseline/long-context/tune debt remains; `TaskSpec.search_space` contract gives `kind=tune` real parameter-search semantics; adaptive benchmark profile enrichment adds a long-context anchor when `MaxContextLen` allows without exploding the matrix; RulePlanner consumes PendingWork alongside gaps/advisories. Structured decision-trace logging (`tier`, `tasks`, `task_list`, `llm_tokens`, `proposed_tasks`, `dedup_dropped`, `ready_combos_seen`, `blocked_combos_seen`, `knowledge_gaps`) on every `explorer: plan generated` event.
+- **Central Advisor Engine + Analyzer** — `CentralStore` interface decouples storage from logic with two implementations (`store_sqlite.go`, `store_postgres.go` using `pgx/v5`, nil-CGO). `Advisor` wraps an `LLMCompleter` (OpenAI-compatible, custom headers via `WithOpenAIHeaders`/`CENTRAL_LLM_HEADERS`) to power `Recommend` / `OptimizeScenario` / `GenerateScenario`. `Analyzer` owns scheduled gap scans, pattern discovery, scenario health checks, and post-ingest delayed analysis with real `analysis_runs` lifecycle transitions. Prompt templates in `advisor_prompts.go`. New API endpoints `POST /api/v1/advise`, `GET /api/v1/advisories`, `POST /api/v1/advisory/feedback`, `POST /api/v1/scenario/generate`, `GET /api/v1/scenarios`, `GET /api/v1/analysis`. (See note in Changed: Central implementation has moved to a separate repo.)
+- **Advisory lifecycle** — `pending` → `delivered` (on `sync pull`) → `validated` / `rejected` (on edge feedback) → `expired` (30d untouched). Advisory/scenario pulls are hardware-aware and lifecycle-filtered.
+- **Sync v2 protocol** — `knowledge.sync_pull` now returns advisories + scenarios alongside configurations/benchmarks/notes; `knowledge.sync_push` carries advisory feedback; CLI `aima knowledge advise` and `aima scenario generate/list --source central` exposed. End-to-end integration test covering advisory creation → delivery → validation → feedback.
+- **aima-service Device Registry Integration (Phase 1)** — edge devices obtain a unified cloud identity (`device_id` + `token` + `recovery_code`) from the `aima-service` device-registry on first boot, flowing through every Central call. Registration is a non-blocking goroutine with exponential backoff so offline edges keep serving local traffic. `internal/cloud/device.go` exposes the canonical `device.*` config keys plus `RequireRegistered` / `ReadIdentity`; `internal/support/bootstrap.go` provides `Service.Bootstrap`, `StartRegistrationWorker`, `RenewToken`, `ResetIdentity`; `internal/support/state.go::mirrorCanonical` mirrors identity into `device.*` keys so the rest of AIMA reads one source of truth. `--invite-code` persistent flag; `AIMA_INVITE_CODE` env takes priority. `aima device register/status/renew/reset` CLI + 4 matching MCP tools. All 10 outbound Central closures gate on `cloud.RequireRegistered`; URLs carry `?device_id=`.
+- **Onboarding Cold-Start Wizard** — single guided flow for new users: hardware detection → scan existing assets → recommend top models/engines → deploy with progress. `internal/onboarding` package owns business logic; `aima onboarding` CLI wraps the `onboarding` MCP tool (5 actions). Real-time SSE streaming with heartbeat; security + i18n + INV-8 (offline-first) hardening; agent destructive-action gating; reuse trail for previously-scanned assets. GPU occupancy panel with Stop buttons for non-AIMA containers; clickable phase dots for back-nav; scan-complete summary with Back/Continue; actionable engine-blocked / GPU-busy error copy; "Skip for now" button on the support page.
+- **Onboarding Recommend Scoring v2** — 5-dimension 0-100 scoring (modality, local readiness, VRAM fit, largest-fittable, recency) with bandwidth+RAM aware paths for MoE vs dense inference on unified-memory SoCs (GB10) vs high-bandwidth discrete GPUs (RTX 4090). `released_at` catalog metadata fuels the recency bonus. Recommend scoring spec lives in `design/onboarding-recommend-scoring-v2.md`.
+- **Multi-modal Benchmark System** — `Requester` interface + `Sample` struct generalize benchmark adapters beyond chat. Adapters for TTS, ASR, T2I (text-to-image), T2V (text-to-video); `matrix` MCP dispatches the right requester per modality. V14 SQLite migration adds multi-modal benchmark columns. Smoke-test servers for T2I/T2V. `RunResult` carries modality-specific fields. Design spec: `design/smart-synthetic-deploy.md` and `docs/superpowers/specs/2026-04-13-multimodal-benchmark-design.md`.
+- **Model `metadata.aliases` in catalog YAML** — `ModelAsset` honors a `metadata.aliases` list so scan-name → canonical-name matching is catalog-driven, not hardcoded. `qwen3-emb-0.6b.yaml` gains `Qwen3-Embedding-0.6B` / `qwen3-embedding-0.6b`; `qwen3-8b.yaml` gains `Qwen3-8B-junhowie` / `gptq-Qwen3-8B-junhowie`. Adding a new alias is a YAML-only change (honors INV-1/2).
+- **MCP profile-aware tool filtering** — `ListToolsForProfile` on `Server`; `WithProfile` + `ProfiledToolExecutor` on `Agent`; system prompt rewritten to cover all 39 ProfileOperator tools, reducing token overhead per agent call.
+- **Catalog expansion** — FLUX.2-dev full-stack deploy with TeaCache + ROCm engine split; LTX-2.3 22B for AMD RDNA3; xDiT Wan2.2 engine/model hotfix.
+- **Central production deployment** — default Central endpoint is now `https://aimaservice.ai/central`; deployment integration design (`design/superpowers/plans/2026-04-13-central-deployment-integration.md`) documents the gateway-proxied topology (Rust gateway `/central/*` → `http://central:8081`), PostgreSQL `aima_central` database, and upgrade workflow from the production server.
 
 ### Changed
 
-- **Central Knowledge Server strict mode** — every scoped endpoint now requires `device_id` query parameter, returning 400 when missing; `/healthz` and `/api/v1/stats` remain exempt. Edge is expected to have completed aima-service registration before issuing any Central request. See `aima-central-knowledge` commit history for the server-side implementation.
-- **Onboarding engine selection hardened (#36)** — `FormatToEngine` prefers general-purpose LLM engines over specialized ones (safetensors → vllm instead of mooer-asr); `InferEngineType` enforces format compatibility; blocked engines (status: blocked) now fail fast instead of hanging a 15-minute docker pull. Three `vllm-nightly-*` assets marked blocked where the referenced image `qwen3_5-cu130` does not exist.
-- **Onboarding wizard UX (#36)** — GPU occupancy panel with Stop buttons for non-AIMA containers, clickable phase dots for back-nav, scan-complete summary + Back/Continue buttons, actionable engine-blocked / GPU-busy error copy, and a "Skip for now" button on the support page.
-- **Knowledge resolver scan-name resolution (#39, refactored)** — `resolveCatalogModelName` matches scan inputs (`Qwen3-Embedding-0.6B`, `gptq-Qwen3-8B-junhowie`) against catalog via the new `Aliases` field. Synthetic fallback no longer auto-selects the ASR-only `mooer` engine for `safetensors` llm/embedding models; redundant guard checks in `BuildSyntheticModelAsset` collapsed into a single `substituteDisallowedMooer` helper.
+- **MCP tool consolidation 101 → 61** — merged redundant tools into action-param unified tools, removed 45+ legacy and unused tools. Current surface (61): 8 deploy · 6 model · 6 engine · 6 knowledge · 4 benchmark · 4 automation (patrol/tuning/explore/explorer) · 4 agent (support/ask/status/rollback) · 4 device (register/status/renew/reset) · 3 catalog · 3 central · 2 fleet · 2 hardware · 2 data · 2 scenario · 2 system · 1 onboarding · 1 stack · 1 openclaw. App register/provision/list and power mode/history were removed in consolidation (unused by external consumers; power is subsumed by `hardware.metrics` + `GET /api/v1/power`). Test naming and tooldeps wiring updated.
+- **Central Knowledge Server strict mode** — every scoped endpoint now requires a `device_id` query parameter, returning 400 when missing; `/healthz` and `/api/v1/stats` remain exempt. Edge is expected to have completed aima-service registration before issuing any Central request.
+- **Central Knowledge Server moved to a separate repo** — server code and deployment live in `github.com/Approaching-AI/aima-central-knowledge`. Do not add `internal/central/` or `cmd/central/` to this repo; Edge↔Central communication is HTTP REST only, payloads are built with `map[string]any` in `cmd/aima/tooldeps_integration.go`, and the API contract is owned by `aima-central-knowledge/api/openapi.yaml`.
+- **Onboarding engine selection hardened (#36)** — `FormatToEngine` prefers general-purpose LLM engines over specialized ones (safetensors → vllm instead of mooer-asr); `InferEngineType` enforces format compatibility; blocked engines (status: `blocked`) fail fast instead of hanging a 15-minute docker pull. Three `vllm-nightly-*` assets marked blocked where the referenced image `qwen3_5-cu130` does not exist.
+- **Knowledge resolver scan-name resolution (#39)** — `resolveCatalogModelName` matches scan inputs against catalog via the new `Aliases` field; hardcoded `gptq-` prefix strip retired. Synthetic fallback no longer auto-selects the ASR-only `mooer` engine for `safetensors` llm/embedding models; redundant guard checks in `BuildSyntheticModelAsset` collapsed into a single `substituteDisallowedMooer` helper.
+- **Explorer frontier grounded in executable facts** — `available-combos.md` is regenerated from live data; structural blockers, fail-count blockers, and no-pending-work completed combos drive dedup instead of "completed means done". Engine-wide blocker propagation prevents the planner from proposing tasks onto an engine scope that has been confirmed broken (GB10 sm_121 × sglang, vllm-standard on GLM models, etc.).
+- **CLI `--remote` / `--api-key` hoisted** to root persistent flags so all subcommands can drive a remote `aima serve` consistently.
 
 ### Fixed
 
+- **MCP-initiated tune detached from HTTP request context** — tuning runs initiated via MCP no longer get cancelled when the triggering HTTP request ends; a dedicated background context with its own lifecycle manages long-running tune runs.
+- **Engine health_check timeout honored + vllm-nightly warmup wired** — deploys no longer block indefinitely on engines that never become ready; warmup/readiness is first-class for native runtime and now also covers docker runtime for vllm-nightly.
+- **Unblock engines whose image is cached locally** — `status: blocked` is automatically bypassed when `docker images` shows the referenced tag is already on disk, unblocking fast-path deploys on dev labs.
+- **Edge HTTP timeout extended to 600s for LLM reasoning** — Kimi and other reasoning-capable LLM endpoints routinely exceed the prior 30s/120s edge sync timeout; 600s is now the ceiling for LLM-bound outbound calls.
+- **mDNS log filter flipped to allow-list** — deny-list model was leaking noise from Docker veth/br-* and unrelated interfaces; allow-list now matches only known-good interface patterns.
 - **`aima init` systemd unit ExecStart path (#38)** — the stable installer was writing a user-dir binary path (e.g. `/home/qujing/aima`) into `aima-serve.service`, causing `203/EXEC` startup failure even after docker/k3s installed successfully. Bare command names are now resolved via `exec.LookPath`; absolute paths pass through unchanged.
-
-## [v0.3.4] - 2026-04-09
-
-### Added
-
-- **Explorer Agent Planner** — replaced single-shot JSON LLM planner with document-driven PDCA agent workflow (`ExplorerAgentPlanner`). LLM operates as a research agent reading/writing documents in `~/.aima/explorer/` workspace via 7 bash-like tools (cat/ls/write/append/grep/query/done), with three-phase Chinese system prompts (Plan/Check/Act)
-- **Explorer Workspace** — `ExplorerWorkspace` manages fact documents (device-profile.md, available-combos.md, knowledge-base.md), analysis documents (plan.md, summary.md), and experiment results (experiments/*.md) with read-only guards and path safety
-- **Knowledge query tool** — `query` tool wired to SQLite knowledge store (search/compare/gaps/aggregate), enabling LLM to query historical benchmark data during planning
-- **Enriched experiment results** — benchmark entries now include concurrency, input/max tokens, and latency metrics from `HarvestResult`, giving the Check phase richer data for analysis
-
-### Changed
-
-- **Engine discovery decoupled** — removed `installedEnginesContainResolvedAsset` gate from `WithGatherLocalEngines`; all locally installed engines are now visible to Explorer regardless of catalog match. Catalog YAML only enriches metadata (Features, TunableParams)
-- **AnalyzablePlanner interface** — extends existing `Planner` interface with `Analyze()` method for PDCA Check+Act phases without breaking `RulePlanner`
+- **Tuner aligned with deploy.run contract** — tuning no longer skews deploy config with benchmark-profile fields; `configurations.config` reflects real deploy config.
+- **Warmup readiness + served model label normalization** — deploy.apply waits for an actual ready endpoint before returning; benchmark uses `deploy.status` to resolve the real endpoint address instead of defaulting to `localhost:6188`.
+- **Partial-matrix narrative + overlay profile spurious warnings** — matrix harvest documents zero-cell and partial-cell outcomes without flooding logs with overlay-profile false positives.
+- **Explorer evidence/frontier/blocker coverage** — frontier coverage grounded in durable local facts; blocker learning uses exploration_runs history not just in-memory counters; retracted three design-philosophy violations from the explorer cleanup run (cross-boundary writes in the dedup path).
+- **Explorer E2E closure (seven rounds from 2026-03-XX through 2026-04-17)** — fixes cover: OpenAI User-Agent (Kimi 403 `access_terminated_error`), code-fence stripping in Advisor/Analyzer response parsing, `/v1` double-prefix URL bug, advisor `[]json.RawMessage` → yaml.Marshal as `[]any`, `compare` plan kind removed from LLMPlanner prompt, auto-promote zero-throughput guard, plan input filtering (local-only models/engines/gaps, max caps for gaps/open_questions/history), `ensureDeployed` + `waitForReady` + `resolveDeployEndpoint` + deploy-status precheck for "already running", sglang-kt engine-specific parameter substitution (no `--gpu-memory-utilization` leak), synthetic fallback `"no variant of model"` trigger + variant merge, failure notes not persisted to DB (keep central sync clean), hardware-based benchmark profile defaults, matrix-aware harvest notes with per-cell throughput/TTFT summary, synchronous event loop (fixes budget race/redundant planning/stale input), plan_id propagation for traceability, harvester template vs LLM split for validate vs tune, promotion quality gate blocking auto-promote on zero benchmark metadata, N1+prefill dedup feeding explored combos to LLM prompt.
+- **Central-edge automation loop** — column-order bug in SQLite inserts, context leak in advisor LLM calls, advisory EventBus bridge ordering, and deploy strategy hardening across the sync v2 path.
 
 ### Removed
 
-- **LLMPlanner** — deleted `explorer_llmplanner.go` and `explorer_llmplanner_test.go` (replaced by `ExplorerAgentPlanner`)
-- **Dead code** — removed unused `installedEnginesContainResolvedAsset` from `engine_match.go`
+- **LLMPlanner** — replaced by `ExplorerAgentPlanner`; `explorer_llmplanner.go` and its test deleted.
+- **45+ legacy MCP tools** — replaced by action-param unified tools during the 101→61 consolidation.
+- **Hardcoded `gptq-` prefix strip** — superseded by catalog `metadata.aliases`.
+- **`buildOnboardingDeps` decorator** — onboarding moved to `internal/onboarding` with direct DI.
+
+### Infrastructure
+
+- 61 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 32 engine YAMLs, 28 model YAMLs, 3 deployment scenarios, 3 partition strategies, 5 stack components.
+- Central Knowledge Server: separate repo, PostgreSQL `aima_central` in production behind Rust gateway at `https://aimaservice.ai/central`.
+- Edge ↔ aima-service: `device_id + token + recovery_code` identity; canonical `device.*` config keys; `RequireRegistered` gate on all outbound Central calls.
+- New SQLite migrations: V12 (`exploration_plans`), V14 (multi-modal benchmark columns).
+
+### Notes for operators
+
+- Documented env-var matrix (edge + central) lives in `design/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md` §7.4. `AIMA_EXPLORER_*` env vars drive Explorer scheduling; `CENTRAL_*` env vars configure the standalone Central service (now in `aima-central-knowledge`).
+- The v0.3.4 CHANGELOG entry (Explorer Agent Planner, 2026-04-09) was never tagged; its content is consolidated into v0.4.0 above.
 
 ## [v0.3.3] - 2026-04-09
 
@@ -91,11 +114,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **Runtime** — knowledge-driven delivery flow restoration, native process identity and failure detail preservation, engine and model delivery recovery, runtime planning alignment with no-pull semantics
 - **Knowledge** — GPU-count-aware variant selection enforcement, engine profile overlay staleness tracking, engine asset rebuild after profile overlay changes
 - **UI** — settings extras validation and patrol idle gaps, fleet device ordering stability, local fallback restoration, dashboard panel regrouping, default serve entry stabilization
-- **Code quality** — 21-file audit fixing bugs and catalog hygiene, cross-reference errors unified (MCP tool count was 56/79/80/94 in different docs, now consistently 94)
+- **Code quality** — 21-file audit fixing bugs and catalog hygiene, cross-reference errors in MCP tool count unified across docs.
 
 ### Infrastructure
 
-94 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 27 engine YAMLs, 25 model YAMLs, 3 deployment scenarios.
+101 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 27 engine YAMLs, 25 model YAMLs, 3 deployment scenarios. (Consolidated to 61 tools in v0.4.0.)
 
 ## [v0.2.0] - 2026-03-25 — "Connect the Dots"
 
@@ -144,6 +167,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 Initial tagged release. Foundation layer with hardware detection (8 GPU vendors), multi-runtime deployment, knowledge-driven config resolution, 80 MCP tools, central knowledge server, TUI dashboard, benchmark runner, and exploration runner.
 
+[v0.4.0]: https://github.com/Approaching-AI/AIMA/compare/v0.3.3...HEAD
+[v0.3.3]: https://github.com/Approaching-AI/AIMA/compare/v0.3.0...v0.3.3
 [v0.3.0]: https://github.com/Approaching-AI/AIMA/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/Approaching-AI/AIMA/compare/v0.0.1...v0.2.0
 [v0.0.1]: https://github.com/Approaching-AI/AIMA/releases/tag/v0.0.1

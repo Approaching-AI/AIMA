@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 60 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes 61 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -269,7 +269,7 @@ ssh <user@host> 'uname -a && cat /etc/os-release 2>/dev/null; sw_vers 2>/dev/nul
 
 ## Git Flow & Version Management
 
-This project uses **Git Flow** branching model. Current version: **v0.3.x** (pre-release).
+This project uses **Git Flow** branching model. Current version: **v0.4.x** (pre-release).
 
 ```
 master ──●──── tag v0.0.1 ──────── tag v0.2.0 ──
@@ -293,7 +293,7 @@ develop ───●──●──●──●──feature──●──●
 - **0.0.1** — Initial foundation release (hardware detection, multi-runtime)
 - **0.2.0** — Support service, Web UI redesign, OpenClaw integration
 - **0.3.0** — Edge Intelligence: OpenClaw full-stack, smart agent routing, RDNA3 support, major refactoring
-- **0.4.0** — Next milestone: expanded catalog, agent orchestration maturity
+- **0.4.0** — Knowledge Autonomy: Explorer Agent Planner (PDCA), Central Advisor+Analyzer, advisory lifecycle, Sync v2, MCP tool consolidation (101→61), aima-service device identity (Phase 1), onboarding wizard, multi-modal benchmark
 - **1.0.0** — Production-ready, stable API contract
 
 ### Daily Workflow
@@ -357,18 +357,11 @@ go build -ldflags "$LDFLAGS" -o build/aima ./cmd/aima
 Before starting any v1.0-targeted work, read that doc first. Keep it updated as gaps are closed.
 **Changelog: `CHANGELOG.md`** — release history with all changes per version.
 
-### Current State (v0.3.0)
+### Current State (v0.4.0)
 
-60 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 30 engine YAMLs, 28 model YAMLs, 3 deployment scenarios.
-OpenClaw full-stack integration (local TTS cloning end-to-end). Smart Agent routing with model ranking.
-Engine Profile system with SGLang-KT support. AMD RDNA3 (W7900D) 8-GPU validated.
-God file refactor: `cmd/aima/main.go` split into 46 modules. ZeroClaw removal.
-Embedded Web UI with per-card GPU metrics, collapsible panels, multi-socket CPU fix.
-Central knowledge server (已拆分至 `aima-central-knowledge` 独立 repo). TUI dashboard (Bubble Tea). ResourceSlot abstraction.
-Knowledge query engine complete (6 query types). Agent: patrol + self-healing with auto-diagnosis/recovery.
-L2c golden config injection in resolve chain. Time constraint engine filtering.
-Explorer Agent Planner: 文档驱动 PDCA 工作流（ExplorerWorkspace + 7 bash 风格工具 + 知识库查询），替代单次 JSON prompt。Engine discovery 从 catalog 匹配解耦。
-aima-service 设备身份打通（Phase 1）：`internal/cloud/` canonical identity surface；`internal/support/Bootstrap` 首启动自动注册 + token 续期；Central strict mode（所有出云端点要求 `?device_id=`）；`aima device register/status/renew/reset` + 4 个 MCP tools。
+61 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 32 engine YAMLs, 28 model YAMLs, 3 deployment scenarios, 3 partition strategies, 5 stack components.
+Carried from v0.3.0: OpenClaw full-stack integration, Smart Agent routing with model ranking, Engine Profile system with SGLang-KT, AMD RDNA3 (W7900D) 8-GPU validated, god file refactor (`cmd/aima/main.go` → 46 modules), ZeroClaw removal, embedded Web UI with per-card GPU metrics + multi-socket CPU fix, TUI dashboard (Bubble Tea), ResourceSlot abstraction, knowledge query engine (6 query types), patrol + self-healing auto-diagnosis, L2c golden config injection, time constraint engine filtering.
+v0.4.0 adds: Explorer Agent Planner (document-driven PDCA with `ExplorerWorkspace` + 7 bash-like tools + SQLite query tool) replacing single-shot JSON prompt, with `PendingWork` / `search_space` / long-context anchor contracts and structured decision-trace logging; Central Advisor Engine + Periodic Analyzer + `CentralStore` interface (SQLite + Postgres/pgx) + advisory lifecycle (pending→delivered→validated/rejected→expired) + Sync v2 protocol (now in separate `aima-central-knowledge` repo, deployed at `https://aimaservice.ai/central`); aima-service device identity Phase 1 (`internal/cloud/` canonical surface, `internal/support/Bootstrap` auto-register + token renew, Central strict mode `?device_id=`, `aima device register/status/renew/reset` + 4 MCP tools); MCP consolidation 101→61 with profile-aware `ListToolsForProfile`; onboarding cold-start wizard with 5-dimension 0-100 recommend scoring; multi-modal benchmark system (chat/TTS/ASR/T2I/T2V) with V14 SQLite migration; model `metadata.aliases` for catalog-driven scan-name matching; MCP-initiated tune detached from HTTP request context for long-run stability; engine health_check timeout honored; edge HTTP timeout 600s for LLM reasoning endpoints.
 
 ### v0.3.0 Completed — "Edge Intelligence"
 

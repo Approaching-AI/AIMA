@@ -682,12 +682,14 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	args := collectArgs(comp, hwProfile)
 	env := collectEnv(comp, hwProfile)
 
+	resolvedBinary := resolveSystemdBinaryPath(binary)
+
 	// Copy binary to /usr/local/bin/ so it's accessible to all users.
 	// This matches the K3S official install script convention.
 	systemBinary := filepath.Join("/usr/local/bin", name)
-	if err := copyFile(binary, systemBinary, 0o755); err != nil {
+	if err := copyFile(resolvedBinary, systemBinary, 0o755); err != nil {
 		slog.Warn("failed to copy binary to system path, using original", "error", err)
-		systemBinary = binary
+		systemBinary = resolvedBinary
 	} else {
 		slog.Info("installed binary to system path", "path", systemBinary)
 	}
@@ -789,6 +791,19 @@ WantedBy=multi-user.target
 
 	slog.Info("daemon installed as systemd service", "name", name, "unit", unitPath)
 	return nil
+}
+
+func resolveSystemdBinaryPath(binary string) string {
+	if binary == "" {
+		return binary
+	}
+	if filepath.IsAbs(binary) {
+		return binary
+	}
+	if resolved, err := lookupPath(binary); err == nil && resolved != "" {
+		return resolved
+	}
+	return binary
 }
 
 // installArchive installs a component from a .tar.gz archive:
@@ -1146,11 +1161,7 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 		}
 	}
 
-	// Resolve binary from dist/ if not in PATH
-	binary := parts[0]
-	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
-		binary = localPath
-	}
+	binary := resolveVerificationBinary(parts[0], inst.distDir)
 
 	out, err := inst.runner.Run(ctx, binary, parts[1:]...)
 	if err != nil {

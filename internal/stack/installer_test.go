@@ -139,6 +139,50 @@ func TestStatusPrefersInstalledBinaryOverDistArtifact(t *testing.T) {
 	}
 }
 
+func TestCheckComponentPrefersInstalledBinaryOverDistArtifact(t *testing.T) {
+	tmp := t.TempDir()
+	distDir := filepath.Join(tmp, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		t.Fatalf("mkdir distDir: %v", err)
+	}
+	realDocker := filepath.Join(tmp, "system-docker")
+	if err := os.WriteFile(realDocker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write real docker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "docker"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write dist docker: %v", err)
+	}
+
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "docker" {
+			return realDocker, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			realDocker + " version": {output: []byte("24.0.7")},
+		},
+	}
+
+	inst := NewInstaller(runner, tmp).WithDistDir(distDir)
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "docker", Version: "24.0.7"},
+		Verify: knowledge.StackVerify{
+			Command:        "docker version",
+			ReadyCondition: "24.0.0",
+		},
+	}
+
+	status := inst.checkComponent(context.Background(), comp, "")
+	if !status.Installed || !status.Ready {
+		t.Fatalf("expected installed+ready status, got %+v", status)
+	}
+}
+
 func TestInitSkipsReadyComponent(t *testing.T) {
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -869,6 +913,34 @@ func TestInstallDaemonSystemdUnitContent(t *testing.T) {
 	}
 	if env["EXTRA"] != "val" {
 		t.Errorf("EXTRA = %q, want %q", env["EXTRA"], "val")
+	}
+}
+
+func TestResolveSystemdBinaryPathPrefersLookPathForBareCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	installed := filepath.Join(tempDir, "aima")
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write installed binary: %v", err)
+	}
+
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "aima" {
+			return installed, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
+
+	if got := resolveSystemdBinaryPath("aima"); got != installed {
+		t.Fatalf("resolveSystemdBinaryPath(aima) = %q, want %q", got, installed)
+	}
+}
+
+func TestResolveSystemdBinaryPathKeepsAbsolutePath(t *testing.T) {
+	path := "/usr/local/bin/aima"
+	if got := resolveSystemdBinaryPath(path); got != path {
+		t.Fatalf("resolveSystemdBinaryPath(%q) = %q, want unchanged", path, got)
 	}
 }
 

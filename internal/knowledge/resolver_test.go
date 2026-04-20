@@ -330,6 +330,69 @@ func TestResolvePrefersExactEngineAssetVariant(t *testing.T) {
 	}
 }
 
+// TestResolveCarriesEngineAssetName verifies the U9 label-drift fix: when
+// the user passes an engine type alias (e.g. "vllm-nightly"), the resolved
+// ResolvedConfig must expose the concrete asset metadata.name via
+// EngineAssetName (e.g. "vllm-nightly-blackwell") so the downstream
+// aima.dev/engine label matches what runtime/progress.go's findEngineAsset
+// looks up. Resolver.Engine keeps the original alias for CLI/DB key
+// stability, but EngineAssetName is the canonical label key.
+func TestResolveCarriesEngineAssetName(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-nightly-blackwell", Type: "vllm-nightly", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "Blackwell"},
+				Startup: EngineStartup{
+					DefaultArgs: map[string]any{"gpu_memory_utilization": 0.9},
+					HealthCheck: HealthCheck{Path: "/health", TimeoutS: 300},
+				},
+				Image: EngineImage{Name: "vllm/vllm-openai", Tag: "nightly-blackwell"},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-nightly-ada", Type: "vllm-nightly", Version: "1.0",
+					SupportedFormats: []string{"safetensors"},
+				},
+				Hardware: EngineHardware{GPUArch: "Ada"},
+				Startup: EngineStartup{
+					DefaultArgs: map[string]any{"gpu_memory_utilization": 0.9},
+					HealthCheck: HealthCheck{Path: "/health", TimeoutS: 300},
+				},
+				Image: EngineImage{Name: "vllm/vllm-openai", Tag: "nightly-ada"},
+			},
+		},
+		ModelAssets: []ModelAsset{
+			{
+				Metadata: ModelMetadata{Name: "demo-model", Type: "llm"},
+				Variants: []ModelVariant{{
+					Name:     "demo-blackwell",
+					Hardware: ModelVariantHardware{GPUArch: "Blackwell", VRAMMinMiB: 0},
+					Engine:   "vllm-nightly", // type alias
+					Format:   "safetensors",
+				}},
+			},
+		},
+	}
+
+	hw := HardwareInfo{GPUArch: "Blackwell", GPUVRAMMiB: 120000, GPUCount: 1}
+	resolved, err := cat.Resolve(hw, "demo-model", "vllm-nightly", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "vllm-nightly" {
+		t.Errorf("resolved.Engine = %q, want %q (type alias preserved for CLI/DB stability)",
+			resolved.Engine, "vllm-nightly")
+	}
+	if resolved.EngineAssetName != "vllm-nightly-blackwell" {
+		t.Fatalf("resolved.EngineAssetName = %q, want %q (asset metadata.name keys the aima.dev/engine label)",
+			resolved.EngineAssetName, "vllm-nightly-blackwell")
+	}
+}
+
 func TestBuildSyntheticModelAsset(t *testing.T) {
 	// Build a catalog with engines that declare supported_formats.
 	// This mirrors the real catalog: llamacpp supports gguf, vllm supports safetensors.
@@ -592,6 +655,13 @@ func TestBuildSyntheticWithHardware(t *testing.T) {
 					SupportedFormats: []string{"safetensors"},
 				},
 				Hardware: EngineHardware{GPUArch: "*"},
+				// Production vLLM YAMLs declare these knobs in default_args;
+				// the synthetic config path now strictly honors the declaration
+				// (INV-1 U6/U10 fix).
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"gpu_memory_utilization": 0.90,
+					"max_model_len":          8192,
+				}},
 			},
 			{
 				Metadata: EngineMetadata{
@@ -2043,4 +2113,110 @@ func TestCheckFitTPExceedsGPUCount(t *testing.T) {
 			t.Fatalf("expected Fit=true without TP config, got Reason=%q", fit.Reason)
 		}
 	})
+}
+
+// TestBuildSyntheticConfig_NoVRAMLeakForEnginesWithoutDeclaredKnob is the
+// U6/U10 regression test: synthesized config must NOT inject
+// gpu_memory_utilization (nor mem_fraction_static) into engines whose YAML
+// does not declare any VRAM-fraction knob. llama-server rejects
+// --gpu-memory-utilization as an unknown flag at startup, so silent
+// synthesis there is an INV-1 violation.
+//
+// Context/TP fallback remains permissive by design — many vLLM engine YAMLs
+// only declare a subset of knobs in default_args while still accepting the
+// standard vLLM flag names for TP/context. That broader synthesis stays
+// intact; only the memory-fraction concept is strictly gated.
+func TestBuildSyntheticConfig_NoVRAMLeakForEnginesWithoutDeclaredKnob(t *testing.T) {
+	hw := HardwareInfo{GPUArch: "Ada", GPUVRAMMiB: 24576, GPUCount: 1}
+
+	tests := []struct {
+		name            string
+		engine          EngineAsset
+		gmu             float64
+		maxLen          int
+		tp              int
+		wantMemKey      string // empty → must not emit any VRAM-fraction key
+		wantCtxKey      string // empty → must not emit any context key
+		forbiddenMemKey bool   // when true, assert neither VRAM alias is present
+	}{
+		{
+			name: "vllm declaring gpu_memory_utilization → emits gpu_memory_utilization",
+			engine: EngineAsset{
+				Metadata: EngineMetadata{Name: "vllm", Type: "vllm"},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"gpu_memory_utilization": 0.9,
+					"max_model_len":          8192,
+				}},
+			},
+			gmu: 0.8, maxLen: 4096, tp: 2,
+			wantMemKey: "gpu_memory_utilization",
+			wantCtxKey: "max_model_len",
+		},
+		{
+			name: "sglang-kt declaring mem_fraction_static → emits mem_fraction_static",
+			engine: EngineAsset{
+				Metadata: EngineMetadata{Name: "sglang-kt", Type: "sglang-kt"},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"mem_fraction_static": 0.85,
+					"tp_size":             1,
+				}},
+			},
+			gmu: 0.8, maxLen: 4096, tp: 2,
+			wantMemKey: "mem_fraction_static",
+			wantCtxKey: "", // sglang-kt has no context-length knob
+		},
+		{
+			name: "llamacpp declaring only ctx_size → MUST NOT emit gpu_memory_utilization",
+			engine: EngineAsset{
+				Metadata: EngineMetadata{Name: "llamacpp-rocm", Type: "llamacpp"},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"ctx_size":     4096,
+					"n_gpu_layers": 999,
+				}},
+			},
+			gmu: 0.5, maxLen: 8192, tp: 1,
+			forbiddenMemKey: true,
+			wantCtxKey:      "ctx_size",
+		},
+		{
+			name: "engine with no default_args → MUST NOT emit gpu_memory_utilization (U6/U10)",
+			engine: EngineAsset{
+				Metadata: EngineMetadata{Name: "llamacpp-universal", Type: "llamacpp"},
+				Hardware: EngineHardware{GPUArch: "*"},
+			},
+			gmu: 0.5, maxLen: 4096, tp: 1,
+			forbiddenMemKey: true,
+		},
+	}
+
+	memAliases := []string{"gpu_memory_utilization", "mem_fraction_static"}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cat := &Catalog{EngineAssets: []EngineAsset{tc.engine}}
+			cfg := cat.buildSyntheticConfig(tc.engine.Metadata.Type, hw, tc.gmu, tc.maxLen, tc.tp)
+
+			if tc.forbiddenMemKey {
+				for _, k := range memAliases {
+					if _, ok := cfg[k]; ok {
+						t.Errorf("INV-1 violation: synthetic cfg leaked %q=%v into engine %q (no VRAM knob declared)",
+							k, cfg[k], tc.engine.Metadata.Type)
+					}
+				}
+			}
+			if tc.wantMemKey != "" {
+				if _, ok := cfg[tc.wantMemKey]; !ok {
+					t.Errorf("missing memory key %q in cfg %v", tc.wantMemKey, cfg)
+				}
+			}
+			if tc.wantCtxKey != "" {
+				if _, ok := cfg[tc.wantCtxKey]; !ok {
+					t.Errorf("missing context key %q in cfg %v", tc.wantCtxKey, cfg)
+				}
+			}
+		})
+	}
 }

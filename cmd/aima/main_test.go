@@ -2097,3 +2097,4 @@ func seedBenchmarkPredictionTables(t *testing.T, ctx context.Context, db *state.
 		t.Fatalf("insert model_variant: %v", err)
 	}
 }
+

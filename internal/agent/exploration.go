@@ -665,7 +665,10 @@ func summarizeTuningSession(session *TuningSession) map[string]any {
 		"avg_output_tokens": best.AvgOutputTokens,
 	}
 	payload["matrix_profiles"] = tuningMatrixProfiles(session.Results)
-	payload["total_cells"] = len(session.Results)
+	// total_cells = planned cells; success_cells = cells that produced a
+	// usable benchmark row. Keeping them distinct lets the partial-preserve
+	// branch tell "2 attempted, 1 succeeded" apart from "1 of 1 succeeded".
+	payload["total_cells"] = session.Total
 	payload["success_cells"] = len(session.Results)
 	return payload
 }
@@ -1121,20 +1124,48 @@ func checkDeployPhase(ctx context.Context, tools ToolExecutor, name string) stri
 // Uses progress-based stall detection instead of a fixed timeout.
 // Safety net = max(EstimatedTotalS * 3, 15min) prevents infinite wait
 // when an engine has no log_patterns.
+//
+// deployVanishGrace tolerates transient "not found" responses (runtime
+// registration race after deploy.apply) before concluding the deployment
+// has truly disappeared; without this grace a slow runtime would spin the
+// full safety-net window before failing.
 func (m *ExplorationManager) waitForReady(ctx context.Context, model string) error {
 	if m.tools == nil {
 		return nil
 	}
-	const pollInterval = 5 * time.Second
+	const (
+		pollInterval      = 5 * time.Second
+		deployVanishGrace = 2
+	)
 
 	// First poll to get EstimatedTotalS for safety net calculation
 	safetyNet := 15 * time.Minute
 	deadline := time.Now().Add(safetyNet)
 
+	everSeenAlive := false
+	consecutiveMissing := 0
+
 	for time.Now().Before(deadline) {
 		statusArgs, _ := json.Marshal(map[string]string{"name": model})
 		result, err := m.tools.ExecuteTool(ctx, "deploy.status", statusArgs)
-		if err == nil && result != nil {
+		if err != nil {
+			// A "not found" response means the runtime no longer knows about
+			// this deployment. If the deploy was alive earlier in the wait
+			// loop, treat the first miss as authoritative — it vanished. If
+			// we have not yet seen it alive, allow deployVanishGrace polls
+			// before giving up so we don't race the runtime's registration.
+			if isDeploymentNotFound(err) {
+				consecutiveMissing++
+				threshold := deployVanishGrace
+				if everSeenAlive {
+					threshold = 1
+				}
+				if consecutiveMissing >= threshold {
+					return fmt.Errorf("deployment %s disappeared before becoming ready: %w", model, err)
+				}
+			}
+			// Other transient errors: keep polling.
+		} else if result != nil {
 			var status struct {
 				Phase           string `json:"phase"`
 				Ready           bool   `json:"ready"`
@@ -1144,6 +1175,9 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 				EstimatedTotalS int    `json:"estimated_total_s"`
 			}
 			if json.Unmarshal([]byte(result.Content), &status) == nil {
+				everSeenAlive = true
+				consecutiveMissing = 0
+
 				// Adjust safety net on first EstimatedTotalS reading
 				if status.EstimatedTotalS > 0 {
 					dynamic := time.Duration(status.EstimatedTotalS*3) * time.Second
@@ -1177,6 +1211,18 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 		}
 	}
 	return fmt.Errorf("timeout waiting for %s to become ready (safety net %v)", model, safetyNet)
+}
+
+// isDeploymentNotFound is true when an error from deploy.status / a runtime's
+// Status() signals that the deployment is unknown to every runtime. Keeping
+// detection substring-based tolerates variation in error wrapping across the
+// docker/k3s/native runtimes without requiring a shared error type.
+func isDeploymentNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no such container") || strings.Contains(msg, "no matching deployment")
 }
 
 // resolveDeployEndpoint queries deploy.status to get the actual inference base address.

@@ -88,6 +88,17 @@ func (s *Service) Bootstrap(ctx context.Context, opts BootstrapOptions) (Bootstr
 
 	state, endpoint, resp, err := s.ensureRegistered(ctx, req)
 	if err != nil {
+		// Prompt errors mean the edge is waiting on user input; keep state
+		// at "unregistered" so offline-first semantics stay accurate. Only
+		// genuine server/network failures get tagged "failed".
+		var prompt *RegistrationPromptError
+		if errors.As(err, &prompt) {
+			if setErr := s.store.SetConfig(ctx, cloud.ConfigRegistrationState, cloud.StateUnregistered); setErr != nil {
+				s.logger.Warn("restore registration_state=unregistered after prompt error",
+					"error", setErr, "prompt_kind", prompt.Kind)
+			}
+			return BootstrapResult{}, err
+		}
 		s.tagRegistrationFailed(ctx)
 		return BootstrapResult{}, err
 	}

@@ -1059,3 +1059,127 @@ func TestExplorationManagerExecuteValidate_CancelledContextSkipsLateSuccessArtif
 		t.Fatalf("stored run status = %q, want cancelled", stored.Status)
 	}
 }
+
+// TestWaitForReady_FailsFastWhenDeploymentDisappears verifies the U1/U3/U5
+// release-blocker fix: when the deployment vanishes mid-wait (container
+// removed / crashed / proxy cleaned the stale backend) waitForReady must
+// surface an error inside the next poll instead of silently spinning until
+// its 15-minute safety net expires. That silent spin was the common root
+// cause behind plan=active and run=running never reaching terminal state
+// after deploy-disappeared.
+func TestWaitForReady_FailsFastWhenDeploymentDisappears(t *testing.T) {
+	// Single status snapshot: deploy.status returns "not found" immediately.
+	// The fix must translate that into a fast deploy-vanished error instead
+	// of looping until the 15-minute safety net expires.
+	calls := 0
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "deploy.status" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			calls++
+			return nil, fmt.Errorf("deployment %q not found", "vanishing-model")
+		},
+	}
+	manager := &ExplorationManager{tools: tools}
+
+	start := time.Now()
+	err := manager.waitForReady(context.Background(), "vanishing-model")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("waitForReady returned nil, want error after deployment disappearance")
+	}
+	if !strings.Contains(err.Error(), "disappeared") && !strings.Contains(err.Error(), "vanish") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %q, want deploy-vanished error (substring 'disappeared'/'vanish'/'not found')", err)
+	}
+	// Upper bound: one poll interval plus slack. The prior-buggy behavior
+	// spun for 15 minutes — give us a very safe bound that still proves the
+	// fast-fail path ran.
+	if elapsed > 30*time.Second {
+		t.Errorf("waitForReady took %v, must fail faster than the 15-minute safety net", elapsed)
+	}
+	if calls == 0 {
+		t.Error("expected at least one deploy.status call, got 0")
+	}
+}
+
+// TestWaitForReady_VanishAfterAliveCloses_Faster verifies that when the
+// deployment was seen alive at least once, a subsequent "not found" aborts
+// on the FIRST miss (no grace). This matches the U5-attempt2 shape where
+// the plan had already started executing, the container came up, then
+// disappeared — the run must converge to failed within one poll of that.
+func TestWaitForReady_VanishAfterAliveCloses_Faster(t *testing.T) {
+	calls := 0
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "deploy.status" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			calls++
+			if calls == 1 {
+				return &ToolResult{Content: `{"phase":"starting","ready":false,"startup_phase":"loading_model","startup_progress":35,"estimated_total_s":180}`}, nil
+			}
+			return nil, fmt.Errorf("deployment %q not found", "alive-then-gone")
+		},
+	}
+	manager := &ExplorationManager{tools: tools}
+
+	start := time.Now()
+	err := manager.waitForReady(context.Background(), "alive-then-gone")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("waitForReady returned nil, want disappeared error")
+	}
+	if !strings.Contains(err.Error(), "disappeared") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %q, want deploy-vanished error", err)
+	}
+	// Only two polls happen: one alive + one not-found. Elapsed must be
+	// roughly one pollInterval (5s), not two or more.
+	if elapsed > 12*time.Second {
+		t.Errorf("waitForReady elapsed = %v, want ≤ ~5s after seen-alive → missed path", elapsed)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want exactly 2 (1 alive + 1 not-found trigger)", calls)
+	}
+}
+
+// TestSummarizeTuningSession_PartialMatrixReportsAttemptedTotal verifies that
+// summarizeTuningSession reports session.Total for total_cells instead of
+// len(session.Results), so a tune with attempted=2 but successful=1 surfaces
+// as total_cells=2, success_cells=1 — the minimum required for the partial-
+// preserve branch (U2) to converge.
+func TestSummarizeTuningSession_PartialMatrixReportsAttemptedTotal(t *testing.T) {
+	session := &TuningSession{
+		ID:       "tune-partial",
+		Status:   "running",
+		Progress: 2,
+		Total:    2,
+		Results: []TuningResult{{
+			BenchmarkID:   "bench-ok",
+			ConfigID:      "cfg-ok",
+			ThroughputTPS: 18.37,
+			Score:         18.37,
+		}},
+		BestConfig: map[string]any{"gpu_memory_utilization": 0.74},
+		BestScore:  18.37,
+	}
+
+	payload := summarizeTuningSession(session)
+
+	total, ok := payload["total_cells"].(int)
+	if !ok {
+		t.Fatalf("total_cells type = %T, want int", payload["total_cells"])
+	}
+	if total != 2 {
+		t.Fatalf("total_cells = %d, want 2 (session.Total covering all attempted cells)", total)
+	}
+	success, ok := payload["success_cells"].(int)
+	if !ok {
+		t.Fatalf("success_cells type = %T, want int", payload["success_cells"])
+	}
+	if success != 1 {
+		t.Fatalf("success_cells = %d, want 1 (len(session.Results))", success)
+	}
+}

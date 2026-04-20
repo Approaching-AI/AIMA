@@ -374,7 +374,10 @@ func TestServiceAskForHelpRegistrationPromptErrors(t *testing.T) {
 			defer server.Close()
 
 			svc := NewService(newMemoryStore(), WithHTTPClient(server.Client()))
-			_, err := svc.AskForHelp(context.Background(), AskRequest{Endpoint: server.URL})
+			// Invite code must be supplied explicitly; offline-first (INV-8)
+			// blocks the HTTP call otherwise, so the test of server-driven
+			// 422/403 → prompt-error translation needs a real invite.
+			_, err := svc.AskForHelp(context.Background(), AskRequest{Endpoint: server.URL, InviteCode: "test-invite"})
 			if err == nil {
 				t.Fatal("expected registration prompt error")
 			}

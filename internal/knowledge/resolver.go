@@ -46,7 +46,8 @@ type PartitionSlot struct {
 
 // ResolvedConfig is the merged output of the L0-L2 config resolution process.
 type ResolvedConfig struct {
-	Engine                string
+	Engine                string // caller-supplied engine type or alias (preserves CLI/DB key semantics)
+	EngineAssetName       string // concrete asset metadata.name selected — use for runtime labels so findEngineAsset can resolve the asset
 	EngineImage           string
 	ModelPath             string
 	ModelName             string
@@ -212,8 +213,13 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		provenance[k] = "L1"
 	}
 
+	engineAssetName := ""
+	if engine != nil {
+		engineAssetName = engine.Metadata.Name
+	}
 	resolved := &ResolvedConfig{
 		Engine:             engineType,
+		EngineAssetName:    engineAssetName,
 		ModelName:          model.Metadata.Name,
 		ModelFormat:        variant.Format,
 		Slot:               slot.Name,
@@ -1317,44 +1323,43 @@ func substituteDisallowedMooer(meta ScanMetadata, proposed string) string {
 	return proposed
 }
 
-// buildSyntheticConfig generates engine-appropriate config for a synthetic
-// model variant. Instead of hardcoding vLLM param names, it checks the
-// engine's default_args to determine the correct parameter names.
-// Standard concepts: memory utilization → gpu_memory_utilization or mem_fraction_static;
-// context length → max_model_len or context_length; TP → tensor_parallel_size or tp_size.
+// buildSyntheticConfig emits config keys for a synthetic model variant.
+// Memory fraction is strictly YAML-driven: passing an unknown flag like
+// --gpu-memory-utilization to engines that don't accept it aborts startup.
+// Context length and tensor parallelism keep a vLLM-shaped fallback for
+// engines whose default_args only cover the knobs they override.
 func (c *Catalog) buildSyntheticConfig(engineType string, hw HardwareInfo, gmu float64, maxLen, tp int) map[string]any {
 	cfg := make(map[string]any)
 
-	// Look up the engine's default_args to determine supported param names.
 	engineArgs := c.engineDefaultArgs(engineType, hw)
 
-	// Memory utilization: prefer engine's native param name.
+	pickDeclared := func(aliases []string) string {
+		for _, k := range aliases {
+			if _, ok := engineArgs[k]; ok {
+				return k
+			}
+		}
+		return ""
+	}
+
 	if gmu > 0 {
-		if _, ok := engineArgs["mem_fraction_static"]; ok {
-			cfg["mem_fraction_static"] = gmu
-		} else {
-			cfg["gpu_memory_utilization"] = gmu
+		if key := pickDeclared([]string{"gpu_memory_utilization", "mem_fraction_static"}); key != "" {
+			cfg[key] = gmu
 		}
 	}
-
-	// Context / sequence length: prefer engine's native param name.
 	if maxLen > 0 {
-		if _, ok := engineArgs["context_length"]; ok {
-			cfg["context_length"] = maxLen
-		} else if _, hasMFL := engineArgs["max_model_len"]; hasMFL {
+		if key := pickDeclared([]string{"context_length", "max_model_len", "ctx_size", "max_context_tokens"}); key != "" {
+			cfg[key] = maxLen
+		} else if _, hasMFS := engineArgs["mem_fraction_static"]; !hasMFS {
+			// Engines that declare mem_fraction_static (SGLang family) have
+			// no explicit context-length knob. Fall back to max_model_len
+			// only for the vLLM-shaped path.
 			cfg["max_model_len"] = maxLen
-		} else if _, hasMFS := engineArgs["mem_fraction_static"]; hasMFS {
-			// sglang-kt family: no explicit context length param, engine manages it.
-			// Don't inject max_model_len which sglang-kt doesn't recognize.
-		} else {
-			cfg["max_model_len"] = maxLen // safe default for vLLM-like engines
 		}
 	}
-
-	// Tensor parallelism: prefer engine's native param name.
 	if tp > 1 {
-		if _, ok := engineArgs["tp_size"]; ok {
-			cfg["tp_size"] = tp
+		if key := pickDeclared([]string{"tp_size", "tensor_parallel_size"}); key != "" {
+			cfg[key] = tp
 		} else {
 			cfg["tensor_parallel_size"] = tp
 		}

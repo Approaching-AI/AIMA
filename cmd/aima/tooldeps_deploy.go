@@ -100,7 +100,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			GPUResourceName:  resolved.GPUResourceName,
 			ExtraVolumes:     resolved.ExtraVolumes,
 			Labels: map[string]string{
-				"aima.dev/engine":      resolved.Engine,
+				// Label carries the resolved asset metadata.name so the
+				// runtime's findEngineAsset lookup (keyed on metadata.name)
+				// can gate health_check + warmup. Fall through to the type
+				// alias when the resolver has no asset binding.
+				"aima.dev/engine":      firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
 				"aima.dev/model":       modelName,
 				"aima.dev/slot":        resolved.Slot,
 				proxy.LabelServedModel: upstreamModel,

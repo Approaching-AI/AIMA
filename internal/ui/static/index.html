@@ -1864,6 +1864,150 @@ body {
 .explorer-feedback.info { color: var(--text-dim); background: rgba(10, 132, 255, 0.08); border: 0.5px solid rgba(10, 132, 255, 0.3); }
 .explorer-feedback.error { color: var(--error); background: rgba(255, 69, 58, 0.08); border: 0.5px solid rgba(255, 69, 58, 0.4); }
 
+/* Runs tab + Run Detail drawer (D3) */
+.explorer-runs-filterbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.explorer-filter-input {
+  padding: 6px 10px;
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.02));
+  color: var(--text);
+  border: 0.5px solid var(--border-medium);
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+.explorer-runs-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.explorer-runs-head,
+.explorer-runs-row {
+  display: grid;
+  grid-template-columns: 104px 80px 1fr 64px 120px 80px 80px 72px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.explorer-runs-head {
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  border-bottom: 0.5px solid var(--border-medium);
+  border-radius: 0;
+  padding-bottom: 10px;
+}
+.explorer-runs-row {
+  background: rgba(255, 255, 255, 0.015);
+  border: 0.5px solid transparent;
+  transition: background var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth);
+}
+.explorer-runs-row:hover {
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.03));
+  border-color: var(--border-light);
+}
+.explorer-runs-cell-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-runs-cell-goal {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(520px, 100vw);
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-medium);
+  box-shadow: -20px 0 36px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  z-index: 141;
+}
+.explorer-drawer-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 0.5px solid var(--border-light);
+  margin-bottom: 10px;
+}
+
+.explorer-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.explorer-event {
+  border: 0.5px solid var(--border-light);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.explorer-event-summary {
+  display: grid;
+  grid-template-columns: 40px 110px 1fr 90px 70px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.explorer-event-summary:hover {
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.03));
+}
+.explorer-event-body {
+  padding: 4px 10px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 0.5px dashed var(--border-light);
+}
+.explorer-event-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+}
+
+@media (max-width: 768px) {
+  .explorer-runs-head { display: none; }
+  .explorer-runs-row {
+    grid-template-columns: auto 1fr auto;
+    grid-auto-rows: auto;
+    row-gap: 4px;
+  }
+  .explorer-drawer { width: 100vw; }
+  .explorer-event-summary {
+    grid-template-columns: 40px 1fr auto;
+  }
+}
+
 /* ===== Mobile ===== */
 .mobile-tabs {
   display: none;
@@ -3887,7 +4031,7 @@ body {
             x-text="t('explorer_tab_overview')"></button>
           <button class="explorer-tab"
             :class="{ active: explorerTab === 'runs' }"
-            @click="explorerTab = 'runs'"
+            @click="openRunsTab()"
             x-text="t('explorer_tab_runs')"></button>
         </div>
 
@@ -3991,10 +4135,75 @@ body {
           </section>
         </div>
 
-        <!-- Runs tab — placeholder, implemented in D3 -->
+        <!-- Runs tab — historical exploration_runs rows -->
         <div class="explorer-scroll" x-show="explorerTab === 'runs'">
           <section class="explorer-section">
-            <div class="explorer-empty" x-text="t('explorer_runs_coming')"></div>
+            <div class="explorer-section-title" x-text="t('explorer_runs_title')"></div>
+
+            <div class="explorer-runs-filterbar">
+              <select class="explorer-filter-input"
+                      x-model="explorerRunsFilter.status"
+                      @change="refreshExplorerRuns()">
+                <option value="" x-text="t('explorer_runs_filter_status_all')"></option>
+                <option value="planning">planning</option>
+                <option value="needs_approval">needs_approval</option>
+                <option value="queued">queued</option>
+                <option value="running">running</option>
+                <option value="completed">completed</option>
+                <option value="failed">failed</option>
+                <option value="blocked">blocked</option>
+              </select>
+              <select class="explorer-filter-input"
+                      x-model="explorerRunsFilter.kind"
+                      @change="refreshExplorerRuns()">
+                <option value="" x-text="t('explorer_runs_filter_kind_all')"></option>
+                <option value="validate">validate</option>
+                <option value="tune">tune</option>
+                <option value="open_question">open_question</option>
+              </select>
+              <button class="explorer-btn"
+                      @click="refreshExplorerRuns()"
+                      x-text="t('explorer_refresh_btn')"></button>
+            </div>
+
+            <template x-if="explorerRunsLoading && explorerRuns.length === 0">
+              <div class="explorer-empty" x-text="t('loading')"></div>
+            </template>
+
+            <template x-if="!explorerRunsLoading && explorerRuns.length === 0">
+              <div class="explorer-empty" x-text="t('explorer_no_runs')"></div>
+            </template>
+
+            <template x-if="explorerRuns.length > 0">
+              <div class="explorer-runs-table">
+                <div class="explorer-runs-head">
+                  <span x-text="t('explorer_runs_col_status')"></span>
+                  <span x-text="t('explorer_runs_col_kind')"></span>
+                  <span x-text="t('explorer_runs_col_goal')"></span>
+                  <span x-text="t('explorer_runs_col_tier')"></span>
+                  <span x-text="t('explorer_runs_col_tasks')"></span>
+                  <span x-text="t('explorer_runs_col_started')"></span>
+                  <span x-text="t('explorer_runs_col_duration')"></span>
+                  <span></span>
+                </div>
+                <template x-for="run in explorerRuns" :key="run.id">
+                  <div class="explorer-runs-row">
+                    <span class="explorer-chip" :class="run.status" x-text="run.status"></span>
+                    <span class="explorer-runs-cell-mono" x-text="run.kind"></span>
+                    <span class="explorer-runs-cell-goal"
+                          :title="run.goal || ''"
+                          x-text="run.goal || '—'"></span>
+                    <span class="explorer-runs-cell-mono" x-text="runPlanTier(run)"></span>
+                    <span class="explorer-runs-cell-mono" x-text="runTaskChips(run)"></span>
+                    <span class="explorer-runs-cell-mono" x-text="runRelativeTime(run.started_at)"></span>
+                    <span class="explorer-runs-cell-mono" x-text="runDuration(run)"></span>
+                    <button class="explorer-btn"
+                            @click="openRunDrawer(run.id)"
+                            x-text="t('explorer_runs_detail')"></button>
+                  </div>
+                </template>
+              </div>
+            </template>
           </section>
         </div>
       </div>
@@ -4693,6 +4902,116 @@ body {
     </div>
   </template>
 
+  <!-- Explorer Run Detail Drawer (D3) -->
+  <template x-if="explorerDrawerRunId">
+    <div>
+      <div class="onboarding-overlay" @click="closeRunDrawer()"></div>
+      <aside class="explorer-drawer" role="dialog" aria-modal="true" :aria-label="t('explorer_drawer_title')">
+        <div class="onboarding-drawer-header">
+          <div>
+            <h3 class="onboarding-drawer-title" x-text="t('explorer_drawer_title')"></h3>
+            <p class="onboarding-drawer-subtitle" x-text="explorerDrawerRunId"></p>
+          </div>
+          <button class="onboarding-close-btn" @click="closeRunDrawer()" :title="t('cancel')">&times;</button>
+        </div>
+
+        <div class="onboarding-tabs">
+          <button type="button"
+                  :class="{ active: explorerDrawerTab === 'summary' }"
+                  @click="switchDrawerTab('summary')"
+                  x-text="t('explorer_drawer_tab_summary')"></button>
+          <button type="button"
+                  :class="{ active: explorerDrawerTab === 'plan' }"
+                  @click="switchDrawerTab('plan')"
+                  x-text="t('explorer_drawer_tab_plan')"></button>
+          <button type="button"
+                  :class="{ active: explorerDrawerTab === 'events' }"
+                  @click="switchDrawerTab('events')"
+                  x-text="t('explorer_drawer_tab_events')"></button>
+        </div>
+
+        <div class="onboarding-drawer-body">
+          <div class="onboarding-loading" x-show="explorerDrawerLoading" x-text="t('loading')"></div>
+
+          <template x-if="explorerDrawerRun">
+            <div class="explorer-drawer-meta">
+              <span class="explorer-chip" :class="explorerDrawerRun.status" x-text="explorerDrawerRun.status"></span>
+              <span class="explorer-runs-cell-mono" x-text="explorerDrawerRun.kind || ''"></span>
+              <span class="explorer-runs-cell-mono" x-text="runPlanTier(explorerDrawerRun)"></span>
+              <span class="explorer-runs-cell-mono"
+                    x-text="t('explorer_runs_col_started') + ': ' + runRelativeTime(explorerDrawerRun.started_at)"></span>
+              <span class="explorer-runs-cell-mono"
+                    x-text="t('explorer_runs_col_duration') + ': ' + runDuration(explorerDrawerRun)"></span>
+            </div>
+          </template>
+
+          <!-- Summary tab -->
+          <template x-if="explorerDrawerTab === 'summary'">
+            <div>
+              <template x-if="explorerDrawerDocs['summary.md'] && explorerDrawerDocs['summary.md'].exists">
+                <pre class="explorer-md" x-text="explorerDrawerDocs['summary.md'].content"></pre>
+              </template>
+              <template x-if="explorerDrawerDocs['summary.md'] && !explorerDrawerDocs['summary.md'].exists">
+                <div class="explorer-empty" x-text="t('explorer_summary_missing')"></div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Plan tab -->
+          <template x-if="explorerDrawerTab === 'plan'">
+            <div>
+              <template x-if="explorerDrawerDocs['plan.md'] && explorerDrawerDocs['plan.md'].exists">
+                <pre class="explorer-md" x-text="explorerDrawerDocs['plan.md'].content"></pre>
+              </template>
+              <template x-if="explorerDrawerDocs['plan.md'] && !explorerDrawerDocs['plan.md'].exists">
+                <div class="explorer-empty" x-text="t('explorer_plan_missing')"></div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Events tab -->
+          <template x-if="explorerDrawerTab === 'events'">
+            <div class="explorer-events">
+              <template x-if="!explorerDrawerLoading && explorerDrawerEvents.length === 0">
+                <div class="explorer-empty" x-text="t('explorer_events_empty')"></div>
+              </template>
+              <template x-for="ev in explorerDrawerEvents" :key="ev.id">
+                <div class="explorer-event">
+                  <div class="explorer-event-summary" @click="toggleDrawerEvent(ev.id)">
+                    <span class="explorer-runs-cell-mono" x-text="'#' + ev.step_index"></span>
+                    <span class="explorer-runs-cell-mono" x-text="ev.step_kind || ''"></span>
+                    <span class="explorer-runs-cell-mono" x-text="ev.tool_name || ''"></span>
+                    <span class="explorer-chip" :class="ev.status" x-text="ev.status"></span>
+                    <span class="explorer-runs-cell-mono" x-text="runRelativeTime(ev.created_at)"></span>
+                  </div>
+                  <template x-if="explorerDrawerEventExpanded === ev.id">
+                    <div class="explorer-event-body">
+                      <template x-if="ev.request_json">
+                        <div>
+                          <div class="explorer-event-label" x-text="t('explorer_event_request')"></div>
+                          <pre class="explorer-md" x-text="ev.request_json"></pre>
+                        </div>
+                      </template>
+                      <template x-if="ev.response_json">
+                        <div>
+                          <div class="explorer-event-label" x-text="t('explorer_event_response')"></div>
+                          <pre class="explorer-md" x-text="ev.response_json"></pre>
+                        </div>
+                      </template>
+                      <template x-if="!ev.request_json && !ev.response_json">
+                        <div class="explorer-empty" x-text="t('explorer_event_empty_payload')"></div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </aside>
+    </div>
+  </template>
+
   <template x-if="showOnboardingDrawer">
     <div>
       <div class="onboarding-overlay" @click="closeOnboardingDrawer()"></div>
@@ -4920,7 +5239,26 @@ var I18N = {
     explorer_latest_summary: 'Latest Summary',
     explorer_no_runs: 'No runs yet. The next trigger will show up here.',
     explorer_summary_missing: 'summary.md not written yet — run may still be in progress.',
-    explorer_runs_coming: 'Runs list — coming in D3.',
+    explorer_runs_title: 'Exploration Runs',
+    explorer_runs_filter_status_all: 'All statuses',
+    explorer_runs_filter_kind_all: 'All kinds',
+    explorer_runs_col_status: 'Status',
+    explorer_runs_col_kind: 'Kind',
+    explorer_runs_col_goal: 'Goal',
+    explorer_runs_col_tier: 'Tier',
+    explorer_runs_col_tasks: 'Tasks',
+    explorer_runs_col_started: 'Started',
+    explorer_runs_col_duration: 'Duration',
+    explorer_runs_detail: 'Detail',
+    explorer_drawer_title: 'Run Detail',
+    explorer_drawer_tab_summary: 'Summary',
+    explorer_drawer_tab_plan: 'Plan',
+    explorer_drawer_tab_events: 'Events',
+    explorer_plan_missing: 'plan.md not available yet for this run.',
+    explorer_events_empty: 'No events recorded for this run yet.',
+    explorer_event_request: 'Request',
+    explorer_event_response: 'Response',
+    explorer_event_empty_payload: '(no request / response payload recorded)',
     tab_general: 'General',
     tab_monitoring: 'Monitoring',
     tab_agent: 'AI Agent',
@@ -5176,7 +5514,26 @@ var I18N = {
     explorer_latest_summary: '最近一轮 Summary',
     explorer_no_runs: '还没有历史记录。触发后会显示在这里。',
     explorer_summary_missing: 'summary.md 还未写入 — 探索可能仍在进行。',
-    explorer_runs_coming: '历史列表 — D3 实现。',
+    explorer_runs_title: '探索历史',
+    explorer_runs_filter_status_all: '全部状态',
+    explorer_runs_filter_kind_all: '全部类型',
+    explorer_runs_col_status: '状态',
+    explorer_runs_col_kind: '类型',
+    explorer_runs_col_goal: '目标',
+    explorer_runs_col_tier: '层级',
+    explorer_runs_col_tasks: '任务',
+    explorer_runs_col_started: '启动',
+    explorer_runs_col_duration: '耗时',
+    explorer_runs_detail: '详情',
+    explorer_drawer_title: '执行详情',
+    explorer_drawer_tab_summary: '总结',
+    explorer_drawer_tab_plan: '计划',
+    explorer_drawer_tab_events: '事件',
+    explorer_plan_missing: '当前执行的 plan.md 尚不可用。',
+    explorer_events_empty: '此执行还没有事件记录。',
+    explorer_event_request: '请求',
+    explorer_event_response: '响应',
+    explorer_event_empty_payload: '（未记录 request / response 负载）',
     tab_general: '\u5E38\u89C4',
     tab_monitoring: '\u76D1\u63A7',
     tab_agent: 'AI Agent',
@@ -5837,6 +6194,17 @@ function aimaApp() {
     explorerTriggerFeedback: null,      // { type:'info'|'error', text }
     explorerFeedback: null,             // inline feedback on Overview
     _explorerTimer: null,
+    // D3: Runs tab + Run Detail drawer
+    explorerRuns: [],                   // explore.list_runs result
+    explorerRunsFilter: { status: '', kind: '' },
+    explorerRunsLoading: false,
+    explorerDrawerRunId: null,          // null = drawer closed
+    explorerDrawerTab: 'summary',       // 'summary' | 'plan' | 'events'
+    explorerDrawerRun: null,            // explore.get_run_detail result
+    explorerDrawerDocs: {},             // cache: { 'summary.md': {...}, 'plan.md': {...} }
+    explorerDrawerEvents: [],           // explore.get_run_events result (newest first)
+    explorerDrawerLoading: false,
+    explorerDrawerEventExpanded: null,  // event.id of expanded row, or null
     // Support page state
     supportConnected: false,
     supportPageConnecting: false,
@@ -8271,6 +8639,146 @@ function aimaApp() {
       const total = this.explorerTaskTotal();
       if (!total) return 0;
       return Math.min(100, Math.round((this.explorerTaskCompleted() / total) * 100));
+    },
+
+    // ── Explorer D3: Runs tab + Run Detail drawer ──
+
+    async refreshExplorerRuns() {
+      this.explorerRunsLoading = true;
+      const params = { action: 'list_runs', limit: 50 };
+      if (this.explorerRunsFilter.status) params.status = this.explorerRunsFilter.status;
+      if (this.explorerRunsFilter.kind)   params.kind   = this.explorerRunsFilter.kind;
+      const res = await this.callTool('explore', params);
+      this.explorerRunsLoading = false;
+      // Backend returns [] for empty lists but may return null for nil slice —
+      // normalize to [] so the template doesn't need to reason about shape.
+      if (res && !res._err) {
+        this.explorerRuns = Array.isArray(res) ? res : [];
+      }
+    },
+
+    openRunsTab() {
+      this.explorerTab = 'runs';
+      if (this.explorerRuns.length === 0) this.refreshExplorerRuns();
+    },
+
+    async openRunDrawer(runId) {
+      if (!runId) return;
+      this.explorerDrawerRunId = runId;
+      this.explorerDrawerTab = 'summary';
+      this.explorerDrawerRun = null;
+      this.explorerDrawerDocs = {};
+      this.explorerDrawerEvents = [];
+      this.explorerDrawerEventExpanded = null;
+      this.explorerDrawerLoading = true;
+      const detail = await this.callTool('explore', { action: 'get_run_detail', id: runId });
+      if (detail && !detail._err) this.explorerDrawerRun = detail;
+      // Default tab is Summary — warm its content alongside detail so the
+      // drawer opens in one logical paint instead of showing an empty pane
+      // that fills a tick later.
+      await this.loadDrawerDoc('summary.md');
+      this.explorerDrawerLoading = false;
+    },
+
+    closeRunDrawer() {
+      this.explorerDrawerRunId = null;
+    },
+
+    async switchDrawerTab(tab) {
+      this.explorerDrawerTab = tab;
+      if (tab === 'summary' && !this.explorerDrawerDocs['summary.md']) {
+        await this.loadDrawerDoc('summary.md');
+      } else if (tab === 'plan' && !this.explorerDrawerDocs['plan.md']) {
+        await this.loadDrawerDoc('plan.md');
+      } else if (tab === 'events' && this.explorerDrawerEvents.length === 0) {
+        await this.loadDrawerEvents();
+      }
+    },
+
+    async loadDrawerDoc(doc) {
+      const res = await this.callTool('explore', { action: 'get_workspace_doc', doc });
+      if (res && !res._err) this.explorerDrawerDocs[doc] = res;
+    },
+
+    async loadDrawerEvents() {
+      const runId = this.explorerDrawerRunId;
+      if (!runId) return;
+      const res = await this.callTool('explore', { action: 'get_run_events', id: runId });
+      if (res && !res._err && Array.isArray(res)) {
+        // Backend stores events chronologically; humans read this kind of
+        // log newest-first, so reverse once here rather than in the template.
+        this.explorerDrawerEvents = res.slice().reverse();
+      }
+    },
+
+    toggleDrawerEvent(id) {
+      this.explorerDrawerEventExpanded =
+        (this.explorerDrawerEventExpanded === id) ? null : id;
+    },
+
+    // ── D3 display helpers (pure projections over run/event rows) ──
+
+    runPlanTier(run) {
+      try {
+        if (!run || !run.plan_json) return '—';
+        const p = JSON.parse(run.plan_json);
+        const tier = p && (p.Tier ?? p.tier);
+        return (tier == null) ? '—' : ('Tier ' + tier);
+      } catch (e) {
+        return '—';
+      }
+    },
+
+    runTaskChips(run) {
+      // ExplorationRun's plan_json is the canonical task list. Metrics on
+      // ExplorerStatus are live but unscoped to a specific run row — for
+      // the list view we derive per-row counts from the frozen plan_json.
+      try {
+        if (!run || !run.plan_json) return '—';
+        const p = JSON.parse(run.plan_json);
+        const tasks = (p && (p.Tasks || p.tasks)) || [];
+        if (!tasks.length) return '—';
+        let ok = 0, fail = 0, skip = 0;
+        for (const t of tasks) {
+          const s = (t.Status || t.status || '').toLowerCase();
+          if (s === 'completed' || s === 'success') ok++;
+          else if (s === 'failed' || s === 'error') fail++;
+          else if (s === 'skipped' || s === 'blocked') skip++;
+        }
+        return '✓ ' + ok + ' / ✗ ' + fail + ' / ⊘ ' + skip;
+      } catch (e) {
+        return '—';
+      }
+    },
+
+    runRelativeTime(iso) {
+      // Go's zero time serializes to "0001-01-01T00:00:00Z" when omitempty
+      // can't fire (non-pointer field). Treat those as absent.
+      if (!iso || iso.startsWith('0001-01-01')) return '—';
+      const t = new Date(iso).getTime();
+      if (isNaN(t)) return '—';
+      const diff = Math.max(0, Date.now() - t);
+      const s = Math.floor(diff / 1000);
+      if (s < 60)   return s + 's ago';
+      const m = Math.floor(s / 60);
+      if (m < 60)   return m + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24)   return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    },
+
+    runDuration(run) {
+      if (!run || !run.started_at || run.started_at.startsWith('0001-01-01')) return '—';
+      const start = new Date(run.started_at).getTime();
+      if (isNaN(start)) return '—';
+      const hasEnd = run.completed_at && !run.completed_at.startsWith('0001-01-01');
+      const end = hasEnd ? new Date(run.completed_at).getTime() : Date.now();
+      const s = Math.max(0, Math.floor((end - start) / 1000));
+      if (s < 60)   return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return h + 'h ' + m + 'm';
     },
 
     // ── Support Page methods (independent from chat /askforhelp) ──

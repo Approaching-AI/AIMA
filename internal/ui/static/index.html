@@ -1575,6 +1575,295 @@ body {
 }
 .modal textarea:focus { border-color: var(--accent); background: var(--msg-tool-hover); }
 
+/* ===== Explorer view ===== */
+.agent-explorer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0.5px solid var(--border-medium);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth),
+              background var(--duration-fast) var(--ease-smooth);
+}
+.agent-explorer-btn:hover { color: var(--text); border-color: var(--border-light); }
+.agent-explorer-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(10, 132, 255, 0.12);
+}
+.agent-explorer-btn .explorer-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-tertiary);
+  transition: background var(--duration-fast) var(--ease-smooth),
+              box-shadow var(--duration-fast) var(--ease-smooth);
+}
+.agent-explorer-btn.running .explorer-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(48, 209, 88, 0.5);
+}
+.agent-explorer-btn.blocked .explorer-dot {
+  background: var(--warning);
+  box-shadow: 0 0 6px rgba(255, 159, 10, 0.45);
+}
+
+.explorer-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.explorer-tabbar {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 0.5px solid var(--border-medium);
+  flex-shrink: 0;
+}
+.explorer-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth);
+}
+.explorer-tab:hover { color: var(--text-dim); }
+.explorer-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.explorer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.explorer-section {
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-medium);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--panel-shadow, 0 4px 24px rgba(0, 0, 0, 0.2));
+}
+.explorer-section-title {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 12px 0;
+}
+
+.explorer-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.explorer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  border: 0.5px solid var(--border-medium);
+  color: var(--text-dim);
+  background: transparent;
+}
+.explorer-chip.idle { color: var(--text-tertiary); }
+.explorer-chip.running { color: var(--success); border-color: rgba(48, 209, 88, 0.5); background: rgba(48, 209, 88, 0.08); }
+.explorer-chip.planning { color: var(--accent); border-color: rgba(10, 132, 255, 0.5); background: rgba(10, 132, 255, 0.08); }
+.explorer-chip.blocked { color: var(--warning); border-color: rgba(255, 159, 10, 0.5); background: rgba(255, 159, 10, 0.08); }
+.explorer-chip.completed { color: var(--success); border-color: rgba(48, 209, 88, 0.35); }
+.explorer-chip.failed { color: var(--error); border-color: rgba(255, 69, 58, 0.5); background: rgba(255, 69, 58, 0.08); }
+
+.explorer-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.explorer-meta-primary {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.explorer-meta-secondary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.explorer-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+.explorer-kpi {
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.02));
+  border: 0.5px solid var(--border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.explorer-kpi-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.explorer-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.explorer-kpi-value.success { color: var(--success); }
+.explorer-kpi-value.failed  { color: var(--error); }
+.explorer-kpi-value.skipped { color: var(--warning); }
+
+.explorer-progress {
+  margin-top: 12px;
+}
+.explorer-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.explorer-progress-bar {
+  height: 6px;
+  background: var(--border-light);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.explorer-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width var(--duration-fast) var(--ease-smooth);
+}
+
+.explorer-task-chips {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.explorer-task-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 0.5px solid var(--border-light);
+  color: var(--text-dim);
+}
+.explorer-task-chip.success { color: var(--success); border-color: rgba(48, 209, 88, 0.35); }
+.explorer-task-chip.failed  { color: var(--error);   border-color: rgba(255, 69, 58, 0.35); }
+.explorer-task-chip.skipped { color: var(--warning); border-color: rgba(255, 159, 10, 0.35); }
+
+.explorer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.explorer-btn {
+  background: transparent;
+  border: 0.5px solid var(--border-medium);
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth),
+              background var(--duration-fast) var(--ease-smooth);
+}
+.explorer-btn:hover { color: var(--text); border-color: var(--border-light); }
+.explorer-btn.primary {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(10, 132, 255, 0.08);
+}
+.explorer-btn.primary:hover { background: rgba(10, 132, 255, 0.18); }
+.explorer-btn.danger {
+  color: var(--error);
+  border-color: rgba(255, 69, 58, 0.5);
+}
+.explorer-btn.danger:hover { background: rgba(255, 69, 58, 0.1); }
+.explorer-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.explorer-empty {
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.explorer-md {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.02));
+  border: 0.5px solid var(--border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.explorer-feedback {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+.explorer-feedback.info { color: var(--text-dim); background: rgba(10, 132, 255, 0.08); border: 0.5px solid rgba(10, 132, 255, 0.3); }
+.explorer-feedback.error { color: var(--error); background: rgba(255, 69, 58, 0.08); border: 0.5px solid rgba(255, 69, 58, 0.4); }
+
 /* ===== Mobile ===== */
 .mobile-tabs {
   display: none;
@@ -3480,6 +3769,13 @@ body {
           <button class="agent-onboarding-btn" x-ref="onboardingTrigger" @click="openOnboardingDrawer()" :title="t('onboarding_title')">
             <span x-text="t('onboarding_title')"></span>
           </button>
+          <button class="agent-explorer-btn"
+            :class="{ active: currentView === 'explorer', running: explorerPhaseTone() === 'running', blocked: explorerPhaseTone() === 'blocked' }"
+            @click="toggleExplorerView()"
+            :title="t('explorer_view')">
+            <span class="explorer-dot"></span>
+            <span x-text="t('explorer_view')"></span>
+          </button>
           <button class="agent-support-btn"
             :class="{ active: currentView === 'support', connected: supportConnected }"
             @click="openSupportFlow()">
@@ -3579,6 +3875,127 @@ body {
             autocomplete="off"
             spellcheck="false">
           <button class="chat-send" @click="send()" :disabled="thinking || !input.trim()" x-text="t('send')"></button>
+        </div>
+      </div>
+
+      <!-- Explorer View -->
+      <div x-show="currentView === 'explorer'" class="explorer-page" x-cloak>
+        <div class="explorer-tabbar">
+          <button class="explorer-tab"
+            :class="{ active: explorerTab === 'overview' }"
+            @click="explorerTab = 'overview'"
+            x-text="t('explorer_tab_overview')"></button>
+          <button class="explorer-tab"
+            :class="{ active: explorerTab === 'runs' }"
+            @click="explorerTab = 'runs'"
+            x-text="t('explorer_tab_runs')"></button>
+        </div>
+
+        <div class="explorer-scroll" x-show="explorerTab === 'overview'">
+          <!-- A1: Current Run Status -->
+          <section class="explorer-section">
+            <div class="explorer-section-title" x-text="t('explorer_current_run')"></div>
+            <div class="explorer-status-row">
+              <span class="explorer-chip"
+                :class="explorerPhaseTone()"
+                x-text="(explorerStatus && explorerStatus.phase) || 'idle'"></span>
+              <div class="explorer-meta">
+                <div class="explorer-meta-primary" x-text="explorerCurrentGoal()"></div>
+                <div class="explorer-meta-secondary" x-text="explorerCurrentMeta()"></div>
+              </div>
+            </div>
+
+            <!-- Progress bar (only while running) -->
+            <template x-if="explorerTaskTotal() > 0">
+              <div class="explorer-progress">
+                <div class="explorer-progress-label">
+                  <span x-text="t('explorer_tasks_progress') + ': ' + explorerTaskCompleted() + ' / ' + explorerTaskTotal()"></span>
+                  <span x-text="explorerTaskPct() + '%'"></span>
+                </div>
+                <div class="explorer-progress-bar">
+                  <div class="explorer-progress-fill" :style="'width: ' + explorerTaskPct() + '%'"></div>
+                </div>
+                <div class="explorer-task-chips">
+                  <span class="explorer-task-chip success" x-text="'&check; ' + (explorerLastMetrics()?.completed || 0)"></span>
+                  <span class="explorer-task-chip failed"  x-text="'&times; ' + (explorerLastMetrics()?.failed || 0)"></span>
+                  <span class="explorer-task-chip skipped" x-text="'⊘ ' + (explorerLastMetrics()?.skipped || 0)"></span>
+                </div>
+              </div>
+            </template>
+
+            <div class="explorer-actions">
+              <button class="explorer-btn primary"
+                @click="openExplorerTrigger()"
+                :disabled="explorerTriggering"
+                x-text="t('explorer_trigger_btn')"></button>
+              <button class="explorer-btn danger"
+                x-show="explorerStatus && explorerStatus.running"
+                @click="explorerCancel()"
+                x-text="t('explorer_cancel_btn')"></button>
+              <button class="explorer-btn"
+                @click="explorerRefresh()"
+                x-text="t('explorer_refresh_btn')"></button>
+            </div>
+
+            <template x-if="explorerFeedback">
+              <div class="explorer-feedback" :class="explorerFeedback.type" x-text="explorerFeedback.text"></div>
+            </template>
+          </section>
+
+          <!-- A2: DB Delta Counter -->
+          <section class="explorer-section">
+            <div class="explorer-section-title" x-text="t('explorer_db_delta')"></div>
+            <div class="explorer-kpi-grid">
+              <div class="explorer-kpi">
+                <div class="explorer-kpi-label" x-text="t('explorer_db_configurations')"></div>
+                <div class="explorer-kpi-value" x-text="explorerDbDeltas.configurations || 0"></div>
+              </div>
+              <div class="explorer-kpi">
+                <div class="explorer-kpi-label" x-text="t('explorer_db_benchmark_results')"></div>
+                <div class="explorer-kpi-value" x-text="explorerDbDeltas.benchmark_results || 0"></div>
+              </div>
+              <div class="explorer-kpi">
+                <div class="explorer-kpi-label" x-text="t('explorer_db_events')"></div>
+                <div class="explorer-kpi-value" x-text="explorerDbDeltas.exploration_events || 0"></div>
+              </div>
+            </div>
+            <div style="margin-top:8px;font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);"
+                 x-text="t('explorer_db_since') + ': ' + (explorerDbSince || '—')"></div>
+          </section>
+
+          <!-- A4: Latest Summary -->
+          <section class="explorer-section">
+            <div class="explorer-section-title" x-text="t('explorer_latest_summary')"></div>
+            <template x-if="!explorerLatestRun">
+              <div class="explorer-empty" x-text="t('explorer_no_runs')"></div>
+            </template>
+            <template x-if="explorerLatestRun">
+              <div>
+                <div class="explorer-status-row">
+                  <span class="explorer-chip" :class="explorerLatestRun.status"
+                        x-text="explorerLatestRun.status"></span>
+                  <div class="explorer-meta">
+                    <div class="explorer-meta-primary" x-text="explorerLatestRun.goal || '(no goal)'"></div>
+                    <div class="explorer-meta-secondary"
+                         x-text="(explorerLatestRun.kind || 'run') + ' · ' + (explorerLatestRun.id || '')"></div>
+                  </div>
+                </div>
+                <template x-if="explorerSummaryDoc && explorerSummaryDoc.exists">
+                  <pre class="explorer-md" x-text="explorerSummaryDoc.content"></pre>
+                </template>
+                <template x-if="explorerSummaryDoc && !explorerSummaryDoc.exists">
+                  <div class="explorer-empty" x-text="t('explorer_summary_missing')"></div>
+                </template>
+              </div>
+            </template>
+          </section>
+        </div>
+
+        <!-- Runs tab — placeholder, implemented in D3 -->
+        <div class="explorer-scroll" x-show="explorerTab === 'runs'">
+          <section class="explorer-section">
+            <div class="explorer-empty" x-text="t('explorer_runs_coming')"></div>
+          </section>
         </div>
       </div>
 
@@ -4224,6 +4641,58 @@ body {
     </div>
   </template>
 
+  <!-- Explorer Trigger Modal -->
+  <template x-if="explorerTriggerOpen">
+    <div class="modal-overlay" @click.self="explorerTriggerOpen = false">
+      <div class="modal">
+        <h3 x-text="t('explorer_trigger_title')"></h3>
+
+        <template x-if="explorerTriggerFeedback">
+          <div class="modal-feedback" :class="explorerTriggerFeedback.type" x-text="explorerTriggerFeedback.text"></div>
+        </template>
+
+        <div class="modal-section">
+          <div class="modal-field">
+            <label x-text="t('explorer_trigger_kind')"></label>
+            <select x-model="explorerTriggerForm.kind"
+                    style="width:100%;padding:8px 10px;background:var(--msg-tool-hover,rgba(255,255,255,0.02));color:var(--text);border:0.5px solid var(--border-medium);border-radius:8px;">
+              <option value="validate">validate</option>
+              <option value="tune">tune</option>
+              <option value="open_question">open_question</option>
+            </select>
+          </div>
+
+          <div class="modal-field">
+            <label x-text="t('explorer_trigger_goal')"></label>
+            <textarea x-model="explorerTriggerForm.goal"
+                      :placeholder="t('explorer_trigger_goal_ph')"
+                      rows="3"></textarea>
+            <div class="modal-hint" x-text="t('explorer_trigger_goal_hint')"></div>
+          </div>
+
+          <div class="modal-field">
+            <label x-text="t('explorer_trigger_approval')"></label>
+            <select x-model="explorerTriggerForm.approval_mode"
+                    style="width:100%;padding:8px 10px;background:var(--msg-tool-hover,rgba(255,255,255,0.02));color:var(--text);border:0.5px solid var(--border-medium);border-radius:8px;">
+              <option value="auto">auto</option>
+              <option value="needs_approval">needs_approval</option>
+            </select>
+          </div>
+
+          <div class="modal-hint" x-text="t('explorer_trigger_local_note')"></div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="modal-btn" @click="explorerTriggerOpen = false" x-text="t('cancel')"></button>
+          <button class="modal-btn primary"
+                  @click="submitExplorerTrigger()"
+                  :disabled="explorerTriggering || !explorerTriggerForm.goal.trim()"
+                  x-text="explorerTriggering ? t('saving') : t('explorer_trigger_submit')"></button>
+        </div>
+      </div>
+    </div>
+  </template>
+
   <template x-if="showOnboardingDrawer">
     <div>
       <div class="onboarding-overlay" @click="closeOnboardingDrawer()"></div>
@@ -4422,6 +4891,36 @@ var I18N = {
     support_new_task: 'New Task',
     support_messages: 'Messages',
     support_open_workspace: 'Open AIMA-Service',
+    // Explorer view (v0.4 MVP)
+    explorer_view: 'Explorer',
+    explorer_tab_overview: 'Overview',
+    explorer_tab_runs: 'Runs',
+    explorer_current_run: 'Current Run',
+    explorer_no_active: 'No active exploration. Click Trigger to start one.',
+    explorer_tasks_progress: 'Tasks',
+    explorer_trigger_btn: 'Trigger',
+    explorer_cancel_btn: 'Cancel',
+    explorer_refresh_btn: 'Refresh',
+    explorer_trigger_title: 'Trigger Exploration Run',
+    explorer_trigger_kind: 'Kind',
+    explorer_trigger_goal: 'Goal',
+    explorer_trigger_goal_ph: 'e.g. On RTX 4060, find the engine+params combo with highest throughput for Qwen3-30B',
+    explorer_trigger_goal_hint: 'A one-line description of what you want to learn this run.',
+    explorer_trigger_approval: 'Approval Mode',
+    explorer_trigger_local_note: 'Uses local models and engines only. No auto-pull (auto_pull=false).',
+    explorer_trigger_submit: 'Start',
+    explorer_trigger_started: 'Exploration queued. Watching for progress...',
+    explorer_trigger_failed: 'Failed to start exploration.',
+    explorer_cancel_sent: 'Stop requested. Waiting for runner to converge...',
+    explorer_db_delta: 'DB Activity Since Entering View',
+    explorer_db_since: 'Anchor',
+    explorer_db_configurations: 'Configurations',
+    explorer_db_benchmark_results: 'Benchmark Results',
+    explorer_db_events: 'Exploration Events',
+    explorer_latest_summary: 'Latest Summary',
+    explorer_no_runs: 'No runs yet. The next trigger will show up here.',
+    explorer_summary_missing: 'summary.md not written yet — run may still be in progress.',
+    explorer_runs_coming: 'Runs list — coming in D3.',
     tab_general: 'General',
     tab_monitoring: 'Monitoring',
     tab_agent: 'AI Agent',
@@ -4648,6 +5147,36 @@ var I18N = {
     support_new_task: '\u65B0\u4EFB\u52A1',
     support_messages: '\u6D88\u606F',
     support_open_workspace: '\u6253\u5F00\u7075\u673A\u4E91',
+    // Explorer view (v0.4 MVP) - Chinese
+    explorer_view: 'Explorer',
+    explorer_tab_overview: '总览',
+    explorer_tab_runs: '历史',
+    explorer_current_run: '当前执行',
+    explorer_no_active: '无正在进行的探索。点击「触发」启动一轮。',
+    explorer_tasks_progress: '任务',
+    explorer_trigger_btn: '触发',
+    explorer_cancel_btn: '停止',
+    explorer_refresh_btn: '刷新',
+    explorer_trigger_title: '触发探索任务',
+    explorer_trigger_kind: '类型',
+    explorer_trigger_goal: '目标',
+    explorer_trigger_goal_ph: '例：在 RTX 4060 上为 Qwen3-30B 找到 throughput 最高的 engine+params 组合',
+    explorer_trigger_goal_hint: '一句话描述本轮探索要弄清楚的问题。',
+    explorer_trigger_approval: '审批模式',
+    explorer_trigger_local_note: '仅使用本地已有的 model 和 engine，不会自动拉取（auto_pull=false）。',
+    explorer_trigger_submit: '启动',
+    explorer_trigger_started: '已入队，正在监听进度…',
+    explorer_trigger_failed: '触发失败。',
+    explorer_cancel_sent: '已发送停止请求，等待收敛…',
+    explorer_db_delta: '进入本视图后的 DB 增量',
+    explorer_db_since: '锚点',
+    explorer_db_configurations: '新增配置',
+    explorer_db_benchmark_results: '新增 Benchmark',
+    explorer_db_events: '新增 Events',
+    explorer_latest_summary: '最近一轮 Summary',
+    explorer_no_runs: '还没有历史记录。触发后会显示在这里。',
+    explorer_summary_missing: 'summary.md 还未写入 — 探索可能仍在进行。',
+    explorer_runs_coming: '历史列表 — D3 实现。',
     tab_general: '\u5E38\u89C4',
     tab_monitoring: '\u76D1\u63A7',
     tab_agent: 'AI Agent',
@@ -5293,8 +5822,21 @@ function aimaApp() {
     deployments: [],
     modelDeploying: {},
     fleet: [],
-    // View toggle (chat / support)
+    // View toggle (chat / support / explorer)
     currentView: 'chat',
+    // Explorer page state (v0.4 MVP)
+    explorerTab: 'overview',            // 'overview' | 'runs'
+    explorerStatus: null,               // explorer.status response
+    explorerDbDeltas: { configurations: 0, benchmark_results: 0, exploration_events: 0 },
+    explorerDbSince: '',                // ISO-8601 anchor, set on entering the view
+    explorerLatestRun: null,            // top row from explore.list_runs
+    explorerSummaryDoc: null,           // { doc, exists, content, mtime, size }
+    explorerTriggerOpen: false,
+    explorerTriggering: false,
+    explorerTriggerForm: { kind: 'validate', goal: '', approval_mode: 'auto' },
+    explorerTriggerFeedback: null,      // { type:'info'|'error', text }
+    explorerFeedback: null,             // inline feedback on Overview
+    _explorerTimer: null,
     // Support page state
     supportConnected: false,
     supportPageConnecting: false,
@@ -5414,6 +5956,7 @@ function aimaApp() {
       this._timers.forEach(t => clearInterval(t));
       this._timers = [];
       if (this._deployTimer) clearInterval(this._deployTimer);
+      this.stopExplorerPolling();
       this.wizCleanup();
     },
 
@@ -7573,6 +8116,161 @@ function aimaApp() {
         this.messages.push({ role: 'ai', text: 'Support connected as device ' + (data.device_id || 'unknown') });
       }
       this.scrollChat();
+    },
+
+    // ── Explorer view methods (v0.4 MVP) ──
+
+    toggleExplorerView() {
+      if (this.currentView === 'explorer') {
+        this.closeExplorerView();
+        return;
+      }
+      this.openExplorerView();
+    },
+
+    openExplorerView() {
+      this.currentView = 'explorer';
+      this.explorerTab = 'overview';
+      // Anchor DB delta counters to the moment the user enters this view.
+      // Without an anchor, COUNT(*) returns absolute totals and the "delta"
+      // framing in the UI becomes a lie.
+      this.explorerDbSince = new Date().toISOString();
+      this.explorerRefresh();
+      this.stopExplorerPolling();
+      this._explorerTimer = setInterval(() => this.explorerRefresh(), 3000);
+    },
+
+    closeExplorerView() {
+      this.currentView = 'chat';
+      this.stopExplorerPolling();
+    },
+
+    stopExplorerPolling() {
+      if (this._explorerTimer) {
+        clearInterval(this._explorerTimer);
+        this._explorerTimer = null;
+      }
+    },
+
+    async explorerRefresh() {
+      // Fan out the three read-only probes in parallel. callTool is already
+      // tolerant of transient errors (returns { _err }), so one failing
+      // endpoint cannot tear down the whole refresh.
+      const [statusRes, deltasRes, runsRes] = await Promise.all([
+        this.callTool('explorer', { action: 'status' }),
+        this.callTool('explorer', { action: 'db_deltas', since: this.explorerDbSince }),
+        this.callTool('explore',  { action: 'list_runs', limit: 1 }),
+      ]);
+
+      if (statusRes && !statusRes._err) this.explorerStatus = statusRes;
+      if (deltasRes && !deltasRes._err) this.explorerDbDeltas = deltasRes;
+
+      if (runsRes && !runsRes._err && Array.isArray(runsRes) && runsRes.length > 0) {
+        const run = runsRes[0];
+        const prevId = this.explorerLatestRun ? this.explorerLatestRun.id : null;
+        this.explorerLatestRun = run;
+        // Lazy-load summary.md only when the latest run changes or we haven't
+        // fetched once. Avoids hammering the workspace file on every 3s tick.
+        if (run.id !== prevId || !this.explorerSummaryDoc) {
+          const doc = await this.callTool('explore', { action: 'get_workspace_doc', doc: 'summary.md' });
+          if (doc && !doc._err) this.explorerSummaryDoc = doc;
+        }
+      }
+    },
+
+    openExplorerTrigger() {
+      this.explorerTriggerFeedback = null;
+      this.explorerTriggerOpen = true;
+    },
+
+    async submitExplorerTrigger() {
+      const goal = this.explorerTriggerForm.goal.trim();
+      if (!goal) return;
+      this.explorerTriggering = true;
+      this.explorerTriggerFeedback = null;
+
+      const params = {
+        action: 'start',
+        kind: this.explorerTriggerForm.kind,
+        goal: goal,
+        requested_by: 'ui',
+        approval_mode: this.explorerTriggerForm.approval_mode,
+      };
+      const data = await this.callTool('explore', params);
+
+      this.explorerTriggering = false;
+      if (!data || data._err) {
+        this.explorerTriggerFeedback = { type: 'error', text: (data && data._err) || this.t('explorer_trigger_failed') };
+        return;
+      }
+      this.explorerTriggerOpen = false;
+      this.explorerTriggerForm.goal = '';
+      this.explorerFeedback = { type: 'info', text: this.t('explorer_trigger_started') };
+      // Pull fresh status right away so the Overview chip flips to running.
+      await this.explorerRefresh();
+    },
+
+    async explorerCancel() {
+      const plan = this.explorerStatus && this.explorerStatus.active_plan;
+      const runId = (plan && plan.ID) || '';
+      if (!runId) return;
+      const data = await this.callTool('explore', { action: 'stop', id: runId });
+      if (!data || data._err) {
+        this.explorerFeedback = { type: 'error', text: (data && data._err) || 'stop failed' };
+        return;
+      }
+      this.explorerFeedback = { type: 'info', text: this.t('explorer_cancel_sent') };
+      await this.explorerRefresh();
+    },
+
+    // ── Explorer view helpers (read-only projections of explorerStatus) ──
+
+    explorerPhaseTone() {
+      const phase = (this.explorerStatus && this.explorerStatus.phase) || '';
+      if (phase === 'running' || phase === 'executing') return 'running';
+      if (phase === 'planning') return 'planning';
+      if (phase === 'blocked')  return 'blocked';
+      if (phase === 'completed') return 'completed';
+      if (phase === 'failed')   return 'failed';
+      return 'idle';
+    },
+
+    explorerCurrentGoal() {
+      const p = this.explorerStatus && this.explorerStatus.active_plan;
+      if (p && p.Reasoning) return p.Reasoning;
+      if (this.explorerLatestRun && this.explorerLatestRun.goal) return this.explorerLatestRun.goal;
+      return this.t('explorer_no_active');
+    },
+
+    explorerCurrentMeta() {
+      const s = this.explorerStatus;
+      if (!s) return '';
+      const parts = [];
+      if (s.tier != null) parts.push('tier ' + s.tier);
+      if (s.mode) parts.push(s.mode);
+      if (s.rounds_used != null && s.max_rounds)
+        parts.push('rounds ' + s.rounds_used + '/' + s.max_rounds);
+      return parts.join(' · ');
+    },
+
+    explorerLastMetrics() {
+      return this.explorerStatus && this.explorerStatus.last_plan_metrics;
+    },
+
+    explorerTaskTotal() {
+      const m = this.explorerLastMetrics();
+      return (m && m.total_tasks) || 0;
+    },
+
+    explorerTaskCompleted() {
+      const m = this.explorerLastMetrics();
+      return (m && m.completed) || 0;
+    },
+
+    explorerTaskPct() {
+      const total = this.explorerTaskTotal();
+      if (!total) return 0;
+      return Math.min(100, Math.round((this.explorerTaskCompleted() / total) * 100));
     },
 
     // ── Support Page methods (independent from chat /askforhelp) ──

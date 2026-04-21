@@ -314,7 +314,7 @@ func makeAlert(severity, typ, message string) Alert {
 	}
 }
 
-// Config returns the current patrol config (for agent.patrol_config tool).
+// Config returns the current patrol config (for the patrol tool, action=config).
 func (p *Patrol) Config() PatrolConfig {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

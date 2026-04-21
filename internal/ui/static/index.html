@@ -7817,7 +7817,7 @@ function aimaApp() {
       } catch(e) { this.settingsForm.llmExtraParams = ''; }
       // Monitoring tab — load from patrol config
       try {
-        var pc = await this.callTool('agent.patrol_config', { action: 'get' });
+        var pc = await this.callTool('patrol', { action: 'config', config_action: 'get' });
         if (pc) {
           this.settingsForm.patrolInterval = (pc.Interval === 0 || pc.Interval) ? this.formatGoDuration(pc.Interval) : '5m';
           this.settingsForm.selfHeal = pc.SelfHealEnabled !== false;
@@ -7876,7 +7876,7 @@ function aimaApp() {
       ];
       for (var pk of patrolKeys) {
         try {
-          var pr = await this.callTool('agent.patrol_config', { action: 'set', key: pk.key, value: pk.value });
+          var pr = await this.callTool('patrol', { action: 'config', config_action: 'set', key: pk.key, value: pk.value });
           if (pr && pr._err) errors.push(pk.key + ': ' + pr._err);
         } catch(e) { errors.push(pk.key + ': ' + e.message); }
       }
@@ -7940,12 +7940,12 @@ function aimaApp() {
       await this.callTool('system.config', { key: 'support.endpoint', value: '' });
 
       // Reset patrol to defaults
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'interval', value: '5m' });
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'self_heal', value: 'true' });
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_temp_warn', value: '85' });
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_idle_pct', value: '10' });
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'gpu_idle_minutes', value: '15' });
-      await this.callTool('agent.patrol_config', { action: 'set', key: 'vram_opportunity_pct', value: '50' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'interval', value: '5m' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'self_heal', value: 'true' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'gpu_temp_warn', value: '85' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'gpu_idle_pct', value: '10' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'gpu_idle_minutes', value: '15' });
+      await this.callTool('patrol', { action: 'config', config_action: 'set', key: 'vram_opportunity_pct', value: '50' });
 
       this.agentInfo.llmEndpoint = '';
       this.agentInfo.llmModel = '';

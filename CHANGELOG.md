@@ -3,9 +3,9 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
-## [v0.4.0] - TBD — "Knowledge Autonomy"
+## [v0.4.0] - 2026-04-21 — "Knowledge Autonomy"
 
-162 commits since v0.3.3. v0.4 closes the Edge↔Central automation loop first sketched in `docs/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md`: Explorer now autonomously discovers work, executes benchmark/tune tasks, harvests knowledge, and syncs upstream; Central generates advisories and scenarios with a stable lifecycle; the edge device has a unified cloud identity via `aima-service`.
+176 commits since v0.3.3. v0.4 closes the Edge↔Central automation loop first sketched in `docs/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md`: Explorer now autonomously discovers work, executes benchmark/tune tasks, harvests knowledge, and syncs upstream; Central generates advisories and scenarios with a stable lifecycle; the edge device has a unified cloud identity via `aima-service`.
 
 v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never tagged) is folded into this release.
 
@@ -14,6 +14,7 @@ v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never ta
 - **v0.4 Knowledge Autonomy core** — Explorer orchestrator with tier detection, Scheduler (gap-scan/sync/audit timer loops with quiet hours), in-process EventBus (pub/sub for `deploy.completed`, `patrol.alert.oom/idle`, `model.discovered`, `central.advisory`, `central.scenario`), Planner interface (`RulePlanner` for Tier 1, replaced by `ExplorerAgentPlanner` for Tier 2), Harvester (template + LLM modes, `maybeAutoPromote` with zero-throughput guard), `exploration_plans` SQLite table (migrateV12).
 - **Explorer Agent Planner** — document-driven PDCA agent workflow (`ExplorerAgentPlanner`) replaces the single-shot JSON LLM planner. LLM operates as a research agent reading/writing documents in `~/.aima/explorer/` workspace via 7 bash-like tools (cat/ls/write/append/grep/query/done), with three-phase Chinese system prompts (Plan/Check/Act). `ExplorerWorkspace` manages fact documents (`device-profile.md`, `available-combos.md`, `knowledge-base.md`), analysis documents (`plan.md`, `summary.md`), and experiment results (`experiments/*.md`) with read-only guards and path safety. `query` tool wired to SQLite knowledge store (search/compare/gaps/aggregate) enables LLM to pull historical benchmark data during planning. `AnalyzablePlanner` extends `Planner` with `Analyze()` for PDCA Check+Act phases.
 - **Explorer evidence contract (2026-04-16 design)** — `PendingWork` derivation from durable local facts (`configurations` + `benchmark_results` + `exploration_runs`) keeps completed combos in Ready frontier when baseline/long-context/tune debt remains; `TaskSpec.search_space` contract gives `kind=tune` real parameter-search semantics; adaptive benchmark profile enrichment adds a long-context anchor when `MaxContextLen` allows without exploding the matrix; RulePlanner consumes PendingWork alongside gaps/advisories. Structured decision-trace logging (`tier`, `tasks`, `task_list`, `llm_tokens`, `proposed_tasks`, `dedup_dropped`, `ready_combos_seen`, `blocked_combos_seen`, `knowledge_gaps`) on every `explorer: plan generated` event.
+- **Explorer Web UI MVP** — embedded Explorer screens now expose live status without shell access: Overview tab (tier, planner state, DB delta, manual trigger), Runs tab with run-detail drawer, and read-only Explorer inspector MCP tools that back the UI. The end-to-end five-step closure was live-smoked on `gb10-4T` before release.
 - **Central Advisor Engine + Analyzer** — `CentralStore` interface decouples storage from logic with two implementations (`store_sqlite.go`, `store_postgres.go` using `pgx/v5`, nil-CGO). `Advisor` wraps an `LLMCompleter` (OpenAI-compatible, custom headers via `WithOpenAIHeaders`/`CENTRAL_LLM_HEADERS`) to power `Recommend` / `OptimizeScenario` / `GenerateScenario`. `Analyzer` owns scheduled gap scans, pattern discovery, scenario health checks, and post-ingest delayed analysis with real `analysis_runs` lifecycle transitions. Prompt templates in `advisor_prompts.go`. New API endpoints `POST /api/v1/advise`, `GET /api/v1/advisories`, `POST /api/v1/advisory/feedback`, `POST /api/v1/scenario/generate`, `GET /api/v1/scenarios`, `GET /api/v1/analysis`. (See note in Changed: Central implementation has moved to a separate repo.)
 - **Advisory lifecycle** — `pending` → `delivered` (on `sync pull`) → `validated` / `rejected` (on edge feedback) → `expired` (30d untouched). Advisory/scenario pulls are hardware-aware and lifecycle-filtered.
 - **Sync v2 protocol** — `knowledge.sync_pull` now returns advisories + scenarios alongside configurations/benchmarks/notes; `knowledge.sync_push` carries advisory feedback; CLI `aima knowledge advise` and `aima scenario generate/list --source central` exposed. End-to-end integration test covering advisory creation → delivery → validation → feedback.
@@ -69,6 +70,14 @@ v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never ta
 
 - Documented env-var matrix (edge + central) lives in `design/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md` §7.4. `AIMA_EXPLORER_*` env vars drive Explorer scheduling; `CENTRAL_*` env vars configure the standalone Central service (now in `aima-central-knowledge`).
 - The v0.3.4 CHANGELOG entry (Explorer Agent Planner, 2026-04-09) was never tagged; its content is consolidated into v0.4.0 above.
+
+### Known issues
+
+- **U10 onboarding smoke coverage** — `test-win`, `aibook`, `m1000`, and `metax-n260` were not refreshed in this release window; this is a device-coverage gap, not a reproduced functional failure.
+- **U11 multi-modal benchmark evidence** — the final evidence chain still needs reachable `w7900d` and `aibook` hosts to complete the remaining coverage.
+- **U13 smoke matrix coverage** — current-head smoke still lacks `test-win` refresh, while `aibook`, `m1000`, and `metax-n260` remain unreachable.
+- **U14 Central cross-repo evidence split** — the Central SQLite/Postgres contract is closed in production, but the final regression proof lives in `aima-central-knowledge`, not in this repo.
+- **U16 overlay hardware identity granularity** — overlay YAML identity matching remains intentionally coarse in v0.4; the follow-up spec is deferred to v0.5.
 
 ## [v0.3.3] - 2026-04-09
 
@@ -167,7 +176,7 @@ v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never ta
 
 Initial tagged release. Foundation layer with hardware detection (8 GPU vendors), multi-runtime deployment, knowledge-driven config resolution, 80 MCP tools, central knowledge server, TUI dashboard, benchmark runner, and exploration runner.
 
-[v0.4.0]: https://github.com/Approaching-AI/AIMA/compare/v0.3.3...HEAD
+[v0.4.0]: https://github.com/Approaching-AI/AIMA/compare/v0.3.3...v0.4.0
 [v0.3.3]: https://github.com/Approaching-AI/AIMA/compare/v0.3.0...v0.3.3
 [v0.3.0]: https://github.com/Approaching-AI/AIMA/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/Approaching-AI/AIMA/compare/v0.0.1...v0.2.0

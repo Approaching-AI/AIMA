@@ -1880,6 +1880,16 @@ body {
   font-family: var(--font-sans);
   font-size: 12px;
 }
+.explorer-select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--msg-tool-hover, rgba(255, 255, 255, 0.02));
+  color: var(--text);
+  border: 0.5px solid var(--border-medium);
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
 .explorer-runs-table {
   display: flex;
   flex-direction: column;
@@ -1888,7 +1898,7 @@ body {
 .explorer-runs-head,
 .explorer-runs-row {
   display: grid;
-  grid-template-columns: 104px 80px 1fr 64px 120px 80px 80px 72px;
+  grid-template-columns: 96px 72px minmax(0, 1fr) 60px 104px 72px 72px 64px;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -4863,8 +4873,7 @@ body {
         <div class="modal-section">
           <div class="modal-field">
             <label x-text="t('explorer_trigger_kind')"></label>
-            <select x-model="explorerTriggerForm.kind"
-                    style="width:100%;padding:8px 10px;background:var(--msg-tool-hover,rgba(255,255,255,0.02));color:var(--text);border:0.5px solid var(--border-medium);border-radius:8px;">
+            <select class="explorer-select" x-model="explorerTriggerForm.kind">
               <option value="validate">validate</option>
               <option value="tune">tune</option>
               <option value="open_question">open_question</option>
@@ -4881,8 +4890,7 @@ body {
 
           <div class="modal-field">
             <label x-text="t('explorer_trigger_approval')"></label>
-            <select x-model="explorerTriggerForm.approval_mode"
-                    style="width:100%;padding:8px 10px;background:var(--msg-tool-hover,rgba(255,255,255,0.02));color:var(--text);border:0.5px solid var(--border-medium);border-radius:8px;">
+            <select class="explorer-select" x-model="explorerTriggerForm.approval_mode">
               <option value="auto">auto</option>
               <option value="needs_approval">needs_approval</option>
             </select>

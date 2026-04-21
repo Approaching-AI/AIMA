@@ -1,0 +1,102 @@
+== version ==
+aima v0.4.0
+  build:  2026-04-21T11:14:24Z
+  commit: c185d38
+  go:     go1.26.1
+
+== hal detect ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:04 INFO explorer started tier=1
+{
+  "gpu": {
+    "vendor": "nvidia",
+    "name": "NVIDIA GB10",
+    "arch": "Blackwell",
+    "vram_mib": 122504,
+    "compute_id": "12.1",
+    "driver_version": "580.126.09",
+    "sdk_version": "CUDA 13.0",
+    "power_draw_watts": 12.08,
+    "temperature_celsius": 51,
+    "unified_memory": true,
+    "count": 1
+  },
+  "cpu": {
+    "arch": "arm64",
+    "model": "Cortex-X925",
+    "cores": 20,
+    "threads": 20,
+    "freq_ghz": 4.004
+  },
+  "ram": {
+    "total_mib": 122504,
+    "available_mib": 14058,
+    "swap_total_mib": 16383
+  },
+  "storage": {
+    "data_dir_path": "/home/qujing/.aima",
+    "free_mib": 102587,
+    "total_mib": 937290,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "device": "/dev/nvme0n1p2",
+        "total_mib": 937290,
+        "free_mib": 102587
+      },
+      {
+        "mount_point": "/boot/efi",
+        "device": "/dev/nvme0n1p1",
+        "total_mib": 510,
+        "free_mib": 504
+      }
+    ]
+  },
+  "os": {
+    "os": "linux",
+    "arch": "arm64",
+    "version": "24.04",
+    "container_runtime": "docker"
+  }
+}
+
+== engine list ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+[]
+2026/04/21 11:17:04 INFO explorer started tier=1
+
+== model list ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:04 INFO explorer started tier=1
+[]
+
+== deploy list ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:04 INFO explorer started tier=1
+[
+  {
+    "address": "127.0.0.1:8011",
+    "engine": "voxcpm2-nanovllm",
+    "model": "voxcpm2",
+    "name": "voxcpm2-voxcpm2-nanovllm",
+    "parameter_count": "2B",
+    "phase": "running",
+    "ready": true,
+    "runtime": "docker",
+    "served_model": "voxcpm2",
+    "slot": "primary",
+    "start_time": "2026-04-16T19:54:02Z",
+    "started_at_unix": 1776369242,
+    "status": "running"
+  }
+]
+
+== device status ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+{
+  "device_id": "",
+  "referral_code": "",
+  "registered": false,
+  "registration_state": "failed"
+}
+2026/04/21 11:17:04 INFO explorer started tier=1

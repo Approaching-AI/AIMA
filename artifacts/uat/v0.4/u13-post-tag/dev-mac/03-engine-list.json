@@ -1,0 +1,14 @@
+[
+  {
+    "available": true,
+    "binary_path": "/Users/jguan/.aima/dist/darwin-arm64/llama-server",
+    "created_at": "2026-02-27T06:58:58Z",
+    "id": "5ec30eef7dc17ed0",
+    "image": "",
+    "platform": "darwin-arm64",
+    "runtime_type": "native",
+    "size_bytes": 10028208,
+    "tag": "",
+    "type": "llamacpp"
+  }
+]

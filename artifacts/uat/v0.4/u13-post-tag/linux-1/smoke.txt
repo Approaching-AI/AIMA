@@ -1,0 +1,531 @@
+== version ==
+aima v0.4.0
+  build:  2026-04-21T11:14:24Z
+  commit: c185d38
+  go:     go1.26.1
+
+== hal detect ==
+2026/04/21 19:17:05 INFO catalog overlay has stale entries; review recommended stale_count=3 dir=/home/cjwx/.aima/catalog
+2026/04/21 19:17:05 INFO catalog overlay merged dir=/home/cjwx/.aima/catalog overlay_assets=6 new_assets=3
+2026/04/21 19:17:05 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 19:17:05 INFO explorer started tier=1
+{
+  "gpu": {
+    "vendor": "nvidia",
+    "name": "NVIDIA GeForce RTX 4090",
+    "arch": "Ada",
+    "vram_mib": 49140,
+    "compute_id": "8.9",
+    "driver_version": "580.95.05",
+    "sdk_version": "CUDA 13.0",
+    "power_draw_watts": 14.76,
+    "power_limit_watts": 450,
+    "temperature_celsius": 35,
+    "unified_memory": false,
+    "count": 2
+  },
+  "cpu": {
+    "arch": "amd64",
+    "model": "Intel(R) Xeon(R) Platinum 8488C",
+    "cores": 48,
+    "threads": 96,
+    "freq_ghz": 0.7999980000000001
+  },
+  "ram": {
+    "total_mib": 515434,
+    "available_mib": 493014,
+    "swap_total_mib": 8191
+  },
+  "storage": {
+    "data_dir_path": "/home/cjwx/.aima",
+    "free_mib": 23898,
+    "total_mib": 446502,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "device": "/dev/mapper/ubuntu--vg-ubuntu--lv",
+        "total_mib": 446502,
+        "free_mib": 23898
+      },
+      {
+        "mount_point": "/mnt/data",
+        "device": "/dev/nvme0n1",
+        "total_mib": 3604224,
+        "free_mib": 1577122
+      },
+      {
+        "mount_point": "/boot",
+        "device": "/dev/sda2",
+        "total_mib": 1945,
+        "free_mib": 1535
+      },
+      {
+        "mount_point": "/boot/efi",
+        "device": "/dev/sda1",
+        "total_mib": 1072,
+        "free_mib": 1066
+      }
+    ]
+  },
+  "os": {
+    "os": "linux",
+    "arch": "amd64",
+    "version": "22.04",
+    "container_runtime": "docker"
+  }
+}
+
+== engine list ==
+2026/04/21 19:17:06 INFO catalog overlay has stale entries; review recommended stale_count=3 dir=/home/cjwx/.aima/catalog
+2026/04/21 19:17:06 INFO catalog overlay merged dir=/home/cjwx/.aima/catalog overlay_assets=6 new_assets=3
+2026/04/21 19:17:06 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 19:17:06 INFO explorer started tier=1
+[
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-15T06:54:16Z",
+    "id": "sha256:7a69e2d73d4c26a4c42fe7e7c257dc34f408d27696ddaa6ac312da88b033a165",
+    "image": "lmsysorg/sglang",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "dev-cu13",
+    "type": "sglang"
+  },
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "sha256:1d597ffcd93a082fe9e21a001f1587edd240d45ae6d0dcaaa9db9fe107215cbc",
+    "image": "vllm/vllm-openai",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "gemma4-cu130",
+    "type": "vllm"
+  },
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "sha256:cf52d479f95fa71fed3ef47a0a09119f567f49d50214a2bd1708acfdb9dec127",
+    "image": "zhiwen-ktransformers",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "v0.5.1",
+    "type": "sglang-kt"
+  },
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "sha256:1e54315524640ce1713721cd04e39b34313613f6a0897708cfc517645893ff29",
+    "image": "zhiwen-sglang",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "v0.5.8",
+    "type": "sglang"
+  },
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "sha256:87bc3ebf174c8ed176ca974a6d24a5e7f8eddaaef98c8de60b8edc77c39092aa",
+    "image": "zhiwen-llama-box",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "v3.3.1",
+    "type": "llamacpp"
+  },
+  {
+    "available": true,
+    "binary_path": "",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "sha256:5791f8642d1b71d45d832e232250aeca6a9aeb99b89698dff3c1ca5eea7a9655",
+    "image": "zhiwen-vllm",
+    "platform": "linux-amd64",
+    "runtime_type": "container",
+    "size_bytes": 0,
+    "tag": "v3.3.1",
+    "type": "vllm"
+  },
+  {
+    "available": true,
+    "binary_path": "/home/cjwx/.aima/dist/linux-amd64/sglang-kt",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "332c7dc119881d2c",
+    "image": "",
+    "platform": "linux-amd64",
+    "runtime_type": "native",
+    "size_bytes": 4719475192,
+    "tag": "",
+    "type": "sglang-kt"
+  },
+  {
+    "available": true,
+    "binary_path": "/usr/local/bin/torchrun",
+    "created_at": "2026-04-10T09:12:06Z",
+    "id": "11b138d55655e202",
+    "image": "",
+    "platform": "linux-amd64",
+    "runtime_type": "native",
+    "size_bytes": 220,
+    "tag": "",
+    "type": "xdit-wan22"
+  }
+]
+
+== model list ==
+2026/04/21 19:17:06 INFO catalog overlay has stale entries; review recommended stale_count=3 dir=/home/cjwx/.aima/catalog
+2026/04/21 19:17:06 INFO catalog overlay merged dir=/home/cjwx/.aima/catalog overlay_assets=6 new_assets=3
+2026/04/21 19:17:06 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 19:17:06 INFO explorer started tier=1
+[
+  {
+    "active_params": 3239575552,
+    "created_at": "2026-04-15T11:42:50Z",
+    "detected_arch": "qwen",
+    "detected_params": "3B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "bd8765e58160c2710a305d18805b485ee2420b19f79f510e9995a62ba005e59c",
+    "model_class": "moe",
+    "name": "Qwen3-Next-80B-A3B-Instruct-AWQ-4bit",
+    "path": "/mnt/data/models/Qwen3-Next-80B-A3B-Instruct-AWQ-4bit",
+    "quant_src": "config",
+    "quantization": "int4",
+    "size_bytes": 49231450912,
+    "status": "registered",
+    "total_params": 79039037440,
+    "type": "llm"
+  },
+  {
+    "active_params": 3352821760,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "3B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "3c38803d6d512c1b4e5ef7bd772ada4161e30500a067f9dff1d7f3fc7bcacaa1",
+    "model_class": "moe",
+    "name": "qwen3-30b-a3b",
+    "path": "/home/cjwx/.aima/models/qwen3-30b-a3b",
+    "quant_src": "config",
+    "quantization": "bf16",
+    "size_bytes": 61066575648,
+    "status": "registered",
+    "total_params": 30531911680,
+    "type": "llm"
+  },
+  {
+    "active_params": 4022272000,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "3B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "9b8354c3994963912142ca88339ad26bbf8940fab6efa16f6be6221819181e95",
+    "model_class": "dense",
+    "name": "qwen3-4b",
+    "path": "/home/cjwx/.aima/models/qwen3-4b",
+    "quant_src": "config",
+    "quantization": "bf16",
+    "size_bytes": 8044982000,
+    "status": "registered",
+    "total_params": 4022272000,
+    "type": "llm"
+  },
+  {
+    "active_params": 0,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "c499c4b8bc59a47bc2442f0e65e558f0fdb171d06345ba588ba63bf9fb4cdf0e",
+    "model_class": "dense",
+    "name": "qwen3-asr-1.7b",
+    "path": "/home/cjwx/.aima/models/qwen3-asr-1.7b",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 4698521512,
+    "status": "registered",
+    "total_params": 0,
+    "type": "llm"
+  },
+  {
+    "active_params": 0,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "6f13656235f33cf4c0d76a19da2128fcc756de21d9ea984dc47f1f935f88e097",
+    "model_class": "dense",
+    "name": "qwen3-tts-0.6b",
+    "path": "/home/cjwx/.aima/models/qwen3-tts-0.6b",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 1829344272,
+    "status": "registered",
+    "total_params": 0,
+    "type": "llm"
+  },
+  {
+    "active_params": 23081779200,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "22B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "4d4b5575a164a0d19139560304d7d1a2cc44a718a6de6fef293e7c05e2929242",
+    "model_class": "dense",
+    "name": "qwen3.5-27b",
+    "path": "/home/cjwx/.aima/models/qwen3.5-27b",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 55563022432,
+    "status": "registered",
+    "total_params": 23081779200,
+    "type": "llm"
+  },
+  {
+    "active_params": 2365587456,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "glm",
+    "detected_params": "3B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "4f07d682c629bb4f490b7c2c935ad56b05d64b939050d0e2ffc9cf6f5efbe063",
+    "model_class": "moe",
+    "name": "GLM-4.7-Flash",
+    "path": "/mnt/data/models/GLM-4.7-Flash",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 62444175504,
+    "status": "registered",
+    "total_params": 2365587456,
+    "type": "llm"
+  },
+  {
+    "active_params": 11029708800,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "minimax_m2",
+    "detected_params": "7B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "d2b6ca66c115fe7dc4ac85039d9d548f4514fe7649822c4da696373699dc2fb5",
+    "model_class": "moe",
+    "name": "MiniMax-M2.5",
+    "path": "/mnt/data/models/MiniMax-M2.5",
+    "quant_src": "config",
+    "quantization": "fp8",
+    "size_bytes": 230134264560,
+    "status": "registered",
+    "total_params": 228688920576,
+    "type": "llm"
+  },
+  {
+    "active_params": 0,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "",
+    "detected_params": "",
+    "download_progress": 0,
+    "format": "onnx",
+    "id": "0d0bd0aad8f3915cc9629a2725de076aa8ffa733e2be5f21d2a5f21b8d43b01e",
+    "model_class": "unknown",
+    "name": "PDF-parser",
+    "path": "/mnt/data/models/PDF-parser",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 267241810,
+    "status": "registered",
+    "total_params": 0,
+    "type": ""
+  },
+  {
+    "active_params": 31984189440,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "22B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "ce7a18de9aa20713da6be3f3dacf779672e811e1aff89f11794975e482fbca44",
+    "model_class": "dense",
+    "name": "Qwen2.5-32B-Instruct-GPTQ-Int8",
+    "path": "/mnt/data/models/Qwen2.5-32B-Instruct-GPTQ-Int8",
+    "quant_src": "config",
+    "quantization": "int4",
+    "size_bytes": 35068693560,
+    "status": "registered",
+    "total_params": 31984189440,
+    "type": "llm"
+  },
+  {
+    "active_params": 7070285824,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "3B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "e3fc3e0cde296c6b99edef58472fae19f14954995627172395cbcf49ecfba61e",
+    "model_class": "dense",
+    "name": "Qwen2.5-VL-7B-Instruct",
+    "path": "/mnt/data/models/Qwen2.5-VL-7B-Instruct",
+    "quant_src": "config",
+    "quantization": "bf16",
+    "size_bytes": 16584414560,
+    "status": "registered",
+    "total_params": 7070285824,
+    "type": "llm"
+  },
+  {
+    "active_params": 7568097280,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "7B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "19c221ea54a78470fb8cd22ecc5f2e3f7205e26045754c6296e11c41aa580c68",
+    "model_class": "dense",
+    "name": "Qwen3-VL-8B-Instruct",
+    "path": "/mnt/data/models/Qwen3-VL-8B-Instruct",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 17534339512,
+    "status": "registered",
+    "total_params": 7568097280,
+    "type": "llm"
+  },
+  {
+    "active_params": 8207204352,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "qwen",
+    "detected_params": "7B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "0ed11c3508fd5d4a2757e1cf965c31cc7f5f017c693ba8e651db36078c056fdf",
+    "model_class": "moe",
+    "name": "Qwen3.5-122B-A10B",
+    "path": "/mnt/data/models/Qwen3.5-122B-A10B",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 250173250864,
+    "status": "registered",
+    "total_params": 120547442688,
+    "type": "llm"
+  },
+  {
+    "active_params": 658655232,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "bert",
+    "detected_params": "\u003c1B",
+    "download_progress": 0,
+    "format": "onnx",
+    "id": "267df616b2d1a898609dc8454f9bdfc6abc7a41aa39f2071f2bf556ffd09db3d",
+    "model_class": "dense",
+    "name": "onnx",
+    "path": "/mnt/data/models/bge-m3/onnx",
+    "quant_src": "config",
+    "quantization": "fp32",
+    "size_bytes": 724923,
+    "status": "registered",
+    "total_params": 658655232,
+    "type": "embedding"
+  },
+  {
+    "active_params": 658655232,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "bert",
+    "detected_params": "\u003c1B",
+    "download_progress": 0,
+    "format": "onnx",
+    "id": "a69c974cc24dd07efbcafbe29b91b44499c732325497fee53d612f007cbcb496",
+    "model_class": "dense",
+    "name": "onnx",
+    "path": "/mnt/data/models/bge-m3-FP16/onnx",
+    "quant_src": "config",
+    "quantization": "fp32",
+    "size_bytes": 724923,
+    "status": "registered",
+    "total_params": 658655232,
+    "type": "embedding"
+  },
+  {
+    "active_params": 658655232,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "bert",
+    "detected_params": "\u003c1B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "249177ec72560b43c8b6a19ca8bba26b7c59cf21a04942b44f1f5a28a3c45186",
+    "model_class": "dense",
+    "name": "bge-reranker-v2-m3",
+    "path": "/mnt/data/models/bge-reranker-v2-m3",
+    "quant_src": "config",
+    "quantization": "fp32",
+    "size_bytes": 2271071852,
+    "status": "registered",
+    "total_params": 658655232,
+    "type": "embedding"
+  },
+  {
+    "active_params": 20808990720,
+    "created_at": "2026-04-10T09:13:12Z",
+    "detected_arch": "gemma",
+    "detected_params": "22B",
+    "download_progress": 0,
+    "format": "safetensors",
+    "id": "335c81445b7210fb244a5225103177388bd42a97228ddb48882ab88d3a3fce58",
+    "model_class": "moe",
+    "name": "gemma-4-31B-it",
+    "path": "/mnt/data/models/gemma-4-31B-it",
+    "quant_src": "unknown",
+    "quantization": "unknown",
+    "size_bytes": 62546338248,
+    "status": "registered",
+    "total_params": 20808990720,
+    "type": "llm"
+  }
+]
+
+== deploy list ==
+2026/04/21 19:17:06 INFO catalog overlay has stale entries; review recommended stale_count=3 dir=/home/cjwx/.aima/catalog
+2026/04/21 19:17:06 INFO catalog overlay merged dir=/home/cjwx/.aima/catalog overlay_assets=6 new_assets=3
+2026/04/21 19:17:07 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 19:17:07 INFO explorer started tier=1
+[
+  {
+    "address": "127.0.0.1:30000",
+    "engine": "sglang-kt",
+    "error_lines": "[2026-04-15 20:05:32] INFO:     127.0.0.1:37504 - \"GET /health HTTP/1.1\" 200 OK\n[2026-04-20 19:04:11 TP0] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, full token usage: 0.00, mamba usage: 0.00, #running-req: 0, #queue-req: 0, input throughput (token/s): 0.00, cuda graph: False\n[2026-04-20 19:04:11] INFO:     127.0.0.1:56786 - \"GET /health HTTP/1.1\" 200 OK\n[2026-04-21 14:26:03] SIGTERM received. signum=None frame=None. Draining requests and shutting down...\n[2026-04-21 14:26:04] Gracefully exiting... Remaining number of requests 0. Remaining requests remaining_rids=[].",
+    "message": "process exited before readiness",
+    "model": "qwen3.5-122b-a10b",
+    "name": "qwen3.5-122b-a10b",
+    "parameter_count": "122B",
+    "phase": "failed",
+    "ready": false,
+    "runtime": "native",
+    "served_model": "qwen3.5-122b-a10b",
+    "slot": "primary",
+    "start_time": "2026-04-15T12:00:17Z",
+    "started_at_unix": 1776254417,
+    "status": "failed"
+  }
+]
+
+== device status ==
+2026/04/21 19:17:07 INFO catalog overlay has stale entries; review recommended stale_count=3 dir=/home/cjwx/.aima/catalog
+2026/04/21 19:17:07 INFO catalog overlay merged dir=/home/cjwx/.aima/catalog overlay_assets=6 new_assets=3
+2026/04/21 19:17:07 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+{
+  "device_id": "",
+  "referral_code": "",
+  "registered": false,
+  "registration_state": "unregistered"
+}
+2026/04/21 19:17:07 INFO explorer started tier=1

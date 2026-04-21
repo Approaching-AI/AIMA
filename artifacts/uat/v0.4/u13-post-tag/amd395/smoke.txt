@@ -1,0 +1,105 @@
+== version ==
+aima v0.4.0
+  build:  2026-04-21T11:14:24Z
+  commit: c185d38
+  go:     go1.26.1
+
+== hal detect ==
+2026/04/21 11:17:05 INFO runtime selected runtime=k3s docker_available=true k3s_available=true
+2026/04/21 11:17:05 INFO explorer started tier=1
+{
+  "gpu": {
+    "vendor": "amd",
+    "name": "Radeon 8060S Graphics",
+    "arch": "RDNA3.5",
+    "vram_mib": 512,
+    "compute_id": "gfx1151",
+    "driver_version": "6.14.0-1020-oem",
+    "sdk_version": "ROCm 7.2.0",
+    "power_draw_watts": 19.081,
+    "temperature_celsius": 33,
+    "unified_memory": false,
+    "count": 1
+  },
+  "npu": {
+    "vendor": "amd",
+    "name": "NPU Strix Halo",
+    "firmware_version": "255.0.11.71",
+    "driver": "amdxdna",
+    "count": 1
+  },
+  "cpu": {
+    "arch": "amd64",
+    "model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "cores": 16,
+    "threads": 32,
+    "freq_ghz": 4.26841
+  },
+  "ram": {
+    "total_mib": 127945,
+    "available_mib": 78314,
+    "swap_total_mib": 8191
+  },
+  "storage": {
+    "data_dir_path": "/home/quings/.aima",
+    "free_mib": 528354,
+    "total_mib": 957257,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "device": "/dev/mapper/ubuntu--vg--1-ubuntu--lv",
+        "total_mib": 957257,
+        "free_mib": 528354
+      },
+      {
+        "mount_point": "/boot",
+        "device": "/dev/nvme0n1p2",
+        "total_mib": 1945,
+        "free_mib": 1527
+      },
+      {
+        "mount_point": "/data",
+        "device": "/dev/mapper/ubuntu--vg-ubuntu--lv",
+        "total_mib": 957773,
+        "free_mib": 609775
+      },
+      {
+        "mount_point": "/boot/efi",
+        "device": "/dev/nvme0n1p1",
+        "total_mib": 1072,
+        "free_mib": 1066
+      }
+    ]
+  },
+  "os": {
+    "os": "linux",
+    "arch": "amd64",
+    "version": "24.04",
+    "container_runtime": "docker"
+  }
+}
+
+== engine list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=k3s docker_available=true k3s_available=true
+[]
+2026/04/21 11:17:05 INFO explorer started tier=1
+
+== model list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=k3s docker_available=true k3s_available=true
+2026/04/21 11:17:05 INFO explorer started tier=1
+[]
+
+== deploy list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=k3s docker_available=true k3s_available=true
+2026/04/21 11:17:05 INFO explorer started tier=1
+[]
+
+== device status ==
+2026/04/21 11:17:06 INFO runtime selected runtime=k3s docker_available=true k3s_available=true
+{
+  "device_id": "dev_19b6713629b8",
+  "referral_code": "WISE-GATE-9179",
+  "registered": true,
+  "registration_state": "registered"
+}
+2026/04/21 11:17:06 INFO explorer started tier=1

@@ -1,0 +1,103 @@
+== version ==
+aima v0.4.0
+  build:  2026-04-21T11:14:24Z
+  commit: c185d38
+  go:     go1.26.1
+
+== hal detect ==
+2026/04/21 11:17:04 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:04 INFO explorer started tier=1
+{
+  "gpu": {
+    "vendor": "amd",
+    "name": "Navi 31 [Radeon Pro W7900D]",
+    "arch": "RDNA3",
+    "vram_mib": 49136,
+    "compute_id": "gfx1100",
+    "driver_version": "6.14.14",
+    "sdk_version": "ROCm 7.0.2",
+    "power_draw_watts": 12,
+    "temperature_celsius": 25,
+    "unified_memory": false,
+    "count": 8
+  },
+  "cpu": {
+    "arch": "amd64",
+    "model": "AMD EPYC 9334 32-Core Processor",
+    "cores": 64,
+    "threads": 128,
+    "freq_ghz": 2.699935
+  },
+  "ram": {
+    "total_mib": 1031744,
+    "available_mib": 927307
+  },
+  "storage": {
+    "data_dir_path": "/root/.aima",
+    "free_mib": 364512,
+    "total_mib": 3661041,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "device": "/dev/mapper/ubuntu--vg-ubuntu--lv",
+        "total_mib": 446502,
+        "free_mib": 162276
+      },
+      {
+        "mount_point": "/disk/ssd1",
+        "device": "/dev/nvme0n1",
+        "total_mib": 3661041,
+        "free_mib": 364512
+      },
+      {
+        "mount_point": "/boot",
+        "device": "/dev/sda2",
+        "total_mib": 1945,
+        "free_mib": 1521
+      },
+      {
+        "mount_point": "/boot/efi",
+        "device": "/dev/sda1",
+        "total_mib": 1072,
+        "free_mib": 1066
+      },
+      {
+        "mount_point": "/disk/ssd2",
+        "device": "/dev/nvme1n1",
+        "total_mib": 3604224,
+        "free_mib": 3141067
+      }
+    ]
+  },
+  "os": {
+    "os": "linux",
+    "arch": "amd64",
+    "version": "24.04",
+    "container_runtime": "docker"
+  }
+}
+
+== engine list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:05 INFO explorer started tier=1
+[]
+
+== model list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:05 INFO explorer started tier=1
+[]
+
+== deploy list ==
+2026/04/21 11:17:05 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 11:17:05 INFO explorer started tier=1
+[]
+
+== device status ==
+2026/04/21 11:17:05 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+{
+  "device_id": "",
+  "referral_code": "",
+  "registered": false,
+  "registration_state": "unregistered"
+}
+2026/04/21 11:17:05 INFO explorer started tier=1

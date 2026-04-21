@@ -845,6 +845,25 @@ func TestExplorerHandleEvent_RejectsBudgetExhaustedAdvisory(t *testing.T) {
 	}
 }
 
+func TestAdvisoryPlanStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		in   HarvestResult
+		want string
+	}{
+		{name: "success", in: HarvestResult{Success: true}, want: "completed"},
+		{name: "cancelled", in: HarvestResult{Cancelled: true}, want: "cancelled"},
+		{name: "failed validation becomes rejected", in: HarvestResult{Success: false, Error: "boom"}, want: "rejected"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := advisoryPlanStatus(tc.in); got != tc.want {
+				t.Fatalf("advisoryPlanStatus(%+v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExplorerAdvisoryTaskAllowed(t *testing.T) {
 	t.Run("rejects combo outside ready set", func(t *testing.T) {
 		e := &Explorer{

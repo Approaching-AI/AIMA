@@ -1,0 +1,31 @@
+{
+  "benchmark_profile": {
+    "avg_input_tokens": 134,
+    "avg_output_tokens": 64,
+    "concurrency": 1,
+    "input_tokens": 128,
+    "max_tokens": 64,
+    "num_requests": 1,
+    "rounds": 1,
+    "warmup_count": 2
+  },
+  "engine": "vllm",
+  "engine_image": "vllm/vllm-openai:v0.8.5",
+  "engine_version": "0.8.5",
+  "hardware": "nvidia-rtx4090-x86",
+  "model": "qwen3-4b",
+  "qps": 1.6023590879088774,
+  "resource_usage": {
+    "cpu_usage_pct": 5.4,
+    "gpu_utilization_pct": 36.25,
+    "power_draw_watts": 247.29749999999999,
+    "ram_usage_mib": 11
+  },
+  "throughput_tps": 102.55098162616815,
+  "tpot_p50_ms": 9.565603174603176,
+  "tpot_p95_ms": 9.565603174603176,
+  "ttft_p50_ms": 21.322,
+  "ttft_p95_ms": 21.322,
+  "ttft_p99_ms": 21.322,
+  "updated_at": "2026-04-21T06:30:22Z"
+}

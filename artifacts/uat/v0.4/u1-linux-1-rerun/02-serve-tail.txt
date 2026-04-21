@@ -1,0 +1,9 @@
+2026/04/21 12:29:10 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 12:29:10 INFO explorer started tier=1
+2026/04/21 12:29:10 INFO starting proxy server addr=127.0.0.1:6294
+2026/04/21 12:29:10 INFO proxy server starting addr=127.0.0.1:6294
+2026/04/21 12:29:10 INFO openclaw sync complete llm=0 vlm=0 asr=0 tts=false image_gen=0 config=/home/cjwx/.openclaw/openclaw.json
+2026/04/21 12:29:10 INFO mDNS broadcasting service=_llm._tcp port=6294
+2026/04/21 12:29:10 INFO starting MCP server (HTTP) addr=127.0.0.1:9194
+2026/04/21 12:29:10 WARN device registration blocked on user input — run `aima device register` after providing the credential kind=invite_or_worker detail="aima-service invite code required (pass --invite-code or set AIMA_INVITE_CODE)"
+2026/04/21 12:29:11 INFO startup engine scan completed

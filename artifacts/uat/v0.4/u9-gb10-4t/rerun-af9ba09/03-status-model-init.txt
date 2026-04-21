@@ -1,0 +1,32 @@
+2026-04-20T17:04:29Z
+2026/04/20 17:04:29 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/20 17:04:29 INFO explorer started tier=1
+{
+  "address": "127.0.0.1:18083",
+  "engine": "vllm-nightly-blackwell",
+  "estimated_total_s": 600,
+  "labels": {
+    "aima.dev/engine": "vllm-nightly-blackwell",
+    "aima.dev/host-port": "18083",
+    "aima.dev/model": "qwen3.5-9b",
+    "aima.dev/parameter_count": "9B",
+    "aima.dev/port": "18083",
+    "aima.dev/served-model": "qwen3.5-9b",
+    "aima.dev/slot": "primary",
+    "maintainer": "NVIDIA CORPORATION \u003ccudatools@nvidia.com\u003e",
+    "org.opencontainers.image.ref.name": "ubuntu",
+    "org.opencontainers.image.version": "22.04"
+  },
+  "last_progress_at": 1776704669,
+  "model": "qwen3.5-9b",
+  "name": "qwen3-5-9b-vllm-nightly",
+  "phase": "running",
+  "ready": false,
+  "runtime": "docker",
+  "slot": "primary",
+  "start_time": "2026-04-20T17:03:32Z",
+  "started_at_unix": 1776704612,
+  "startup_message": "Model init...",
+  "startup_phase": "model_init",
+  "startup_progress": 5
+}

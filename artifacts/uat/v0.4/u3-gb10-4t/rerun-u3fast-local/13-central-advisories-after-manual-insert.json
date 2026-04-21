@@ -1,0 +1,2 @@
+[{"id":"adv_u3_glm_validate_fast","status":"pending","target_model":"GLM-4.1V-9B-Thinking","target_engine":"vllm-nightly","content_json":"{\"max_model_len\":384}","created_at":"2026-04-21 05:04:06"},
+{"id":"adv_13ca655bffaf48b9","status":"pending","target_model":"GLM-4.1V-9B-Thinking","target_engine":"vllm-nightly","content_json":"{\"gap_type\":\"missing_benchmark\",\"priority\":\"high\",\"suggested_action\":\"Validate the recommended combo and report benchmark evidence.\"}","created_at":"2026-04-21T05:01:40Z"}]

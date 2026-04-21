@@ -38,6 +38,7 @@ type ExplorerConfig struct {
 //   - LastPlanKnowledgeGaps: knowledge-level gaps (model×engine with zero benchmarks)
 //   - LastPlanReadyCombos:   model×engine pairs the planner deemed eligible for new tasks this cycle
 //   - LastPlanBlockedCombos: pairs filtered out by resolver/runtime checks
+//
 // The authoritative per-phase view is available-combos.md inside the workspace.
 type ExplorerStatus struct {
 	Running               bool           `json:"running"`
@@ -420,20 +421,20 @@ func (e *Explorer) Status() ExplorerStatus {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return ExplorerStatus{
-		Running:          e.running,
-		Enabled:          e.config.Enabled,
-		Phase:            e.phase,
-		Tier:             e.tier,
-		ActivePlan:       e.activePlan,
-		Schedule:         e.config.Schedule,
-		LastRun:          e.lastRun,
-		Mode:             e.config.Mode,
-		RoundsUsed:       e.roundsUsed,
-		MaxRounds:        e.config.MaxRounds,
-		TokensUsedToday:  e.tokensUsedToday,
-		MaxTokensPerDay:  e.config.MaxTokensPerDay,
-		MaxCycles:        e.config.MaxCycles,
-		MaxTasks:         e.config.MaxTasks,
+		Running:               e.running,
+		Enabled:               e.config.Enabled,
+		Phase:                 e.phase,
+		Tier:                  e.tier,
+		ActivePlan:            e.activePlan,
+		Schedule:              e.config.Schedule,
+		LastRun:               e.lastRun,
+		Mode:                  e.config.Mode,
+		RoundsUsed:            e.roundsUsed,
+		MaxRounds:             e.config.MaxRounds,
+		TokensUsedToday:       e.tokensUsedToday,
+		MaxTokensPerDay:       e.config.MaxTokensPerDay,
+		MaxCycles:             e.config.MaxCycles,
+		MaxTasks:              e.config.MaxTasks,
 		LastPlanMetrics:       e.lastPlanMetrics,
 		BlockedByDeploys:      e.blockedByDeploys,
 		LastPlanKnowledgeGaps: e.lastPlanKnowledgeGaps,
@@ -1106,6 +1107,16 @@ func taskStatusFromHarvest(result HarvestResult) string {
 	return "failed"
 }
 
+func advisoryPlanStatus(result HarvestResult) string {
+	if result.Success {
+		return "completed"
+	}
+	if result.Cancelled {
+		return "cancelled"
+	}
+	return "rejected"
+}
+
 func (e *Explorer) finalizeExplorationPlanRecord(ctx context.Context, plan *ExplorerPlan, terminalStatus string) {
 	if e.db == nil || plan == nil {
 		return
@@ -1179,7 +1190,7 @@ func (e *Explorer) executeAdvisoryValidation(ctx context.Context, advisory advis
 	taskStart := time.Now()
 	result := e.executeTask(ctx, task, plan.ID)
 	taskElapsed := time.Since(taskStart)
-	plan.Tasks[0].Status = taskStatusFromHarvest(result)
+	plan.Tasks[0].Status = advisoryPlanStatus(result)
 
 	// Stamp the bench row with the advisory ID so Central's feedback ingest can
 	// attribute the evidence. Best-effort: stamping is not load-bearing for the
@@ -1205,7 +1216,7 @@ func (e *Explorer) executeAdvisoryValidation(ctx context.Context, advisory advis
 		}
 	}
 
-	terminalStatus := plan.Tasks[0].Status
+	terminalStatus := advisoryPlanStatus(result)
 	if ctx.Err() != nil {
 		terminalStatus = "cancelled"
 	}

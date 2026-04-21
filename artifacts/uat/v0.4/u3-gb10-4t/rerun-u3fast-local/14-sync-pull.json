@@ -1,0 +1,71 @@
+Pull: {
+  "advisories": {
+    "count": 2,
+    "filters": {
+      "hardware": "nvidia-gb10-arm64",
+      "status": "pending"
+    },
+    "items": [
+      {
+        "confidence": "medium",
+        "content": {
+          "max_model_len": 384
+        },
+        "created_at": "2026-04-21 05:04:06",
+        "delivered_at": "2026-04-21T05:04:07Z",
+        "id": "adv_u3_glm_validate_fast",
+        "reasoning": "Single-cell GLM validation for onboarding UAT fast rerun.",
+        "status": "pending",
+        "summary": "Force a terminal deep advisory with one feasible benchmark cell.",
+        "target_engine": "vllm-nightly",
+        "target_hardware": "nvidia-gb10-arm64",
+        "target_model": "GLM-4.1V-9B-Thinking",
+        "title": "Manual GLM validation fast",
+        "type": "config_recommend"
+      },
+      {
+        "confidence": "high",
+        "content": {
+          "gap_type": "missing_benchmark",
+          "priority": "high",
+          "suggested_action": "Validate the recommended combo and report benchmark evidence."
+        },
+        "created_at": "2026-04-21T05:01:40Z",
+        "delivered_at": "2026-04-21T05:04:07Z",
+        "id": "adv_13ca655bffaf48b9",
+        "reasoning": "Freshly registered GB10 device has no local validation evidence yet.",
+        "status": "pending",
+        "summary": "Freshly registered GB10 device has no local validation evidence yet.",
+        "target_engine": "vllm-nightly",
+        "target_hardware": "nvidia-gb10-arm64",
+        "target_model": "GLM-4.1V-9B-Thinking",
+        "title": "Gap Alert: missing_benchmark",
+        "type": "gap_alert"
+      }
+    ],
+    "published_events": 2
+  },
+  "endpoint": "http://127.0.0.1:18198",
+  "gpu_arch": "Blackwell",
+  "hardware_profile": "nvidia-gb10-arm64",
+  "knowledge_import": {
+    "dry_run": false,
+    "imported": {
+      "benchmark_results": 0,
+      "configurations": 0,
+      "knowledge_notes": 0
+    },
+    "skipped": 0
+  },
+  "protocol_version": "v2-edge",
+  "scenarios": {
+    "count": 0,
+    "filters": {
+      "hardware": "nvidia-gb10-arm64"
+    },
+    "items": null,
+    "published_events": 0
+  },
+  "since": "",
+  "status": "pulled"
+}

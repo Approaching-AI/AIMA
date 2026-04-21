@@ -1,0 +1,16 @@
+[
+  [
+    "adv_c35405616b4730fd",
+    "rejected",
+    "qwen3.5-9b",
+    "vllm-nightly",
+    "2026-04-21T04:20:16Z"
+  ],
+  [
+    "adv_u3_glm_validate_fix",
+    "pending",
+    "GLM-4.1V-9B-Thinking",
+    "vllm-nightly",
+    "2026-04-21T04:26:35Z"
+  ]
+]

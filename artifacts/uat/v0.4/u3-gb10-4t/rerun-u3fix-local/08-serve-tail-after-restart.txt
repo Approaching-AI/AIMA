@@ -1,0 +1,7 @@
+2026/04/21 04:23:07 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 04:23:07 INFO explorer started tier=1
+2026/04/21 04:23:07 INFO starting proxy server addr=127.0.0.1:6292
+2026/04/21 04:23:07 INFO proxy server starting addr=127.0.0.1:6292
+2026/04/21 04:23:07 INFO mDNS broadcasting service=_llm._tcp port=6292
+2026/04/21 04:23:07 INFO starting MCP server (HTTP) addr=127.0.0.1:9192
+2026/04/21 04:23:07 INFO startup engine scan completed

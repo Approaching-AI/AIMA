@@ -1,0 +1,42 @@
+{
+  "benchmark_profile": {
+    "avg_input_tokens": 134,
+    "avg_output_tokens": 64,
+    "concurrency": 1,
+    "input_tokens": 128,
+    "max_tokens": 64,
+    "num_requests": 1,
+    "rounds": 1,
+    "warmup_count": 1
+  },
+  "engine": "llamacpp-rocm-rdna3",
+  "engine_image": "ghcr.io/ggml-org/llama.cpp:full-rocm",
+  "engine_version": "latest",
+  "hardware": "amd-w7900d-x86",
+  "heterogeneous_observation": {
+    "cpu_offload": true,
+    "cpu_usage_pct": 1.44,
+    "gpu_utilization_pct": 31.2,
+    "n_gpu_layers": 999,
+    "path": "gpu+cpu",
+    "power_draw_watts": 573.4,
+    "ram_usage_mib": 168,
+    "vram_usage_mib": 856
+  },
+  "model": "Qwen3-30B-A3B-Q4_K_M",
+  "qps": 0.9832400828438763,
+  "resource_usage": {
+    "cpu_usage_pct": 1.44,
+    "gpu_utilization_pct": 31.2,
+    "power_draw_watts": 573.4,
+    "ram_usage_mib": 168,
+    "vram_usage_mib": 856
+  },
+  "throughput_tps": 62.927365302008084,
+  "tpot_p50_ms": 12.635539682539683,
+  "tpot_p95_ms": 12.635539682539683,
+  "ttft_p50_ms": 220.933,
+  "ttft_p95_ms": 220.933,
+  "ttft_p99_ms": 220.933,
+  "updated_at": "2026-04-21T06:00:41Z"
+}

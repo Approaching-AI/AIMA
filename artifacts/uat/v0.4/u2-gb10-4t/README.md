@@ -1,72 +1,94 @@
 # U2 on `gb10-4T`
 
-- Date: 2026-04-20
+- Initial run: 2026-04-20
+- Current rerun: 2026-04-21
 - Host: `qujing@100.91.39.109` (`aitopatom-66c4`, GB10 / Blackwell ARM64)
-- Binary: `aima v0.4-dev` (`44bc4c7`)
-- Isolation: separate `AIMA_DATA_DIR` under `~/aima-uat/u2/data`, separate proxy/MCP ports `6286/9186`
+- Latest binary: `aima v0.4-dev` from repo `HEAD=af9ba09`
+- Latest isolation: `AIMA_DATA_DIR=~/aima-uat-rerun/u2-qwen/data`, proxy/MCP ports `6291/9191`
 
 ## Verdict
 
-`KNOWN ISSUE`
+`PASS`
 
-The "partial preserve" branch is still not healthy once a tune run has one successful cell and then loses the next cell:
+The 2026-04-20 Gemma result is superseded by the patched rerun on `af9ba09`.
 
-- the first cell completed normally and wrote a real benchmark/configuration row;
-- after the second cell lost its backend, the run remained stuck in `running`;
-- `summary_json` under-counted the run as `total_cells=1, success_cells=1` even though the same `tuning_session` still reported `progress=1, total=2`.
+This rerun validated the actual "partial preserve" branch instead of getting stuck behind the older summary/stall behavior:
 
-So the implementation does preserve the first successful benchmark row in DB, but it does not surface the partial run correctly at the exploration summary level, and it can fail to converge after the failed cell.
+- the first candidate completed and wrote a real benchmark/configuration row;
+- the second candidate failed naturally at deploy time with an invalid `dtype`;
+- the tuning session still finished `completed` with `total_cells=2` and `success_cells=1`;
+- only the successful cell was persisted to `benchmark_results` / `configurations`;
+- the surviving result was promoted into planner-consumable state (`golden` config + perf observation file).
 
 ## What Was Verified
 
 1. A real 2-cell tune run was started through isolated MCP `explore.start`.
-   - run id: `ca3b9f262f1d3583`
-   - tuning session: `42aa70e762d9015f`
-   - model / engine: `gemma-4-26b-a4b-it` + `vllm-gemma4-blackwell`
-   - search space: `gpu_memory_utilization=[0.74, 1.2]`
+   - run id: `3c0b3ba2679bb423`
+   - tuning session: `7fc5a13a4fd72e9c`
+   - model / engine: `qwen3.5-9b` + `vllm-nightly`
+   - search space: `dtype=[bfloat16, definitely-not-real]`
+   - benchmark profile: single-point `concurrency=1`, `input_tokens=128`, `max_tokens=32`, `num_requests=1`
 
 2. The first cell completed successfully.
-   - `tuning: testing config progress=1/2 config=map[gpu_memory_utilization:0.74]`
-   - isolated DB kept one real benchmark/configuration row
-   - run summary already promoted:
-     - `benchmark_id=d984dc10a425a85f`
-     - `config_id=d067bf14f2abc765`
-     - `throughput_tps=18.3714409353017`
+   - `serve.log` recorded `tuning: testing config progress=1/2 config=map[dtype:bfloat16]`
+   - the proxy served a real request at `03:42:32Z`
+   - the isolated DB kept one real benchmark/configuration row:
+     - `benchmark_id=8928d721e8010732`
+     - `config_id=a76d78bb3e5381a7`
+     - `throughput_tps=12.307901395267972`
 
-3. The second cell did not fail naturally from `1.2`.
-   - deploy fitness clamped `gpu_memory_utilization 1.20 -> 0.93`
-   - to force the intended partial-success branch on an isolated host, the second container was explicitly removed after it started
+3. The second cell failed naturally and was skipped.
+   - `serve.log` recorded `tuning: testing config progress=2/2 config=map[dtype:definitely-not-real]`
+   - deploy then failed with:
+     - `vllm serve: error: argument --dtype: invalid choice: 'definitely-not-real'`
+   - the run did not hang after that deploy failure
 
-4. After the second backend disappeared, the run state became inconsistent.
-   - `serve.log` recorded `sync: removing stale backend model=gemma-4-26b-a4b-it`
-   - `docker ps` became empty
-   - by `2026-04-20T11:51:23Z`, the run still remained `running`
-
-5. The partial summary was wrong.
-   - `summary_json.total_cells=1`
-   - `summary_json.success_cells=1`
-   - but the embedded `tuning_session` still reported:
-     - `status=running`
-     - `progress=1`
+4. The partial summary is now correct.
+   - final run status: `completed`
+   - final `summary_json` reports:
+     - `total_cells=2`
+     - `success_cells=1`
+   - embedded `tuning_session` reports:
+     - `status=completed`
+     - `progress=2`
      - `total=2`
      - `results_len=1`
 
-6. The code path matches the observed under-count.
-   - `internal/agent/exploration.go` currently sets:
-     - `payload["total_cells"] = len(session.Results)`
-     - `payload["success_cells"] = len(session.Results)`
-   - this explains why the exploration-level summary only reflects successful results, not attempted cells
+5. Only the successful cell was promoted.
+   - DB counts at the end:
+     - `benchmark_results=1`
+     - `configurations=1`
+   - the saved configuration status is:
+     - `golden`
 
-## Evidence
+6. The preserved partial result is available to later planning.
+   - `serve.log` recorded:
+     - `auto-promote: first golden config`
+     - `perf observation updated`
+   - the isolated data dir now contains:
+     - `observations/models/qwen3.5-9b-perf.json`
 
-- `00-version.txt`: isolated binary version
-- `01-serve-start.txt`: isolated serve bootstrap
-- `02-explorer-status-raw.json`: baseline explorer status
-- `03-explore-start.json`: raw MCP start response with run id
-- `status/020.json` to `status/022.json`: first successful cell appears while run is still in progress
-- `05-run-status-after-injected-failure.json`: post-fault run status
-- `06-serve-after-injected-failure.log`: second-cell stale backend removal in serve log
-- `07-db-counts.txt`: isolated DB still contains only the successful benchmark/config row
-- `08-docker-after-injected-failure.txt`: no backend container left
-- `09-summary-mismatch.txt`: compact summary mismatch (`1/1` vs tuning `1/2`)
-- `10-remote-cleanup.txt`: isolated serve, container, and data dir cleaned up
+## Key Evidence
+
+- `rerun-u2fix-qwen/00-version.txt`: rebuilt `af9ba09` binary version
+- `rerun-u2fix-qwen/01-serve-start.txt`: isolated `serve --mcp` startup
+- `rerun-u2fix-qwen/02-explorer-status-raw.json`: baseline explorer status
+- `rerun-u2fix-qwen/03-explore-start.json`: raw MCP start response
+- `rerun-u2fix-qwen/04-status-polls.jsonl`: run/session progress over time
+- `rerun-u2fix-qwen/04a-status-compact.txt`: compact progress summary showing `0/2 -> 1/2 -> completed`
+- `rerun-u2fix-qwen/05-run-result.json`: final run payload with `total_cells=2`, `success_cells=1`
+- `rerun-u2fix-qwen/06-db-counts.txt`: only one benchmark/config row persisted
+- `rerun-u2fix-qwen/07-serve-tail.txt`: first-cell success path and second-cell invalid-`dtype` deploy failure
+- `rerun-u2fix-qwen/08-docker-after-run.txt`: no leftover `qwen3-5-9b` container after completion
+- `rerun-u2fix-qwen/09-remote-cleanup.txt`: isolated remote cleanup
+- `rerun-u2fix-qwen/10-perf-observation.json`: persisted performance observation for later planner input
+- `rerun-u2fix-qwen/11-config-status.txt`: saved config status is `golden`
+
+## Historical Note
+
+The original 2026-04-20 Gemma run and the intermediate 2026-04-21 Gemma warmup-only rerun remain on disk as earlier attempts:
+
+- `status/` + legacy files under this directory: original stuck summary/stall evidence
+- `rerun-u2fix-local/`: a patched Gemma retry that still spent most of its time in first-cell startup
+
+They are useful as baseline context, but the current verdict is based on `rerun-u2fix-qwen/`.

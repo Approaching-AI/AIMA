@@ -1,0 +1,5 @@
+          id = adv_u3_glm_validate_fast2
+      status = validated
+    accepted = 1
+    feedback = validated: 10.3 tok/s, TTFT P95 102ms
+validated_at = 2026-04-21T05:14:33Z

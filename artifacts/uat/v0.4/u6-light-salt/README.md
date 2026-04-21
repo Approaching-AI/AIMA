@@ -1,41 +1,42 @@
 # U6 on `light-salt` (`test-win`)
 
-- Date: 2026-04-20
+- Initial run: 2026-04-20
+- Current rerun: 2026-04-21
 - Host: `jguan@100.114.25.35` (`Light-Salt`, Windows 11, RTX 4060 8GB)
-- Binary: `aima v0.4-dev` (`44bc4c7`)
-- Isolation: used a separate `AIMA_DATA_DIR` under `C:\Users\jguan\aima-uat\u6\data`, then deleted that remote directory after capture
+- Latest binary: `aima v0.4-dev` (`af9ba09`)
+- Latest isolation: `C:\Users\jguan\aima-uat-rerun\u6-pass\data`
 
 ## Verdict
 
-`KNOWN ISSUE`
+`PASS`
 
-U6 did not pass on Windows. Two acceptance branches diverged from the doc:
+The 2026-04-20 failure is superseded by the rerun on `af9ba09`.
 
-1. The unregistered cloud-rejection path works before `serve`.
-   - `device status` was `unregistered`
-   - `support.invite_code` was absent
-   - `knowledge sync --push` failed cleanly with `device not registered with aima-service`
+## What Was Verified
 
-2. `aima serve` without any explicit invite code did **not** stay `unregistered` / `pending`.
-   - Within the first second it auto-registered successfully
-   - `device status` stayed `registered` across later samples
-   - This matches the current code path that falls back to the default invite code when no explicit invite is present
+1. Unregistered bootstrap remains offline-first.
+   - `device status` started as `registered=false`, `registration_state=unregistered`.
+   - `knowledge sync --push` failed cleanly with `device not registered with aima-service`.
 
-3. The "local inference still works without identity" acceptance could not be satisfied on this Windows path.
-   - `deploy Qwen3-0.6B-Q8_0 --engine llamacpp` generated a native `llama-server.exe` command with `--gpu-memory-utilization`
-   - The Windows `llama-server.exe` rejected that flag with `error: invalid argument: --gpu-memory-utilization`
-   - `deploy list` then showed the deployment in `failed` / `process exited before readiness`
+2. Windows native `llamacpp` deploy now works before registration.
+   - `deploy Qwen3-0.6B-Q8_0 --engine llamacpp` returned `0`.
+   - Returned config only contained `ctx_size`, `n_gpu_layers`, `port`.
+   - No leaked `--gpu-memory-utilization` appeared in the deploy payload.
+   - Poll 1 showed `startup_phase=loading_model`, `ready=false`; poll 2 showed `ready=true`.
+   - Final `deploy list` reported the deployment as `runtime=native`, `engine=llamacpp-universal`, `ready=true`.
+
+3. Explicit registration writes canonical + mirrored keys consistently.
+   - `device register --invite-code U6-INVITE-20260421` succeeded against the mock support service.
+   - `device status` ended as `registered=true`, `registration_state=registered`, `device_id=dev-u6-light-salt`.
+   - `device.id` / `device.token` / `device.recovery_code` matched their `support.state.*` mirrors.
 
 ## Evidence
 
-- `03-device-status-before.txt`: pre-serve state was `unregistered`
-- `04-sync-push-before-serve.txt`: unregistered Central push was gracefully rejected
-- `05-deploy.txt`: native deploy command emitted on Windows
-- `06-deploy-list-after-fail.txt`: failed deployment with `invalid argument: --gpu-memory-utilization`
-- `09-device-status-after-serve.txt`: post-serve state was `registered`
-- `08-identity-mirror-check.txt`: canonical/private identity keys were mirrored after registration
+- `10-rerun-af9ba09.json`: full rerun summary on current HEAD
+- `03-device-status-before.txt`: original pre-serve `unregistered` capture
+- `04-sync-push-before-serve.txt`: original graceful rejection before registration
+- `08-identity-mirror-check.txt`: original mirror-key capture from the first run
 
 ## Notes
 
-- The `*.txt` captures are PowerShell redirections, so they are encoded as UTF-16LE.
-- I did not keep local copies of raw `device.token` / `recovery_code`; only the mirror-check result was preserved.
+- The rerun JSON was captured through Python `subprocess(..., text=True)` on Windows; one background reader thread logged a benign decode error, but the script completed and emitted the full summary.

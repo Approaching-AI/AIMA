@@ -26,6 +26,8 @@ patterns:
   - "llama-rocm"
   - "gguf-rocm"
 startup:
+  # full-rocm image ships llama-server under /app, not on PATH
+  command: ["/app/llama-server", "--model", "{{.ModelPath}}", "--host", "0.0.0.0"]
   env:
     HSA_OVERRIDE_GFX_VERSION: "11.0.0"
     HSA_ENABLE_SDMA: "0"

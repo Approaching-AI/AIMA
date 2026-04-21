@@ -1,0 +1,33 @@
+{
+  "benchmark_profile": {
+    "avg_input_tokens": 136,
+    "avg_output_tokens": 32,
+    "concurrency": 1,
+    "input_tokens": 128,
+    "max_tokens": 32,
+    "num_requests": 1,
+    "rounds": 1,
+    "warmup_count": 2
+  },
+  "engine": "vllm-nightly",
+  "engine_image": "vllm/vllm-openai:qwen3_5-cu130",
+  "engine_version": "nightly",
+  "hardware": "nvidia-gb10-arm64",
+  "model": "qwen3.5-9b",
+  "qps": 0.38462191860212414,
+  "resource_usage": {
+    "cpu_usage_pct": 11.35820895522388,
+    "gpu_utilization_pct": 11.462686567164178,
+    "power_draw_watts": 17.59940298507463,
+    "ram_usage_mib": 1108,
+    "unified_memory": true,
+    "vram_usage_mib": 1108
+  },
+  "throughput_tps": 12.307901395267972,
+  "tpot_p50_ms": 80.49558064516128,
+  "tpot_p95_ms": 80.49558064516128,
+  "ttft_p50_ms": 104.489,
+  "ttft_p95_ms": 104.489,
+  "ttft_p99_ms": 104.489,
+  "updated_at": "2026-04-21T03:42:40Z"
+}

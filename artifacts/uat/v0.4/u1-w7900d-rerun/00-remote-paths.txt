@@ -1,0 +1,6 @@
+edge_host=root@36.151.243.68:21985
+binary=/root/aima-uat-current
+data_dir=/root/aima-uat-rerun/u1-w7900d/data
+serve_addr=127.0.0.1:6297
+mcp_addr=127.0.0.1:9197
+model_path=/disk/ssd1/models/Qwen3-30B-A3B-GGUF

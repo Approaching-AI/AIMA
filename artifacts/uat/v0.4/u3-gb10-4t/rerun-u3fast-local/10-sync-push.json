@@ -1,0 +1,19 @@
+Push: {
+  "device_id": "dev-u3-gb10-fast",
+  "endpoint": "http://127.0.0.1:18198",
+  "export_stats": {
+    "benchmark_results": 0,
+    "configurations": 0,
+    "knowledge_notes": 0
+  },
+  "gpu_arch": "Blackwell",
+  "hardware_profile": "nvidia-gb10-arm64",
+  "ingest_result": {
+    "benchmarks": 0,
+    "duplicates": 0,
+    "ingested": 0,
+    "notes": 0
+  },
+  "protocol_version": "v2-edge",
+  "status": "pushed"
+}

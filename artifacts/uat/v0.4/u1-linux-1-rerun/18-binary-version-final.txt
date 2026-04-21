@@ -1,0 +1,4 @@
+aima v0.4-dev
+  build:  2026-04-21T05:58:45Z
+  commit: af9ba09
+  go:     go1.26.1

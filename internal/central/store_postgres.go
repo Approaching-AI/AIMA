@@ -36,6 +36,10 @@ func (p *PostgresCentralStore) DB() *sql.DB {
 	return p.db
 }
 
+func pgRFC3339UTCExpr(expr string) string {
+	return fmt.Sprintf(`COALESCE(to_char((%s) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')`, expr)
+}
+
 func (p *PostgresCentralStore) Migrate(ctx context.Context) error {
 	ddl := `
 CREATE TABLE IF NOT EXISTS devices (
@@ -266,10 +270,12 @@ func (p *PostgresCentralStore) ConfigExistsByHash(ctx context.Context, hash stri
 }
 
 func (p *PostgresCentralStore) QueryConfigurations(ctx context.Context, f ConfigFilter) ([]Configuration, error) {
-	query := `SELECT id, COALESCE(device_id,''), hardware, engine_type, COALESCE(engine_version,''), model,
+	query := fmt.Sprintf(`SELECT id, COALESCE(device_id,''), hardware, engine_type, COALESCE(engine_version,''), model,
 	           COALESCE(slot,''), config::text, config_hash, COALESCE(status,''), COALESCE(derived_from,''),
-	           COALESCE(tags,''), COALESCE(source,''), COALESCE(created_at::text,''), COALESCE(updated_at::text,'')
-	          FROM configurations WHERE 1=1`
+	           COALESCE(tags,''), COALESCE(source,''), %s, %s
+	          FROM configurations WHERE 1=1`,
+		pgRFC3339UTCExpr("created_at"),
+		pgRFC3339UTCExpr("updated_at"))
 	var args []any
 	n := 1
 	if f.Hardware != "" {
@@ -322,10 +328,12 @@ func (p *PostgresCentralStore) QueryConfigurations(ctx context.Context, f Config
 }
 
 func (p *PostgresCentralStore) ListConfigurationsForSync(ctx context.Context, f SyncFilter) ([]Configuration, error) {
-	query := `SELECT id, COALESCE(device_id,''), hardware, engine_type, COALESCE(engine_version,''), model,
+	query := fmt.Sprintf(`SELECT id, COALESCE(device_id,''), hardware, engine_type, COALESCE(engine_version,''), model,
 	           COALESCE(slot,''), config::text, config_hash, COALESCE(status,''), COALESCE(derived_from,''),
-	           COALESCE(tags,''), COALESCE(source,''), COALESCE(created_at::text,''), COALESCE(updated_at::text,'')
-	          FROM configurations WHERE 1=1`
+	           COALESCE(tags,''), COALESCE(source,''), %s, %s
+	          FROM configurations WHERE 1=1`,
+		pgRFC3339UTCExpr("created_at"),
+		pgRFC3339UTCExpr("updated_at"))
 	var args []any
 	n := 1
 	if f.Since != "" {
@@ -383,15 +391,16 @@ func (p *PostgresCentralStore) InsertBenchmark(ctx context.Context, b BenchmarkR
 }
 
 func (p *PostgresCentralStore) ListBenchmarksForSync(ctx context.Context, configIDs []string, since string) ([]BenchmarkResult, error) {
-	query := `SELECT id, config_id, COALESCE(device_id,''), COALESCE(concurrency,0),
+	query := fmt.Sprintf(`SELECT id, config_id, COALESCE(device_id,''), COALESCE(concurrency,0),
 	           COALESCE(input_len_bucket,''), COALESCE(output_len_bucket,''), COALESCE(modality,''),
 	           COALESCE(throughput_tps,0), COALESCE(ttft_p50_ms,0), COALESCE(ttft_p95_ms,0), COALESCE(ttft_p99_ms,0),
 	           COALESCE(tpot_p50_ms,0), COALESCE(tpot_p95_ms,0), COALESCE(qps,0),
 	           COALESCE(vram_usage_mib,0), COALESCE(ram_usage_mib,0), COALESCE(power_draw_watts,0),
 	           COALESCE(gpu_utilization_pct,0), COALESCE(cpu_usage_pct,0), COALESCE(error_rate,0), COALESCE(oom_occurred,false),
 	           COALESCE(stability,''), COALESCE(duration_s,0), COALESCE(sample_count,0),
-	           COALESCE(agent_model,''), COALESCE(notes,''), COALESCE(tested_at::text,'')
-	          FROM benchmark_results WHERE 1=1`
+	           COALESCE(agent_model,''), COALESCE(notes,''), %s
+	          FROM benchmark_results WHERE 1=1`,
+		pgRFC3339UTCExpr("tested_at"))
 	var args []any
 	var conditions []string
 	n := 1
@@ -423,15 +432,16 @@ func (p *PostgresCentralStore) ListBenchmarksForSync(ctx context.Context, config
 }
 
 func (p *PostgresCentralStore) QueryBenchmarks(ctx context.Context, f BenchmarkFilter) ([]BenchmarkResult, error) {
-	query := `SELECT br.id, br.config_id, COALESCE(br.device_id,''), COALESCE(br.concurrency,0),
+	query := fmt.Sprintf(`SELECT br.id, br.config_id, COALESCE(br.device_id,''), COALESCE(br.concurrency,0),
 	           COALESCE(br.input_len_bucket,''), COALESCE(br.output_len_bucket,''), COALESCE(br.modality,''),
 	           COALESCE(br.throughput_tps,0), COALESCE(br.ttft_p50_ms,0), COALESCE(br.ttft_p95_ms,0), COALESCE(br.ttft_p99_ms,0),
 	           COALESCE(br.tpot_p50_ms,0), COALESCE(br.tpot_p95_ms,0), COALESCE(br.qps,0),
 	           COALESCE(br.vram_usage_mib,0), COALESCE(br.ram_usage_mib,0), COALESCE(br.power_draw_watts,0),
 	           COALESCE(br.gpu_utilization_pct,0), COALESCE(br.cpu_usage_pct,0), COALESCE(br.error_rate,0), COALESCE(br.oom_occurred,false),
 	           COALESCE(br.stability,''), COALESCE(br.duration_s,0), COALESCE(br.sample_count,0),
-	           COALESCE(br.agent_model,''), COALESCE(br.notes,''), COALESCE(br.tested_at::text,'')
-	          FROM benchmark_results br`
+	           COALESCE(br.agent_model,''), COALESCE(br.notes,''), %s
+	          FROM benchmark_results br`,
+		pgRFC3339UTCExpr("br.tested_at"))
 	var args []any
 	var wheres []string
 	n := 1
@@ -492,9 +502,10 @@ func (p *PostgresCentralStore) UpsertKnowledgeNote(ctx context.Context, n Knowle
 
 func (p *PostgresCentralStore) ListKnowledgeNotes(ctx context.Context) ([]KnowledgeNote, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, title, COALESCE(tags,''), COALESCE(hardware_profile,''), COALESCE(model,''),
-		 COALESCE(engine,''), content, COALESCE(confidence,''), COALESCE(created_at::text,'')
-		 FROM knowledge_notes ORDER BY created_at ASC LIMIT 1000`)
+		fmt.Sprintf(`SELECT id, title, COALESCE(tags,''), COALESCE(hardware_profile,''), COALESCE(model,''),
+		 COALESCE(engine,''), content, COALESCE(confidence,''), %s
+		 FROM knowledge_notes ORDER BY created_at ASC LIMIT 1000`,
+			pgRFC3339UTCExpr("created_at")))
 	if err != nil {
 		return nil, err
 	}
@@ -530,14 +541,17 @@ func (p *PostgresCentralStore) InsertAdvisory(ctx context.Context, a Advisory) e
 }
 
 func (p *PostgresCentralStore) ListAdvisories(ctx context.Context, f AdvisoryFilter) ([]Advisory, error) {
-	query := `SELECT id, type, COALESCE(status,''), COALESCE(severity,''),
+	query := fmt.Sprintf(`SELECT id, type, COALESCE(status,''), COALESCE(severity,''),
 	           COALESCE(target_hardware, hardware, ''), COALESCE(target_model, model, ''), COALESCE(target_engine, engine, ''),
 	           COALESCE(content_json::text, details, ''), COALESCE(reasoning, summary, ''), COALESCE(confidence, ''),
-	           COALESCE(based_on_json::text, '[]'), COALESCE(analysis_id, ''), COALESCE(created_at::text, ''),
-	           COALESCE(delivered_at::text, ''), COALESCE(validated_at::text, ''),
+	           COALESCE(based_on_json::text, '[]'), COALESCE(analysis_id, ''), %s,
+	           %s, %s,
 	           COALESCE(title, ''), COALESCE(summary, ''), COALESCE(hardware, ''), COALESCE(model, ''),
 	           COALESCE(engine, ''), COALESCE(details, ''), COALESCE(feedback, ''), COALESCE(accepted, false)
-	          FROM advisories WHERE 1=1`
+	          FROM advisories WHERE 1=1`,
+		pgRFC3339UTCExpr("created_at"),
+		pgRFC3339UTCExpr("delivered_at"),
+		pgRFC3339UTCExpr("validated_at"))
 	var args []any
 	n := 1
 	if f.ID != "" {
@@ -755,10 +769,14 @@ func (p *PostgresCentralStore) ListAnalysisRuns(ctx context.Context, limit int) 
 		limit = 20
 	}
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, type, status, COALESCE(summary,''), COALESCE(input_json::text,''), COALESCE(output_json::text,''),
+		fmt.Sprintf(`SELECT id, type, status, COALESCE(summary,''), COALESCE(input_json::text,''), COALESCE(output_json::text,''),
 		 COALESCE(advisories::text,''), COALESCE(advisory_count,0), COALESCE(duration_ms,0), COALESCE(error,''),
-		 COALESCE(started_at::text, created_at::text, ''), COALESCE(completed_at::text, ''), COALESCE(created_at::text, ''), COALESCE(updated_at::text, '')
-		 FROM analysis_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT $1`, limit)
+		 %s, %s, %s, %s
+		 FROM analysis_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT $1`,
+			pgRFC3339UTCExpr("COALESCE(started_at, created_at)"),
+			pgRFC3339UTCExpr("completed_at"),
+			pgRFC3339UTCExpr("created_at"),
+			pgRFC3339UTCExpr("updated_at")), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -813,11 +831,13 @@ func (p *PostgresCentralStore) InsertScenario(ctx context.Context, s Scenario) e
 }
 
 func (p *PostgresCentralStore) ListScenarios(ctx context.Context, f ScenarioFilter) ([]Scenario, error) {
-	query := `SELECT id, name, COALESCE(description,''), COALESCE(hardware_profile, hardware, ''),
+	query := fmt.Sprintf(`SELECT id, name, COALESCE(description,''), COALESCE(hardware_profile, hardware, ''),
 	           COALESCE(scenario_yaml, config::text, ''), COALESCE(source,''), COALESCE(advisory_id,''),
-	           COALESCE(version, 1), COALESCE(created_at::text,''), COALESCE(updated_at::text, created_at::text, ''),
+	           COALESCE(version, 1), %s, %s,
 	           COALESCE(hardware,''), COALESCE(models,''), COALESCE(config::text,'')
-	          FROM scenarios WHERE 1=1`
+	          FROM scenarios WHERE 1=1`,
+		pgRFC3339UTCExpr("created_at"),
+		pgRFC3339UTCExpr("COALESCE(updated_at, created_at)"))
 	var args []any
 	n := 1
 	if f.Name != "" {
@@ -878,10 +898,14 @@ func (p *PostgresCentralStore) getAdvisory(ctx context.Context, id string) (Advi
 
 func (p *PostgresCentralStore) getAnalysisRun(ctx context.Context, id string) (AnalysisRun, error) {
 	row := p.db.QueryRowContext(ctx,
-		`SELECT id, type, status, COALESCE(summary,''), COALESCE(input_json::text,''), COALESCE(output_json::text,''),
+		fmt.Sprintf(`SELECT id, type, status, COALESCE(summary,''), COALESCE(input_json::text,''), COALESCE(output_json::text,''),
 		 COALESCE(advisories::text,''), COALESCE(advisory_count,0), COALESCE(duration_ms,0), COALESCE(error,''),
-		 COALESCE(started_at::text, created_at::text, ''), COALESCE(completed_at::text, ''), COALESCE(created_at::text, ''), COALESCE(updated_at::text, '')
-		 FROM analysis_runs WHERE id = $1`, id)
+		 %s, %s, %s, %s
+		 FROM analysis_runs WHERE id = $1`,
+			pgRFC3339UTCExpr("COALESCE(started_at, created_at)"),
+			pgRFC3339UTCExpr("completed_at"),
+			pgRFC3339UTCExpr("created_at"),
+			pgRFC3339UTCExpr("updated_at")), id)
 
 	var run AnalysisRun
 	var inputJSON string

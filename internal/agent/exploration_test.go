@@ -1145,6 +1145,39 @@ func TestWaitForReady_VanishAfterAliveCloses_Faster(t *testing.T) {
 	}
 }
 
+func TestWaitForReady_FailedPhaseIncludesDiagnostic(t *testing.T) {
+	tools := &mockTools{
+		execute: func(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+			if name != "deploy.status" {
+				return nil, fmt.Errorf("unexpected tool: %s", name)
+			}
+			return &ToolResult{Content: `{
+				"phase":"failed",
+				"ready":false,
+				"startup_phase":"initializing",
+				"startup_progress":5,
+				"startup_message":"Initializing...",
+				"error_lines":"usage: vllm serve\nvllm serve: error: argument --dtype: invalid choice: 'definitely-not-real'"
+			}`}, nil
+		},
+	}
+	manager := &ExplorationManager{tools: tools}
+
+	start := time.Now()
+	err := manager.waitForReady(context.Background(), "bad-dtype-model")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("waitForReady returned nil, want terminal failed error")
+	}
+	if !strings.Contains(err.Error(), "invalid choice") {
+		t.Fatalf("err = %q, want diagnostic line from error_lines", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("waitForReady elapsed = %v, want immediate terminal failure", elapsed)
+	}
+}
+
 // TestSummarizeTuningSession_PartialMatrixReportsAttemptedTotal verifies that
 // summarizeTuningSession reports session.Total for total_cells instead of
 // len(session.Results), so a tune with attempted=2 but successful=1 surfaces

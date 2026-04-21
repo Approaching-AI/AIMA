@@ -1,0 +1,3 @@
+benchmarks = 2
+configs = 2
+tables = app_dependencies,apps,audit_log,benchmark_results,config,configurations,deleted_deployments,engine_assets,engine_features,engine_hardware_compat,engines,exploration_events,exploration_plans,exploration_runs,hardware_profiles,knowledge_notes,model_assets,model_variants,models,open_questions,partition_strategies,patrol_alerts,perf_vectors,power_samples,rollback_snapshots,sqlite_sequence,sqlite_stat1,sqlite_stat4,tuning_sessions,validation_results

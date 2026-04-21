@@ -1,0 +1,13 @@
+benchmarks = 1
+configs = 1
+          id = advisory-adv_u3_glm_validate_fast2
+      status = completed
+    progress = 1
+       total = 1
+completed_at = 2026-04-21 05:14:33.436457803 +0000 UTC m=+706.706070966
+summary_json = {"ID":"advisory-adv_u3_glm_validate_fast2","Tier":1,"Tasks":[{"kind":"validate","hardware":"nvidia-gb10-arm64","model":"GLM-4.1V-9B-Thinking","engine":"vllm-nightly","source_ref":"adv_u3_glm_validate_fast2","params":{"max_model_len":384},"benchmark":{"concurrency":null,"input_tokens":null,"max_tokens":null,"requests_per_combo":0},"reason":"validate central advisory adv_u3_glm_validate_fast2","priority":0,"status":"completed"}],"Reasoning":"central advisory validation"}
+          id = 0bf88e8171f6ac64
+        kind = validate
+      status = completed
+completed_at = 2026-04-21 05:14:27.876159189 +0000 UTC m=+701.145772368
+       error = 

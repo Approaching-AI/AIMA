@@ -1,0 +1,6 @@
+2026/04/21 13:01:39 INFO advisor enabled llm_endpoint=http://127.0.0.1:18189/v1 model=mock-gpt
+2026/04/21 13:01:39 INFO analyzer started gap_interval=1h0m0s pattern_interval=1h0m0s scenario_interval=1h0m0s post_ingest_delay=2s
+2026/04/21 13:01:39 INFO central server starting addr=127.0.0.1:18198
+2026/04/21 13:01:40 INFO analyzer: starting full analysis cycle
+2026/04/21 13:14:33 INFO analyzer: new data ingested, scheduled delayed analysis configs=1 benchmarks=1 notes=1 delay=2s
+2026/04/21 13:14:35 INFO analyzer: starting full analysis cycle

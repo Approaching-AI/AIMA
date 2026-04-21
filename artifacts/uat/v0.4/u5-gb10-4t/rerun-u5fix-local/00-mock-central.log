@@ -1,0 +1,8 @@
+{"ts": "2026-04-21T03:18:56Z", "kind": "server_start", "port": 18086}
+{"ts": "2026-04-21T03:21:57Z", "kind": "sync_pull", "query": {"device_id": ["dev-u5-gb10-u5fix"]}}
+{"ts": "2026-04-21T03:21:58Z", "kind": "list_advisories", "query": {"device_id": ["dev-u5-gb10-u5fix"], "hardware": ["nvidia-gb10-arm64"], "status": ["pending"]}, "returned": 1, "advisory_status": "delivered"}
+{"ts": "2026-04-21T03:21:58Z", "kind": "list_scenarios", "query": {"device_id": ["dev-u5-gb10-u5fix"], "hardware": ["nvidia-gb10-arm64"]}}
+{"ts": "2026-04-21T03:23:08Z", "kind": "advisory_feedback", "advisory_id": "adv-u5-reject-u5fix", "status": "rejected", "feedback": "validation failed: pre-flight deploy: wait for deployed service GLM-4.1V-9B-Thinking: deployment GLM-4.1V-9B-Thinking entered terminal phase \"failed\": vllm serve: error: argument --dtype: invalid choice: 'definitely-not-real' (choose from auto, bfloat16, float, float16, float32, half)"}
+{"ts": "2026-04-21T03:23:43Z", "kind": "sync_pull", "query": {"device_id": ["dev-u5-gb10-u5fix"], "since": ["2026-04-21 03:21:57"]}}
+{"ts": "2026-04-21T03:23:43Z", "kind": "list_advisories", "query": {"device_id": ["dev-u5-gb10-u5fix"], "hardware": ["nvidia-gb10-arm64"], "status": ["pending"]}, "returned": 0, "advisory_status": "rejected"}
+{"ts": "2026-04-21T03:23:44Z", "kind": "list_scenarios", "query": {"device_id": ["dev-u5-gb10-u5fix"], "hardware": ["nvidia-gb10-arm64"]}}

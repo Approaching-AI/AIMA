@@ -1,0 +1,1 @@
+('a76d78bb3e5381a7', 'qwen3.5-9b', 'vllm-nightly', 'golden')

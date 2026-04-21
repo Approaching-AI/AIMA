@@ -1,0 +1,12 @@
+[serve]
+LISTEN 0      4096                     127.0.0.1:9188       0.0.0.0:*    users:(("aima-u5fix-linu",pid=2186255,fd=16))
+LISTEN 0      4096                     127.0.0.1:6288       0.0.0.0:*    users:(("aima-u5fix-linu",pid=2186255,fd=13))
+
+[docker]
+Docker version 28.5.1, build e180ab8
+
+[binary]
+aima v0.4-dev
+  build:  2026-04-21T03:18:23Z
+  commit: af9ba09
+  go:     go1.26.1

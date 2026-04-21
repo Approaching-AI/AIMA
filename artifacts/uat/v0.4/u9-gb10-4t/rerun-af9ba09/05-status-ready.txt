@@ -1,0 +1,25 @@
+{
+  "address": "127.0.0.1:18083",
+  "engine": "vllm-nightly-blackwell",
+  "estimated_total_s": 600,
+  "labels": {
+    "aima.dev/engine": "vllm-nightly-blackwell",
+    "aima.dev/host-port": "18083",
+    "aima.dev/model": "qwen3.5-9b",
+    "aima.dev/parameter_count": "9B",
+    "aima.dev/port": "18083",
+    "aima.dev/served-model": "qwen3.5-9b",
+    "aima.dev/slot": "primary",
+    "maintainer": "NVIDIA CORPORATION \u003ccudatools@nvidia.com\u003e",
+    "org.opencontainers.image.ref.name": "ubuntu",
+    "org.opencontainers.image.version": "22.04"
+  },
+  "model": "qwen3.5-9b",
+  "name": "qwen3-5-9b-vllm-nightly",
+  "phase": "running",
+  "ready": true,
+  "runtime": "docker",
+  "slot": "primary",
+  "start_time": "2026-04-20T17:03:32Z",
+  "started_at_unix": 1776704612
+}

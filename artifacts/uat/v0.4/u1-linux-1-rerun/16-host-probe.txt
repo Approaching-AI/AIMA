@@ -1,0 +1,7 @@
+linux-1 probe on 2026-04-21
+host = qujing24
+gpu0_free = 6124 MiB / 49140 MiB
+gpu1_free = 6943 MiB / 49140 MiB
+
+w7900d probe on 2026-04-21
+ssh: Could not resolve hostname w7900d: nodename nor servname provided, or not known

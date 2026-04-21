@@ -428,8 +428,14 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	switch di.State.Status {
 	case "running":
 		phase = "running"
-	case "created", "restarting":
+	case "created":
 		phase = "starting"
+	case "restarting":
+		// A restart loop means the engine process is crashing and Docker is
+		// re-spawning it under the restart policy. Treat that as failed so the
+		// caller can surface a terminal error instead of waiting out the full
+		// startup safety net on a deployment that will never become ready.
+		phase = "failed"
 	case "exited":
 		if di.State.ExitCode != 0 {
 			phase = "failed"
@@ -463,7 +469,7 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	}
 	setDeploymentStartFromString(ds, di.State.StartedAt)
 
-	if di.State.Status == "exited" && di.State.ExitCode != 0 {
+	if (di.State.Status == "exited" || di.State.Status == "restarting") && di.State.ExitCode != 0 {
 		ec := di.State.ExitCode
 		ds.ExitCode = &ec
 	}
@@ -548,7 +554,7 @@ func dockerStatusToPhase(status string) string {
 	case strings.HasPrefix(s, "created"):
 		return "starting"
 	case strings.HasPrefix(s, "restarting"):
-		return "starting"
+		return "failed"
 	default:
 		return "stopped"
 	}

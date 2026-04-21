@@ -1,5 +1,10 @@
 # U1 — Tune Warmup Readiness (gb10-4T)
 
+Historical note: this README captures the original `gb10-4T` reproduction only. For later follow-up runs and the current cross-device conclusion, also see:
+
+- `../u1-linux-1-rerun/README.md`
+- `../u1-w7900d-rerun/README.md`
+
 - Date: 2026-04-20
 - Device: `gb10-4T` (`qujing@100.91.39.109`, host `aitopatom-66c4`)
 - Binary: `v0.4-dev` (`44bc4c7`)
@@ -52,5 +57,5 @@ What still blocks PASS:
 
 ## Recommended Next Step
 
-- Re-run U1 first on a faster/stabler host (`linux-1`) to satisfy the benchmark acceptance criteria.
-- For `gb10-4T`, treat the `vllm-nightly` repair-init path as a separate asset/startup issue and capture a dedicated follow-up if the image must remain release-critical.
+- Treat `gb10-4T`'s `vllm-nightly` repair-init path as a separate asset/startup issue if that image must remain release-critical.
+- Use the combined follow-up evidence from `../u1-linux-1-rerun/README.md` and `../u1-w7900d-rerun/README.md` for the current cross-device U1 conclusion.

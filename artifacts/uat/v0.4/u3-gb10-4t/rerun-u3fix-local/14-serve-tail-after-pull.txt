@@ -1,0 +1,17 @@
+2026/04/21 04:23:07 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 04:23:07 INFO explorer started tier=1
+2026/04/21 04:23:07 INFO starting proxy server addr=127.0.0.1:6292
+2026/04/21 04:23:07 INFO proxy server starting addr=127.0.0.1:6292
+2026/04/21 04:23:07 INFO mDNS broadcasting service=_llm._tcp port=6292
+2026/04/21 04:23:07 INFO starting MCP server (HTTP) addr=127.0.0.1:9192
+2026/04/21 04:23:07 INFO startup engine scan completed
+2026/04/21 04:23:13 [INFO] mdns: Closing client {true true 0x597de0802010 0x597de0802018 0x597de0802020 0x597de0802038 1 0x597de03c6380 0x597de03d23f0}
+2026/04/21 04:23:13 [INFO] mdns: Closing client {true true 0x597de02fe2e0 0x597de02fe3f0 0x597de02fe410 0x597de02fe418 1 0x597de078c7e0 0x597de03d23f0}
+2026/04/21 04:23:13 [INFO] mdns: Closing client {true true 0x597de0902028 0x597de0902030 0x597de0902038 0x597de0902050 1 0x597de06b6150 0x597de03d23f0}
+2026/04/21 04:24:09 [INFO] mdns: Closing client {true true 0x597de0402020 0x597de0402028 0x597de0402030 0x597de0402038 1 0x597de06b60e0 0x597de03d23f0}
+2026/04/21 04:24:09 [INFO] mdns: Closing client {true true 0x597de0b00030 0x597de0b00038 0x597de0b00040 0x597de0b00048 1 0x597de078c4d0 0x597de03d23f0}
+2026/04/21 04:24:09 [INFO] mdns: Closing client {true true 0x597de0716060 0x597de0716068 0x597de0716088 0x597de0716090 1 0x597de03c6af0 0x597de03d23f0}
+2026/04/21 04:24:44 [INFO] mdns: Closing client {true true 0x597de09020f8 0x597de0902100 0x597de0902108 0x597de0902110 1 0x597de078c620 0x597de03d23f0}
+2026/04/21 04:24:44 [INFO] mdns: Closing client {true true 0x597de0402020 0x597de0402028 0x597de0402030 0x597de0402038 1 0x597de0ac4150 0x597de03d23f0}
+2026/04/21 04:24:44 [INFO] mdns: Closing client {true true 0x597de0716190 0x597de0716198 0x597de07161a0 0x597de07161a8 1 0x597de07a07e0 0x597de03d23f0}
+2026/04/21 04:25:34 INFO explorer event received type=central.advisory

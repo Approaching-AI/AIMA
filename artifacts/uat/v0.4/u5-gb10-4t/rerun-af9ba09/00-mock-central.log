@@ -1,0 +1,17 @@
+{"ts": "2026-04-21T03:07:32Z", "kind": "server_start", "port": 18086}
+{"ts": "2026-04-21T03:11:03Z", "kind": "sync_pull", "query": {"device_id": ["dev-u5-gb10-af9ba09"]}}
+{"ts": "2026-04-21T03:11:03Z", "kind": "list_advisories", "query": {"device_id": ["dev-u5-gb10-af9ba09"], "hardware": ["nvidia-gb10-arm64"], "status": ["pending"]}, "returned": 1, "advisory_status": "delivered"}
+{"ts": "2026-04-21T03:11:04Z", "kind": "list_scenarios", "query": {"device_id": ["dev-u5-gb10-af9ba09"], "hardware": ["nvidia-gb10-arm64"]}}
+{"ts": "2026-04-21T03:15:47Z", "kind": "advisory_feedback", "advisory_id": "adv-u5-reject-af9ba09", "status": "rejected", "feedback": "validation failed: pre-flight deploy: wait for deployed service GLM-4.1V-9B-Thinking: deployment GLM-4.1V-9B-Thinking stalled at initializing (5%)"}
+Traceback (most recent call last):
+  File "/Users/jguan/projects/AIMA/artifacts/uat/v0.4/u5-gb10-4t/mock_central.py", line 168, in <module>
+    main()
+    ~~~~^^
+  File "/Users/jguan/projects/AIMA/artifacts/uat/v0.4/u5-gb10-4t/mock_central.py", line 164, in main
+    server.serve_forever()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 235, in serve_forever
+    ready = selector.select(poll_interval)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+KeyboardInterrupt

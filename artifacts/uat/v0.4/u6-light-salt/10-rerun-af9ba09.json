@@ -1,0 +1,389 @@
+{
+  "binary": "C:\\Users\\jguan\\aima-uat-rerun\\bin\\aima-af9ba09.exe",
+  "data_dir": "C:\\Users\\jguan\\aima-uat-rerun\\u6-pass\\data",
+  "support_endpoint": "http://100.125.202.50:18091",
+  "invite_code_used": "***",
+  "device_status_before": {
+    "args": [
+      "device",
+      "status"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"device_id\": \"\",\n  \"referral_code\": \"\",\n  \"registered\": false,\n  \"registration_state\": \"unregistered\"\n}\n",
+    "stderr": "2026/04/21 01:12:18 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:18 INFO explorer started tier=1\n",
+    "parsed": {
+      "device_id": "",
+      "referral_code": "",
+      "registered": false,
+      "registration_state": "unregistered"
+    }
+  },
+  "sync_push_before": {
+    "args": [
+      "knowledge",
+      "sync",
+      "--push"
+    ],
+    "returncode": 1,
+    "stdout": "",
+    "stderr": "2026/04/21 01:12:18 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:18 INFO explorer started tier=1\naima: push: device not registered with aima-service\n"
+  },
+  "model_scan": {
+    "args": [
+      "model",
+      "scan"
+    ],
+    "returncode": 0,
+    "stdout": "[\n  {\n    \"active_params\": 507904000,\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"format\": \"gguf\",\n    \"id\": \"bef4b174413410e4c834dfad99da082946d4610f1c3084063ea2d0564873dc36\",\n    \"model_class\": \"dense\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-0.6b\\\\Qwen3-0.6B-Q8_0.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int8\",\n    \"size_bytes\": 639446688,\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 507904000,\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"format\": \"safetensors\",\n    \"id\": \"5239a0d2a53a0f4d64eb0befe9994d8d86c4a140c59f9c8c70ba667f076dadae\",\n    \"model_class\": \"dense\",\n    \"name\": \"qwen3-0.6b-safetensor-test\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-0.6b-safetensor-test\",\n    \"quant_src\": \"config\",\n    \"quantization\": \"bf16\",\n    \"size_bytes\": 11534336,\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 2588672000,\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"3B\",\n    \"format\": \"gguf\",\n    \"id\": \"d4aeb44dacf16b8e872bf39a0465e5c6300b79bce398a4f85f24ca935cc9e970\",\n    \"model_class\": \"moe\",\n    \"name\": \"Qwen3-30B-A3B-Q4_K_M\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-30b-a3b\\\\Qwen3-30B-A3B-Q4_K_M.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int4\",\n    \"size_bytes\": 18556685824,\n    \"total_params\": 29767761920,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 7568097280,\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"7B\",\n    \"format\": \"safetensors\",\n    \"id\": \"ff0ddc84bd7c29c3c9fd376e9879104932c8289c56bd69f80eeb4d5eb96d7456\",\n    \"model_class\": \"dense\",\n    \"name\": \"qwen3-8b\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-8b\",\n    \"quant_src\": \"config\",\n    \"quantization\": \"bf16\",\n    \"size_bytes\": 16381516776,\n    \"total_params\": 7568097280,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 507904000,\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"format\": \"gguf\",\n    \"id\": \"1c60f17a3e729a9bc425ae81ef415133b90d2a118fd3a8e9d57050de193cb138\",\n    \"model_class\": \"dense\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\test-import\\\\Qwen3-0.6B-Q8_0.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int8\",\n    \"size_bytes\": 639446688,\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  }\n]\n",
+    "stderr": "2026/04/21 01:12:18 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:18 INFO explorer started tier=1\n",
+    "parsed": [
+      {
+        "active_params": 507904000,
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "format": "gguf",
+        "id": "bef4b174413410e4c834dfad99da082946d4610f1c3084063ea2d0564873dc36",
+        "model_class": "dense",
+        "name": "Qwen3-0.6B-Q8_0",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-0.6b\\Qwen3-0.6B-Q8_0.gguf",
+        "quant_src": "filename",
+        "quantization": "int8",
+        "size_bytes": 639446688,
+        "total_params": 507904000,
+        "type": "llm"
+      },
+      {
+        "active_params": 507904000,
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "format": "safetensors",
+        "id": "5239a0d2a53a0f4d64eb0befe9994d8d86c4a140c59f9c8c70ba667f076dadae",
+        "model_class": "dense",
+        "name": "qwen3-0.6b-safetensor-test",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-0.6b-safetensor-test",
+        "quant_src": "config",
+        "quantization": "bf16",
+        "size_bytes": 11534336,
+        "total_params": 507904000,
+        "type": "llm"
+      },
+      {
+        "active_params": 2588672000,
+        "detected_arch": "qwen",
+        "detected_params": "3B",
+        "format": "gguf",
+        "id": "d4aeb44dacf16b8e872bf39a0465e5c6300b79bce398a4f85f24ca935cc9e970",
+        "model_class": "moe",
+        "name": "Qwen3-30B-A3B-Q4_K_M",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-30b-a3b\\Qwen3-30B-A3B-Q4_K_M.gguf",
+        "quant_src": "filename",
+        "quantization": "int4",
+        "size_bytes": 18556685824,
+        "total_params": 29767761920,
+        "type": "llm"
+      },
+      {
+        "active_params": 7568097280,
+        "detected_arch": "qwen",
+        "detected_params": "7B",
+        "format": "safetensors",
+        "id": "ff0ddc84bd7c29c3c9fd376e9879104932c8289c56bd69f80eeb4d5eb96d7456",
+        "model_class": "dense",
+        "name": "qwen3-8b",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-8b",
+        "quant_src": "config",
+        "quantization": "bf16",
+        "size_bytes": 16381516776,
+        "total_params": 7568097280,
+        "type": "llm"
+      },
+      {
+        "active_params": 507904000,
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "format": "gguf",
+        "id": "1c60f17a3e729a9bc425ae81ef415133b90d2a118fd3a8e9d57050de193cb138",
+        "model_class": "dense",
+        "name": "Qwen3-0.6B-Q8_0",
+        "path": "C:\\Users\\jguan\\.aima\\models\\test-import\\Qwen3-0.6B-Q8_0.gguf",
+        "quant_src": "filename",
+        "quantization": "int8",
+        "size_bytes": 639446688,
+        "total_params": 507904000,
+        "type": "llm"
+      }
+    ]
+  },
+  "model_import_path": "C:\\Users\\jguan\\aima-uat\\u10\\data\\models\\qwen3-0.6b\\Qwen3-0.6B-Q8_0.gguf",
+  "model_import": {
+    "args": [
+      "model",
+      "import",
+      "C:\\Users\\jguan\\aima-uat\\u10\\data\\models\\qwen3-0.6b\\Qwen3-0.6B-Q8_0.gguf"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"active_params\": 507904000,\n  \"detected_arch\": \"qwen\",\n  \"detected_params\": \"\\u003c1B\",\n  \"engine_hint\": \"llamacpp\",\n  \"format\": \"gguf\",\n  \"id\": \"a11dcb4b1ad04ad9c2942ea185eb90accf5e3a42aa1cb08ac2bd5624f0cfecf5\",\n  \"model_class\": \"dense\",\n  \"name\": \"Qwen3-0.6B-Q8_0\",\n  \"path\": \"C:\\\\Users\\\\jguan\\\\aima-uat-rerun\\\\u6-pass\\\\data\\\\models\\\\qwen3-0.6b\\\\Qwen3-0.6B-Q8_0.gguf\",\n  \"quant_src\": \"filename\",\n  \"quantization\": \"int8\",\n  \"size_bytes\": 639446688,\n  \"total_params\": 507904000,\n  \"type\": \"llm\"\n}\n\nModel imported: Qwen3-0.6B-Q8_0 (<1B, gguf, qwen, int8)\n\nNext steps:\n  Deploy:  aima deploy Qwen3-0.6B-Q8_0 --engine llamacpp\n  Preview: aima deploy Qwen3-0.6B-Q8_0 --dry-run\n  Info:    aima model info Qwen3-0.6B-Q8_0\n",
+    "stderr": "2026/04/21 01:12:20 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:20 INFO explorer started tier=1\n",
+    "parsed": null
+  },
+  "model_list": {
+    "args": [
+      "model",
+      "list"
+    ],
+    "returncode": 0,
+    "stdout": "[\n  {\n    \"active_params\": 507904000,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"download_progress\": 0,\n    \"format\": \"gguf\",\n    \"id\": \"bef4b174413410e4c834dfad99da082946d4610f1c3084063ea2d0564873dc36\",\n    \"model_class\": \"dense\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-0.6b\\\\Qwen3-0.6B-Q8_0.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int8\",\n    \"size_bytes\": 639446688,\n    \"status\": \"registered\",\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 507904000,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"download_progress\": 0,\n    \"format\": \"safetensors\",\n    \"id\": \"5239a0d2a53a0f4d64eb0befe9994d8d86c4a140c59f9c8c70ba667f076dadae\",\n    \"model_class\": \"dense\",\n    \"name\": \"qwen3-0.6b-safetensor-test\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-0.6b-safetensor-test\",\n    \"quant_src\": \"config\",\n    \"quantization\": \"bf16\",\n    \"size_bytes\": 11534336,\n    \"status\": \"registered\",\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 2588672000,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"3B\",\n    \"download_progress\": 0,\n    \"format\": \"gguf\",\n    \"id\": \"d4aeb44dacf16b8e872bf39a0465e5c6300b79bce398a4f85f24ca935cc9e970\",\n    \"model_class\": \"moe\",\n    \"name\": \"Qwen3-30B-A3B-Q4_K_M\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-30b-a3b\\\\Qwen3-30B-A3B-Q4_K_M.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int4\",\n    \"size_bytes\": 18556685824,\n    \"status\": \"registered\",\n    \"total_params\": 29767761920,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 7568097280,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"7B\",\n    \"download_progress\": 0,\n    \"format\": \"safetensors\",\n    \"id\": \"ff0ddc84bd7c29c3c9fd376e9879104932c8289c56bd69f80eeb4d5eb96d7456\",\n    \"model_class\": \"dense\",\n    \"name\": \"qwen3-8b\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\qwen3-8b\",\n    \"quant_src\": \"config\",\n    \"quantization\": \"bf16\",\n    \"size_bytes\": 16381516776,\n    \"status\": \"registered\",\n    \"total_params\": 7568097280,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 507904000,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"download_progress\": 0,\n    \"format\": \"gguf\",\n    \"id\": \"1c60f17a3e729a9bc425ae81ef415133b90d2a118fd3a8e9d57050de193cb138\",\n    \"model_class\": \"dense\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\.aima\\\\models\\\\test-import\\\\Qwen3-0.6B-Q8_0.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int8\",\n    \"size_bytes\": 639446688,\n    \"status\": \"registered\",\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  },\n  {\n    \"active_params\": 507904000,\n    \"created_at\": \"2026-04-20T17:12:20Z\",\n    \"detected_arch\": \"qwen\",\n    \"detected_params\": \"\\u003c1B\",\n    \"download_progress\": 0,\n    \"format\": \"gguf\",\n    \"id\": \"a11dcb4b1ad04ad9c2942ea185eb90accf5e3a42aa1cb08ac2bd5624f0cfecf5\",\n    \"model_class\": \"dense\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"path\": \"C:\\\\Users\\\\jguan\\\\aima-uat-rerun\\\\u6-pass\\\\data\\\\models\\\\qwen3-0.6b\\\\Qwen3-0.6B-Q8_0.gguf\",\n    \"quant_src\": \"filename\",\n    \"quantization\": \"int8\",\n    \"size_bytes\": 639446688,\n    \"status\": \"registered\",\n    \"total_params\": 507904000,\n    \"type\": \"llm\"\n  }\n]\n",
+    "stderr": "2026/04/21 01:12:21 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:21 INFO explorer started tier=1\n",
+    "parsed": [
+      {
+        "active_params": 507904000,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "download_progress": 0,
+        "format": "gguf",
+        "id": "bef4b174413410e4c834dfad99da082946d4610f1c3084063ea2d0564873dc36",
+        "model_class": "dense",
+        "name": "Qwen3-0.6B-Q8_0",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-0.6b\\Qwen3-0.6B-Q8_0.gguf",
+        "quant_src": "filename",
+        "quantization": "int8",
+        "size_bytes": 639446688,
+        "status": "registered",
+        "total_params": 507904000,
+        "type": "llm"
+      },
+      {
+        "active_params": 507904000,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "download_progress": 0,
+        "format": "safetensors",
+        "id": "5239a0d2a53a0f4d64eb0befe9994d8d86c4a140c59f9c8c70ba667f076dadae",
+        "model_class": "dense",
+        "name": "qwen3-0.6b-safetensor-test",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-0.6b-safetensor-test",
+        "quant_src": "config",
+        "quantization": "bf16",
+        "size_bytes": 11534336,
+        "status": "registered",
+        "total_params": 507904000,
+        "type": "llm"
+      },
+      {
+        "active_params": 2588672000,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "3B",
+        "download_progress": 0,
+        "format": "gguf",
+        "id": "d4aeb44dacf16b8e872bf39a0465e5c6300b79bce398a4f85f24ca935cc9e970",
+        "model_class": "moe",
+        "name": "Qwen3-30B-A3B-Q4_K_M",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-30b-a3b\\Qwen3-30B-A3B-Q4_K_M.gguf",
+        "quant_src": "filename",
+        "quantization": "int4",
+        "size_bytes": 18556685824,
+        "status": "registered",
+        "total_params": 29767761920,
+        "type": "llm"
+      },
+      {
+        "active_params": 7568097280,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "7B",
+        "download_progress": 0,
+        "format": "safetensors",
+        "id": "ff0ddc84bd7c29c3c9fd376e9879104932c8289c56bd69f80eeb4d5eb96d7456",
+        "model_class": "dense",
+        "name": "qwen3-8b",
+        "path": "C:\\Users\\jguan\\.aima\\models\\qwen3-8b",
+        "quant_src": "config",
+        "quantization": "bf16",
+        "size_bytes": 16381516776,
+        "status": "registered",
+        "total_params": 7568097280,
+        "type": "llm"
+      },
+      {
+        "active_params": 507904000,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "download_progress": 0,
+        "format": "gguf",
+        "id": "1c60f17a3e729a9bc425ae81ef415133b90d2a118fd3a8e9d57050de193cb138",
+        "model_class": "dense",
+        "name": "Qwen3-0.6B-Q8_0",
+        "path": "C:\\Users\\jguan\\.aima\\models\\test-import\\Qwen3-0.6B-Q8_0.gguf",
+        "quant_src": "filename",
+        "quantization": "int8",
+        "size_bytes": 639446688,
+        "status": "registered",
+        "total_params": 507904000,
+        "type": "llm"
+      },
+      {
+        "active_params": 507904000,
+        "created_at": "2026-04-20T17:12:20Z",
+        "detected_arch": "qwen",
+        "detected_params": "<1B",
+        "download_progress": 0,
+        "format": "gguf",
+        "id": "a11dcb4b1ad04ad9c2942ea185eb90accf5e3a42aa1cb08ac2bd5624f0cfecf5",
+        "model_class": "dense",
+        "name": "Qwen3-0.6B-Q8_0",
+        "path": "C:\\Users\\jguan\\aima-uat-rerun\\u6-pass\\data\\models\\qwen3-0.6b\\Qwen3-0.6B-Q8_0.gguf",
+        "quant_src": "filename",
+        "quantization": "int8",
+        "size_bytes": 639446688,
+        "status": "registered",
+        "total_params": 507904000,
+        "type": "llm"
+      }
+    ]
+  },
+  "deploy_small": {
+    "args": [
+      "deploy",
+      "Qwen3-0.6B-Q8_0",
+      "--engine",
+      "llamacpp"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"config\": {\n    \"ctx_size\": 2048,\n    \"n_gpu_layers\": 999,\n    \"port\": 8081\n  },\n  \"engine\": \"llamacpp\",\n  \"model\": \"Qwen3-0.6B-Q8_0\",\n  \"name\": \"qwen3-0-6b-q8-0-llamacpp\",\n  \"runtime\": \"native\",\n  \"slot\": \"primary\",\n  \"status\": \"deploying\"\n}\n",
+    "stderr": null
+  },
+  "deploy_polls": [
+    {
+      "args": [
+        "deploy",
+        "list"
+      ],
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"address\": \"127.0.0.1:8081\",\n    \"context_window_tokens\": 2048,\n    \"engine\": \"llamacpp-universal\",\n    \"estimated_total_s\": 10,\n    \"model\": \"Qwen3-0.6B-Q8_0\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"phase\": \"starting\",\n    \"ready\": false,\n    \"runtime\": \"native\",\n    \"served_model\": \"Qwen3-0.6B-Q8_0\",\n    \"slot\": \"primary\",\n    \"start_time\": \"2026-04-20T17:12:57Z\",\n    \"started_at_unix\": 1776705177,\n    \"startup_message\": \"Loading model...\",\n    \"startup_phase\": \"loading_model\",\n    \"startup_progress\": 50,\n    \"status\": \"starting\"\n  }\n]\n",
+      "stderr": "2026/04/21 01:12:57 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:12:57 INFO explorer started tier=1\n",
+      "parsed": [
+        {
+          "address": "127.0.0.1:8081",
+          "context_window_tokens": 2048,
+          "engine": "llamacpp-universal",
+          "estimated_total_s": 10,
+          "model": "Qwen3-0.6B-Q8_0",
+          "name": "Qwen3-0.6B-Q8_0",
+          "phase": "starting",
+          "ready": false,
+          "runtime": "native",
+          "served_model": "Qwen3-0.6B-Q8_0",
+          "slot": "primary",
+          "start_time": "2026-04-20T17:12:57Z",
+          "started_at_unix": 1776705177,
+          "startup_message": "Loading model...",
+          "startup_phase": "loading_model",
+          "startup_progress": 50,
+          "status": "starting"
+        }
+      ]
+    },
+    {
+      "args": [
+        "deploy",
+        "list"
+      ],
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"address\": \"127.0.0.1:8081\",\n    \"context_window_tokens\": 2048,\n    \"engine\": \"llamacpp-universal\",\n    \"model\": \"Qwen3-0.6B-Q8_0\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"phase\": \"running\",\n    \"ready\": true,\n    \"runtime\": \"native\",\n    \"served_model\": \"Qwen3-0.6B-Q8_0\",\n    \"slot\": \"primary\",\n    \"start_time\": \"2026-04-20T17:12:57Z\",\n    \"started_at_unix\": 1776705177,\n    \"status\": \"running\"\n  }\n]\n",
+      "stderr": "2026/04/21 01:13:03 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:13:03 INFO explorer started tier=1\n",
+      "parsed": [
+        {
+          "address": "127.0.0.1:8081",
+          "context_window_tokens": 2048,
+          "engine": "llamacpp-universal",
+          "model": "Qwen3-0.6B-Q8_0",
+          "name": "Qwen3-0.6B-Q8_0",
+          "phase": "running",
+          "ready": true,
+          "runtime": "native",
+          "served_model": "Qwen3-0.6B-Q8_0",
+          "slot": "primary",
+          "start_time": "2026-04-20T17:12:57Z",
+          "started_at_unix": 1776705177,
+          "status": "running"
+        }
+      ]
+    }
+  ],
+  "set_support_endpoint": {
+    "args": [
+      "config",
+      "set",
+      "support.endpoint",
+      "http://100.125.202.50:18091"
+    ],
+    "returncode": 0,
+    "stdout": "support.endpoint = http://100.125.202.50:18091\n",
+    "stderr": "2026/04/21 01:13:03 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:13:03 INFO explorer started tier=1\n"
+  },
+  "register_with_invite": {
+    "args": [
+      "device",
+      "register",
+      "--invite-code",
+      "U6-INVITE-20260421"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"already_registered\": false,\n  \"created\": true,\n  \"device_id\": \"dev-u6-light-salt\",\n  \"endpoint\": \"http://100.125.202.50:18091/api/v1\",\n  \"referral_code\": \"REF-U6\",\n  \"token_expires_at\": \"2026-05-20T17:13:03Z\"\n}\n",
+    "stderr": "2026/04/21 01:13:03 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:13:03 INFO explorer started tier=1\n"
+  },
+  "device_status_after": {
+    "args": [
+      "device",
+      "status"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"device_id\": \"dev-u6-light-salt\",\n  \"referral_code\": \"REF-U6\",\n  \"registered\": true,\n  \"registration_state\": \"registered\",\n  \"token_expires_at\": \"2026-05-20T17:13:03Z\",\n  \"token_expires_in_seconds\": 2591999\n}\n",
+    "stderr": "2026/04/21 01:13:03 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:13:03 INFO explorer started tier=1\n",
+    "parsed": {
+      "device_id": "dev-u6-light-salt",
+      "referral_code": "REF-U6",
+      "registered": true,
+      "registration_state": "registered",
+      "token_expires_at": "2026-05-20T17:13:03Z",
+      "token_expires_in_seconds": 2591999
+    }
+  },
+  "mirror_check": {
+    "db_exists": true,
+    "device_id_mirrored": true,
+    "token_mirrored": true,
+    "recovery_code_mirrored": true,
+    "registration_state": "registered"
+  },
+  "final_deploy_list": {
+    "args": [
+      "deploy",
+      "list"
+    ],
+    "returncode": 0,
+    "stdout": "[\n  {\n    \"address\": \"127.0.0.1:8081\",\n    \"context_window_tokens\": 2048,\n    \"engine\": \"llamacpp-universal\",\n    \"model\": \"Qwen3-0.6B-Q8_0\",\n    \"name\": \"Qwen3-0.6B-Q8_0\",\n    \"phase\": \"running\",\n    \"ready\": true,\n    \"runtime\": \"native\",\n    \"served_model\": \"Qwen3-0.6B-Q8_0\",\n    \"slot\": \"primary\",\n    \"start_time\": \"2026-04-20T17:12:57Z\",\n    \"started_at_unix\": 1776705177,\n    \"status\": \"running\"\n  }\n]\n",
+    "stderr": "2026/04/21 01:13:03 INFO runtime selected runtime=native docker_available=false k3s_available=false\n2026/04/21 01:13:03 INFO explorer started tier=1\n",
+    "parsed": [
+      {
+        "address": "127.0.0.1:8081",
+        "context_window_tokens": 2048,
+        "engine": "llamacpp-universal",
+        "model": "Qwen3-0.6B-Q8_0",
+        "name": "Qwen3-0.6B-Q8_0",
+        "phase": "running",
+        "ready": true,
+        "runtime": "native",
+        "served_model": "Qwen3-0.6B-Q8_0",
+        "slot": "primary",
+        "start_time": "2026-04-20T17:12:57Z",
+        "started_at_unix": 1776705177,
+        "status": "running"
+      }
+    ]
+  }
+}

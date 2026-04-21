@@ -1,0 +1,23 @@
+{
+  "active_params": 4022272000,
+  "detected_arch": "qwen",
+  "detected_params": "3B",
+  "engine_hint": "sglang",
+  "format": "safetensors",
+  "id": "ba6d308bd399879b28c230291bf1d234aba78f1047d13e7deaa8861ad05a2158",
+  "model_class": "dense",
+  "name": "qwen3-4b",
+  "path": "/home/cjwx/aima-uat-rerun/u1-final/data/models/qwen3-4b",
+  "quant_src": "config",
+  "quantization": "bf16",
+  "size_bytes": 8044982000,
+  "total_params": 4022272000,
+  "type": "llm"
+}
+
+Model imported: qwen3-4b (3B, safetensors, qwen, bf16)
+
+Next steps:
+  Deploy:  aima deploy qwen3-4b --engine sglang
+  Preview: aima deploy qwen3-4b --dry-run
+  Info:    aima model info qwen3-4b

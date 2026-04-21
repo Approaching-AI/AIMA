@@ -1,0 +1,20 @@
+{
+  "config": {
+    "dtype": "bfloat16",
+    "enable_auto_tool_choice": true,
+    "enable_chunked_prefill": false,
+    "enforce_eager": true,
+    "gpu_memory_utilization": 0.25,
+    "max_model_len": 65536,
+    "port": 18083,
+    "served_model_name": "{{.ModelName}}",
+    "tool_call_parser": "qwen3_xml",
+    "trust_remote_code": true
+  },
+  "engine": "vllm-nightly",
+  "model": "qwen3.5-9b",
+  "name": "qwen3-5-9b-vllm-nightly",
+  "runtime": "docker",
+  "slot": "primary",
+  "status": "deploying"
+}

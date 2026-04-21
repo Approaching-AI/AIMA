@@ -1172,7 +1172,9 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 				Stalled         bool   `json:"stalled"`
 				StartupProgress int    `json:"startup_progress"`
 				StartupPhase    string `json:"startup_phase"`
+				StartupMessage  string `json:"startup_message"`
 				EstimatedTotalS int    `json:"estimated_total_s"`
+				ErrorLines      string `json:"error_lines"`
 			}
 			if json.Unmarshal([]byte(result.Content), &status) == nil {
 				everSeenAlive = true
@@ -1195,6 +1197,12 @@ func (m *ExplorationManager) waitForReady(ctx context.Context, model string) err
 				// Fast fail on terminal phases
 				switch status.Phase {
 				case "failed", "stopped", "error", "exited":
+					if detail := summarizeDiagnosticErrorLines(status.ErrorLines); detail != "" {
+						return fmt.Errorf("deployment %s entered terminal phase %q: %s", model, status.Phase, detail)
+					}
+					if detail := strings.TrimSpace(status.StartupMessage); detail != "" {
+						return fmt.Errorf("deployment %s entered terminal phase %q: %s", model, status.Phase, detail)
+					}
 					return fmt.Errorf("deployment %s entered terminal phase %q", model, status.Phase)
 				}
 

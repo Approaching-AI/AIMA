@@ -1,0 +1,1 @@
+{"aima.dev/engine":"vllm-nightly-blackwell","aima.dev/host-port":"18083","aima.dev/model":"qwen3.5-9b","aima.dev/parameter_count":"9B","aima.dev/port":"18083","aima.dev/served-model":"qwen3.5-9b","aima.dev/slot":"primary","maintainer":"NVIDIA CORPORATION <cudatools@nvidia.com>","org.opencontainers.image.ref.name":"ubuntu","org.opencontainers.image.version":"22.04"}

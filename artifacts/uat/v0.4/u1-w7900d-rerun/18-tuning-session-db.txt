@@ -1,0 +1,12 @@
+columns = id, model, engine, status, progress, total, best_config, best_score, results, started_at, completed_at
+id = 531cc06928183275
+model = Qwen3-30B-A3B-Q4_K_M
+engine = llamacpp-rocm-rdna3
+status = completed
+progress = 2
+total = 2
+best_config = {"ctx_size":4096,"n_gpu_layers":999,"port":8080}
+best_score = 62.927365302008084
+results = [{"config_overrides":{"ctx_size":2048,"n_gpu_layers":999,"port":8080},"throughput_tps":62.82665695670213,"ttft_p50_ms":221.45,"ttft_p95_ms":221.45,"tpot_p50_ms":12.652587301587303,"tpot_p95_ms":12.652587301587303,"qps":0.9816665149484708,"concurrency":1,"num_requests":1,"warmup_count":1,"rounds":1,"input_tokens":128,"max_tokens":64,"avg_input_tokens":135,"avg_output_tokens":64,"vram_usage_mib":856,"ram_usage_mib":164,"cpu_usage_pct":1.7,"gpu_utilization_pct":22.6,"power_draw_watts":623.6,"benchmark_id":"e1c6a57c93e5b3f0","config_id":"35a10bf0cd31e0d0","engine_version":"latest","engine_image":"ghcr.io/ggml-org/llama.cpp:full-rocm","resource_usage":{"cpu_usage_pct":1.7,"gpu_utilization_pct":22.6,"power_draw_watts":623.6,"ram_usage_mib":164,"vram_usage_mib":856},"score":62.82665695670213},{"config_overrides":{"ctx_size":4096,"n_gpu_layers":999,"port":8080},"throughput_tps":62.927365302008084,"ttft_p50_ms":220.933,"ttft_p95_ms":220.933,"tpot_p50_ms":12.635539682539683,"tpot_p95_ms":12.635539682539683,"qps":0.9832400828438763,"concurrency":1,"num_requests":1,"warmup_count":1,"rounds":1,"input_tokens":128,"max_tokens":64,"avg_input_tokens":134,"avg_output_tokens":64,"vram_usage_mib":856,"ram_usage_mib":168,"cpu_usage_pct":1.44,"gpu_utilization_pct":31.2,"power_draw_watts":573.4,"benchmark_id":"83a3a7c57fc7a921","config_id":"2351e0a340a53d07","engine_version":"latest","engine_image":"ghcr.io/ggml-org/llama.cpp:full-rocm","resource_usage":{"cpu_usage_pct":1.44,"gpu_utilization_pct":31.2,"power_draw_watts":573.4,"ram_usage_mib":168,"vram_usage_mib":856},"score":62.927365302008084}]
+started_at = 2026-04-21 05:59:40
+completed_at = 2026-04-21T06:00:41Z

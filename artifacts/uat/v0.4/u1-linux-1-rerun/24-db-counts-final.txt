@@ -1,0 +1,13 @@
+benchmarks = 1
+configs = 1
+id = 285ee8967d35cf2d
+model = qwen3-4b
+engine = vllm
+status = completed
+progress = 2
+total = 2
+best_config = {"dtype":"auto","gpu_memory_utilization":0.25,"max_model_len":8192,"port":8000,"served_model_name":"{{.ModelName}}"}
+best_score = 102.55098162616815
+results = [{"config_overrides":{"dtype":"auto","gpu_memory_utilization":0.25,"max_model_len":8192,"port":8000,"served_model_name":"{{.ModelName}}"},"throughput_tps":102.55098162616815,"ttft_p50_ms":21.322,"ttft_p95_ms":21.322,"tpot_p50_ms":9.565603174603176,"tpot_p95_ms":9.565603174603176,"qps":1.6023590879088774,"concurrency":1,"num_requests":1,"warmup_count":2,"rounds":1,"input_tokens":128,"max_tokens":64,"avg_input_tokens":134,"avg_output_tokens":64,"ram_usage_mib":11,"cpu_usage_pct":5.4,"gpu_utilization_pct":36.25,"power_draw_watts":247.29749999999999,"benchmark_id":"26dbf541072e8629","config_id":"843da040f2cc42ee","engine_version":"0.8.5","engine_image":"vllm/vllm-openai:v0.8.5","resource_usage":{"cpu_usage_pct":5.4,"gpu_utilization_pct":36.25,"power_draw_watts":247.29749999999999,"ram_usage_mib":11},"score":102.55098162616815}]
+started_at = 2026-04-21 06:27:32
+completed_at = 2026-04-21T06:30:22Z

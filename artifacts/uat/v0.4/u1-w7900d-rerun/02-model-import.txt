@@ -1,0 +1,25 @@
+2026/04/21 05:51:28 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 05:51:28 INFO explorer started tier=1
+{
+  "active_params": 2588672000,
+  "detected_arch": "qwen",
+  "detected_params": "3B",
+  "engine_hint": "llamacpp",
+  "format": "gguf",
+  "id": "ee0bc216bd6c0e9c47bbf0b67920b56f9c2ac38cff04f7fc10a308cb750edd11",
+  "model_class": "moe",
+  "name": "Qwen3-30B-A3B-Q4_K_M",
+  "path": "/root/aima-uat-rerun/u1-w7900d/data/models/Qwen3-30B-A3B-GGUF/Qwen3-30B-A3B-Q4_K_M.gguf",
+  "quant_src": "filename",
+  "quantization": "int4",
+  "size_bytes": 18556685824,
+  "total_params": 29767761920,
+  "type": "llm"
+}
+
+Model imported: Qwen3-30B-A3B-Q4_K_M (3B, gguf, qwen, int4)
+
+Next steps:
+  Deploy:  aima deploy Qwen3-30B-A3B-Q4_K_M --engine llamacpp
+  Preview: aima deploy Qwen3-30B-A3B-Q4_K_M --dry-run
+  Info:    aima model info Qwen3-30B-A3B-Q4_K_M

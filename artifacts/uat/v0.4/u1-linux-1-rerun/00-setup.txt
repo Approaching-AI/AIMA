@@ -1,0 +1,2 @@
+drwxrwxr-x 4 cjwx cjwx 4096 Apr 21 12:29 /home/cjwx/aima-uat-rerun/u1-fix
+drwxrwxr-x 2 cjwx cjwx 4096 Apr 21 12:29 /home/cjwx/aima-uat-rerun/u1-fix/data

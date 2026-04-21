@@ -1,0 +1,8 @@
+=== 2026-04-21T05:05:34Z advisories ===
+[{"id":"adv_13ca655bffaf48b9","status":"delivered","accepted":0,"feedback":"","created_at":"2026-04-21T05:01:40Z","delivered_at":"2026-04-21T05:04:07Z","validated_at":null},
+{"id":"adv_u3_glm_validate_fast","status":"delivered","accepted":0,"feedback":"","created_at":"2026-04-21 05:04:06","delivered_at":"2026-04-21T05:04:07Z","validated_at":null}]
+
+=== 2026-04-21T05:05:34Z edge ===
+benchmarks = 0
+configs = 0
+

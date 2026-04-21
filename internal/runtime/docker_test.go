@@ -363,9 +363,10 @@ func TestDockerInspectToStatus(t *testing.T) {
 	r := &DockerRuntime{}
 
 	tests := []struct {
-		name      string
-		di        dockerInspect
-		wantPhase string
+		name         string
+		di           dockerInspect
+		wantPhase    string
+		wantExitCode *int
 	}{
 		{
 			name: "running",
@@ -394,6 +395,10 @@ func TestDockerInspectToStatus(t *testing.T) {
 				}{Status: "exited", ExitCode: 1},
 			},
 			wantPhase: "failed",
+			wantExitCode: func() *int {
+				v := 1
+				return &v
+			}(),
 		},
 		{
 			name: "exited cleanly",
@@ -408,6 +413,24 @@ func TestDockerInspectToStatus(t *testing.T) {
 				}{Status: "exited", ExitCode: 0},
 			},
 			wantPhase: "stopped",
+		},
+		{
+			name: "restarting loop with error",
+			di: dockerInspect{
+				Name: "/test-vllm",
+				State: struct {
+					Status     string `json:"Status"`
+					StartedAt  string `json:"StartedAt"`
+					ExitCode   int    `json:"ExitCode"`
+					Running    bool   `json:"Running"`
+					Restarting bool   `json:"Restarting"`
+				}{Status: "restarting", ExitCode: 2, Restarting: true},
+			},
+			wantPhase: "failed",
+			wantExitCode: func() *int {
+				v := 2
+				return &v
+			}(),
 		},
 		{
 			name: "created",
@@ -430,6 +453,14 @@ func TestDockerInspectToStatus(t *testing.T) {
 			ds := r.inspectToStatus(tt.di)
 			if ds.Phase != tt.wantPhase {
 				t.Errorf("phase = %q, want %q", ds.Phase, tt.wantPhase)
+			}
+			switch {
+			case tt.wantExitCode == nil && ds.ExitCode != nil:
+				t.Errorf("exit_code = %v, want nil", *ds.ExitCode)
+			case tt.wantExitCode != nil && ds.ExitCode == nil:
+				t.Fatalf("exit_code = nil, want %d", *tt.wantExitCode)
+			case tt.wantExitCode != nil && *ds.ExitCode != *tt.wantExitCode:
+				t.Errorf("exit_code = %d, want %d", *ds.ExitCode, *tt.wantExitCode)
 			}
 			if ds.Runtime != "docker" {
 				t.Errorf("runtime = %q, want %q", ds.Runtime, "docker")
@@ -487,7 +518,7 @@ func TestDockerStatusToPhase(t *testing.T) {
 		{"Exited (0) 5 minutes ago", "stopped"},
 		{"Exited (137) 2 seconds ago", "failed"},
 		{"Created", "starting"},
-		{"Restarting (1) 5 seconds ago", "starting"},
+		{"Restarting (1) 5 seconds ago", "failed"},
 	}
 
 	for _, tt := range tests {

@@ -1,0 +1,1 @@
+29741d52116fbc06|completed|2|2|10.1357010126496|{"enable_chunked_prefill":false,"gpu_memory_utilization":0.85,"max_model_len":384,"port":8000,"served_model_name":"{{.ModelName}}"}|2026-04-21T07:56:43Z

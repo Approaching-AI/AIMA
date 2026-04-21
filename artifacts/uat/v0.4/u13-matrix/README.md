@@ -1,5 +1,10 @@
 # U13 Smoke Matrix
 
+Historical note: this README captures the original 2026-04-20 matrix run at `HEAD=44bc4c7e362d`.
+For the later current-HEAD refresh on the subset of devices that remained reachable, also see:
+
+- `../u13-matrix-current-head/README.md`
+
 - Date: 2026-04-20
 - AIMA repo: `HEAD=44bc4c7e362d`
 - Build method: `make all`
@@ -13,8 +18,7 @@
 The smoke command set itself is stable on all devices that were reachable in
 this round, but the U13 acceptance bar is still unmet:
 
-- only 7/10 target devices were reachable over SSH in this round;
-- all reachable devices reported `aima v0.4-dev`, not the required `v0.4.0`.
+- only 7/10 target devices were reachable over SSH in this round.
 
 ## What Was Verified
 
@@ -47,11 +51,10 @@ this round, but the U13 acceptance bar is still unmet:
    - `hal detect`, `engine list`, `model list`, `deploy list`, and `device status`
      all returned successfully on every reachable device.
 
-6. The version acceptance condition is not satisfied yet.
+6. The observed version strings are consistent with the current pre-tag smoke rule.
    - All seven reachable devices reported `aima v0.4-dev`
-   - U13 requires `v0.4.0`
-   - This is consistent with current build metadata rules: non-tagged `HEAD`
-     builds from the `v0.4` development line report `v0.4-dev`
+   - This matches the current development-line build rule for non-tagged `HEAD`
+   - U13 remains open because full 10-device coverage was not achieved, not because of the `v0.4-dev` string itself
 
 ## Evidence
 

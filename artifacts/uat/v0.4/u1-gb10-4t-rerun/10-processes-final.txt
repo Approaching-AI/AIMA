@@ -1,0 +1,2 @@
+1071251 /home/qujing/aima-uat-rerun/bin/aima-7dc8718-linux-arm64 serve --addr 127.0.0.1:6298 --mcp --mcp-addr 127.0.0.1:9198
+1217682 /usr/bin/python3 /usr/local/bin/vllm serve /models --port 8000 --gpu-memory-utilization 0.85 --max-model-len 384 --served-model-name GLM-4.1V-9B-Thinking

@@ -1,0 +1,31 @@
+{
+  "cpu": {
+    "arch": "arm64",
+    "model": "Apple M4",
+    "cores": 10,
+    "threads": 10,
+    "freq_ghz": 0
+  },
+  "ram": {
+    "total_mib": 16384,
+    "available_mib": 9011,
+    "swap_total_mib": 5120
+  },
+  "storage": {
+    "data_dir_path": "/Users/jguan/.aima",
+    "free_mib": 165834,
+    "total_mib": 471482,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "total_mib": 471482,
+        "free_mib": 165834
+      }
+    ]
+  },
+  "os": {
+    "os": "darwin",
+    "arch": "arm64",
+    "container_runtime": "docker"
+  }
+}

@@ -1,0 +1,25 @@
+2026/04/21 07:41:06 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/21 07:41:06 INFO explorer started tier=1
+{
+  "active_params": 8778678272,
+  "detected_arch": "glm",
+  "detected_params": "8B",
+  "engine_hint": "sglang",
+  "format": "safetensors",
+  "id": "09c1d4f4ed7bac4b788e016edce49a84b7ab593c97855754d8244c00b7d58221",
+  "model_class": "dense",
+  "name": "GLM-4.1V-9B-Thinking",
+  "path": "/home/qujing/aima-uat-rerun/u1-gb10-final/data/models/GLM-4.1V-9B-Thinking",
+  "quant_src": "unknown",
+  "quantization": "unknown",
+  "size_bytes": 20585644104,
+  "total_params": 8778678272,
+  "type": "llm"
+}
+
+Model imported: GLM-4.1V-9B-Thinking (8B, safetensors, glm)
+
+Next steps:
+  Deploy:  aima deploy GLM-4.1V-9B-Thinking --engine sglang
+  Preview: aima deploy GLM-4.1V-9B-Thinking --dry-run
+  Info:    aima model info GLM-4.1V-9B-Thinking

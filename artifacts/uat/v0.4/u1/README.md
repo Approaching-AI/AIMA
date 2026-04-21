@@ -2,6 +2,7 @@
 
 Historical note: this README captures the original `gb10-4T` reproduction only. For later follow-up runs and the current cross-device conclusion, also see:
 
+- `../u1-gb10-4t-rerun/README.md`
 - `../u1-linux-1-rerun/README.md`
 - `../u1-w7900d-rerun/README.md`
 
@@ -57,5 +58,5 @@ What still blocks PASS:
 
 ## Recommended Next Step
 
-- Treat `gb10-4T`'s `vllm-nightly` repair-init path as a separate asset/startup issue if that image must remain release-critical.
-- Use the combined follow-up evidence from `../u1-linux-1-rerun/README.md` and `../u1-w7900d-rerun/README.md` for the current cross-device U1 conclusion.
+- Keep this README as the historical record for the original `qwen3.5-9b` / repair-init observation on `gb10-4T`.
+- Use the combined follow-up evidence from `../u1-gb10-4t-rerun/README.md`, `../u1-linux-1-rerun/README.md`, and `../u1-w7900d-rerun/README.md` for the current cross-device U1 conclusion.

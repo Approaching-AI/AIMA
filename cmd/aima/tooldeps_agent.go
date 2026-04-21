@@ -183,6 +183,52 @@ func buildAgentDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		return json.Marshal(result)
 	}
+	deps.ExploreListRuns = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		var p struct {
+			Status string `json:"status"`
+			Kind   string `json:"kind"`
+			Limit  int    `json:"limit"`
+		}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("parse list_runs params: %w", err)
+			}
+		}
+		if p.Limit <= 0 {
+			p.Limit = 50
+		}
+		if p.Limit > 500 {
+			p.Limit = 500 // Cap runaway requests; UI pages locally.
+		}
+		runs, err := db.ListExplorationRuns(ctx, p.Status, p.Limit)
+		if err != nil {
+			return nil, err
+		}
+		if p.Kind != "" {
+			filtered := runs[:0]
+			for _, r := range runs {
+				if r.Kind == p.Kind {
+					filtered = append(filtered, r)
+				}
+			}
+			runs = filtered
+		}
+		return json.Marshal(runs)
+	}
+	deps.ExploreRunDetail = func(ctx context.Context, runID string) (json.RawMessage, error) {
+		run, err := db.GetExplorationRun(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(run)
+	}
+	deps.ExploreRunEvents = func(ctx context.Context, runID string) (json.RawMessage, error) {
+		events, err := db.ListExplorationEvents(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(events)
+	}
 	deps.OpenQuestions = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 		var p struct {
 			Action      string `json:"action"`
@@ -269,4 +315,3 @@ func buildAgentDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 	}
 }
-

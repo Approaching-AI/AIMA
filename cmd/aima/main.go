@@ -849,6 +849,70 @@ func run() error {
 			"stopped": cleaned,
 		})
 	}
+	deps.ExplorerDbDeltas = func(ctx context.Context, sinceISO string) (json.RawMessage, error) {
+		var since time.Time
+		if sinceISO != "" {
+			t, err := time.Parse(time.RFC3339, sinceISO)
+			if err != nil {
+				return nil, fmt.Errorf("parse since=%q as RFC3339: %w", sinceISO, err)
+			}
+			since = t
+		}
+		counts, err := db.ExplorationDbDeltas(ctx, since)
+		if err != nil {
+			return nil, err
+		}
+		resp := map[string]any{
+			"configurations":     counts["configurations"],
+			"benchmark_results":  counts["benchmark_results"],
+			"exploration_events": counts["exploration_events"],
+		}
+		if !since.IsZero() {
+			resp["since"] = since.UTC().Format(time.RFC3339)
+		}
+		return json.Marshal(resp)
+	}
+	// Read-only access to the Explorer workspace. The same directory is reused
+	// across runs (see explorer.setupPlannerLocked), so responses reflect the
+	// active Explorer session rather than any specific run_id.
+	allowedWorkspaceDocs := map[string]bool{
+		"plan.md":             true,
+		"summary.md":          true,
+		"device-profile.md":   true,
+		"available-combos.md": true,
+		"knowledge-base.md":   true,
+		"experiment-facts.md": true,
+		"index.md":            true,
+	}
+	deps.ExploreWorkspaceDoc = func(ctx context.Context, doc string) (json.RawMessage, error) {
+		if !allowedWorkspaceDocs[doc] {
+			return nil, fmt.Errorf("doc %q is not in the workspace whitelist", doc)
+		}
+		path := filepath.Join(explorerConfig.WorkspaceDir, doc)
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return json.Marshal(map[string]any{
+					"doc":    doc,
+					"exists": false,
+					"path":   path,
+				})
+			}
+			return nil, fmt.Errorf("stat workspace doc: %w", statErr)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read workspace doc: %w", err)
+		}
+		return json.Marshal(map[string]any{
+			"doc":     doc,
+			"exists":  true,
+			"path":    path,
+			"mtime":   info.ModTime().UTC().Format(time.RFC3339),
+			"size":    info.Size(),
+			"content": string(data),
+		})
+	}
 
 	// Wire agent, patrol, tuning, exploration, and open questions tools.
 	buildAgentDeps(ac, deps, patrol, tuner, explorationMgr)

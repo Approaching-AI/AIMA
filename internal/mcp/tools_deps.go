@@ -129,6 +129,11 @@ type ToolDeps struct {
 	ExploreStatus       func(ctx context.Context, runID string) (json.RawMessage, error)
 	ExploreStop         func(ctx context.Context, runID string) (json.RawMessage, error)
 	ExploreResult       func(ctx context.Context, runID string) (json.RawMessage, error)
+	// Read-only inspectors powering the Explorer Web UI (v0.4 MVP).
+	ExploreListRuns     func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExploreRunDetail    func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreRunEvents    func(ctx context.Context, runID string) (json.RawMessage, error)
+	ExploreWorkspaceDoc func(ctx context.Context, doc string) (json.RawMessage, error)
 
 	// Validation (F5)
 	ValidateKnowledge func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
@@ -162,10 +167,11 @@ type ToolDeps struct {
 	ScenarioApply func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error)
 
 	// Explorer
-	ExplorerStatus  func(ctx context.Context) (json.RawMessage, error)
-	ExplorerConfig  func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
-	ExplorerTrigger func(ctx context.Context) (json.RawMessage, error)
-	ExplorerCleanup func(ctx context.Context) (json.RawMessage, error)
+	ExplorerStatus   func(ctx context.Context) (json.RawMessage, error)
+	ExplorerConfig   func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	ExplorerTrigger  func(ctx context.Context) (json.RawMessage, error)
+	ExplorerCleanup  func(ctx context.Context) (json.RawMessage, error)
+	ExplorerDbDeltas func(ctx context.Context, sinceISO string) (json.RawMessage, error)
 
 	// Onboarding
 	RecommendModels func(ctx context.Context) (json.RawMessage, error)

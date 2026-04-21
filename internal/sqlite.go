@@ -93,11 +93,11 @@ type AuditEntry struct {
 //
 // Source field vocabulary (DC-6 documentation):
 //   - "local":     explicitly-saved deploy-time configuration; Config is the engine
-//                  argv / engine_params actually applied to the container.
+//     argv / engine_params actually applied to the container.
 //   - "benchmark": anchor row auto-created per benchmark cell; Config holds the
-//                  cell parameters {concurrency, input_tokens, max_tokens}, NOT
-//                  engine args. These rows exist so benchmark_results.config_id
-//                  has a row to reference.
+//     cell parameters {concurrency, input_tokens, max_tokens}, NOT
+//     engine args. These rows exist so benchmark_results.config_id
+//     has a row to reference.
 //   - "central":   configuration pulled from the Central Knowledge Server.
 //
 // When querying for real deploy configurations, filter on source IN ('local','central').
@@ -2987,6 +2987,38 @@ func (d *DB) CountActiveExplorationRuns(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count active exploration runs: %w", err)
 	}
 	return count, nil
+}
+
+// ExplorationDbDeltas returns row counts for the three exploration-visible
+// tables (configurations, benchmark_results, exploration_events). When since
+// is non-zero the counts reflect rows created at or after that instant; when
+// zero they are absolute totals. UI polls this to surface SOP §2.4's
+// "DB delta doesn't lie" signal during a live run.
+func (d *DB) ExplorationDbDeltas(ctx context.Context, since time.Time) (map[string]int64, error) {
+	out := make(map[string]int64, 3)
+	queries := []struct {
+		key   string
+		sql   string
+		tsCol string
+	}{
+		{"configurations", "SELECT COUNT(*) FROM configurations", "created_at"},
+		{"benchmark_results", "SELECT COUNT(*) FROM benchmark_results", "tested_at"},
+		{"exploration_events", "SELECT COUNT(*) FROM exploration_events", "created_at"},
+	}
+	for _, q := range queries {
+		var n int64
+		stmt := q.sql
+		var args []any
+		if !since.IsZero() {
+			stmt += " WHERE " + q.tsCol + " >= ?"
+			args = append(args, since.UTC())
+		}
+		if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(&n); err != nil {
+			return nil, fmt.Errorf("count %s delta: %w", q.key, err)
+		}
+		out[q.key] = n
+	}
+	return out, nil
 }
 
 // HasCompletedExploration checks if a model+engine combo has any completed exploration run.

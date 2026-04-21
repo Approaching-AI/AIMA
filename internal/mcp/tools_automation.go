@@ -91,14 +91,14 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// explore — start/status/stop/result via action param
+	// explore — start/status/stop/result/list_runs/get_run_detail/get_run_events/get_workspace_doc via action param
 	s.RegisterTool(&Tool{
 		Name:        "explore",
-		Description: "Exploration run management. action=start: start a persisted exploration run (tune, validate, open_question). action=status: get current status with events and progress. action=stop: stop a running exploration run. action=result: get final or current result with events and summaries.",
+		Description: "Exploration run management. action=start: start a persisted exploration run (tune, validate, open_question). action=status: get current status with events and progress. action=stop: stop a running exploration run. action=result: get final or current result with events and summaries. action=list_runs: list historical runs (optional status/kind/limit filters) for the Web UI. action=get_run_detail: fetch a single run row by id. action=get_run_events: list events for a run. action=get_workspace_doc: read a whitelisted markdown document from the active Explorer workspace (plan.md, summary.md, device-profile.md, available-combos.md, knowledge-base.md, experiment-facts.md, index.md).",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["start","status","stop","result"],"description":"Explore action"},`+
-				`"id":{"type":"string","description":"Exploration run ID (required for status, stop, result)"},`+
-				`"kind":{"type":"string","enum":["tune","validate","open_question"],"description":"Exploration kind (for start)"},`+
+			`"action":{"type":"string","enum":["start","status","stop","result","list_runs","get_run_detail","get_run_events","get_workspace_doc"],"description":"Explore action"},`+
+				`"id":{"type":"string","description":"Exploration run ID (required for status, stop, result, get_run_detail, get_run_events)"},`+
+				`"kind":{"type":"string","enum":["tune","validate","open_question"],"description":"Exploration kind (for start; optional filter for list_runs)"},`+
 				`"goal":{"type":"string","description":"Human-readable objective (for start)"},`+
 				`"requested_by":{"type":"string","description":"Who requested the run (for start)"},`+
 				`"executor":{"type":"string","description":"Executor identity, default local_go (for start)"},`+
@@ -107,30 +107,34 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 				`"target":{"type":"object","description":"Exploration target with hardware, model, engine (for start)"},`+
 				`"search_space":{"type":"object","description":"Parameter grid as key -> candidate array (for start)"},`+
 				`"constraints":{"type":"object","description":"Execution constraints with max_candidates (for start)"},`+
-				`"benchmark_profile":{"type":"object","description":"Benchmark profile with endpoint, concurrency, rounds (for start)"}`,
+				`"benchmark_profile":{"type":"object","description":"Benchmark profile with endpoint, concurrency, rounds (for start)"},`+
+				`"status":{"type":"string","description":"Status filter (for list_runs): planning, needs_approval, queued, running, completed, failed, blocked"},`+
+				`"limit":{"type":"integer","description":"Max rows to return (for list_runs, default 50)"},`+
+				`"doc":{"type":"string","description":"Workspace document name (for get_workspace_doc). Whitelist: plan.md, summary.md, device-profile.md, available-combos.md, knowledge-base.md, experiment-facts.md, index.md"}`,
 			"action"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			var p struct {
 				Action string `json:"action"`
 				ID     string `json:"id"`
+				Doc    string `json:"doc"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-				switch p.Action {
-				case "start":
-					if deps.ExploreStart == nil {
-						return ErrorResult("explore action=start not implemented"), nil
-					}
+			switch p.Action {
+			case "start":
+				if deps.ExploreStart == nil {
+					return ErrorResult("explore action=start not implemented"), nil
+				}
 				data, err := deps.ExploreStart(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("explore start: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "status":
-					if deps.ExploreStatus == nil {
-						return ErrorResult("explore action=status not implemented"), nil
-					}
+			case "status":
+				if deps.ExploreStatus == nil {
+					return ErrorResult("explore action=status not implemented"), nil
+				}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=status"), nil
 				}
@@ -139,10 +143,10 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explore status: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "stop":
-					if deps.ExploreStop == nil {
-						return ErrorResult("explore action=stop not implemented"), nil
-					}
+			case "stop":
+				if deps.ExploreStop == nil {
+					return ErrorResult("explore action=stop not implemented"), nil
+				}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=stop"), nil
 				}
@@ -151,10 +155,10 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explore stop: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "result":
-					if deps.ExploreResult == nil {
-						return ErrorResult("explore action=result not implemented"), nil
-					}
+			case "result":
+				if deps.ExploreResult == nil {
+					return ErrorResult("explore action=result not implemented"), nil
+				}
 				if p.ID == "" {
 					return ErrorResult("id is required for action=result"), nil
 				}
@@ -163,8 +167,53 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explore result: %w", err)
 				}
 				return TextResult(string(data)), nil
+			case "list_runs":
+				if deps.ExploreListRuns == nil {
+					return ErrorResult("explore action=list_runs not implemented"), nil
+				}
+				data, err := deps.ExploreListRuns(ctx, params)
+				if err != nil {
+					return nil, fmt.Errorf("explore list_runs: %w", err)
+				}
+				return TextResult(string(data)), nil
+			case "get_run_detail":
+				if deps.ExploreRunDetail == nil {
+					return ErrorResult("explore action=get_run_detail not implemented"), nil
+				}
+				if p.ID == "" {
+					return ErrorResult("id is required for action=get_run_detail"), nil
+				}
+				data, err := deps.ExploreRunDetail(ctx, p.ID)
+				if err != nil {
+					return nil, fmt.Errorf("explore get_run_detail: %w", err)
+				}
+				return TextResult(string(data)), nil
+			case "get_run_events":
+				if deps.ExploreRunEvents == nil {
+					return ErrorResult("explore action=get_run_events not implemented"), nil
+				}
+				if p.ID == "" {
+					return ErrorResult("id is required for action=get_run_events"), nil
+				}
+				data, err := deps.ExploreRunEvents(ctx, p.ID)
+				if err != nil {
+					return nil, fmt.Errorf("explore get_run_events: %w", err)
+				}
+				return TextResult(string(data)), nil
+			case "get_workspace_doc":
+				if deps.ExploreWorkspaceDoc == nil {
+					return ErrorResult("explore action=get_workspace_doc not implemented"), nil
+				}
+				if p.Doc == "" {
+					return ErrorResult("doc is required for action=get_workspace_doc"), nil
+				}
+				data, err := deps.ExploreWorkspaceDoc(ctx, p.Doc)
+				if err != nil {
+					return nil, fmt.Errorf("explore get_workspace_doc: %w", err)
+				}
+				return TextResult(string(data)), nil
 			default:
-				return ErrorResult(fmt.Sprintf("unknown action %q; supported: start, status, stop, result", p.Action)), nil
+				return ErrorResult(fmt.Sprintf("unknown action %q; supported: start, status, stop, result, list_runs, get_run_detail, get_run_events, get_workspace_doc", p.Action)), nil
 			}
 		},
 	})
@@ -232,37 +281,39 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// explorer — status/config/trigger via action param
+	// explorer — status/config/trigger/cleanup/db_deltas via action param
 	s.RegisterTool(&Tool{
 		Name:        "explorer",
-		Description: "Autonomous Explorer management. action=status: show current state (tier, active plan, schedule config, last run). action=config: get or update Explorer schedule configuration. action=trigger: manually trigger an Explorer gap scan cycle. action=cleanup: stop all active deployments to free GPU memory before exploration (use when status shows blocked_by_deploys).",
+		Description: "Autonomous Explorer management. action=status: show current state (tier, active plan, schedule config, last run). action=config: get or update Explorer schedule configuration. action=trigger: manually trigger an Explorer gap scan cycle. action=cleanup: stop all active deployments to free GPU memory before exploration (use when status shows blocked_by_deploys). action=db_deltas: count rows in configurations/benchmark_results/exploration_events since an optional ISO timestamp (for Web UI's DB-delta counters).",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["status","config","trigger","cleanup"],"description":"Explorer action"},`+
+			`"action":{"type":"string","enum":["status","config","trigger","cleanup","db_deltas"],"description":"Explorer action"},`+
 				`"config_action":{"type":"string","enum":["get","set"],"description":"Config sub-action (for action=config)"},`+
 				`"key":{"type":"string","description":"Config key: gap_scan_interval, sync_interval, full_audit_interval, quiet_start, quiet_end, max_concurrent_runs, enabled, mode (continuous/once/budget), max_rounds, max_tokens_per_day, max_cycles, max_tasks. rounds_used is read-only (for action=config, config_action=set)"},`+
-				`"value":{"type":"string","description":"New value (for action=config, config_action=set)"}`,
+				`"value":{"type":"string","description":"New value (for action=config, config_action=set)"},`+
+				`"since":{"type":"string","description":"Optional ISO-8601 timestamp lower bound (for action=db_deltas). Omit to return absolute totals."}`,
 			"action"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			var p struct {
 				Action string `json:"action"`
+				Since  string `json:"since"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
-				switch p.Action {
-				case "status":
-					if deps.ExplorerStatus == nil {
-						return ErrorResult("explorer action=status not implemented"), nil
-					}
+			switch p.Action {
+			case "status":
+				if deps.ExplorerStatus == nil {
+					return ErrorResult("explorer action=status not implemented"), nil
+				}
 				data, err := deps.ExplorerStatus(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("explorer status: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "config":
-					if deps.ExplorerConfig == nil {
-						return ErrorResult("explorer action=config not implemented"), nil
-					}
+			case "config":
+				if deps.ExplorerConfig == nil {
+					return ErrorResult("explorer action=config not implemented"), nil
+				}
 				// Remap config_action → action for the underlying dep
 				var rawP map[string]json.RawMessage
 				if err := json.Unmarshal(params, &rawP); err != nil {
@@ -286,26 +337,35 @@ func registerAutomationTools(s *Server, deps *ToolDeps) {
 					return nil, fmt.Errorf("explorer config: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "trigger":
-					if deps.ExplorerTrigger == nil {
-						return ErrorResult("explorer action=trigger not implemented"), nil
-					}
+			case "trigger":
+				if deps.ExplorerTrigger == nil {
+					return ErrorResult("explorer action=trigger not implemented"), nil
+				}
 				data, err := deps.ExplorerTrigger(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("explorer trigger: %w", err)
 				}
 				return TextResult(string(data)), nil
-				case "cleanup":
-					if deps.ExplorerCleanup == nil {
-						return ErrorResult("explorer action=cleanup not implemented"), nil
-					}
+			case "cleanup":
+				if deps.ExplorerCleanup == nil {
+					return ErrorResult("explorer action=cleanup not implemented"), nil
+				}
 				data, err := deps.ExplorerCleanup(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("explorer cleanup: %w", err)
 				}
 				return TextResult(string(data)), nil
+			case "db_deltas":
+				if deps.ExplorerDbDeltas == nil {
+					return ErrorResult("explorer action=db_deltas not implemented"), nil
+				}
+				data, err := deps.ExplorerDbDeltas(ctx, p.Since)
+				if err != nil {
+					return nil, fmt.Errorf("explorer db_deltas: %w", err)
+				}
+				return TextResult(string(data)), nil
 			default:
-				return ErrorResult(fmt.Sprintf("unknown action %q; supported: status, config, trigger, cleanup", p.Action)), nil
+				return ErrorResult(fmt.Sprintf("unknown action %q; supported: status, config, trigger, cleanup, db_deltas", p.Action)), nil
 			}
 		},
 	})

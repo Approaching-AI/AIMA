@@ -161,7 +161,7 @@ aima config set api_key <your-key>
 aima fleet devices --api-key <your-key>
 ```
 
-## Eight Silicon Kingdoms
+## Eight Silicon Ecosystems
 
 <!-- section title: replaces "Supported Hardware" — hardware matrix as a piece of lore.
      Number in the title tracks the table row count; bump when new vendors are validated. -->
@@ -169,7 +169,7 @@ aima fleet devices --api-key <your-key>
 AIMA has been validated end-to-end across eight GPU/NPU ecosystems — NVIDIA (CUDA), AMD (ROCm / Vulkan), Huawei Ascend (CANN), Hygon (DCU), MetaX (MACA), Moore Threads (MUSA), Apple (Metal), and Intel (CPU-only):
 
 <div align="center">
-  <img src="docs/assets/eight-silicon-kingdoms.png" alt="Eight Silicon Kingdoms — AIMA runs end-to-end across NVIDIA RTX 4060/4090/GB10, AMD Radeon 8060S/Ryzen AI MAX+/W7900D×8, Huawei Ascend 910B1, Hygon BW150 DCU, MetaX N260, Moore Threads M1000/AIBook M1000 SoC, Apple M4, and Intel CPU-only" width="1000"/>
+  <img src="docs/assets/eight-silicon-ecosystems.png" alt="Eight Silicon Ecosystems — AIMA runs end-to-end across NVIDIA RTX 4060/4090/GB10, AMD Radeon 8060S/Ryzen AI MAX+/W7900D×8, Huawei Ascend 910B1, Hygon BW150 DCU, MetaX N260, Moore Threads M1000/AIBook M1000 SoC, Apple M4, and Intel CPU-only" width="1000"/>
 </div>
 
 ## Supported Engines

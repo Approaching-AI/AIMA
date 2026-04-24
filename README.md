@@ -166,40 +166,19 @@ aima fleet devices --api-key <your-key>
 <!-- section title: replaces "Supported Hardware" — hardware matrix as a piece of lore.
      Number in the title tracks the table row count; bump when new vendors are validated. -->
 
-AIMA has been validated end-to-end across eight GPU/NPU ecosystems:
+AIMA has been validated end-to-end across eight GPU/NPU ecosystems — NVIDIA (CUDA), AMD (ROCm / Vulkan), Huawei Ascend (CANN), Hygon (DCU), MetaX (MACA), Moore Threads (MUSA), Apple (Metal), and Intel (CPU-only):
 
 <div align="center">
-
-![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-5E35B1?style=for-the-badge&logo=nvidia&logoColor=white&labelColor=1a1a2e)
-![AMD ROCm](https://img.shields.io/badge/AMD-ROCm%20%2F%20Vulkan-5E35B1?style=for-the-badge&logo=amd&logoColor=white&labelColor=1a1a2e)
-![Huawei CANN](https://img.shields.io/badge/Huawei-CANN-5E35B1?style=for-the-badge&logo=huawei&logoColor=white&labelColor=1a1a2e)
-![Apple Metal](https://img.shields.io/badge/Apple-Metal-5E35B1?style=for-the-badge&logo=apple&logoColor=white&labelColor=1a1a2e)
-![Intel CPU](https://img.shields.io/badge/Intel-CPU-5E35B1?style=for-the-badge&logo=intel&logoColor=white&labelColor=1a1a2e)
-![Hygon DCU](https://img.shields.io/badge/Hygon-DCU-42A5F5?style=for-the-badge&labelColor=1a1a2e)
-![MetaX MACA](https://img.shields.io/badge/MetaX-MACA-42A5F5?style=for-the-badge&labelColor=1a1a2e)
-![Moore Threads MUSA](https://img.shields.io/badge/Moore%20Threads-MUSA-42A5F5?style=for-the-badge&labelColor=1a1a2e)
-
+  <img src="docs/assets/eight-silicon-kingdoms.png" alt="Eight Silicon Kingdoms — AIMA runs end-to-end across NVIDIA RTX 4060/4090/GB10, AMD Radeon 8060S/Ryzen AI MAX+/W7900D×8, Huawei Ascend 910B1, Hygon BW150 DCU, MetaX N260, Moore Threads M1000/AIBook M1000 SoC, Apple M4, and Intel CPU-only" width="1000"/>
 </div>
-
-| Vendor | Tested Devices | SDK |
-|--------|---------------|-----|
-| NVIDIA | RTX 4060, RTX 4090, GB10 (Grace Blackwell) | CUDA |
-| AMD | Radeon 8060S (RDNA 3.5), Ryzen AI MAX+ 395, W7900D × 8 (RDNA 3) | ROCm / Vulkan |
-| Huawei | Ascend 910B1 (8× 64GB HBM, Kunpeng-920 aarch64) | CANN |
-| Hygon | BW150 DCU (8× 64GB HBM) | DCU |
-| MetaX | N260 (64GB HBM2e, MACA 3.1) | MACA |
-| Moore Threads | M1000 (MUSA 3.1), AIBook M1000 SoC | MUSA |
-| Apple | M4 | Metal |
-| Intel | CPU-only | — |
 
 ## Supported Engines
 
-| Engine | GPU Support | Format |
-|--------|------------|--------|
-| vLLM | NVIDIA CUDA, AMD ROCm, Hygon DCU | Safetensors |
-| llama.cpp | NVIDIA CUDA, AMD Vulkan, Apple Metal, CPU | GGUF |
-| SGLang | NVIDIA CUDA, Huawei Ascend (CANN) | Safetensors |
-| Ollama | All (via llama.cpp) | GGUF |
+AIMA orchestrates four inference runtimes — vLLM (Safetensors), llama.cpp (GGUF), SGLang (Safetensors), and Ollama (GGUF via llama.cpp) — across every supported backend:
+
+<div align="center">
+  <img src="docs/assets/supported-engines.png" alt="Supported Engines — vLLM on NVIDIA CUDA, AMD ROCm, Hygon DCU; llama.cpp on NVIDIA CUDA, AMD Vulkan, Apple Metal, CPU; SGLang on NVIDIA CUDA and Huawei Ascend (CANN); Ollama on all (via llama.cpp)" width="1000"/>
+</div>
 
 ## The L0→L3 Intelligence Ladder
 
@@ -208,7 +187,7 @@ AIMA has been validated end-to-end across eight GPU/NPU ecosystems:
 AIMA resolves every deployment decision by climbing four layers of intelligence. Each layer can override the layer below it, and every layer fails gracefully to the one underneath.
 
 <div align="center">
-  <img src="docs/assets/architecture-ladder.svg" alt="AIMA L0→L3 Intelligence Ladder — four stacked layers (L0 YAML Knowledge Base bedrock, L1 Human CLI Overrides, L2 Golden Configs from benchmark history, L3a Go Agent Loop at top); each higher layer overrides the one below, every layer falls back gracefully" width="1000"/>
+  <img src="docs/assets/architecture-ladder.png" alt="AIMA L0→L3 Intelligence Ladder — four stacked layers (L0 Defaults YAML knowledge bedrock, L1 Human CLI manual parameters, L2 Knowledge Base deterministic matching, L3a Go Agent tool-calling loop); each higher layer overrides the one below, every layer guarantees graceful fallback" width="1000"/>
 </div>
 
 The system is built around four invariants: no code branches for engine/model types (YAML-driven), no container lifecycle management (K3S handles it), MCP tools as the single source of truth, and offline-first operation.

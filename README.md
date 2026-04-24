@@ -18,7 +18,8 @@
 <div align="center">
 
 [![GitHub Release](https://img.shields.io/github/v/release/Approaching-AI/AIMA?style=for-the-badge&color=5E35B1&labelColor=1a1a2e)](https://github.com/Approaching-AI/AIMA/releases)
-<!-- GitHub Stars badge hidden until stars ≥ 500 -->
+<!-- GitHub Stars badge — hidden until stars ≥ 500. Re-enable:
+[![GitHub Stars](https://img.shields.io/github/stars/Approaching-AI/AIMA?style=for-the-badge&color=42A5F5&labelColor=1a1a2e)](https://github.com/Approaching-AI/AIMA/stargazers) -->
 [![License](https://img.shields.io/github/license/Approaching-AI/AIMA?style=for-the-badge&color=4ecdc4&labelColor=1a1a2e)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/Approaching-AI/AIMA?style=for-the-badge&logo=go&logoColor=white&labelColor=1a1a2e&color=5E35B1)](go.mod)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux_%7C_macOS_%7C_Windows-42A5F5?style=for-the-badge&labelColor=1a1a2e)](#60-second-genesis)
@@ -167,6 +168,19 @@ aima fleet devices --api-key <your-key>
 
 AIMA has been validated end-to-end across eight GPU/NPU ecosystems:
 
+<div align="center">
+
+![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-5E35B1?style=for-the-badge&logo=nvidia&logoColor=white&labelColor=1a1a2e)
+![AMD ROCm](https://img.shields.io/badge/AMD-ROCm%20%2F%20Vulkan-5E35B1?style=for-the-badge&logo=amd&logoColor=white&labelColor=1a1a2e)
+![Huawei CANN](https://img.shields.io/badge/Huawei-CANN-5E35B1?style=for-the-badge&logo=huawei&logoColor=white&labelColor=1a1a2e)
+![Apple Metal](https://img.shields.io/badge/Apple-Metal-5E35B1?style=for-the-badge&logo=apple&logoColor=white&labelColor=1a1a2e)
+![Intel CPU](https://img.shields.io/badge/Intel-CPU-5E35B1?style=for-the-badge&logo=intel&logoColor=white&labelColor=1a1a2e)
+![Hygon DCU](https://img.shields.io/badge/Hygon-DCU-42A5F5?style=for-the-badge&labelColor=1a1a2e)
+![MetaX MACA](https://img.shields.io/badge/MetaX-MACA-42A5F5?style=for-the-badge&labelColor=1a1a2e)
+![Moore Threads MUSA](https://img.shields.io/badge/Moore%20Threads-MUSA-42A5F5?style=for-the-badge&labelColor=1a1a2e)
+
+</div>
+
 | Vendor | Tested Devices | SDK |
 |--------|---------------|-----|
 | NVIDIA | RTX 4060, RTX 4090, GB10 (Grace Blackwell) | CUDA |
@@ -193,19 +207,11 @@ AIMA has been validated end-to-end across eight GPU/NPU ecosystems:
 
 AIMA resolves every deployment decision by climbing four layers of intelligence. Each layer can override the layer below it, and every layer fails gracefully to the one underneath.
 
-- **L0** — YAML knowledge base defaults
-- **L1** — Human CLI overrides
-- **L2** — Golden configs from benchmark history
-- **L3a** — Go Agent loop (tool-calling LLM)
+<div align="center">
+  <img src="docs/assets/architecture-ladder.svg" alt="AIMA L0→L3 Intelligence Ladder — four stacked layers (L0 YAML Knowledge Base bedrock, L1 Human CLI Overrides, L2 Golden Configs from benchmark history, L3a Go Agent Loop at top); each higher layer overrides the one below, every layer falls back gracefully" width="1000"/>
+</div>
 
 The system is built around four invariants: no code branches for engine/model types (YAML-driven), no container lifecycle management (K3S handles it), MCP tools as the single source of truth, and offline-first operation.
-
-<!-- ======== Architecture diagram (placeholder) ======== -->
-<!-- TODO: export ARCHITECTURE.md §system diagram to SVG
-<div align="center">
-  <img src="docs/assets/architecture.svg" alt="AIMA L0-L3 intelligence ladder" width="820"/>
-</div>
--->
 
 See [design/ARCHITECTURE.md](design/ARCHITECTURE.md) for the full architecture document.
 
@@ -214,6 +220,16 @@ See [design/ARCHITECTURE.md](design/ARCHITECTURE.md) for the full architecture d
 <!-- NEW section: surfaces the UAT evidence that's currently buried. Replaces/absorbs "Battle-tested" from HKUDS-inspired template. -->
 
 Every AIMA release passes through The Forge — an end-to-end UAT matrix run on real hardware.
+
+<div align="center">
+
+![8 Vendors](https://img.shields.io/badge/8-VENDORS-5E35B1?style=for-the-badge&labelColor=1a1a2e)
+![3 Runtimes](https://img.shields.io/badge/3-RUNTIMES-42A5F5?style=for-the-badge&labelColor=1a1a2e)
+![16 UAT](https://img.shields.io/badge/16-UAT%20ITEMS-5E35B1?style=for-the-badge&labelColor=1a1a2e)
+![1200+ Evidence Files](https://img.shields.io/badge/1%2C200+-EVIDENCE%20FILES-42A5F5?style=for-the-badge&labelColor=1a1a2e)
+![1000+ Runtime Hours](https://img.shields.io/badge/~1%2C000-RUNTIME%20HOURS-5E35B1?style=for-the-badge&labelColor=1a1a2e)
+
+</div>
 
 - **Eight vendors** × multiple devices (NVIDIA GB10, RTX 4090, AMD W7900D × 8, Huawei Ascend 910B × 8, Hygon BW150 DCU × 8, MetaX N260 × 2, Moore Threads M1000, Apple M4, Intel CPU)
 - **Three runtimes** validated per release: K3S Pod, Docker container, Native exec
@@ -229,6 +245,29 @@ AIMA is built to be driven by AI agents first, humans second.
 - **61 MCP tools** expose hardware / model / engine / deploy / fleet / knowledge / agent / device identity as JSON-RPC 2.0 functions
 - **The Dispatcher** routes any request through L0→L3 with automatic fallback — agents get the same API whether the local LLM is loaded or not
 - **Explorer Agent Planner** runs document-driven PDCA cycles with a SQLite-backed workspace and seven bash-like tools; every decision leaves a structured trace
+
+<details>
+<summary><strong>Browse the MCP tool surface by domain</strong></summary>
+
+<br>
+
+| Domain | Representative tools | Purpose |
+|---|---|---|
+| **hardware** | `hardware.detect` · `hardware.metrics` | GPU/CPU/RAM inventory + live telemetry |
+| **model** | `model.list` · `model.scan` · `model.pull` · `model.import` · `model.safetensors` | Local model catalog + download + import |
+| **engine** | `engine.list` · `engine.pull` · `engine.scan` · `engine.import` · `engine.info` | Inference engine lifecycle |
+| **deploy** | `deploy.apply` · `deploy.dry_run` · `deploy.list` · `deploy.logs` · `deploy.delete` · `deploy.approve` · `deploy.status` | Start / monitor / stop model serving |
+| **fleet** | `fleet.info` · `fleet.exec` | LAN auto-discovery + remote tool execution |
+| **knowledge** | `knowledge.resolve` · `knowledge.search` · `knowledge.promote` · `knowledge.evaluate` · `knowledge.save` · `knowledge.analytics` | YAML catalog + golden-config lifecycle |
+| **agent** | `agent.ask` · `agent.status` · `agent.rollback` | L3a Agent invocation + decision trace |
+| **device** | `device.register` · `device.status` · `device.renew` · `device.reset` | aima-service identity lifecycle |
+| **benchmark** | `benchmark.run` · `benchmark.matrix` · `benchmark.record` · `benchmark.ensure_assets` | Reproducible performance testing |
+| **central** | `central.advise` · `central.scenario` · `central.sync` | Central knowledge server + advisory feedback |
+| **system** | `system.config` · `system.status` | Hot-reload config + overall health |
+
+See [`internal/mcp/`](internal/mcp/) for the complete registry.
+
+</details>
 
 Connect any MCP-compatible client (Claude Desktop, Cursor, custom agent) and AIMA becomes your AI-inference control plane.
 

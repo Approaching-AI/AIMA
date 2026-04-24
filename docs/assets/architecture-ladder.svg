@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">AIMA L0 → L3 Intelligence Ladder</title>
+  <desc id="desc">Four stacked layers (L0 YAML Knowledge, L1 Human CLI Overrides, L2 Golden Configs, L3a Go Agent Loop). Each higher layer overrides the layer below; each layer gracefully falls back to the one below when unavailable.</desc>
+
+  <defs>
+    <!-- Card background: deep purple, echoes banner -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A1A2E"/>
+      <stop offset="100%" stop-color="#14142A"/>
+    </linearGradient>
+
+    <!-- Layer fills: L0 darkest / base → L3a lightest / most active -->
+    <linearGradient id="L0fill" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3F1D88"/>
+      <stop offset="100%" stop-color="#4527A0"/>
+    </linearGradient>
+    <linearGradient id="L1fill" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4527A0"/>
+      <stop offset="100%" stop-color="#5E35B1"/>
+    </linearGradient>
+    <linearGradient id="L2fill" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5E35B1"/>
+      <stop offset="100%" stop-color="#3F78C4"/>
+    </linearGradient>
+    <linearGradient id="L3fill" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3F78C4"/>
+      <stop offset="100%" stop-color="#42A5F5"/>
+    </linearGradient>
+
+    <!-- Dot texture (subtle) -->
+    <pattern id="dots" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="white" opacity="0.03"/>
+    </pattern>
+
+    <!-- Arrow marker -->
+    <marker id="arrDown" viewBox="0 0 10 10" refX="5" refY="10" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 5 10 L 10 0 Z" fill="#42A5F5" opacity="0.85"/>
+    </marker>
+    <marker id="arrUp" viewBox="0 0 10 10" refX="5" refY="0" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 10 L 5 0 L 10 10 Z" fill="#42A5F5" opacity="0.85"/>
+    </marker>
+  </defs>
+
+  <!-- Card background -->
+  <rect width="1200" height="620" fill="url(#bgGrad)" rx="12"/>
+  <rect width="1200" height="620" fill="url(#dots)" rx="12"/>
+  <rect x="1" y="1" width="1198" height="618" fill="none" stroke="#42A5F5" stroke-width="1" opacity="0.25" rx="12"/>
+
+  <!-- Title -->
+  <text x="60" y="58" font-family="Arial, Helvetica, sans-serif"
+        font-size="28" font-weight="700" fill="#FFFFFF" letter-spacing="1">
+    L0 → L3 Intelligence Ladder
+  </text>
+  <text x="60" y="88" font-family="Arial, Helvetica, sans-serif"
+        font-size="15" fill="#B39DDB" opacity="0.85">
+    Each higher layer overrides the one below · every layer gracefully falls back
+  </text>
+  <line x1="60" y1="106" x2="1140" y2="106" stroke="#42A5F5" stroke-width="1" opacity="0.25"/>
+
+  <!-- Left-column tier labels + stacked layer cards -->
+  <!-- Layer geometry: x=160, width=980, height=92, gap=14 -->
+
+  <!-- L3a (top) -->
+  <g>
+    <text x="80" y="165" font-family="Arial, Helvetica, sans-serif"
+          font-size="22" font-weight="700" fill="#42A5F5" letter-spacing="1">L3a</text>
+    <rect x="160" y="135" width="980" height="80" fill="url(#L3fill)" rx="10"/>
+    <text x="186" y="172" font-family="Arial, Helvetica, sans-serif"
+          font-size="20" font-weight="700" fill="#FFFFFF">Go Agent Loop</text>
+    <text x="186" y="198" font-family="Arial, Helvetica, sans-serif"
+          font-size="14" fill="#E8EAF6" opacity="0.92">Tool-calling LLM drives exploration, benchmarks, and fleet orchestration</text>
+    <text x="1090" y="172" font-family="Arial, Helvetica, sans-serif"
+          font-size="12" fill="#E8EAF6" opacity="0.85" text-anchor="end">MOST ACTIVE</text>
+  </g>
+
+  <!-- Arrows L2 ↔ L3a -->
+  <line x1="600" y1="221" x2="600" y2="239" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrUp)"/>
+  <text x="612" y="234" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">overrides</text>
+  <line x1="540" y1="239" x2="540" y2="221" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrDown)"/>
+  <text x="444" y="234" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">falls back</text>
+
+  <!-- L2 -->
+  <g>
+    <text x="80" y="278" font-family="Arial, Helvetica, sans-serif"
+          font-size="22" font-weight="700" fill="#90CAF9" letter-spacing="1">L2</text>
+    <rect x="160" y="248" width="980" height="80" fill="url(#L2fill)" rx="10"/>
+    <text x="186" y="285" font-family="Arial, Helvetica, sans-serif"
+          font-size="20" font-weight="700" fill="#FFFFFF">Golden Configs</text>
+    <text x="186" y="311" font-family="Arial, Helvetica, sans-serif"
+          font-size="14" fill="#E8EAF6" opacity="0.92">Configs promoted from real benchmark history — tested on this hardware</text>
+  </g>
+
+  <!-- Arrows L1 ↔ L2 -->
+  <line x1="600" y1="334" x2="600" y2="352" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrUp)"/>
+  <text x="612" y="347" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">overrides</text>
+  <line x1="540" y1="352" x2="540" y2="334" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrDown)"/>
+  <text x="444" y="347" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">falls back</text>
+
+  <!-- L1 -->
+  <g>
+    <text x="80" y="391" font-family="Arial, Helvetica, sans-serif"
+          font-size="22" font-weight="700" fill="#B39DDB" letter-spacing="1">L1</text>
+    <rect x="160" y="361" width="980" height="80" fill="url(#L1fill)" rx="10"/>
+    <text x="186" y="398" font-family="Arial, Helvetica, sans-serif"
+          font-size="20" font-weight="700" fill="#FFFFFF">Human CLI Overrides</text>
+    <text x="186" y="424" font-family="Arial, Helvetica, sans-serif"
+          font-size="14" fill="#E8EAF6" opacity="0.92">Explicit flags from the operator — escape hatch when you know better</text>
+  </g>
+
+  <!-- Arrows L0 ↔ L1 -->
+  <line x1="600" y1="447" x2="600" y2="465" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrUp)"/>
+  <text x="612" y="460" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">overrides</text>
+  <line x1="540" y1="465" x2="540" y2="447" stroke="#42A5F5" stroke-width="2" opacity="0.9" marker-end="url(#arrDown)"/>
+  <text x="444" y="460" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#90CAF9" opacity="0.85">falls back</text>
+
+  <!-- L0 (bottom / bedrock) -->
+  <g>
+    <text x="80" y="504" font-family="Arial, Helvetica, sans-serif"
+          font-size="22" font-weight="700" fill="#C5A8E9" letter-spacing="1">L0</text>
+    <rect x="160" y="474" width="980" height="80" fill="url(#L0fill)" rx="10"/>
+    <text x="186" y="511" font-family="Arial, Helvetica, sans-serif"
+          font-size="20" font-weight="700" fill="#FFFFFF">YAML Knowledge Base</text>
+    <text x="186" y="537" font-family="Arial, Helvetica, sans-serif"
+          font-size="14" fill="#E8EAF6" opacity="0.92">Catalog defaults, embedded in the binary — always available, offline-safe</text>
+    <text x="1090" y="511" font-family="Arial, Helvetica, sans-serif"
+          font-size="12" fill="#E8EAF6" opacity="0.85" text-anchor="end">BEDROCK</text>
+  </g>
+
+  <!-- Footnote -->
+  <text x="60" y="588" font-family="Arial, Helvetica, sans-serif"
+        font-size="12" fill="#7986CB" opacity="0.75">
+    System runs at L0 alone. Any higher layer is optional enhancement.
+  </text>
+</svg>

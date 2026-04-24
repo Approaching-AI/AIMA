@@ -128,7 +128,8 @@ aima serve
   data directory and verifies `hal detect`, `onboarding`, `recommend`, and
   `run --dry-run` style flows where available.
 - Add a Web UI "Run recommended model" action that maps exactly to the CLI
-  golden path.
+  golden path. (Implemented after the initial remediation commit via
+  `/ui/api/onboarding-start` + the existing deploy SSE flow.)
 - Add release-note examples for three personas: local Mac/Windows user, Linux
   workstation owner, and multi-node operator.
 - Add telemetry-free local diagnostics export so failed first runs are easy to

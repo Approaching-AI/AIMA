@@ -886,6 +886,13 @@ body {
   border-color: rgba(10, 132, 255, 0.35);
   background: var(--input-bg);
 }
+.onboarding-command-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.onboarding-run-btn {
+  border-color: rgba(10, 132, 255, 0.45);
+}
 .onboarding-command-btn strong {
   font-size: 13px;
   font-weight: 600;
@@ -5061,6 +5068,16 @@ body {
 
           <section class="onboarding-section" x-show="onboardingTab === 'quick_start' && onboardingLocaleData()">
             <p class="support-note" x-text="onboardingText(((((onboardingLocaleData() || {}).quick_start) || {}).intro), '')"></p>
+            <div class="support-starter-section">
+              <div class="support-starter-label" x-text="t('onboarding_recommended_action')"></div>
+              <button type="button" class="onboarding-command-btn onboarding-run-btn"
+                @click="runRecommendedFromOnboarding()"
+                :disabled="onboardingStartLoading">
+                <strong x-text="onboardingStartLoading ? t('onboarding_checking_recommendation') : t('onboarding_run_recommended')"></strong>
+                <span x-text="t('onboarding_run_recommended_desc')"></span>
+              </button>
+              <div class="onboarding-error" x-show="onboardingStartError" x-text="onboardingStartError"></div>
+            </div>
             <ol class="onboarding-steps">
               <template x-for="(item, idx) in (((((onboardingLocaleData() || {}).quick_start) || {}).steps) || [])" :key="item.id || item.command || idx">
                 <li class="onboarding-step">
@@ -5315,6 +5332,12 @@ var I18N = {
     onboarding_tab_full_commands: 'Full commands',
     onboarding_tab_troubleshooting: 'Troubleshooting',
     onboarding_common_commands: 'Common Commands',
+    onboarding_recommended_action: 'Recommended action',
+    onboarding_run_recommended: 'Run recommended model',
+    onboarding_checking_recommendation: 'Checking recommendation...',
+    onboarding_run_recommended_desc: 'Detect this host, pick the safest recommendation, and show live startup progress.',
+    onboarding_no_recommended_model: 'No recommended model is available for this host.',
+    onboarding_run_recommended_failed: 'Failed to start the recommended model.',
     loading: 'Loading...',
     // Onboarding wizard
     wiz_title: 'Welcome to AIMA',
@@ -5593,6 +5616,12 @@ var I18N = {
     onboarding_tab_full_commands: '\u5B8C\u6574\u547D\u4EE4',
     onboarding_tab_troubleshooting: '\u9047\u5230\u95EE\u9898',
     onboarding_common_commands: '\u5E38\u7528\u547D\u4EE4',
+    onboarding_recommended_action: '\u63A8\u8350\u64CD\u4F5C',
+    onboarding_run_recommended: '\u8FD0\u884C\u63A8\u8350\u6A21\u578B',
+    onboarding_checking_recommendation: '\u6B63\u5728\u68C0\u67E5\u63A8\u8350...',
+    onboarding_run_recommended_desc: '\u68C0\u6D4B\u672C\u673A\uFF0C\u9009\u62E9\u6700\u7A33\u59A5\u7684\u63A8\u8350\u6A21\u578B\uFF0C\u5E76\u663E\u793A\u5B9E\u65F6\u542F\u52A8\u8FDB\u5EA6\u3002',
+    onboarding_no_recommended_model: '\u5F53\u524D\u4E3B\u673A\u6CA1\u6709\u53EF\u7528\u7684\u63A8\u8350\u6A21\u578B\u3002',
+    onboarding_run_recommended_failed: '\u542F\u52A8\u63A8\u8350\u6A21\u578B\u5931\u8D25\u3002',
     loading: '\u52A0\u8F7D\u4E2D...',
     // Onboarding wizard
     wiz_title: '\u6B22\u8FCE\u4F7F\u7528 AIMA',
@@ -6255,6 +6284,9 @@ function aimaApp() {
     onboardingLoading: false,
     onboardingLoadFailed: false,
     onboardingError: '',
+    onboardingStartLoading: false,
+    onboardingStartError: '',
+    onboardingStartResult: null,
     _onboardingReturnFocus: null,
     // Onboarding wizard state
     onboardingPhase: 'loading',
@@ -6489,6 +6521,65 @@ function aimaApp() {
       if (typeof value === 'string') return value || fallback || '';
       const locale = this.onboardingLocaleKey();
       return value[locale] || value.en || value.zh || fallback || '';
+    },
+
+    onboardingFirstRecommendation(start) {
+      const recommendations = (((start || {}).recommend || {}).recommendations || []);
+      if (!Array.isArray(recommendations) || recommendations.length === 0) return null;
+      const nextModel = String((start || {}).next_model || '').toLowerCase();
+      if (!nextModel) return recommendations[0];
+      return recommendations.find((rec) => String(rec.model_name || rec.model || rec.name || '').toLowerCase() === nextModel) || recommendations[0];
+    },
+
+    async runRecommendedFromOnboarding() {
+      if (this.onboardingStartLoading) return;
+      this.onboardingStartLoading = true;
+      this.onboardingStartError = '';
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
+        const resp = await fetch('/ui/api/onboarding-start', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ locale: this.onboardingLocaleKey() })
+        });
+        if (!resp.ok) {
+          let message = 'onboarding start ' + resp.status;
+          try {
+            const err = await resp.json();
+            if (err && err.error) message = err.error;
+          } catch (e) {}
+          throw new Error(message);
+        }
+
+        const data = await resp.json();
+        this.onboardingStartResult = data;
+        if (data && data.status) this.onboardingData = data.status;
+        if (data && data.scan) {
+          this.onboardingScanResults = {
+            engines: data.scan.engines || [],
+            models: data.scan.models || [],
+            centralConnected: !!data.scan.central_connected
+          };
+          this.onboardingScanDone = true;
+        }
+        this.onboardingRecommendations = (((data || {}).recommend || {}).recommendations || []);
+
+        if (data && data.status && data.status.stack_status && data.status.stack_status.needs_init) {
+          this.closeOnboardingDrawer();
+          this.onboardingPhase = 'detecting';
+          return;
+        }
+
+        const rec = this.onboardingFirstRecommendation(data);
+        if (!rec) throw new Error(this.t('onboarding_no_recommended_model'));
+        this.closeOnboardingDrawer();
+        this.wizDeploy(rec);
+      } catch (e) {
+        this.onboardingStartError = (e && e.message) ? e.message : this.t('onboarding_run_recommended_failed');
+      } finally {
+        this.onboardingStartLoading = false;
+      }
     },
 
     defaultOnboardingManifest() {

@@ -18,7 +18,7 @@
 <div align="center">
 
 [![GitHub Release](https://img.shields.io/github/v/release/Approaching-AI/AIMA?style=for-the-badge&color=5E35B1&labelColor=1a1a2e)](https://github.com/Approaching-AI/AIMA/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/Approaching-AI/AIMA?style=for-the-badge&color=42A5F5&labelColor=1a1a2e)](https://github.com/Approaching-AI/AIMA/stargazers)
+<!-- GitHub Stars badge hidden until stars ≥ 500 -->
 [![License](https://img.shields.io/github/license/Approaching-AI/AIMA?style=for-the-badge&color=4ecdc4&labelColor=1a1a2e)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/Approaching-AI/AIMA?style=for-the-badge&logo=go&logoColor=white&labelColor=1a1a2e&color=5E35B1)](go.mod)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux_%7C_macOS_%7C_Windows-42A5F5?style=for-the-badge&labelColor=1a1a2e)](#60-second-genesis)

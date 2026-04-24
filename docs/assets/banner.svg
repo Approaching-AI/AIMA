@@ -53,7 +53,7 @@
   <!-- Right side: key stats row 1 -->
   <text x="748" y="172" font-family="Arial, Helvetica, sans-serif"
         font-size="14" fill="#90CAF9" opacity="0.85">
-    94 MCP Tools  ·  6 Hardware Platforms  ·  4 Inference Engines
+    61 MCP Tools  ·  8 Hardware Platforms  ·  4 Inference Engines
   </text>
 
   <!-- Right side: key stats row 2 -->

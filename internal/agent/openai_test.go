@@ -582,6 +582,42 @@ func TestOpenAIClient_RouteStatus_SelectsBestLocalModel(t *testing.T) {
 	}
 }
 
+func TestOpenAIClient_RouteStatus_FallsBackWhenConfiguredModelUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"models": []map[string]any{
+				{
+					"model_name":            "qwen3.6-35b-a3b",
+					"ready":                 true,
+					"parameter_count":       "35B",
+					"context_window_tokens": 131072,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewOpenAIClient(srv.URL+"/v1", WithModel("qwen3.5-35b-a3b"))
+	status := client.RouteStatus(context.Background())
+	if !status.Available {
+		t.Fatal("RouteStatus().Available = false, want true")
+	}
+	if status.SelectionReason != "configured_model_unavailable_local_fallback" {
+		t.Fatalf("SelectionReason = %q, want configured_model_unavailable_local_fallback", status.SelectionReason)
+	}
+	if status.Selected == nil || status.Selected.Model != "qwen3.6-35b-a3b" {
+		t.Fatalf("Selected = %+v, want qwen3.6-35b-a3b", status.Selected)
+	}
+	if status.ConfiguredModel != "qwen3.5-35b-a3b" {
+		t.Fatalf("ConfiguredModel = %q, want stale configured model", status.ConfiguredModel)
+	}
+}
+
 func TestOpenAIClient_RouteStatus_UsesFleetFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {

@@ -975,6 +975,12 @@ func selectRouteStatus(baseURL, configuredModel string, localModels []proxy.Adve
 		if localErr != nil {
 			return nil, "", fmt.Errorf("resolve configured model %q at %s: %w", configuredModel, baseURL, localErr)
 		}
+		if len(localModels) > 0 {
+			candidates := routeCandidatesFromAdvertised(baseURL, false, localModels)
+			if len(candidates) > 0 {
+				return &candidates[0], "configured_model_unavailable_local_fallback", nil
+			}
+		}
 		return nil, "", fmt.Errorf("configured model %q not available at %s/models", configuredModel, baseURL)
 	}
 

@@ -39,6 +39,8 @@ variants:
       trust_remote_code: true
       language_model_only: true
       reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
       attention_backend: TRITON_ATTN
       mm_encoder_attn_backend: TORCH_SDPA
       skip_mm_profiling: true
@@ -117,6 +119,8 @@ variants:
       trust_remote_code: true
       language_model_only: true
       reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
       attention_backend: TRITON_ATTN
       mm_encoder_attn_backend: TORCH_SDPA
       skip_mm_profiling: true
@@ -161,6 +165,8 @@ variants:
       trust_remote_code: true
       language_model_only: true
       reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
       attention_backend: FLASH_ATTN
       mm_encoder_attn_backend: TORCH_SDPA
       skip_mm_profiling: true

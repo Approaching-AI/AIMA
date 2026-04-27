@@ -421,9 +421,9 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 		modelType    string
 		wantEngine   string
 		wantType     string
-		wantVariants int // non-default engines get a fallback variant
+		wantVariants int
 	}{
-		{"safetensors->vllm", "safetensors", "llm", "vllm", "llm", 2},
+		{"safetensors->vllm", "safetensors", "llm", "vllm", "llm", 1},
 		{"gguf->llamacpp", "gguf", "llm", "llamacpp", "llm", 1},
 		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm", 1},
 		{"unknown format->default engine", "awq", "llm", "llamacpp", "llm", 1},
@@ -449,13 +449,6 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			}
 			if !strings.HasSuffix(v.Name, "-auto") {
 				t.Errorf("variant Name = %q, want suffix -auto", v.Name)
-			}
-			// Non-default engines should have a fallback variant
-			if tt.wantVariants == 2 {
-				fb := ma.Variants[1]
-				if fb.Engine != "llamacpp" {
-					t.Errorf("fallback Engine = %q, want llamacpp", fb.Engine)
-				}
 			}
 		})
 	}
@@ -505,14 +498,14 @@ func TestBuildSyntheticModelAssetDisallowsMooerForNonASRSafetensors(t *testing.T
 			{
 				Metadata: EngineMetadata{
 					Name: "mooer-test", Type: "mooer", Version: "1.0",
-					SupportedFormats: []string{"safetensors"},
+					SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"asr"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
 			{
 				Metadata: EngineMetadata{
 					Name: "vllm-test", Type: "vllm", Version: "1.0",
-					Default: true, SupportedFormats: []string{"safetensors"},
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "embedding"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
@@ -551,14 +544,14 @@ func TestBuildSyntheticModelAssetKeepsMooerForASR(t *testing.T) {
 			{
 				Metadata: EngineMetadata{
 					Name: "mooer-test", Type: "mooer", Version: "1.0",
-					SupportedFormats: []string{"safetensors"},
+					SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"asr"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
 			{
 				Metadata: EngineMetadata{
 					Name: "vllm-test", Type: "vllm", Version: "1.0",
-					Default: true, SupportedFormats: []string{"safetensors"},
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "embedding"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
@@ -680,9 +673,11 @@ func TestBuildSyntheticWithHardware(t *testing.T) {
 
 	ma := cat.BuildSyntheticModelAsset(meta, hw)
 
-	// Should have 3 variants: hardware-specific + wildcard + llamacpp fallback
-	if len(ma.Variants) != 3 {
-		t.Fatalf("Variants count = %d, want 3", len(ma.Variants))
+	// Should have 2 variants: hardware-specific + wildcard. The default
+	// llamacpp fallback is not emitted because its YAML supports gguf, not
+	// this safetensors model.
+	if len(ma.Variants) != 2 {
+		t.Fatalf("Variants count = %d, want 2", len(ma.Variants))
 	}
 
 	// First variant should be hardware-specific with VRAM estimate

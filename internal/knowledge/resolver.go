@@ -14,20 +14,20 @@ var modelLookupSeparatorRE = regexp.MustCompile(`[-_\s.]+`)
 // Zero-valued fields mean "unknown" and are skipped during validation,
 // ensuring backward compatibility with callers that only set GPUArch/CPUArch.
 type HardwareInfo struct {
-	GPUArch         string
-	GPUVRAMMiB      int  // Per-GPU VRAM (0 = unknown, skip VRAM checks)
-	GPUCount        int  // Number of GPUs
-	UnifiedMemory   bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
-	CPUArch         string
-	CPUCores        int    // Physical CPU core count
-	RAMTotalMiB     int    // Total system RAM
-	GPUModel        string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
-	HardwareProfile string // Name of a matching HardwareProfile, if known
-	Platform        string // "linux/amd64", "darwin/arm64", etc.
-	RuntimeType     string // "k3s" or "native"
-	SwapTotalMiB    int    // Total swap space (0 = unknown or none)
-	TDPWatts        int    // hardware TDP from profile (0 = unknown)
-	GPUBandwidthGbps int   // Per-GPU memory bandwidth in GB/s from profile (0 = unknown)
+	GPUArch          string
+	GPUVRAMMiB       int  // Per-GPU VRAM (0 = unknown, skip VRAM checks)
+	GPUCount         int  // Number of GPUs
+	UnifiedMemory    bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
+	CPUArch          string
+	CPUCores         int    // Physical CPU core count
+	RAMTotalMiB      int    // Total system RAM
+	GPUModel         string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
+	HardwareProfile  string // Name of a matching HardwareProfile, if known
+	Platform         string // "linux/amd64", "darwin/arm64", etc.
+	RuntimeType      string // "k3s" or "native"
+	SwapTotalMiB     int    // Total swap space (0 = unknown or none)
+	TDPWatts         int    // hardware TDP from profile (0 = unknown)
+	GPUBandwidthGbps int    // Per-GPU memory bandwidth in GB/s from profile (0 = unknown)
 	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
 	GPUMemUsedMiB int // Currently used GPU memory
 	GPUMemFreeMiB int // Currently free GPU memory
@@ -933,16 +933,19 @@ const FallbackEngine = "llamacpp"
 
 // FormatToEngine returns the engine type for a given model file format,
 // derived from the catalog's engine assets (supported_formats field).
-// Prefers general-purpose engines (supporting llm/vlm) over specialized ones
-// (e.g. ASR-only) so that safetensors → vllm instead of mooer.
+// It prefers default engines when they declare the format, then falls back to
+// the first format-compatible engine in catalog order.
 // Returns "" if no engine declares support for the format.
 func (c *Catalog) FormatToEngine(format string) string {
-	lower := strings.ToLower(format)
+	format = strings.TrimSpace(format)
+	if format == "" {
+		return ""
+	}
 	var firstMatch string
 	for _, ea := range c.EngineAssets {
 		for _, f := range ea.Metadata.SupportedFormats {
-			if strings.EqualFold(f, lower) {
-				if engineSupportsModelType(ea.Metadata.SupportedModelTypes, "llm") {
+			if strings.EqualFold(f, format) {
+				if ea.Metadata.Default {
 					return ea.Metadata.Type
 				}
 				if firstMatch == "" {
@@ -953,17 +956,6 @@ func (c *Catalog) FormatToEngine(format string) string {
 		}
 	}
 	return firstMatch
-}
-
-// engineSupportsModelType checks if an engine's supported_model_types list
-// contains the given type (case-insensitive).
-func engineSupportsModelType(supported []string, modelType string) bool {
-	for _, s := range supported {
-		if strings.EqualFold(s, modelType) {
-			return true
-		}
-	}
-	return false
 }
 
 // normalizeModelLookupKey lowercases, collapses separators, and trims a model
@@ -1016,6 +1008,73 @@ func (c *Catalog) DefaultEngine() string {
 		}
 	}
 	return FallbackEngine
+}
+
+// EngineForScanMetadata selects a synthetic-model engine from catalog metadata.
+// Format and model type compatibility come from engine_asset YAML; unknown
+// engine metadata stays permissive so older overlays continue to work.
+func (c *Catalog) EngineForScanMetadata(meta ScanMetadata) string {
+	if proposed := strings.TrimSpace(c.FormatToEngine(meta.Format)); proposed != "" && c.engineTypeMatchesScanMetadata(proposed, meta) {
+		return proposed
+	}
+	if proposed := c.DefaultEngineForScanMetadata(meta); proposed != "" {
+		return proposed
+	}
+	return c.DefaultEngine()
+}
+
+// DefaultEngineForScanMetadata returns the default engine only when its YAML
+// metadata matches the scanned model. Otherwise it falls back to the first
+// compatible catalog engine.
+func (c *Catalog) DefaultEngineForScanMetadata(meta ScanMetadata) string {
+	if proposed := strings.TrimSpace(c.DefaultEngine()); proposed != "" && c.engineTypeMatchesScanMetadata(proposed, meta) {
+		return proposed
+	}
+	for _, ea := range c.EngineAssets {
+		if engineAssetMatchesScanMetadata(ea, meta) {
+			return ea.Metadata.Type
+		}
+	}
+	return ""
+}
+
+func (c *Catalog) engineTypeMatchesScanMetadata(engineType string, meta ScanMetadata) bool {
+	engineType = strings.TrimSpace(engineType)
+	if engineType == "" {
+		return false
+	}
+	found := false
+	for _, ea := range c.EngineAssets {
+		if !strings.EqualFold(ea.Metadata.Type, engineType) && !strings.EqualFold(ea.Metadata.Name, engineType) {
+			continue
+		}
+		found = true
+		if engineAssetMatchesScanMetadata(ea, meta) {
+			return true
+		}
+	}
+	return !found
+}
+
+func engineAssetMatchesScanMetadata(ea EngineAsset, meta ScanMetadata) bool {
+	format := strings.TrimSpace(meta.Format)
+	if format != "" && len(ea.Metadata.SupportedFormats) > 0 && !stringListContainsFold(ea.Metadata.SupportedFormats, format) {
+		return false
+	}
+	modelType := strings.TrimSpace(meta.Type)
+	if modelType != "" && len(ea.Metadata.SupportedModelTypes) > 0 && !stringListContainsFold(ea.Metadata.SupportedModelTypes, modelType) {
+		return false
+	}
+	return true
+}
+
+func stringListContainsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanMetadata holds model metadata collected during filesystem scan,
@@ -1171,13 +1230,13 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	if meta.Type == "" {
 		meta.Type = "llm"
 	}
-	inferredEngineType := substituteDisallowedMooer(meta, c.FormatToEngine(meta.Format))
-	if inferredEngineType == "" {
-		inferredEngineType = substituteDisallowedMooer(meta, c.DefaultEngine())
-	}
+	inferredEngineType := c.EngineForScanMetadata(meta)
 
 	estimatedVRAM := estimateVRAMMiB(meta)
-	defaultEngine := substituteDisallowedMooer(meta, c.DefaultEngine())
+	defaultEngine := c.DefaultEngineForScanMetadata(meta)
+	if defaultEngine == "" {
+		defaultEngine = inferredEngineType
+	}
 
 	var variants []ModelVariant
 	var targetedHW *ModelVariantHardware
@@ -1249,8 +1308,11 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	}
 
 	for _, re := range requestedEngines {
-		re = substituteDisallowedMooer(meta, re)
+		re = strings.TrimSpace(re)
 		if re == "" || re == inferredEngineType || re == defaultEngine {
+			continue
+		}
+		if !c.engineTypeMatchesScanMetadata(re, meta) {
 			continue
 		}
 		if targetedHW != nil {
@@ -1298,29 +1360,6 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 		Variants:  variants,
 		synthetic: true,
 	}
-}
-
-func syntheticDisallowMooer(meta ScanMetadata) bool {
-	if !strings.EqualFold(meta.Format, "safetensors") {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(meta.Type)) {
-	case "llm", "embedding":
-		return true
-	default:
-		return false
-	}
-}
-
-// substituteDisallowedMooer returns "vllm" when the proposed engine is mooer
-// (ASR-only) but the scan metadata describes a non-ASR safetensors model.
-// Otherwise returns the proposal unchanged. This collapses the previously
-// duplicated "guard against mooer" inline checks in BuildSyntheticModelAsset.
-func substituteDisallowedMooer(meta ScanMetadata, proposed string) string {
-	if syntheticDisallowMooer(meta) && strings.EqualFold(proposed, "mooer") {
-		return "vllm"
-	}
-	return proposed
 }
 
 // buildSyntheticConfig emits config keys for a synthetic model variant.

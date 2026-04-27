@@ -1,0 +1,65 @@
+{
+  "gpu": {
+    "vendor": "nvidia",
+    "name": "NVIDIA GeForce RTX 4090",
+    "arch": "Ada",
+    "vram_mib": 49140,
+    "compute_id": "8.9",
+    "driver_version": "580.95.05",
+    "sdk_version": "CUDA 13.0",
+    "power_draw_watts": 13.75,
+    "power_limit_watts": 450,
+    "temperature_celsius": 35,
+    "unified_memory": false,
+    "count": 2
+  },
+  "cpu": {
+    "arch": "amd64",
+    "model": "Intel(R) Xeon(R) Platinum 8488C",
+    "cores": 48,
+    "threads": 96,
+    "freq_ghz": 2.4
+  },
+  "ram": {
+    "total_mib": 515434,
+    "available_mib": 492331,
+    "swap_total_mib": 8191
+  },
+  "storage": {
+    "data_dir_path": "/tmp/aima-uat-20260427-design-fix/data",
+    "free_mib": 55044,
+    "total_mib": 446502,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "device": "/dev/mapper/ubuntu--vg-ubuntu--lv",
+        "total_mib": 446502,
+        "free_mib": 55044
+      },
+      {
+        "mount_point": "/boot",
+        "device": "/dev/sda2",
+        "total_mib": 1945,
+        "free_mib": 1535
+      },
+      {
+        "mount_point": "/boot/efi",
+        "device": "/dev/sda1",
+        "total_mib": 1072,
+        "free_mib": 1066
+      },
+      {
+        "mount_point": "/mnt/data",
+        "device": "/dev/nvme0n1",
+        "total_mib": 3604224,
+        "free_mib": 199980
+      }
+    ]
+  },
+  "os": {
+    "os": "linux",
+    "arch": "amd64",
+    "version": "22.04",
+    "container_runtime": "docker"
+  }
+}

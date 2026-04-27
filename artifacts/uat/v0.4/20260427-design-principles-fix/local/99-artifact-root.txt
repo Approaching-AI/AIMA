@@ -1,0 +1,1 @@
+artifacts/uat/v0.4/20260427-design-principles-fix

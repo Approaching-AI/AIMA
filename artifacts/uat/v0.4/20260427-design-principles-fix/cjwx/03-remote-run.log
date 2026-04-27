@@ -1,0 +1,24 @@
+2026/04/27 11:41:38 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:38 INFO explorer started tier=1
+2026/04/27 11:41:39 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:39 INFO explorer started tier=1
+2026/04/27 11:41:39 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:39 INFO explorer started tier=1
+2026/04/27 11:41:39 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=1 new_assets=0
+2026/04/27 11:41:40 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:40 INFO explorer started tier=1
+2026/04/27 11:41:40 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=2 new_assets=1
+2026/04/27 11:41:40 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:40 INFO explorer started tier=1
+2026/04/27 11:41:40 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=2 new_assets=1
+2026/04/27 11:41:40 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:40 INFO explorer started tier=1
+2026/04/27 11:41:40 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=2 new_assets=1
+2026/04/27 11:41:41 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:41 INFO explorer started tier=1
+2026/04/27 11:41:41 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=2 new_assets=1
+2026/04/27 11:41:42 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:42 INFO explorer started tier=1
+2026/04/27 11:41:42 INFO catalog patch layer merged layer=user dir=/tmp/aima-uat-20260427-design-fix/data/catalog/user overlay_assets=2 new_assets=1
+2026/04/27 11:41:42 INFO runtime selected runtime=docker docker_available=true k3s_available=false
+2026/04/27 11:41:42 INFO explorer started tier=1

@@ -42,7 +42,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ---
 
-## MCP 工具列表 (57 个)
+## MCP 工具列表 (62 个)
 
 所有工具统一由 `internal/mcp/tools.go` 的 `RegisterAllTools()` 注册，按领域拆分在 `internal/mcp/tools_*.go` 中实现。下列分组反映当前分支的完整工具前缀集合；具体参数与返回值以各工具的 `inputSchema` 和实现为准。
 
@@ -79,8 +79,10 @@ Go Agent (直接调用)，保证行为一致。
 - Catalog (3): `catalog.list`, `catalog.override`, `catalog.validate`
 - Central (3): `central.sync`, `central.advise`, `central.scenario`
 - Data (2): `data.export`, `data.import`
+- Device (4): `device.register`, `device.status`, `device.renew`, `device.reset`
 - Fleet (2): `fleet.info`, `fleet.exec`
 - OpenClaw (1): `openclaw`
+- Onboarding (1): `onboarding`
 - Support (1): `support`
 
 Profile filtering is advisory. `tools/list` uses the server profile for discovery, and `ListToolsForProfile()` feeds the Go Agent's `agent.ask` path. The Explorer uses `ExplorerAgentPlanner` with its own `ExplorerToolExecutor` (7 document-workspace tools: cat/ls/write/append/grep/query/done), not the MCP profile tool list.

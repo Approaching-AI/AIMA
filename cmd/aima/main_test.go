@@ -1276,7 +1276,9 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		{name: "system config null value blocked", tool: "system.config", args: json.RawMessage(`{"key":"foo","value":null}`), wantBlock: true},
 		// catalog.override: engine/model allowed, infrastructure blocked
 		{name: "catalog override engine_asset allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"engine_asset","name":"vllm","content":"x"}`), wantBlock: false},
+		{name: "catalog override engine_asset_patch allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"engine_asset_patch","name":"vllm","content":"x"}`), wantBlock: false},
 		{name: "catalog override model_asset allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"model_asset","name":"qwen3","content":"x"}`), wantBlock: false},
+		{name: "catalog override model_asset_patch allowed", tool: "catalog.override", args: json.RawMessage(`{"kind":"model_asset_patch","name":"qwen3","content":"x"}`), wantBlock: false},
 		{name: "catalog override hardware_profile blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"hardware_profile","name":"gpu","content":"x"}`), wantBlock: true},
 		{name: "catalog override partition_strategy blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"partition_strategy","name":"p","content":"x"}`), wantBlock: true},
 		{name: "catalog override stack_component blocked", tool: "catalog.override", args: json.RawMessage(`{"kind":"stack_component","name":"k3s","content":"x"}`), wantBlock: true},
@@ -1320,6 +1322,69 @@ func TestMCPToolAdapter_BlocksMergedActionTool(t *testing.T) {
 	}
 	if called != 0 {
 		t.Fatalf("blocked tool should not execute, called=%d", called)
+	}
+}
+
+func TestMCPToolAdapter_ScenarioApplyApprovalFlow(t *testing.T) {
+	s := mcp.NewServer()
+	var calls []struct {
+		tool   string
+		dryRun bool
+	}
+	s.RegisterTool(&mcp.Tool{
+		Name:        "scenario.apply",
+		Description: "test scenario apply",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			var p struct {
+				DryRun bool `json:"dry_run"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			calls = append(calls, struct {
+				tool   string
+				dryRun bool
+			}{tool: "scenario.apply", dryRun: p.DryRun})
+			if p.DryRun {
+				return mcp.TextResult(`{"scenario":"uat","dry_run":true}`), nil
+			}
+			return mcp.TextResult(`{"scenario":"uat","applied":true}`), nil
+		},
+	})
+
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+	args := json.RawMessage(`{"name":"uat-scenario"}`)
+	result, err := adapter.ExecuteTool(context.Background(), "scenario.apply", args)
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || !strings.Contains(result.Content, "NEEDS_APPROVAL") {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	if len(calls) != 1 || !calls[0].dryRun {
+		t.Fatalf("expected first call to be scenario dry-run, got %#v", calls)
+	}
+
+	adapter.mu.Lock()
+	var approvalID int64
+	for id := range adapter.pending {
+		approvalID = id
+	}
+	adapter.mu.Unlock()
+	if approvalID == 0 {
+		t.Fatal("expected a non-zero approval ID")
+	}
+
+	approved, err := adapter.executeApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("executeApproval: %v", err)
+	}
+	if string(approved) != `{"scenario":"uat","applied":true}` {
+		t.Fatalf("approval result = %s, want scenario applied payload", string(approved))
+	}
+	if len(calls) != 2 || calls[1].dryRun {
+		t.Fatalf("expected approval call to execute real scenario.apply, got %#v", calls)
 	}
 }
 
@@ -2097,4 +2162,3 @@ func seedBenchmarkPredictionTables(t *testing.T, ctx context.Context, db *state.
 		t.Fatalf("insert model_variant: %v", err)
 	}
 }
-

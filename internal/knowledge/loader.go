@@ -73,7 +73,7 @@ type HardwareSpec struct {
 type GPUSpec struct {
 	Arch             string `yaml:"arch"`
 	VRAMMiB          int    `yaml:"vram_mib"`
-	BandwidthGbps    int    `yaml:"bandwidth_gbps"`               // Per-GPU memory bandwidth in GB/s (unified mem: shared bus; discrete: GDDR/HBM)
+	BandwidthGbps    int    `yaml:"bandwidth_gbps"` // Per-GPU memory bandwidth in GB/s (unified mem: shared bus; discrete: GDDR/HBM)
 	ComputeID        string `yaml:"compute_id"`
 	ComputeUnits     int    `yaml:"compute_units"`
 	ResourceName     string `yaml:"resource_name,omitempty"`      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
@@ -420,7 +420,7 @@ type ModelVariantHardware struct {
 	GPUArch       string `yaml:"gpu_arch"`
 	GPUModel      string `yaml:"gpu_model,omitempty"`
 	VRAMMinMiB    int    `yaml:"vram_min_mib"`
-	RAMMinMiB     int    `yaml:"ram_min_mib,omitempty"` // system RAM needed (llamacpp CPU inference); used for scoring when vram_min_mib=0
+	RAMMinMiB     int    `yaml:"ram_min_mib,omitempty"`   // system RAM needed (llamacpp CPU inference); used for scoring when vram_min_mib=0
 	GPUCountMin   int    `yaml:"gpu_count_min,omitempty"` // minimum GPUs required (0 = any; typically matches tensor_parallel_size)
 	UnifiedMemory *bool  `yaml:"unified_memory,omitempty"`
 }
@@ -1242,6 +1242,235 @@ func LoadCatalogLenient(fsys fs.FS) (*Catalog, []string) {
 	return cat, warnings
 }
 
+// LoadCatalogPatchesLenient loads runtime overlay patches from a single layer
+// such as ~/.aima/catalog/central or ~/.aima/catalog/user. Patch files use
+// kind: <asset_kind>_patch with metadata.name, and are merged onto the current
+// effective catalog before being parsed as normal assets.
+func LoadCatalogPatchesLenient(fsys fs.FS, base *Catalog) (*Catalog, []string) {
+	cat := &Catalog{EngineProfiles: make(map[string]*EngineProfile)}
+	if fsys == nil {
+		return cat, nil
+	}
+	var warnings []string
+	err := fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			warnings = append(warnings, fmt.Sprintf("walk %s: %v", path, walkErr))
+			return nil
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("read %s: %v", path, err))
+			return nil
+		}
+		assetData, err := catalogPatchToAssetYAML(base, data, path)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("patch %s: %v", path, err))
+			return nil
+		}
+		if err := cat.parseAsset(assetData, path); err != nil {
+			warnings = append(warnings, fmt.Sprintf("parse patch %s: %v", path, err))
+			return nil
+		}
+		return nil
+	})
+	if err != nil {
+		warnings = append(warnings, err.Error())
+	}
+	for _, w := range finalizeEngineAssets(cat) {
+		if strings.Contains(w, "unknown profile") {
+			continue
+		}
+		warnings = append(warnings, w)
+	}
+	return cat, warnings
+}
+
+func catalogPatchToAssetYAML(base *Catalog, data []byte, path string) ([]byte, error) {
+	var patch map[string]any
+	if err := yaml.Unmarshal(data, &patch); err != nil {
+		return nil, err
+	}
+	kind, _ := patch["kind"].(string)
+	baseKind, ok := strings.CutSuffix(kind, "_patch")
+	if !ok || baseKind == "" {
+		return nil, fmt.Errorf("kind %q is not a patch kind", kind)
+	}
+	name := patchMetadataName(patch)
+	if name == "" {
+		return nil, fmt.Errorf("metadata.name is required")
+	}
+	delete(patch, "_base_digest")
+	patch["kind"] = baseKind
+
+	baseMap, found, err := catalogAssetMap(base, baseKind, name)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		baseMap = map[string]any{"kind": baseKind}
+	}
+	merged, ok := mergeYAMLValue(baseMap, patch).(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("patch %s did not produce an object", path)
+	}
+	return yaml.Marshal(merged)
+}
+
+func patchMetadataName(m map[string]any) string {
+	meta, ok := m["metadata"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := meta["name"].(string)
+	return strings.TrimSpace(name)
+}
+
+func catalogAssetMap(cat *Catalog, kind, name string) (map[string]any, bool, error) {
+	if cat == nil {
+		return nil, false, nil
+	}
+	marshal := func(v any) (map[string]any, error) {
+		data, err := yaml.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		var out map[string]any
+		if err := yaml.Unmarshal(data, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	switch kind {
+	case "engine_profile":
+		if p, ok := cat.EngineProfiles[name]; ok {
+			m, err := marshal(p)
+			return m, err == nil, err
+		}
+	case "hardware_profile":
+		for _, v := range cat.HardwareProfiles {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	case "engine_asset":
+		for _, v := range rawEngineAssets(cat) {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	case "model_asset":
+		for _, v := range cat.ModelAssets {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	case "partition_strategy":
+		for _, v := range cat.PartitionStrategies {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	case "stack_component":
+		for _, v := range cat.StackComponents {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	case "deployment_scenario":
+		for _, v := range cat.DeploymentScenarios {
+			if strings.EqualFold(v.Metadata.Name, name) {
+				m, err := marshal(v)
+				return m, err == nil, err
+			}
+		}
+	default:
+		return nil, false, fmt.Errorf("unsupported patch kind %q", kind)
+	}
+	return nil, false, nil
+}
+
+func mergeYAMLValue(base, patch any) any {
+	switch p := patch.(type) {
+	case map[string]any:
+		b, _ := base.(map[string]any)
+		out := make(map[string]any, len(b)+len(p))
+		for k, v := range b {
+			out[k] = normalizeValue(v)
+		}
+		for k, v := range p {
+			out[k] = mergeYAMLValue(out[k], v)
+		}
+		return out
+	case []any:
+		if b, ok := base.([]any); ok {
+			return mergeYAMLSlice(b, p)
+		}
+		out := make([]any, len(p))
+		for i, v := range p {
+			out[i] = normalizeValue(v)
+		}
+		return out
+	default:
+		return normalizeValue(p)
+	}
+}
+
+func mergeYAMLSlice(base, patch []any) []any {
+	if !sliceItemsHaveName(base) || !sliceItemsHaveName(patch) {
+		out := make([]any, len(patch))
+		for i, v := range patch {
+			out[i] = normalizeValue(v)
+		}
+		return out
+	}
+	out := make([]any, len(base))
+	index := make(map[string]int, len(base))
+	for i, item := range base {
+		out[i] = normalizeValue(item)
+		if name := mapItemName(item); name != "" {
+			index[strings.ToLower(name)] = i
+		}
+	}
+	for _, item := range patch {
+		name := mapItemName(item)
+		if i, ok := index[strings.ToLower(name)]; ok {
+			out[i] = mergeYAMLValue(out[i], item)
+			continue
+		}
+		out = append(out, normalizeValue(item))
+	}
+	return out
+}
+
+func sliceItemsHaveName(items []any) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if mapItemName(item) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func mapItemName(item any) string {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := m["name"].(string)
+	return strings.TrimSpace(name)
+}
+
 // overlayProbe extracts _base_digest from an overlay YAML before full parsing.
 type overlayProbe struct {
 	Kind       string `yaml:"kind"`
@@ -1388,6 +1617,33 @@ func CollectNames(cat *Catalog) map[string]bool {
 		names[v.Metadata.Name] = true
 	}
 	return names
+}
+
+// CollectNameKinds returns metadata.name to YAML kind for all catalog assets.
+func CollectNameKinds(cat *Catalog) map[string]string {
+	kinds := make(map[string]string)
+	for name := range cat.EngineProfiles {
+		kinds[name] = "engine_profile"
+	}
+	for _, v := range cat.HardwareProfiles {
+		kinds[v.Metadata.Name] = "hardware_profile"
+	}
+	for _, v := range cat.EngineAssets {
+		kinds[v.Metadata.Name] = "engine_asset"
+	}
+	for _, v := range cat.ModelAssets {
+		kinds[v.Metadata.Name] = "model_asset"
+	}
+	for _, v := range cat.PartitionStrategies {
+		kinds[v.Metadata.Name] = "partition_strategy"
+	}
+	for _, v := range cat.StackComponents {
+		kinds[v.Metadata.Name] = "stack_component"
+	}
+	for _, v := range cat.DeploymentScenarios {
+		kinds[v.Metadata.Name] = "deployment_scenario"
+	}
+	return kinds
 }
 
 func extractOverlayDigests(fsys fs.FS) map[string]string {

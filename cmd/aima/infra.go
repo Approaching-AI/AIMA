@@ -332,7 +332,14 @@ func defaultRootArgs(args []string) []string {
 }
 
 func catalogSize(cat *knowledge.Catalog) int {
-	return len(cat.EngineProfiles) + len(cat.HardwareProfiles) + len(cat.EngineAssets) + len(cat.ModelAssets) + len(cat.PartitionStrategies) + len(cat.StackComponents)
+	return len(cat.EngineProfiles) +
+		len(cat.HardwareProfiles) +
+		len(cat.EngineAssets) +
+		len(cat.ModelAssets) +
+		len(cat.PartitionStrategies) +
+		len(cat.StackComponents) +
+		len(cat.DeploymentScenarios) +
+		len(cat.BenchmarkProfileTiers)
 }
 
 const catalogDigestConfigKey = "catalog.digest.sha256"

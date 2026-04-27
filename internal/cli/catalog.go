@@ -23,7 +23,7 @@ func newCatalogCmd(app *App) *cobra.Command {
 func newCatalogOverrideCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "override <kind> <name> <yaml-file>",
-		Short: "Write a YAML asset to the overlay catalog (takes effect on next restart)",
+		Short: "Write a user-owned YAML patch to the overlay catalog (takes effect on next restart)",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if app.ToolDeps.CatalogOverride == nil {

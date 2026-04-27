@@ -58,7 +58,7 @@ aima knowledge export [--output]          # 导出知识
 aima knowledge import <path>              # 离线导入知识
 aima knowledge sync                       # 与中心服务同步知识
 aima knowledge validate                   # 校验预测与实际性能
-aima catalog override <kind> <name> <yaml-file>  # 写入 overlay catalog
+aima catalog override <kind> <name> <yaml-file>  # 写入 user-owned catalog patch
 aima catalog validate                     # 校验目录资产
 aima catalog status                       # 查看 factory/overlay 状态
 aima benchmark run --model <name>         # 在线基准测试（TTFT/TPOT/吞吐量）

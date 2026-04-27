@@ -30,11 +30,25 @@ var fleetBlockedTools = map[string]string{
 	"fleet.exec": "recursive fleet execution blocked",
 }
 
+type confirmableTool struct {
+	Reason     string
+	DryRunTool string
+	DryRunArgs func(json.RawMessage) json.RawMessage
+}
+
 // confirmableTools lists MCP tools that require user confirmation when called by the Agent.
 // These are NOT blocked: instead, the adapter runs a dry-run and returns NEEDS_APPROVAL.
 // The user can then approve via deploy.approve, or re-run with --dangerously-skip-permissions.
-var confirmableTools = map[string]string{
-	"deploy.apply": "creates or replaces inference deployment",
+var confirmableTools = map[string]confirmableTool{
+	"deploy.apply": {
+		Reason:     "creates or replaces inference deployment",
+		DryRunTool: "deploy.dry_run",
+	},
+	"scenario.apply": {
+		Reason:     "deploys every model defined in a scenario",
+		DryRunTool: "scenario.apply",
+		DryRunArgs: addDryRunFlag,
+	},
 }
 
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
@@ -116,6 +130,7 @@ func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
 				if kindRaw, ok := raw["kind"]; ok {
 					var kind string
 					if json.Unmarshal(kindRaw, &kind) == nil {
+						kind = strings.TrimSuffix(kind, "_patch")
 						switch kind {
 						case "engine_asset", "model_asset":
 							return false, ""
@@ -172,6 +187,34 @@ func fleetExecTarget(arguments json.RawMessage) (string, json.RawMessage, bool) 
 	return innerTool, innerParams, true
 }
 
+func confirmableDryRun(name string, arguments json.RawMessage) (string, json.RawMessage) {
+	spec := confirmableTools[name]
+	dryRunTool := spec.DryRunTool
+	if dryRunTool == "" {
+		dryRunTool = name
+	}
+	dryRunArgs := arguments
+	if spec.DryRunArgs != nil {
+		dryRunArgs = spec.DryRunArgs(arguments)
+	}
+	return dryRunTool, dryRunArgs
+}
+
+func addDryRunFlag(arguments json.RawMessage) json.RawMessage {
+	raw := make(map[string]json.RawMessage)
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &raw); err != nil {
+			return arguments
+		}
+	}
+	raw["dry_run"] = json.RawMessage("true")
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return arguments
+	}
+	return out
+}
+
 func isBlockedFleetExecTarget(name string) (bool, string) {
 	reason, ok := fleetBlockedTools[name]
 	return ok, reason
@@ -218,12 +261,13 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 				if tnRaw, ok := raw["tool_name"]; ok {
 					var innerTool string
 					if json.Unmarshal(tnRaw, &innerTool) == nil {
-						if reason, ok := confirmableTools[innerTool]; ok {
+						if spec, ok := confirmableTools[innerTool]; ok {
 							// Run remote dry-run via fleet.exec itself.
+							dryTool, dryParams := confirmableDryRun(innerTool, json.RawMessage(raw["params"]))
 							dryArgs, _ := json.Marshal(map[string]any{
 								"device_id": json.RawMessage(raw["device_id"]),
-								"tool_name": "deploy.dry_run",
-								"params":    json.RawMessage(raw["params"]),
+								"tool_name": dryTool,
+								"params":    json.RawMessage(dryParams),
 							})
 							dryResult, drErr := a.server.ExecuteTool(ctx, "fleet.exec", dryArgs)
 							var planText string
@@ -241,7 +285,7 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 								"Reason: %s\n\n"+
 								"Deployment plan:\n%s\n\n"+
 								"Present this plan to the user. When the user approves, call deploy.approve with id=%d.",
-								id, innerTool, reason, planText, id)
+								id, innerTool, spec.Reason, planText, id)
 							a.audit(ctx, name, string(arguments), fmt.Sprintf("NEEDS_APPROVAL id=%d", id))
 							return &agent.ToolResult{Content: msg, IsError: false}, nil
 						}
@@ -251,8 +295,9 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 		}
 	}
 
-	if reason, ok := confirmableTools[name]; ok && !skipPerms {
-		dryResult, drErr := a.server.ExecuteTool(ctx, "deploy.dry_run", arguments)
+	if spec, ok := confirmableTools[name]; ok && !skipPerms {
+		dryTool, dryArgs := confirmableDryRun(name, arguments)
+		dryResult, drErr := a.server.ExecuteTool(ctx, dryTool, dryArgs)
 		var planText string
 		if drErr == nil {
 			for _, c := range dryResult.Content {
@@ -270,7 +315,7 @@ func (a *mcpToolAdapter) ExecuteTool(ctx context.Context, name string, arguments
 			"Reason: %s\n\n"+
 			"Deployment plan:\n%s\n\n"+
 			"Present this plan to the user. When the user approves, call deploy.approve with id=%d.",
-			id, name, reason, planText, id)
+			id, name, spec.Reason, planText, id)
 		a.audit(ctx, name, string(arguments), fmt.Sprintf("NEEDS_APPROVAL id=%d", id))
 		return &agent.ToolResult{Content: msg, IsError: false}, nil
 	}

@@ -159,16 +159,6 @@ func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, d
 			continue
 		}
 
-		var raw map[string]any
-		if json.Unmarshal(data, &raw) == nil {
-			if status, _ := raw["status"].(string); status == "NEEDS_APPROVAL" {
-				if id, ok := raw["approval_id"].(float64); ok && deps.DeployApprove != nil {
-					if approved, err := deps.DeployApprove(ctx, int64(id)); err == nil {
-						data = approved
-					}
-				}
-			}
-		}
 		results = append(results, scenarioDeployResult{
 			Model:  d.Model,
 			Engine: d.Engine,

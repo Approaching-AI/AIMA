@@ -12,9 +12,78 @@ import (
 
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/agent"
-	"github.com/jguan/aima/internal/central"
 	"github.com/jguan/aima/internal/mcp"
 )
+
+const (
+	releaseGateAdvisoryTypeConfigRecommend = "config_recommend"
+	releaseGateAdvisoryStatusPending       = "pending"
+	releaseGateAdvisoryStatusDelivered     = "delivered"
+	releaseGateAdvisoryStatusValidated     = "validated"
+	releaseGateAdvisoryStatusRejected      = "rejected"
+)
+
+type releaseGateAdvisory struct {
+	ID             string          `json:"id"`
+	Type           string          `json:"type"`
+	Status         string          `json:"status"`
+	Severity       string          `json:"severity,omitempty"`
+	TargetHardware string          `json:"target_hardware,omitempty"`
+	TargetModel    string          `json:"target_model,omitempty"`
+	TargetEngine   string          `json:"target_engine,omitempty"`
+	ContentJSON    json.RawMessage `json:"content_json,omitempty"`
+	Reasoning      string          `json:"reasoning,omitempty"`
+	Confidence     string          `json:"confidence,omitempty"`
+	CreatedAt      string          `json:"created_at,omitempty"`
+	DeliveredAt    string          `json:"delivered_at,omitempty"`
+	ValidatedAt    string          `json:"validated_at,omitempty"`
+	Feedback       string          `json:"feedback,omitempty"`
+	Accepted       bool            `json:"accepted,omitempty"`
+}
+
+type releaseGateAdvisoryFilter struct {
+	ID       string
+	Type     string
+	Status   string
+	Severity string
+	Hardware string
+	Model    string
+	Engine   string
+	Limit    int
+}
+
+type releaseGateAdvisoryStatusUpdate struct {
+	Status      string
+	DeliveredAt string
+	ValidatedAt string
+	Feedback    string
+}
+
+type releaseGateScenario struct {
+	ID              string `json:"id"`
+	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	HardwareProfile string `json:"hardware_profile,omitempty"`
+	ScenarioYAML    string `json:"scenario_yaml,omitempty"`
+	Source          string `json:"source,omitempty"`
+	Models          string `json:"models,omitempty"`
+	Version         int    `json:"version,omitempty"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+}
+
+type releaseGateScenarioFilter struct {
+	Name       string
+	Hardware   string
+	Source     string
+	AdvisoryID string
+	Limit      int
+}
+
+type releaseGateCentralStore struct {
+	advisories []releaseGateAdvisory
+	scenarios  []releaseGateScenario
+}
 
 func TestV040ReleaseGateAdvisoryLoop_EndToEnd(t *testing.T) {
 	ctx := context.Background()
@@ -26,10 +95,10 @@ func TestV040ReleaseGateAdvisoryLoop_EndToEnd(t *testing.T) {
 	defer edgeDB.Close()
 
 	hwTarget := edgeHardwareTarget(ctx, ac)
-	if err := store.InsertAdvisory(ctx, central.Advisory{
+	if err := store.InsertAdvisory(ctx, releaseGateAdvisory{
 		ID:             "adv-v040-1",
-		Type:           central.AdvisoryTypeConfigRecommend,
-		Status:         central.AdvisoryStatusPending,
+		Type:           releaseGateAdvisoryTypeConfigRecommend,
+		Status:         releaseGateAdvisoryStatusPending,
 		Severity:       "info",
 		TargetHardware: hwTarget.MatchValue,
 		TargetModel:    "qwen3-8b",
@@ -91,14 +160,14 @@ func TestV040ReleaseGateAdvisoryLoop_EndToEnd(t *testing.T) {
 		t.Fatal("timed out waiting for advisory event")
 	}
 
-	stored, err := store.ListAdvisories(ctx, central.AdvisoryFilter{ID: "adv-v040-1", Limit: 1})
+	stored, err := store.ListAdvisories(ctx, releaseGateAdvisoryFilter{ID: "adv-v040-1", Limit: 1})
 	if err != nil {
 		t.Fatalf("ListAdvisories after pull: %v", err)
 	}
 	if len(stored) != 1 {
 		t.Fatalf("stored advisories = %d, want 1", len(stored))
 	}
-	if stored[0].Status != central.AdvisoryStatusDelivered {
+	if stored[0].Status != releaseGateAdvisoryStatusDelivered {
 		t.Fatalf("central status after pull = %q, want delivered", stored[0].Status)
 	}
 	if stored[0].DeliveredAt == "" {
@@ -120,11 +189,11 @@ func TestV040ReleaseGateAdvisoryLoop_EndToEnd(t *testing.T) {
 		t.Fatalf("accepted = %v, want true", feedback["accepted"])
 	}
 
-	stored, err = store.ListAdvisories(ctx, central.AdvisoryFilter{ID: "adv-v040-1", Limit: 1})
+	stored, err = store.ListAdvisories(ctx, releaseGateAdvisoryFilter{ID: "adv-v040-1", Limit: 1})
 	if err != nil {
 		t.Fatalf("ListAdvisories after feedback: %v", err)
 	}
-	if stored[0].Status != central.AdvisoryStatusValidated {
+	if stored[0].Status != releaseGateAdvisoryStatusValidated {
 		t.Fatalf("central status after feedback = %q, want validated", stored[0].Status)
 	}
 	if !stored[0].Accepted {
@@ -153,7 +222,7 @@ func TestV040ReleaseGateScenarioSync_EndToEnd(t *testing.T) {
 		hardware = "test-hardware"
 	}
 
-	if err := store.InsertScenario(ctx, central.Scenario{
+	if err := store.InsertScenario(ctx, releaseGateScenario{
 		ID:              "scn-v040-1",
 		Name:            "advisor-scenario",
 		Description:     "scenario synced from central to edge",
@@ -167,7 +236,7 @@ func TestV040ReleaseGateScenarioSync_EndToEnd(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertScenario advisor: %v", err)
 	}
-	if err := store.InsertScenario(ctx, central.Scenario{
+	if err := store.InsertScenario(ctx, releaseGateScenario{
 		ID:              "scn-v040-2",
 		Name:            "analyzer-scenario",
 		HardwareProfile: hardware,
@@ -257,21 +326,13 @@ func newReleaseGateEdgeHarness(t *testing.T, endpoint, apiKey string) (*appConte
 	return ac, deps, db
 }
 
-func newReleaseGateCentralStore(t *testing.T) central.CentralStore {
+func newReleaseGateCentralStore(t *testing.T) *releaseGateCentralStore {
 	t.Helper()
 
-	store, err := central.NewSQLiteCentralStore(":memory:")
-	if err != nil {
-		t.Fatalf("NewSQLiteCentralStore: %v", err)
-	}
-	if err := store.Migrate(context.Background()); err != nil {
-		t.Fatalf("Migrate central store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	return store
+	return &releaseGateCentralStore{}
 }
 
-func newReleaseGateCentralServer(t *testing.T, store central.CentralStore, apiKey string) *httptest.Server {
+func newReleaseGateCentralServer(t *testing.T, store *releaseGateCentralStore, apiKey string) *httptest.Server {
 	t.Helper()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +355,7 @@ func newReleaseGateCentralServer(t *testing.T, store central.CentralStore, apiKe
 	return httptest.NewServer(handler)
 }
 
-func releaseGateHandleListAdvisories(t *testing.T, store central.CentralStore, w http.ResponseWriter, r *http.Request) {
+func releaseGateHandleListAdvisories(t *testing.T, store *releaseGateCentralStore, w http.ResponseWriter, r *http.Request) {
 	t.Helper()
 
 	q := r.URL.Query()
@@ -305,7 +366,7 @@ func releaseGateHandleListAdvisories(t *testing.T, store central.CentralStore, w
 		}
 	}
 	hardware := firstNonEmpty(q.Get("hardware"), q.Get("target_hardware"))
-	advs, err := store.ListAdvisories(r.Context(), central.AdvisoryFilter{
+	advs, err := store.ListAdvisories(r.Context(), releaseGateAdvisoryFilter{
 		Type:     q.Get("type"),
 		Status:   q.Get("status"),
 		Severity: q.Get("severity"),
@@ -317,23 +378,23 @@ func releaseGateHandleListAdvisories(t *testing.T, store central.CentralStore, w
 	if err != nil {
 		t.Fatalf("ListAdvisories: %v", err)
 	}
-	if q.Get("status") == central.AdvisoryStatusPending {
+	if q.Get("status") == releaseGateAdvisoryStatusPending {
 		deliveredAt := time.Now().UTC().Format(time.RFC3339)
 		for i := range advs {
-			if err := store.UpdateAdvisoryStatus(r.Context(), advs[i].ID, central.AdvisoryStatusUpdate{
-				Status:      central.AdvisoryStatusDelivered,
+			if err := store.UpdateAdvisoryStatus(r.Context(), advs[i].ID, releaseGateAdvisoryStatusUpdate{
+				Status:      releaseGateAdvisoryStatusDelivered,
 				DeliveredAt: deliveredAt,
 			}); err != nil {
 				t.Fatalf("UpdateAdvisoryStatus delivered: %v", err)
 			}
-			advs[i].Status = central.AdvisoryStatusDelivered
+			advs[i].Status = releaseGateAdvisoryStatusDelivered
 			advs[i].DeliveredAt = deliveredAt
 		}
 	}
 	releaseGateWriteJSON(t, w, advs)
 }
 
-func releaseGateHandleAdvisoryFeedback(t *testing.T, store central.CentralStore, w http.ResponseWriter, r *http.Request) {
+func releaseGateHandleAdvisoryFeedback(t *testing.T, store *releaseGateCentralStore, w http.ResponseWriter, r *http.Request) {
 	t.Helper()
 
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/advisories/"), "/feedback")
@@ -349,12 +410,12 @@ func releaseGateHandleAdvisoryFeedback(t *testing.T, store central.CentralStore,
 	status := payload.Status
 	if status == "" && payload.Accepted != nil {
 		if *payload.Accepted {
-			status = central.AdvisoryStatusValidated
+			status = releaseGateAdvisoryStatusValidated
 		} else {
-			status = central.AdvisoryStatusRejected
+			status = releaseGateAdvisoryStatusRejected
 		}
 	}
-	if err := store.UpdateAdvisoryStatus(r.Context(), id, central.AdvisoryStatusUpdate{
+	if err := store.UpdateAdvisoryStatus(r.Context(), id, releaseGateAdvisoryStatusUpdate{
 		Status:      status,
 		Feedback:    payload.Feedback,
 		ValidatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -365,7 +426,7 @@ func releaseGateHandleAdvisoryFeedback(t *testing.T, store central.CentralStore,
 	releaseGateWriteJSON(t, w, map[string]any{"ok": true, "advisory_id": id, "status": status})
 }
 
-func releaseGateHandleListScenarios(t *testing.T, store central.CentralStore, w http.ResponseWriter, r *http.Request) {
+func releaseGateHandleListScenarios(t *testing.T, store *releaseGateCentralStore, w http.ResponseWriter, r *http.Request) {
 	t.Helper()
 
 	q := r.URL.Query()
@@ -376,7 +437,7 @@ func releaseGateHandleListScenarios(t *testing.T, store central.CentralStore, w 
 		}
 	}
 	hardware := firstNonEmpty(q.Get("hardware"), q.Get("hardware_profile"))
-	scenarios, err := store.ListScenarios(r.Context(), central.ScenarioFilter{
+	scenarios, err := store.ListScenarios(r.Context(), releaseGateScenarioFilter{
 		Name:       q.Get("name"),
 		Hardware:   hardware,
 		Source:     q.Get("source"),
@@ -387,6 +448,104 @@ func releaseGateHandleListScenarios(t *testing.T, store central.CentralStore, w 
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	releaseGateWriteJSON(t, w, scenarios)
+}
+
+func (s *releaseGateCentralStore) InsertAdvisory(_ context.Context, adv releaseGateAdvisory) error {
+	s.advisories = append(s.advisories, adv)
+	return nil
+}
+
+func (s *releaseGateCentralStore) ListAdvisories(_ context.Context, filter releaseGateAdvisoryFilter) ([]releaseGateAdvisory, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = len(s.advisories)
+	}
+	out := make([]releaseGateAdvisory, 0, len(s.advisories))
+	for _, adv := range s.advisories {
+		if filter.ID != "" && adv.ID != filter.ID {
+			continue
+		}
+		if filter.Type != "" && adv.Type != filter.Type {
+			continue
+		}
+		if filter.Status != "" && adv.Status != filter.Status {
+			continue
+		}
+		if filter.Severity != "" && adv.Severity != filter.Severity {
+			continue
+		}
+		if filter.Hardware != "" && adv.TargetHardware != filter.Hardware {
+			continue
+		}
+		if filter.Model != "" && adv.TargetModel != filter.Model {
+			continue
+		}
+		if filter.Engine != "" && adv.TargetEngine != filter.Engine {
+			continue
+		}
+		out = append(out, adv)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *releaseGateCentralStore) UpdateAdvisoryStatus(_ context.Context, id string, update releaseGateAdvisoryStatusUpdate) error {
+	for i := range s.advisories {
+		if s.advisories[i].ID != id {
+			continue
+		}
+		if update.Status != "" {
+			s.advisories[i].Status = update.Status
+			switch update.Status {
+			case releaseGateAdvisoryStatusValidated:
+				s.advisories[i].Accepted = true
+			case releaseGateAdvisoryStatusRejected:
+				s.advisories[i].Accepted = false
+			}
+		}
+		if update.DeliveredAt != "" {
+			s.advisories[i].DeliveredAt = update.DeliveredAt
+		}
+		if update.ValidatedAt != "" {
+			s.advisories[i].ValidatedAt = update.ValidatedAt
+		}
+		if update.Feedback != "" {
+			s.advisories[i].Feedback = update.Feedback
+		}
+		return nil
+	}
+	return http.ErrMissingFile
+}
+
+func (s *releaseGateCentralStore) InsertScenario(_ context.Context, scenario releaseGateScenario) error {
+	s.scenarios = append(s.scenarios, scenario)
+	return nil
+}
+
+func (s *releaseGateCentralStore) ListScenarios(_ context.Context, filter releaseGateScenarioFilter) ([]releaseGateScenario, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = len(s.scenarios)
+	}
+	out := make([]releaseGateScenario, 0, len(s.scenarios))
+	for _, scenario := range s.scenarios {
+		if filter.Name != "" && scenario.Name != filter.Name {
+			continue
+		}
+		if filter.Hardware != "" && scenario.HardwareProfile != filter.Hardware {
+			continue
+		}
+		if filter.Source != "" && scenario.Source != filter.Source {
+			continue
+		}
+		out = append(out, scenario)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func releaseGateWriteJSON(t *testing.T, w http.ResponseWriter, v any) {

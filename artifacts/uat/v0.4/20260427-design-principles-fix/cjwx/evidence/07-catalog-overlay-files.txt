@@ -1,0 +1,2 @@
+/tmp/aima-uat-20260427-design-fix/data/catalog/user/models/qwen3-4b.patch.yaml
+/tmp/aima-uat-20260427-design-fix/data/catalog/user/scenarios/uat-approval-flow.patch.yaml

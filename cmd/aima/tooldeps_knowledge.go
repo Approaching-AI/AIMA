@@ -16,6 +16,7 @@ import (
 	"github.com/jguan/aima/internal/mcp"
 
 	state "github.com/jguan/aima/internal"
+	"gopkg.in/yaml.v3"
 )
 
 // buildKnowledgeDeps wires knowledge.*, catalog.*, export/import, and knowledge summary tools.
@@ -504,8 +505,8 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 	}
 
 	deps.CatalogOverride = func(ctx context.Context, kind, name, content string) (json.RawMessage, error) {
-		// Validate kind
-		dir := knowledge.KindToDir(kind)
+		baseKind := strings.TrimSuffix(kind, "_patch")
+		dir := knowledge.KindToDir(baseKind)
 		if dir == "" {
 			return nil, fmt.Errorf("unknown kind %q", kind)
 		}
@@ -513,62 +514,71 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		if err := validateOverlayAssetName(name); err != nil {
 			return nil, err
 		}
-		// Validate YAML parses as the correct kind AND body kind matches param kind
-		tmpCat := &knowledge.Catalog{}
-		if err := tmpCat.ParseAssetPublic([]byte(content), "input"); err != nil {
-			return nil, fmt.Errorf("invalid YAML: %w", err)
+		finalContent, bodyKind, err := normalizeUserCatalogPatch(baseKind, name, content, factoryDigests)
+		if err != nil {
+			return nil, err
 		}
-		if bodyKind := tmpCat.ParsedKind(); bodyKind != kind {
-			return nil, fmt.Errorf("kind mismatch: parameter is %q but YAML body is %q", kind, bodyKind)
-		}
-		// Inject _base_digest if factory has this asset
-		finalContent := content
-		if digest, ok := factoryDigests[name]; ok {
-			finalContent = "_base_digest: " + digest + "\n" + content
-		}
-		// Write to overlay directory
-		overlaySubDir := filepath.Join(dataDir, "catalog", dir)
+		// Write to user-owned patch overlay directory. Central-owned patches
+		// are produced by the central distillation repo and are read-only here.
+		overlaySubDir := filepath.Join(dataDir, "catalog", "user", dir)
 		if err := os.MkdirAll(overlaySubDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create overlay dir: %w", err)
 		}
-		outPath := filepath.Join(overlaySubDir, name+".yaml")
+		outPath := filepath.Join(overlaySubDir, name+".patch.yaml")
 		action := "created"
 		if _, err := os.Stat(outPath); err == nil {
 			action = "replaced"
 		}
-		if err := os.WriteFile(outPath, []byte(finalContent), 0o644); err != nil {
+		if err := os.WriteFile(outPath, finalContent, 0o644); err != nil {
 			return nil, fmt.Errorf("write overlay: %w", err)
 		}
 		result := map[string]string{
-			"path":   outPath,
-			"action": action,
+			"path":      outPath,
+			"action":    action,
+			"kind":      bodyKind,
+			"ownership": "user",
 		}
 		if _, ok := factoryDigests[name]; ok {
-			result["note"] = "overlay shadows factory asset, _base_digest injected"
+			result["note"] = "user patch shadows factory asset, _base_digest injected"
 		}
 		return json.Marshal(result)
 	}
 
 	deps.CatalogStatus = func(ctx context.Context) (json.RawMessage, error) {
 		factoryCat, _ := knowledge.LoadCatalog(catalog.FS)
+		effective, _ := knowledge.LoadCatalog(catalog.FS)
+		factoryNames := knowledge.CollectNames(factoryCat)
 		overlayDir := filepath.Join(dataDir, "catalog")
 		var overlayCat *knowledge.Catalog
 		var parseWarnings []string
-		if info, e := os.Stat(overlayDir); e == nil && info.IsDir() {
-			overlayCat, parseWarnings = knowledge.LoadCatalogLenient(os.DirFS(overlayDir))
-		} else {
-			overlayCat = &knowledge.Catalog{}
+		overlayCat = &knowledge.Catalog{EngineProfiles: map[string]*knowledge.EngineProfile{}}
+		for _, layer := range []string{"central", "user"} {
+			layerDir := filepath.Join(overlayDir, layer)
+			if info, e := os.Stat(layerDir); e != nil || !info.IsDir() {
+				continue
+			}
+			layerCat, warnings := knowledge.LoadCatalogPatchesLenient(os.DirFS(layerDir), effective)
+			for _, w := range warnings {
+				parseWarnings = append(parseWarnings, layer+": "+w)
+			}
+			overlayCat, _ = knowledge.MergeCatalog(overlayCat, layerCat)
+			effective, _ = knowledge.MergeCatalog(effective, layerCat)
 		}
 		// Find shadowed assets
-		factoryNames := knowledge.CollectNames(factoryCat)
 		overlayNames := knowledge.CollectNames(overlayCat)
+		overlayKinds := knowledge.CollectNameKinds(overlayCat)
 		type shadowEntry struct {
 			Name  string `json:"name"`
 			Kind  string `json:"kind"`
 			Stale bool   `json:"stale"`
 		}
 		var shadowed []shadowEntry
-		overlayDigests := knowledge.ExtractOverlayDigestsFromDir(overlayDir)
+		overlayDigests := map[string]string{}
+		for _, layer := range []string{"central", "user"} {
+			for name, digest := range knowledge.ExtractOverlayDigestsFromDir(filepath.Join(overlayDir, layer)) {
+				overlayDigests[name] = digest
+			}
+		}
 		for name := range overlayNames {
 			if factoryNames[name] {
 				stale := false
@@ -577,7 +587,7 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 						stale = true
 					}
 				}
-				shadowed = append(shadowed, shadowEntry{Name: name, Stale: stale})
+				shadowed = append(shadowed, shadowEntry{Name: name, Kind: overlayKinds[name], Stale: stale})
 			}
 		}
 		status := map[string]any{
@@ -879,6 +889,41 @@ func normalizeImportedConfigJSON(data json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid JSON")
 	}
 	return string(data), nil
+}
+
+func normalizeUserCatalogPatch(kind, name, content string, factoryDigests map[string]string) ([]byte, string, error) {
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
+		return nil, "", fmt.Errorf("invalid YAML: %w", err)
+	}
+	bodyKind, _ := raw["kind"].(string)
+	patchKind := kind + "_patch"
+	switch bodyKind {
+	case kind:
+		raw["kind"] = patchKind
+	case patchKind:
+	default:
+		return nil, "", fmt.Errorf("kind mismatch: parameter is %q but YAML body is %q", kind, bodyKind)
+	}
+	meta, _ := raw["metadata"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+		raw["metadata"] = meta
+	}
+	bodyName, _ := meta["name"].(string)
+	if strings.TrimSpace(bodyName) == "" {
+		meta["name"] = name
+	} else if !strings.EqualFold(strings.TrimSpace(bodyName), name) {
+		return nil, "", fmt.Errorf("metadata.name %q does not match requested name %q", bodyName, name)
+	}
+	if digest, ok := factoryDigests[name]; ok {
+		raw["_base_digest"] = digest
+	}
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal patch: %w", err)
+	}
+	return out, patchKind, nil
 }
 
 func parseImportedTimestamp(value string) (time.Time, error) {

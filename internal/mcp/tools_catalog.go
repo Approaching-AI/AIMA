@@ -142,11 +142,11 @@ func registerCatalogTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
-	// catalog.override — write a YAML asset to the runtime overlay catalog
+	// catalog.override — write a user-owned YAML patch to the runtime overlay catalog
 	s.RegisterTool(&Tool{
 		Name:        "catalog.override",
-		Description: "Write a YAML asset to the runtime overlay catalog (~/.aima/catalog/). Overrides factory-embedded asset or adds new one.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","enum":["engine_asset","model_asset","hardware_profile","partition_strategy","stack_component"],"description":"Asset kind"},"name":{"type":"string","description":"metadata.name of the asset"},"content":{"type":"string","description":"Full YAML content of the asset"}},"required":["kind","name","content"]}`),
+		Description: "Write a user-owned YAML patch to the runtime overlay catalog (~/.aima/catalog/user/). Accepts base kind or <asset_kind>_patch; full asset content is converted to a patch for compatibility.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","enum":["engine_asset","engine_asset_patch","model_asset","model_asset_patch","hardware_profile","hardware_profile_patch","partition_strategy","partition_strategy_patch","stack_component","stack_component_patch"],"description":"Base asset kind or patch kind being patched"},"name":{"type":"string","description":"metadata.name of the asset"},"content":{"type":"string","description":"YAML patch content. Preferred body kind is <asset_kind>_patch with metadata.name."}},"required":["kind","name","content"]}`),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.CatalogOverride == nil {
 				return ErrorResult("catalog.override not implemented"), nil

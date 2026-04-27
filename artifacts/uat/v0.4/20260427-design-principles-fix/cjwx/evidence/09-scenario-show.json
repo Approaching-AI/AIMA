@@ -1,0 +1,31 @@
+{
+  "alternative_configs": null,
+  "deployments": [
+    {
+      "Config": {
+        "max_model_len": 2048,
+        "n_gpu_layers": 0
+      },
+      "Engine": "llamacpp",
+      "Modalities": [
+        "text"
+      ],
+      "Model": "qwen3-4b",
+      "Notes": "",
+      "Role": "primary",
+      "Slot": ""
+    }
+  ],
+  "description": "UAT dry-run-only scenario for scenario.apply approval gate",
+  "integrations": null,
+  "memory_budget": null,
+  "name": "uat-approval-flow",
+  "open_questions": null,
+  "post_deploy": null,
+  "startup_order": null,
+  "target": {
+    "HardwareProfile": "",
+    "PartitionStrategy": ""
+  },
+  "verified": null
+}

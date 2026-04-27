@@ -39,6 +39,15 @@ func (m *mockRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if r, ok := m.results[key]; ok {
 		return r.output, r.err
 	}
+	if base := filepath.Base(name); base != name {
+		baseKey := base
+		if len(args) > 0 {
+			baseKey = base + " " + args[0]
+		}
+		if r, ok := m.results[baseKey]; ok {
+			return r.output, r.err
+		}
+	}
 	// Default: command not found
 	return nil, fmt.Errorf("command not found: %s", name)
 }

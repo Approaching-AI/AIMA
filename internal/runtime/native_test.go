@@ -656,9 +656,16 @@ func TestProcessMatchesMetaAllowsInterpreterWrappedScript(t *testing.T) {
 		PID:     cmd.Process.Pid,
 		Command: []string{script, "--port", "32102"},
 	}
-	if !processMatchesMeta(meta) {
-		cmdline, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "cmdline"))
-		t.Fatalf("processMatchesMeta should allow interpreter prefix, cmdline=%q", string(cmdline))
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if processMatchesMeta(meta) {
+			return
+		}
+		if time.Now().After(deadline) {
+			cmdline, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "cmdline"))
+			t.Fatalf("processMatchesMeta should allow interpreter prefix, cmdline=%q", string(cmdline))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

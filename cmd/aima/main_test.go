@@ -1105,10 +1105,9 @@ func TestFindModelDirPreservesUnreadableExactDirectory(t *testing.T) {
 		t.Fatalf("mkdir exact dir: %v", err)
 	}
 	filePath := filepath.Join(exactDir, "config.json")
-	if err := os.WriteFile(filePath, []byte(`{"model_type":"qwen3"}`), 0o000); err != nil {
-		t.Fatalf("write unreadable config: %v", err)
+	if err := os.Symlink(filepath.Join(dataDir, "missing-config.json"), filePath); err != nil {
+		t.Fatalf("create unreadable config symlink: %v", err)
 	}
-	defer os.Chmod(filePath, 0o644)
 
 	got := findModelDir("qwen3-30b-a3b", dataDir, "safetensors", "gptq")
 	if got != exactDir {

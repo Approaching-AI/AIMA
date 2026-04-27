@@ -52,6 +52,37 @@ func (m *mockRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	return nil, fmt.Errorf("command not found: %s", name)
 }
 
+func useTempSystemInstallDirs(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	oldBinDir := systemBinDir
+	oldAIMAEnvDir := systemAIMAEnvDir
+	oldK3SEnvDir := systemK3SEnvDir
+	oldDataDir := systemDataDir
+	oldUnitDir := systemdUnitDir
+
+	systemBinDir = filepath.Join(root, "bin")
+	systemAIMAEnvDir = filepath.Join(root, "etc", "aima")
+	systemK3SEnvDir = filepath.Join(root, "etc", "rancher", "k3s")
+	systemDataDir = filepath.Join(root, "var", "lib", "aima")
+	systemdUnitDir = filepath.Join(root, "etc", "systemd", "system")
+
+	if err := os.MkdirAll(systemBinDir, 0o755); err != nil {
+		t.Fatalf("mkdir system bin dir: %v", err)
+	}
+	if err := os.MkdirAll(systemdUnitDir, 0o755); err != nil {
+		t.Fatalf("mkdir systemd unit dir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		systemBinDir = oldBinDir
+		systemAIMAEnvDir = oldAIMAEnvDir
+		systemK3SEnvDir = oldK3SEnvDir
+		systemDataDir = oldDataDir
+		systemdUnitDir = oldUnitDir
+	})
+}
+
 func TestStatusAllReady(t *testing.T) {
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -737,6 +768,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd tests only run on Linux")
 	}
+	useTempSystemInstallDirs(t)
 
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -794,7 +826,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	}
 
 	// Verify unit file was written
-	unitData, err := os.ReadFile("/etc/systemd/system/k3s.service")
+	unitData, err := os.ReadFile(filepath.Join(systemdUnitDir, "k3s.service"))
 	if err != nil {
 		t.Fatalf("read unit file: %v", err)
 	}
@@ -813,7 +845,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	}
 
 	// Verify env file was written
-	envData, err := os.ReadFile("/etc/rancher/k3s/k3s.env")
+	envData, err := os.ReadFile(filepath.Join(systemK3SEnvDir, "k3s.env"))
 	if err != nil {
 		t.Fatalf("read env file: %v", err)
 	}
@@ -826,6 +858,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd tests only run on Linux")
 	}
+	useTempSystemInstallDirs(t)
 
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -862,7 +895,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("installDaemonSystemd: %v", err)
 	}
 
-	info, err := os.Stat("/etc/aima")
+	info, err := os.Stat(systemAIMAEnvDir)
 	if err != nil {
 		t.Fatalf("stat /etc/aima: %v", err)
 	}
@@ -870,7 +903,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("/etc/aima mode = %#o, want 0755", got)
 	}
 
-	dataDirData, err := os.ReadFile("/etc/aima/data-dir")
+	dataDirData, err := os.ReadFile(filepath.Join(systemAIMAEnvDir, "data-dir"))
 	if err != nil {
 		t.Fatalf("read shared data-dir pointer: %v", err)
 	}
@@ -878,7 +911,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("shared data dir = %q, want %q", got, sharedDataDir)
 	}
 
-	envData, err := os.ReadFile("/etc/aima/aima-serve.env")
+	envData, err := os.ReadFile(filepath.Join(systemAIMAEnvDir, "aima-serve.env"))
 	if err != nil {
 		t.Fatalf("read env file: %v", err)
 	}

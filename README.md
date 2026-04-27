@@ -64,7 +64,7 @@ Grab a pre-built binary from the [Releases](https://github.com/Approaching-AI/AI
 
 ```bash
 git clone https://github.com/Approaching-AI/AIMA.git
-cd aima
+cd AIMA
 make build
 ```
 
@@ -95,14 +95,15 @@ aima hal detect
 
 # 2. Initialize infrastructure (installs K3S + HAMi + aima-serve daemon)
 #    Downloads airgap images for offline container startup.
+#    --tier k3s pulls in K3S + HAMi on top of the docker baseline.
 #    Requires root for systemd service installation.
-sudo aima init
+sudo aima onboarding init --tier k3s --yes
 
 # 3. Deploy a model (auto-resolves engine + config for your hardware)
-aima deploy apply --model qwen3.5-35b-a3b
+aima deploy qwen3.5-35b-a3b
 ```
 
-After `aima init`, three components are running as systemd services:
+After `aima onboarding init --tier k3s`, three components are running as systemd services:
 
 | Component | What it does |
 |-----------|-------------|
@@ -114,13 +115,10 @@ The server is now discoverable on the LAN and ready to serve inference requests.
 
 ### Client Usage (Any Platform)
 
-On another device with the AIMA binary — no `init` or `serve` needed:
+On another device with the AIMA binary — no `onboarding init` or `serve` needed:
 
 ```bash
-# Discover servers on the LAN via mDNS (no IP needed)
-aima discover
-
-# List all discovered AIMA devices
+# List AIMA devices auto-discovered on the LAN via mDNS (no IP needed)
 aima fleet devices
 
 # Query a remote device
@@ -137,7 +135,7 @@ curl http://<server-ip>:6188/v1/chat/completions \
 
 Every AIMA server hosts a built-in Web UI at `http://<server-ip>:6188/ui/`.
 
-To discover the server IP first: `aima discover`.
+To discover the server IP first: `aima fleet devices`.
 
 To get a Fleet dashboard that auto-discovers all LAN peers, run `aima serve --discover` on your own device and open `http://localhost:6188/ui/`.
 
@@ -148,7 +146,7 @@ To get a Fleet dashboard that auto-discovers all LAN peers, run `aima serve --di
 
 ### Security
 
-`aima init` starts the server **without authentication** (LAN trust model). To enable API key authentication:
+`aima onboarding init` starts the server **without authentication** (LAN trust model). To enable API key authentication:
 
 ```bash
 # Set API key (hot-reloads, no restart needed)
@@ -174,10 +172,10 @@ AIMA has been validated end-to-end across eight GPU/NPU ecosystems — NVIDIA (C
 
 ## Supported Engines
 
-AIMA orchestrates four inference runtimes — vLLM (Safetensors), llama.cpp (GGUF), SGLang (Safetensors), and Ollama (GGUF via llama.cpp) — across every supported backend:
+AIMA orchestrates three inference runtimes — vLLM (Safetensors), llama.cpp (GGUF), and SGLang (Safetensors) — across every supported backend:
 
 <div align="center">
-  <img src="docs/assets/supported-engines.png" alt="Supported Engines — vLLM on NVIDIA CUDA, AMD ROCm, Hygon DCU; llama.cpp on NVIDIA CUDA, AMD Vulkan, Apple Metal, CPU; SGLang on NVIDIA CUDA and Huawei Ascend (CANN); Ollama on all (via llama.cpp)" width="1000"/>
+  <img src="docs/assets/supported-engines.png" alt="Supported Engines — vLLM on NVIDIA CUDA, AMD ROCm, Hygon DCU; llama.cpp on NVIDIA CUDA, AMD Vulkan, Apple Metal, CPU; SGLang on NVIDIA CUDA and Huawei Ascend (CANN)" width="1000"/>
 </div>
 
 ## The L0→L3 Intelligence Ladder
@@ -233,14 +231,14 @@ AIMA is built to be driven by AI agents first, humans second.
 | Domain | Representative tools | Purpose |
 |---|---|---|
 | **hardware** | `hardware.detect` · `hardware.metrics` | GPU/CPU/RAM inventory + live telemetry |
-| **model** | `model.list` · `model.scan` · `model.pull` · `model.import` · `model.safetensors` | Local model catalog + download + import |
+| **model** | `model.list` · `model.scan` · `model.pull` · `model.import` · `model.info` · `model.remove` | Local model catalog + download + import |
 | **engine** | `engine.list` · `engine.pull` · `engine.scan` · `engine.import` · `engine.info` | Inference engine lifecycle |
 | **deploy** | `deploy.apply` · `deploy.dry_run` · `deploy.list` · `deploy.logs` · `deploy.delete` · `deploy.approve` · `deploy.status` | Start / monitor / stop model serving |
 | **fleet** | `fleet.info` · `fleet.exec` | LAN auto-discovery + remote tool execution |
 | **knowledge** | `knowledge.resolve` · `knowledge.search` · `knowledge.promote` · `knowledge.evaluate` · `knowledge.save` · `knowledge.analytics` | YAML catalog + golden-config lifecycle |
 | **agent** | `agent.ask` · `agent.status` · `agent.rollback` | L3a Agent invocation + decision trace |
 | **device** | `device.register` · `device.status` · `device.renew` · `device.reset` | aima-service identity lifecycle |
-| **benchmark** | `benchmark.run` · `benchmark.matrix` · `benchmark.record` · `benchmark.ensure_assets` | Reproducible performance testing |
+| **benchmark** | `benchmark.run` · `benchmark.matrix` · `benchmark.record` · `benchmark.list` | Reproducible performance testing |
 | **central** | `central.advise` · `central.scenario` · `central.sync` | Central knowledge server + advisory feedback |
 | **system** | `system.config` · `system.status` | Hot-reload config + overall health |
 

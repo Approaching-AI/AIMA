@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4527A0;stop-opacity:1" />
+      <stop offset="55%" style="stop-color:#5E35B1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3949AB;stop-opacity:1" />
+    </linearGradient>
+    <pattern id="dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.2" fill="white" opacity="0.035"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <!-- Dot texture -->
+  <rect width="1280" height="320" fill="url(#dots)"/>
+
+  <!-- Top accent line -->
+  <rect x="0" y="0" width="1280" height="3" fill="#42A5F5" opacity="0.55"/>
+  <!-- Bottom accent line -->
+  <rect x="0" y="317" width="1280" height="3" fill="#42A5F5" opacity="0.55"/>
+
+  <!-- Left vertical bar -->
+  <rect x="64" y="64" width="4" height="192" fill="#42A5F5" opacity="0.65" rx="2"/>
+
+  <!-- AIMA main title -->
+  <text x="90" y="156" font-family="Arial, Helvetica, sans-serif"
+        font-size="100" font-weight="700" fill="white"
+        letter-spacing="6">AIMA</text>
+
+  <!-- Subtitle -->
+  <text x="92" y="210" font-family="Arial, Helvetica, sans-serif"
+        font-size="20" fill="#B39DDB" letter-spacing="1.5">
+    AI Inference Managed by AI
+  </text>
+
+  <!-- Divider line -->
+  <line x1="700" y1="72" x2="700" y2="248"
+        stroke="#42A5F5" stroke-width="1" opacity="0.3"/>
+
+  <!-- Diagonal decorative lines -->
+  <line x1="680" y1="64" x2="696" y2="256"
+        stroke="#42A5F5" stroke-width="1.5" opacity="0.35"/>
+  <line x1="710" y1="64" x2="726" y2="256"
+        stroke="#42A5F5" stroke-width="1" opacity="0.2"/>
+
+  <!-- Right side: tagline -->
+  <text x="748" y="128" font-family="Arial, Helvetica, sans-serif"
+        font-size="17" font-weight="600" fill="#E8EAF6" opacity="0.95">
+    One binary. Any hardware. Full AI inference control.
+  </text>
+
+  <!-- Right side: key stats row 1 -->
+  <text x="748" y="172" font-family="Arial, Helvetica, sans-serif"
+        font-size="14" fill="#90CAF9" opacity="0.85">
+    61 MCP Tools  ·  8 Hardware Platforms  ·  4 Inference Engines
+  </text>
+
+  <!-- Right side: key stats row 2 -->
+  <text x="748" y="200" font-family="Arial, Helvetica, sans-serif"
+        font-size="14" fill="#90CAF9" opacity="0.7">
+    Fleet Management  ·  Offline-First  ·  Single Binary / Zero CGO
+  </text>
+
+  <!-- Website bottom right -->
+  <text x="1080" y="294" font-family="Arial, Helvetica, sans-serif"
+        font-size="13" fill="#7986CB" opacity="0.65">approaching-ai.com</text>
+</svg>

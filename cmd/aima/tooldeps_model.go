@@ -2,18 +2,139 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jguan/aima/internal/agent"
+	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/model"
 
 	state "github.com/jguan/aima/internal"
 )
+
+func dirSizeBytes(root string) (int64, error) {
+	var total int64
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
+}
+
+func registerCatalogLocalModels(ctx context.Context, cat *knowledge.Catalog, db *state.DB) error {
+	if cat == nil {
+		return nil
+	}
+	for i := range cat.ModelAssets {
+		ma := &cat.ModelAssets[i]
+		if err := registerCatalogLocalModel(ctx, ma, db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func registerCatalogLocalModel(ctx context.Context, ma *knowledge.ModelAsset, db *state.DB) error {
+	if ma == nil {
+		return nil
+	}
+	localPath, detectedArch, modelClass, format := catalogLocalModelDescriptor(ma)
+	if localPath == "" {
+		return nil
+	}
+	info, err := os.Stat(localPath)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	size, err := dirSizeBytes(localPath)
+	if err != nil {
+		return nil
+	}
+	if _, err := db.RawDB().ExecContext(ctx,
+		`DELETE FROM models WHERE LOWER(name) = LOWER(?) AND path <> ?`,
+		ma.Metadata.Name, localPath); err != nil {
+		slog.Warn("cleanup stale duplicate catalog-local model records failed",
+			"model", ma.Metadata.Name,
+			"path", localPath,
+			"error", err)
+	}
+	return db.UpsertScannedModel(ctx, &state.Model{
+		ID:           fmt.Sprintf("%x", sha256.Sum256([]byte(localPath+"|"+ma.Metadata.Name))),
+		Name:         ma.Metadata.Name,
+		Type:         ma.Metadata.Type,
+		Path:         localPath,
+		Format:       format,
+		SizeBytes:    size,
+		DetectedArch: detectedArch,
+		ModelClass:   modelClass,
+		Status:       "registered",
+	})
+}
+
+func catalogLocalModelDescriptor(ma *knowledge.ModelAsset) (localPath, detectedArch, modelClass, format string) {
+	format = firstCatalogFormat(ma)
+	for _, variant := range ma.Variants {
+		if variant.Source != nil && variant.Source.Type == "local_path" && strings.TrimSpace(variant.Source.Path) != "" {
+			return strings.TrimSpace(variant.Source.Path), inferDetectedArch(ma), inferModelClass(ma, &variant), firstNonEmpty(strings.TrimSpace(variant.Format), format)
+		}
+	}
+	for _, src := range ma.Storage.Sources {
+		if src.Type == "local_path" && strings.TrimSpace(src.Path) != "" {
+			return strings.TrimSpace(src.Path), inferDetectedArch(ma), inferModelClass(ma, nil), firstNonEmpty(strings.TrimSpace(src.Format), format)
+		}
+	}
+	return "", "", "", ""
+}
+
+func inferDetectedArch(ma *knowledge.ModelAsset) string {
+	if ma == nil {
+		return ""
+	}
+	family := strings.TrimSpace(strings.ToLower(ma.Metadata.Family))
+	if family != "" {
+		return family
+	}
+	return strings.TrimSpace(strings.ToLower(ma.Metadata.Name))
+}
+
+func inferModelClass(ma *knowledge.ModelAsset, variant *knowledge.ModelVariant) string {
+	if ma == nil {
+		return "unknown"
+	}
+	switch strings.ToLower(strings.TrimSpace(ma.Metadata.Type)) {
+	case "asr", "tts":
+		if variant != nil && strings.EqualFold(strings.TrimSpace(variant.Format), "onnx") {
+			return "pipeline"
+		}
+		return "pipeline"
+	case "llm", "embedding", "reranker":
+		return "dense"
+	default:
+		return "unknown"
+	}
+}
+
+func firstCatalogFormat(ma *knowledge.ModelAsset) string {
+	if ma == nil {
+		return ""
+	}
+	if len(ma.Storage.Formats) > 0 {
+		return strings.TrimSpace(ma.Storage.Formats[0])
+	}
+	return ""
+}
 
 // buildModelDeps wires model.scan, model.list, model.pull, model.import,
 // model.info, and model.remove tools.
@@ -53,10 +174,12 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 				eventBus.Publish(agent.ExplorerEvent{Type: agent.EventModelDiscovered, Model: m.Name})
 			}
 		}
+		_ = registerCatalogLocalModels(ctx, cat, db)
 		return json.Marshal(models)
 	}
 
 	deps.ListModels = func(ctx context.Context) (json.RawMessage, error) {
+		_ = registerCatalogLocalModels(ctx, cat, db)
 		models, err := db.ListModels(ctx)
 		if err != nil {
 			return nil, err

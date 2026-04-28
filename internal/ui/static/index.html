@@ -3877,11 +3877,11 @@ body {
       <!-- Models Panel -->
       <div class="panel">
         <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
-        <template x-if="models.length === 0">
+        <template x-if="deployableModels().length === 0">
           <div class="empty" x-text="t('no_models')"></div>
         </template>
         <ul class="panel-list">
-          <template x-for="(m, mi) in models" :key="m.name || mi">
+          <template x-for="(m, mi) in deployableModels()" :key="m.name || mi">
             <li class="model-list-item">
               <span class="dot" :class="modelDotClass(m.name)"></span>
               <div class="model-entry">
@@ -3902,6 +3902,27 @@ body {
             </li>
           </template>
         </ul>
+        <template x-if="componentModels().length > 0">
+          <div class="hardware-group" style="margin-top:14px">
+            <div class="hardware-group-title">语音组件</div>
+            <ul class="panel-list">
+              <template x-for="(m, mi) in componentModels()" :key="'component-' + (m.name || mi)">
+                <li class="model-list-item">
+                  <span class="dot dot-dim"></span>
+                  <div class="model-entry">
+                    <div class="model-entry-top">
+                      <span class="model-name" x-text="m.name" :title="m.name"></span>
+                      <span class="model-size" x-text="m.size || ''" :title="m.size || ''"></span>
+                    </div>
+                    <div class="model-entry-meta">
+                      <span class="model-status-note" x-text="componentStatusNote(m)" :title="componentStatusNote(m)"></span>
+                    </div>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </template>
       </div>
 
       <!-- Engines Panel -->
@@ -4620,8 +4641,11 @@ body {
         </div>
         <div class="panel">
           <div class="panel-title">&#x25C6; <span x-text="t('models')"></span></div>
+          <template x-if="deployableModels().length === 0">
+            <div class="empty" x-text="t('no_models')"></div>
+          </template>
           <ul class="panel-list">
-            <template x-for="(m, mi) in models" :key="m.name || mi">
+            <template x-for="(m, mi) in deployableModels()" :key="m.name || mi">
               <li class="model-list-item">
                 <span class="dot" :class="modelDotClass(m.name)"></span>
                 <div class="model-entry">
@@ -4642,6 +4666,27 @@ body {
               </li>
             </template>
           </ul>
+          <template x-if="componentModels().length > 0">
+            <div class="hardware-group" style="margin-top:14px">
+              <div class="hardware-group-title">语音组件</div>
+              <ul class="panel-list">
+                <template x-for="(m, mi) in componentModels()" :key="'mobile-component-' + (m.name || mi)">
+                  <li class="model-list-item">
+                    <span class="dot dot-dim"></span>
+                    <div class="model-entry">
+                      <div class="model-entry-top">
+                        <span class="model-name" x-text="m.name" :title="m.name"></span>
+                        <span class="model-size" x-text="m.size || ''" :title="m.size || ''"></span>
+                      </div>
+                      <div class="model-entry-meta">
+                        <span class="model-status-note" x-text="componentStatusNote(m)" :title="componentStatusNote(m)"></span>
+                      </div>
+                    </div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
         </div>
         <div class="panel">
           <div class="panel-title">&#x25B6; <span x-text="t('engines')"></span></div>
@@ -4659,7 +4704,7 @@ body {
         </div>
         <div class="panel">
           <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span></div>
-          <ul class="panel-list"><template x-for="(dep, di) in deployments" :key="di"><li style="flex-wrap:wrap"><span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase === 'failed' ? (dep.failure_detail || dep.detail) : (dep.startup_message || dep.phase)"></span><template x-if="dep.startup_progress > 0 && dep.startup_progress < 100"><div style="width:100%;margin-top:2px"><div class="deploy-progress"><div class="deploy-progress-fill" :style="'width:' + dep.startup_progress + '%'"></div></div></div></template></li></template></ul>
+          <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail"><li style="flex-wrap:wrap"><span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase === 'failed' ? (dep.failure_detail || dep.detail) : (dep.startup_message || dep.phase)"></span><template x-if="dep.startup_progress > 0 && dep.startup_progress < 100"><div style="width:100%;margin-top:2px"><div class="deploy-progress"><div class="deploy-progress-fill" :style="'width:' + dep.startup_progress + '%'"></div></div></div></template></li></template></ul>
         </div>
       </div>
     </template>
@@ -7228,7 +7273,9 @@ function aimaApp() {
         this._wizDeployAbort = abort;
         var headers = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
-        var engineStr = (rec.engine && typeof rec.engine === 'object') ? (rec.engine.type || '') : (rec.engine || '');
+        var engineStr = (rec.engine && typeof rec.engine === 'object')
+          ? (rec.engine.name || rec.engine.type || '')
+          : (rec.engine || '');
         var body = { model: rec.model || rec.model_name || rec.name || '', engine: engineStr };
         var resp = await fetch('/ui/api/onboarding-deploy', {
           method: 'POST',
@@ -8157,8 +8204,43 @@ function aimaApp() {
         return true;
       }).map(m => ({
         name: m.name || 'unknown',
+        type: m.type || 'unknown',
+        format: m.format || '',
+        model_class: m.model_class || '',
+        detected_arch: m.detected_arch || '',
         size: this.fmtModelSize(m.size_bytes || 0, m.format || '')
       }));
+    },
+
+    isDeployableModel(model) {
+      if (!model || !model.name) return false;
+      const type = String(model.type || '').toLowerCase();
+      const format = String(model.format || '').toLowerCase();
+      const modelClass = String(model.model_class || '').toLowerCase();
+      if (type === 'llm' || type === 'embedding') return true;
+      if ((type === 'asr' || type === 'tts') && modelClass === 'pipeline') return true;
+      if (format === 'gguf') return true;
+      if (format === 'safetensors' && (modelClass === 'dense' || modelClass === 'moe' || modelClass === 'hybrid')) return true;
+      if (format === 'onnx' && modelClass === 'pipeline') return true;
+      if (format === 'mnn' && modelClass === 'pipeline') return true;
+      return false;
+    },
+
+    deployableModels() {
+      return this.models.filter(m => this.isDeployableModel(m));
+    },
+
+    componentModels() {
+      return this.models.filter(m => !this.isDeployableModel(m));
+    },
+
+    componentStatusNote(model) {
+      const type = String(model && model.type ? model.type : '').toLowerCase();
+      if (type === 'asr') return this.lang === 'zh' ? '语音识别组件，不作为独立大模型部署' : 'ASR component, not deployed as a standalone foundation model';
+      if (type === 'tts') return this.lang === 'zh' ? '语音合成流水线，可作为独立语音服务部署' : 'Speech synthesis pipeline that can be deployed as a standalone voice service';
+      if (type === 'vad') return this.lang === 'zh' ? '语音活动检测组件，用于语音流水线' : 'VAD component used by speech pipelines';
+      if (type === 'nlp') return this.lang === 'zh' ? '语音后处理/标点组件，用于语音流水线' : 'Speech post-processing / punctuation component for speech pipelines';
+      return this.lang === 'zh' ? '内部组件，不在这里单独一键部署' : 'Internal component, not intended for one-click standalone deployment here';
     },
 
     deploymentForModel(modelName) {
@@ -8190,6 +8272,17 @@ function aimaApp() {
     },
 
     modelStatusNote(modelName) {
+      if (modelName === 'funasr-paraformer-onnx') {
+        const dep = this.deploymentForModel(modelName);
+        if (dep) {
+          if (dep.phase === 'failed') return dep.failure_detail || dep.detail || this.t('retry_label');
+          if (dep.phase === 'running' && dep.ready) {
+            return dep.address ? (this.t('running_label') + ' · ' + dep.address) : this.t('running_label');
+          }
+          return dep.startup_message || dep.startup_phase || dep.phase || this.t('deploying_label');
+        }
+        return this.lang === 'zh' ? '语音识别流水线（FunASR）' : 'Speech recognition pipeline (FunASR)';
+      }
       if (this.modelDeploying[modelName]) return this.t('deploying_label');
       const dep = this.deploymentForModel(modelName);
       if (!dep) return this.lang === 'zh' ? '仅本地资产' : 'Local only';

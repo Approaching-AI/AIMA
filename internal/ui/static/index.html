@@ -2307,9 +2307,7 @@ body {
 .panel-list li.starting {
   background: var(--gauge-bg);
   border-radius: 6px;
-  padding: 8px;
-  margin: -8px;
-  margin-bottom: 0;
+  box-shadow: inset 0 0 0 1px var(--border-medium);
 }
 
 /* ===== Support Page ===== */
@@ -4401,7 +4399,7 @@ body {
           <div class="empty" x-text="t('no_deployments')"></div>
         </template>
         <ul class="panel-list">
-          <template x-for="(dep, di) in deployments" :key="di">
+          <template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail">
             <li :class="{ starting: dep.startup_progress > 0 && dep.startup_progress < 100 }">
               <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
               <div style="flex:1;overflow:hidden">
@@ -4531,7 +4529,7 @@ body {
             <div class="empty" x-text="t('no_deployments')"></div>
           </template>
           <ul class="panel-list">
-            <template x-for="(dep, di) in deployments" :key="di">
+            <template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail">
               <li :class="{ starting: dep.startup_progress > 0 && dep.startup_progress < 100 }" style="flex-wrap:wrap">
                 <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
                 <div style="flex:1;min-width:0">
@@ -8233,7 +8231,7 @@ function aimaApp() {
       if (!data || data._err) return;
       const list = Array.isArray(data) ? data : [];
       const hasStarting = list.some(d => d.phase === 'starting' || (d.phase === 'running' && !d.ready));
-      this.deployments = list.map(d => {
+      const nextDeployments = list.map(d => {
         let eta = '';
         if (d.estimated_total_s && d.startup_progress > 0 && d.startup_progress < 100) {
           const elapsed = d.estimated_total_s * d.startup_progress / 100;
@@ -8255,6 +8253,23 @@ function aimaApp() {
           eta
         };
       });
+      nextDeployments.sort((a, b) => {
+        const rank = dep => {
+          if (dep.phase === 'running' && dep.ready) return 0;
+          if (dep.phase === 'starting' || (dep.phase === 'running' && !dep.ready)) return 1;
+          if (dep.phase === 'failed') return 2;
+          return 3;
+        };
+        const rankDiff = rank(a) - rank(b);
+        if (rankDiff !== 0) return rankDiff;
+        const nameA = (a.name || a.model || '').toLowerCase();
+        const nameB = (b.name || b.model || '').toLowerCase();
+        if (nameA !== nameB) return nameA.localeCompare(nameB);
+        const addrA = (a.address || '').toLowerCase();
+        const addrB = (b.address || '').toLowerCase();
+        return addrA.localeCompare(addrB);
+      });
+      this.deployments = nextDeployments;
       // Adaptive polling: surface externally-triggered deploys quickly enough to show startup.
       this._adjustDeployPoll(hasStarting);
     },

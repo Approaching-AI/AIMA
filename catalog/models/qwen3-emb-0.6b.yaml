@@ -31,7 +31,7 @@ variants:
       gpu_arch: MUSA
       vram_min_mib: 4096
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.20
@@ -54,7 +54,7 @@ variants:
       gpu_arch: MUSA
       vram_min_mib: 4096
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.10

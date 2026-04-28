@@ -8,6 +8,7 @@ metadata:
   aliases:
     - Qwen3-8B-junhowie
     - gptq-Qwen3-8B-junhowie
+    - gptq-Qwen3-8B
 storage:
   formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
@@ -33,7 +34,7 @@ variants:
       gpu_arch: Blackwell
       vram_min_mib: 6144
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.30
@@ -96,7 +97,7 @@ variants:
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.70
-      max_model_len: 16384
+      max_model_len: 8192
       max_num_seqs: 1
       enforce_eager: true
       dtype: auto
@@ -114,7 +115,7 @@ variants:
       gpu_arch: MUSA
       vram_min_mib: 6144
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.50

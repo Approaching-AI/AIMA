@@ -463,7 +463,7 @@ func TestResolveCatalogModelName(t *testing.T) {
 			}},
 			{Metadata: ModelMetadata{
 				Name:    "qwen3-8b",
-				Aliases: []string{"Qwen3-8B-junhowie", "gptq-Qwen3-8B-junhowie"},
+				Aliases: []string{"Qwen3-8B-junhowie", "gptq-Qwen3-8B-junhowie", "gptq-Qwen3-8B"},
 			}},
 			{Metadata: ModelMetadata{Name: "llama-3.1-8b"}},
 		},
@@ -477,6 +477,7 @@ func TestResolveCatalogModelName(t *testing.T) {
 		{"alias exact case", "Qwen3-Embedding-0.6B", "qwen3-emb-0.6b"},
 		{"alias lowercase", "qwen3-embedding-0.6b", "qwen3-emb-0.6b"},
 		{"quant-prefixed alias", "gptq-Qwen3-8B-junhowie", "qwen3-8b"},
+		{"quant short alias", "gptq-Qwen3-8B", "qwen3-8b"},
 		{"canonical name passthrough", "qwen3-8b", "qwen3-8b"},
 		{"canonical name different case", "LLaMA-3.1-8B", "llama-3.1-8b"},
 		{"no match returns input", "some-unknown-model", "some-unknown-model"},
@@ -1546,6 +1547,12 @@ func TestResolveLeavesEngineImageEmptyForNativePreinstalledEngine(t *testing.T) 
 	}
 	if resolved.RuntimeRecommendation != "native" {
 		t.Fatalf("RuntimeRecommendation = %q, want native", resolved.RuntimeRecommendation)
+	}
+	if resolved.Engine != "vllm" {
+		t.Fatalf("Engine = %q, want vllm", resolved.Engine)
+	}
+	if resolved.EngineAssetName != "vllm-musa" {
+		t.Fatalf("EngineAssetName = %q, want vllm-musa", resolved.EngineAssetName)
 	}
 }
 

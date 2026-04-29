@@ -102,17 +102,14 @@ func newServeCmd(app *App) *cobra.Command {
 				go openclaw.StartSyncLoop(ctx, app.OpenClaw, 10*time.Second)
 			}
 
-			// Auto-scan engines on startup so Explorer and other tools see
-			// locally available engines even before a manual engine.scan call.
-			if app.ToolDeps != nil && app.ToolDeps.ScanEngines != nil {
+			// Auto-reconcile local assets on startup so Explorer, onboarding, and
+			// UI views see locally available engines and models even after an
+			// upgrade that skips the first-run onboarding scan.
+			if app.ToolDeps != nil && (app.ToolDeps.ScanEngines != nil || app.ToolDeps.ScanModels != nil || app.ToolDeps.ScanExternalServices != nil) {
 				go func() {
 					scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
 					defer scanCancel()
-					if _, err := app.ToolDeps.ScanEngines(scanCtx, "auto", false); err != nil {
-						slog.Warn("startup engine scan failed (non-fatal)", "error", err)
-					} else {
-						slog.Info("startup engine scan completed")
-					}
+					runStartupAssetReconcile(scanCtx, app.ToolDeps)
 				}()
 			}
 
@@ -226,6 +223,33 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
 
 	return cmd
+}
+
+func runStartupAssetReconcile(ctx context.Context, deps *mcp.ToolDeps) {
+	if deps == nil {
+		return
+	}
+	if deps.ScanEngines != nil {
+		if _, err := deps.ScanEngines(ctx, "auto", false); err != nil {
+			slog.Warn("startup engine scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup engine scan completed")
+		}
+	}
+	if deps.ScanModels != nil {
+		if _, err := deps.ScanModels(ctx); err != nil {
+			slog.Warn("startup model scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup model scan completed")
+		}
+	}
+	if deps.ScanExternalServices != nil {
+		if _, err := deps.ScanExternalServices(ctx); err != nil {
+			slog.Warn("startup external service scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup external service scan completed")
+		}
+	}
 }
 
 func resolveMCPProfile(mcpEnabled bool, profile string) (mcp.Profile, error) {

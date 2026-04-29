@@ -694,6 +694,50 @@ func TestAudioTranscriptions_MultipartRoutesToBackend(t *testing.T) {
 	}
 }
 
+func TestAudioTranscriptions_ExternalASRPathOverride(t *testing.T) {
+	var receivedPath string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"hello"}`))
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	host := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("local-stt", &Backend{
+		ModelName: "local-stt",
+		Address:   host,
+		Ready:     true,
+		External:  true,
+		PathOverrides: map[string]string{
+			"/v1/audio/transcriptions": "/v1/asr",
+		},
+	})
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("model", "local-stt")
+	part, err := writer.CreateFormFile("file", "sample.wav")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	_, _ = part.Write([]byte("RIFFdemo"))
+	_ = writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /v1/audio/transcriptions status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedPath != "/v1/asr" {
+		t.Fatalf("backend received path %q, want /v1/asr", receivedPath)
+	}
+}
+
 func TestImagesGenerations_RoutesToBackend(t *testing.T) {
 	var receivedPath string
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {

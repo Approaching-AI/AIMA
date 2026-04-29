@@ -64,6 +64,20 @@ type Engine struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type ExternalService struct {
+	ID           string    `json:"id"`
+	BaseURL      string    `json:"base_url"`
+	Kind         string    `json:"kind"`
+	Status       string    `json:"status"`
+	Source       string    `json:"source"`
+	ModelsJSON   string    `json:"models_json"`
+	MetadataJSON string    `json:"metadata_json"`
+	LastError    string    `json:"last_error"`
+	Imported     bool      `json:"imported"`
+	FirstSeenAt  time.Time `json:"first_seen_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
 type KnowledgeNote struct {
 	ID              string    `json:"id"`
 	Title           string    `json:"title"`
@@ -390,6 +404,14 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v15: benchmark_results.advisory_id links validation benches to central advisory
 	if err := d.migrateV15(ctx); err != nil {
 		return fmt.Errorf("migrate v15: %w", err)
+	}
+	// v16: external service discovery inventory for unmanaged local APIs
+	if err := d.migrateV16(ctx); err != nil {
+		return fmt.Errorf("migrate v16: %w", err)
+	}
+	// v17: imported flag for externally discovered services routed via proxy
+	if err := d.migrateV17(ctx); err != nil {
+		return fmt.Errorf("migrate v17: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1218,6 +1240,59 @@ func (d *DB) migrateV15(ctx context.Context) error {
 	return nil
 }
 
+func (d *DB) migrateV16(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 16 {
+		return nil
+	}
+	ddl := `CREATE TABLE IF NOT EXISTS external_services (
+	id TEXT PRIMARY KEY,
+	base_url TEXT NOT NULL UNIQUE,
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT DEFAULT '[]',
+	metadata_json TEXT DEFAULT '{}',
+	last_error TEXT DEFAULT '',
+	imported INTEGER DEFAULT 0,
+	first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_external_services_status ON external_services(status);
+CREATE INDEX IF NOT EXISTS idx_external_services_last_seen ON external_services(last_seen_at);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate v16 schema: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 16"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV17(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 17 {
+		return nil
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('external_services') WHERE name='imported'`).Scan(&count); err != nil {
+		return fmt.Errorf("check external_services.imported column: %w", err)
+	}
+	if count == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE external_services ADD COLUMN imported INTEGER DEFAULT 0`); err != nil {
+			return fmt.Errorf("add external_services.imported: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 17"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) InsertExplorationPlan(ctx context.Context, plan *ExplorationPlanRow) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO exploration_plans (id, tier, trigger, status, plan_json, progress, total, created_at)
@@ -1760,6 +1835,83 @@ func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 		engines = append(engines, e)
 	}
 	return engines, rows.Err()
+}
+
+func (d *DB) UpsertExternalService(ctx context.Context, s *ExternalService) error {
+	if s == nil {
+		return fmt.Errorf("external service is nil")
+	}
+	now := time.Now().UTC()
+	if s.Status == "" {
+		s.Status = "reachable"
+	}
+	if s.Source == "" {
+		s.Source = "scan"
+	}
+	if s.ModelsJSON == "" {
+		s.ModelsJSON = "[]"
+	}
+	if s.MetadataJSON == "" {
+		s.MetadataJSON = "{}"
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO external_services
+		   (id, base_url, kind, status, source, models_json, metadata_json, last_error, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(base_url) DO UPDATE SET
+		   id=excluded.id,
+		   kind=excluded.kind,
+		   status=excluded.status,
+		   source=excluded.source,
+		   models_json=excluded.models_json,
+		   metadata_json=excluded.metadata_json,
+		   last_error=excluded.last_error,
+		   last_seen_at=excluded.last_seen_at`,
+		s.ID, s.BaseURL, s.Kind, s.Status, s.Source, s.ModelsJSON, s.MetadataJSON, s.LastError, now, now)
+	if err != nil {
+		return fmt.Errorf("upsert external service %s: %w", s.BaseURL, err)
+	}
+	return nil
+}
+
+func (d *DB) SetExternalServiceImported(ctx context.Context, idOrBaseURL string, imported bool) error {
+	value := 0
+	if imported {
+		value = 1
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE external_services SET imported = ? WHERE id = ? OR base_url = ?`,
+		value, idOrBaseURL, idOrBaseURL)
+	if err != nil {
+		return fmt.Errorf("set external service imported %s: %w", idOrBaseURL, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("external service %s not found", idOrBaseURL)
+	}
+	return nil
+}
+
+func (d *DB) ListExternalServices(ctx context.Context) ([]*ExternalService, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, base_url, kind, status, source,
+		        COALESCE(models_json,'[]'), COALESCE(metadata_json,'{}'), COALESCE(last_error,''), COALESCE(imported,0),
+		        first_seen_at, last_seen_at
+		   FROM external_services
+		  ORDER BY last_seen_at DESC, base_url ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list external services: %w", err)
+	}
+	defer rows.Close()
+	services := make([]*ExternalService, 0)
+	for rows.Next() {
+		s := &ExternalService{}
+		if err := rows.Scan(&s.ID, &s.BaseURL, &s.Kind, &s.Status, &s.Source,
+			&s.ModelsJSON, &s.MetadataJSON, &s.LastError, &s.Imported, &s.FirstSeenAt, &s.LastSeenAt); err != nil {
+			return nil, fmt.Errorf("scan external service row: %w", err)
+		}
+		services = append(services, s)
+	}
+	return services, rows.Err()
 }
 
 // LookupEngineAssetMetadata resolves version/image for an engine reference.

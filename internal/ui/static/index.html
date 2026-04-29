@@ -3920,6 +3920,28 @@ body {
           </template>
         </ul>
       </div>
+
+      <!-- External Services Panel -->
+      <div class="panel">
+        <div class="panel-title">&#x25B7; <span x-text="t('external_services')"></span></div>
+        <template x-if="externalServices.length === 0">
+          <div class="empty" x-text="t('no_external_services')"></div>
+        </template>
+        <ul class="panel-list">
+          <template x-for="(s, si) in externalServices" :key="s.id || si">
+            <li>
+              <span class="dot" :class="s.status === 'reachable' ? 'dot-orange' : 'dot-dim'"></span>
+              <span x-text="s.kind"></span>
+              <span class="item-detail" x-text="s.detail" :title="s.detail"></span>
+              <button type="button"
+                class="model-deploy-btn"
+                :disabled="s.imported || s.importing || !externalServiceImportable(s)"
+                @click="importExternalService(s)"
+                x-text="s.imported ? t('imported_label') : (s.importing ? t('importing_label') : t('import_label'))"></button>
+            </li>
+          </template>
+        </ul>
+      </div>
     </div>
 
     <!-- Center: Chat / Support (toggled by currentView) -->
@@ -5153,6 +5175,7 @@ var I18N = {
     hardware: 'Hardware',
     engines: 'Engines',
     models: 'Models',
+    external_services: 'External services',
     fleet: 'Fleet',
     deployments: 'Deployments',
     agent_status: 'Agent Status',
@@ -5191,6 +5214,10 @@ var I18N = {
     no_gpu: 'No discrete GPU',
     no_engines: 'No engines detected',
     no_models: 'No models found',
+    no_external_services: 'No external services discovered',
+    import_label: 'Import',
+    importing_label: 'Importing...',
+    imported_label: 'Imported',
     no_fleet: 'No devices discovered',
     no_deployments: 'No active deployments',
     hardware_group_accelerator: 'Accelerator',
@@ -5439,6 +5466,7 @@ var I18N = {
     hardware: '\u786C\u4EF6',
     engines: '\u5F15\u64CE',
     models: '\u6A21\u578B',
+    external_services: '\u5916\u90E8\u670D\u52A1',
     fleet: '\u8BBE\u5907\u7FA4',
     deployments: '\u90E8\u7F72',
     agent_status: 'Agent \u72B6\u6001',
@@ -5477,6 +5505,10 @@ var I18N = {
     no_gpu: '\u65E0\u72EC\u7ACB\u663E\u5361',
     no_engines: '\u672A\u68C0\u6D4B\u5230\u5F15\u64CE',
     no_models: '\u672A\u53D1\u73B0\u6A21\u578B',
+    no_external_services: '\u672A\u53D1\u73B0\u5916\u90E8\u670D\u52A1',
+    import_label: '\u5BFC\u5165',
+    importing_label: '\u5BFC\u5165\u4E2D...',
+    imported_label: '\u5DF2\u5BFC\u5165',
     no_fleet: '\u672A\u53D1\u73B0\u8BBE\u5907',
     no_deployments: '\u65E0\u6D3B\u52A8\u90E8\u7F72',
     hardware_group_accelerator: '\u52A0\u901F\u5668',
@@ -6248,6 +6280,7 @@ function aimaApp() {
     engines: [],
     models: [],
     deployments: [],
+    externalServices: [],
     modelDeploying: {},
     fleet: [],
     // View toggle (chat / support / explorer)
@@ -6376,6 +6409,7 @@ function aimaApp() {
       this.pollEngines();
       this.pollModels();
       this.pollDeployments();
+      this.pollExternalServices();
       this.pollFleet();
       this.pollAgentInfo();
       this.loadSupportManifest();
@@ -6384,6 +6418,7 @@ function aimaApp() {
       this._timers.push(setInterval(() => this.pollSystemStatus(), 5000));
       this._timers.push(setInterval(() => this.pollEngines(), 30000));
       this._timers.push(setInterval(() => this.pollModels(), 30000));
+      this._timers.push(setInterval(() => this.pollExternalServices(), 30000));
       this._deployPollMs = 1000;
       this._deployTimer = setInterval(() => this.pollDeployments(), 1000);
       this._timers.push(setInterval(() => this.pollFleet(), 10000));
@@ -8259,6 +8294,44 @@ function aimaApp() {
       this._adjustDeployPoll(hasStarting);
     },
 
+    async pollExternalServices() {
+      const data = await this.callTool('external.list');
+      if (!data || data._err) return;
+      const list = Array.isArray(data) ? data : [];
+      this.externalServices = list.map(s => {
+        const models = Array.isArray(s.models) ? s.models.filter(Boolean) : [];
+        return {
+          id: s.id || s.base_url || '',
+          baseURL: s.base_url || '',
+          kind: s.kind || 'service',
+          status: s.status || 'unknown',
+          imported: !!s.imported,
+          importing: false,
+          models,
+          detail: [s.kind || '', models.length ? models.join(', ') : '', s.base_url || ''].filter(Boolean).join(' · ')
+        };
+      });
+    },
+
+    async importExternalService(service) {
+      if (!service || service.imported || service.importing || !this.externalServiceImportable(service)) return;
+      this.externalServices = this.externalServices.map(s => (
+        s.id === service.id ? { ...s, importing: true } : s
+      ));
+      const data = await this.callTool('external.import', { id: service.id || '', base_url: service.baseURL || '' });
+      if (!data || data._err) {
+        const msg = data && data._err ? data._err : 'external.import failed';
+        this.messages.push({ role: 'error', text: msg });
+      }
+      await this.pollExternalServices();
+      await this.pollDeployments();
+      this.scrollChat();
+    },
+
+    externalServiceImportable(service) {
+      return !!service && (service.kind === 'openai' || service.kind === 'healthz');
+    },
+
     _adjustDeployPoll(fast) {
       const want = fast ? 500 : 1000;
       if (this._deployPollMs === want) return;
@@ -9241,6 +9314,8 @@ function aimaApp() {
         'engines': 'engine.list',
         'deployments': 'deploy.list',
         'deploys': 'deploy.list',
+        'external': 'external.list',
+        'services': 'external.list',
         'fleet': 'fleet.info',
         'devices': 'fleet.info'
       };

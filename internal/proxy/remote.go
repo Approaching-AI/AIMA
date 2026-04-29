@@ -73,7 +73,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 
 	// Clean stale remote backends not seen this round
 	for name, b := range s.ListBackends() {
-		if b.Remote && !alive[strings.ToLower(name)] {
+		if b.Remote && !b.External && !alive[strings.ToLower(name)] {
 			slog.Info("remote: removing stale backend", "model", name)
 			s.RemoveBackend(name)
 		}

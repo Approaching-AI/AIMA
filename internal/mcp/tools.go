@@ -25,7 +25,7 @@ const (
 // Strings ending with "." are prefix matches; others are exact matches.
 var profileIncludes = map[Profile][]string{
 	ProfileOperator: {
-		"hardware.", "model.", "engine.", "deploy.",
+		"hardware.", "model.", "engine.", "external.", "deploy.",
 		"system.", "fleet.", "scenario.",
 		"catalog.list",
 		"benchmark.run", "benchmark.list",
@@ -45,6 +45,7 @@ var profileIncludes = map[Profile][]string{
 		"hardware.detect", "hardware.metrics",
 		"deploy.apply", "deploy.approve", "deploy.dry_run", "deploy.status",
 		"deploy.list", "deploy.logs", "deploy.delete",
+		"external.list", "external.scan",
 		"benchmark.run", "benchmark.record", "benchmark.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.promote", "knowledge.save",
 		"explore", "tuning", "explorer",
@@ -149,6 +150,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	registerHardwareTools(s, deps)
 	registerModelTools(s, deps)
 	registerEngineTools(s, deps)
+	registerExternalTools(s, deps)
 	registerDeployTools(s, deps)
 	registerKnowledgeTools(s, deps)
 	registerBenchmarkTools(s, deps)

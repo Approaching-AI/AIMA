@@ -121,6 +121,7 @@ func TestSyncBackends_Removed(t *testing.T) {
 	s := NewServer()
 	s.RegisterBackend("old-model", &Backend{ModelName: "old-model", Address: "1.2.3.4:8000", Ready: true})
 	s.RegisterBackend("keep-model", &Backend{ModelName: "keep-model", Address: "1.2.3.5:8000", Ready: true})
+	s.RegisterBackend("external-model", &Backend{ModelName: "external-model", Address: "127.0.0.1:8004", Ready: true, External: true})
 
 	SyncBackends(s, []*DeploymentInfo{
 		{
@@ -138,6 +139,9 @@ func TestSyncBackends_Removed(t *testing.T) {
 	}
 	if _, ok := backends["keep-model"]; !ok {
 		t.Error("keep-model should still exist")
+	}
+	if _, ok := backends["external-model"]; !ok {
+		t.Error("external-model should be preserved")
 	}
 }
 

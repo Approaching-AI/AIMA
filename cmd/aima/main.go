@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -17,6 +18,7 @@ import (
 	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/cli"
 	"github.com/jguan/aima/internal/engine"
+	extsvc "github.com/jguan/aima/internal/external"
 	"github.com/jguan/aima/internal/fleet"
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
@@ -1540,6 +1542,87 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 	buildDeployDeps(ac, deps, pullModelCore, deployRunCore)
 	buildKnowledgeDeps(ac, deps)
 	buildBenchmarkDeps(ac, deps, resolveEndpoint)
+	deps.ScanExternalServices = func(ctx context.Context) (json.RawMessage, error) {
+		existing, err := db.ListExternalServices(ctx)
+		if err != nil {
+			return nil, err
+		}
+		endpoints := make([]string, 0)
+		for _, svc := range existing {
+			if svc.Imported && strings.TrimSpace(svc.BaseURL) != "" {
+				endpoints = append(endpoints, svc.BaseURL)
+			}
+		}
+		services, err := extsvc.Scan(ctx, extsvc.ScanOptions{Endpoints: endpoints})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]externalServiceOverview, 0, len(services))
+		for _, svc := range services {
+			overview := externalServiceOverviewFromScan(svc)
+			if err := db.UpsertExternalService(ctx, externalServiceRecordFromOverview(overview)); err != nil {
+				slog.Warn("external service scan: failed to persist service", "base_url", svc.BaseURL, "error", err)
+				continue
+			}
+			out = append(out, overview)
+		}
+		reachable := make(map[string]struct{}, len(out))
+		for _, svc := range out {
+			reachable[svc.BaseURL] = struct{}{}
+		}
+		if err := restoreImportedExternalServices(ctx, db, proxyServer, reachable); err != nil {
+			slog.Warn("external service scan: failed to restore imported services", "error", err)
+		}
+		return json.Marshal(out)
+	}
+	deps.ListExternalServices = func(ctx context.Context) (json.RawMessage, error) {
+		rows, err := db.ListExternalServices(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]externalServiceOverview, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, externalServiceOverviewFromRecord(row))
+		}
+		return json.Marshal(out)
+	}
+	deps.ImportExternalService = func(ctx context.Context, idOrBaseURL string, models []string) (json.RawMessage, error) {
+		rows, err := db.ListExternalServices(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var selected externalServiceOverview
+		for _, row := range rows {
+			if row.ID == idOrBaseURL || row.BaseURL == idOrBaseURL {
+				selected = externalServiceOverviewFromRecord(row)
+				break
+			}
+		}
+		if selected.BaseURL == "" {
+			return nil, fmt.Errorf("external service %q not found; run external.scan first", idOrBaseURL)
+		}
+		probed, err := extsvc.Probe(ctx, selected.BaseURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("probe external service %s: %w", selected.BaseURL, err)
+		}
+		selected = externalServiceOverviewFromScan(probed)
+		if err := db.UpsertExternalService(ctx, externalServiceRecordFromOverview(selected)); err != nil {
+			return nil, err
+		}
+		imported, err := registerExternalServiceBackends(proxyServer, selected, models)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.SetExternalServiceImported(ctx, selected.BaseURL, true); err != nil {
+			return nil, err
+		}
+		selected.Imported = true
+		return json.Marshal(map[string]any{
+			"imported": true,
+			"count":    imported,
+			"service":  selected,
+		})
+	}
 
 	// Onboarding (multi-action MCP tool). The closures below wrap the
 	// internal/onboarding package entry points; scan/init/deploy collect
@@ -1604,4 +1687,171 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 	}
 
 	return deps
+}
+
+type externalServiceOverview struct {
+	ID          string         `json:"id"`
+	BaseURL     string         `json:"base_url"`
+	Kind        string         `json:"kind"`
+	Status      string         `json:"status"`
+	Source      string         `json:"source"`
+	Models      []string       `json:"models,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	LastError   string         `json:"last_error,omitempty"`
+	Imported    bool           `json:"imported"`
+	FirstSeenAt time.Time      `json:"first_seen_at,omitempty"`
+	LastSeenAt  time.Time      `json:"last_seen_at,omitempty"`
+}
+
+func externalServiceOverviewFromScan(svc *extsvc.Service) externalServiceOverview {
+	if svc == nil {
+		return externalServiceOverview{}
+	}
+	return externalServiceOverview{
+		ID:        svc.ID,
+		BaseURL:   svc.BaseURL,
+		Kind:      svc.Kind,
+		Status:    svc.Status,
+		Source:    svc.Source,
+		Models:    svc.Models,
+		Metadata:  svc.Metadata,
+		LastError: svc.LastError,
+	}
+}
+
+func externalServiceRecordFromOverview(svc externalServiceOverview) *state.ExternalService {
+	modelsJSON, _ := json.Marshal(svc.Models)
+	if len(modelsJSON) == 0 || string(modelsJSON) == "null" {
+		modelsJSON = []byte("[]")
+	}
+	metadataJSON, _ := json.Marshal(svc.Metadata)
+	if len(metadataJSON) == 0 || string(metadataJSON) == "null" {
+		metadataJSON = []byte("{}")
+	}
+	return &state.ExternalService{
+		ID:           svc.ID,
+		BaseURL:      svc.BaseURL,
+		Kind:         svc.Kind,
+		Status:       svc.Status,
+		Source:       svc.Source,
+		ModelsJSON:   string(modelsJSON),
+		MetadataJSON: string(metadataJSON),
+		LastError:    svc.LastError,
+	}
+}
+
+func externalServiceOverviewFromRecord(row *state.ExternalService) externalServiceOverview {
+	if row == nil {
+		return externalServiceOverview{}
+	}
+	var models []string
+	_ = json.Unmarshal([]byte(row.ModelsJSON), &models)
+	var metadata map[string]any
+	_ = json.Unmarshal([]byte(row.MetadataJSON), &metadata)
+	return externalServiceOverview{
+		ID:          row.ID,
+		BaseURL:     row.BaseURL,
+		Kind:        row.Kind,
+		Status:      row.Status,
+		Source:      row.Source,
+		Models:      models,
+		Metadata:    metadata,
+		LastError:   row.LastError,
+		Imported:    row.Imported,
+		FirstSeenAt: row.FirstSeenAt,
+		LastSeenAt:  row.LastSeenAt,
+	}
+}
+
+func restoreImportedExternalServices(ctx context.Context, db *state.DB, proxyServer *proxy.Server, reachable map[string]struct{}) error {
+	rows, err := db.ListExternalServices(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if !row.Imported {
+			continue
+		}
+		if reachable != nil {
+			if _, ok := reachable[row.BaseURL]; !ok {
+				continue
+			}
+		}
+		overview := externalServiceOverviewFromRecord(row)
+		if _, err := registerExternalServiceBackends(proxyServer, overview, nil); err != nil {
+			slog.Warn("external service restore: failed to register backend", "base_url", overview.BaseURL, "error", err)
+		}
+	}
+	return nil
+}
+
+func registerExternalServiceBackends(proxyServer *proxy.Server, service externalServiceOverview, selectedModels []string) (int, error) {
+	if proxyServer == nil {
+		return 0, fmt.Errorf("proxy server is nil")
+	}
+	address, basePath, err := proxyRouteTarget(service.BaseURL)
+	if err != nil {
+		return 0, err
+	}
+	models := selectedModels
+	if len(models) == 0 {
+		models = service.Models
+	}
+	seen := make(map[string]struct{})
+	imported := 0
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[strings.ToLower(model)]; exists {
+			continue
+		}
+		seen[strings.ToLower(model)] = struct{}{}
+		engineType := "external-openai"
+		pathOverrides := map[string]string(nil)
+		if service.Kind == "healthz" {
+			engineType = "external-asr"
+			pathOverrides = map[string]string{"/v1/audio/transcriptions": "/v1/asr"}
+		} else if service.Kind != "openai" {
+			return 0, fmt.Errorf("external service %s is %q, not importable", service.BaseURL, service.Kind)
+		}
+		proxyServer.RegisterBackend(model, &proxy.Backend{
+			ModelName:     model,
+			UpstreamModel: model,
+			EngineType:    engineType,
+			Address:       address,
+			BasePath:      basePath,
+			Ready:         true,
+			External:      true,
+			PathOverrides: pathOverrides,
+		})
+		imported++
+	}
+	if imported == 0 {
+		return 0, fmt.Errorf("external service %s has no models to import", service.BaseURL)
+	}
+	return imported, nil
+}
+
+func proxyRouteTarget(baseURL string) (address, basePath string, err error) {
+	raw := strings.TrimSpace(baseURL)
+	if raw == "" {
+		return "", "", fmt.Errorf("base_url is required")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", fmt.Errorf("parse base_url %q: %w", baseURL, err)
+	}
+	if u.Host == "" {
+		return "", "", fmt.Errorf("base_url %q has no host", baseURL)
+	}
+	basePath = strings.TrimRight(u.Path, "/")
+	if basePath == "/v1" {
+		basePath = ""
+	}
+	return u.Host, basePath, nil
 }

@@ -33,15 +33,17 @@ const LabelParameterCount = "aima.dev/parameter_count"
 
 // Backend represents a running inference engine.
 type Backend struct {
-	ModelName           string `json:"model_name"`
-	UpstreamModel       string `json:"upstream_model,omitempty"`
-	EngineType          string `json:"engine_type"`
-	Address             string `json:"address"`
-	BasePath            string `json:"base_path"`
-	Ready               bool   `json:"ready"`
-	Remote              bool   `json:"remote"` // true = discovered via mDNS, not a local deployment
-	ParameterCount      string `json:"parameter_count,omitempty"`
-	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+	ModelName           string            `json:"model_name"`
+	UpstreamModel       string            `json:"upstream_model,omitempty"`
+	EngineType          string            `json:"engine_type"`
+	Address             string            `json:"address"`
+	BasePath            string            `json:"base_path"`
+	Ready               bool              `json:"ready"`
+	Remote              bool              `json:"remote"` // true = discovered via mDNS, not a local deployment
+	External            bool              `json:"external"`
+	PathOverrides       map[string]string `json:"path_overrides,omitempty"`
+	ParameterCount      string            `json:"parameter_count,omitempty"`
+	ContextWindowTokens int               `json:"context_window_tokens,omitempty"`
 }
 
 func cloneBackend(b *Backend) *Backend {
@@ -49,6 +51,12 @@ func cloneBackend(b *Backend) *Backend {
 		return nil
 	}
 	cp := *b
+	if b.PathOverrides != nil {
+		cp.PathOverrides = make(map[string]string, len(b.PathOverrides))
+		for k, v := range b.PathOverrides {
+			cp.PathOverrides[k] = v
+		}
+	}
 	return &cp
 }
 
@@ -343,6 +351,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"engine_type":           b.EngineType,
 			"ready":                 b.Ready,
 			"remote":                b.Remote,
+			"external":              b.External,
 			"parameter_count":       b.ParameterCount,
 			"context_window_tokens": b.ContextWindowTokens,
 		})
@@ -452,6 +461,9 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 	// Determine the target path: basePath + suffix from original request
 	// e.g., request to /v1/chat/completions with basePath=/v1 → forward to /v1/chat/completions
 	targetPath := s.buildTargetPath(backend.BasePath, r.URL.Path)
+	if override := strings.TrimSpace(backend.PathOverrides[r.URL.Path]); override != "" {
+		targetPath = override
+	}
 
 	target := &url.URL{
 		Scheme: "http",

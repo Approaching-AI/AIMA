@@ -97,6 +97,13 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 		Ready:     true,
 		Remote:    true,
 	})
+	// Imported external backends are not owned by mDNS discovery and should survive.
+	s.RegisterBackend("external-model", &Backend{
+		ModelName: "external-model",
+		Address:   "127.0.0.1:8004",
+		Ready:     true,
+		External:  true,
+	})
 	// Also register a local backend that should survive
 	s.RegisterBackend("local-model", &Backend{
 		ModelName: "local-model",
@@ -119,6 +126,10 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 	// old-remote-model should be cleaned up
 	if _, ok := backends["old-remote-model"]; ok {
 		t.Error("stale remote backend 'old-remote-model' should have been removed")
+	}
+
+	if _, ok := backends["external-model"]; !ok {
+		t.Error("external backend 'external-model' should not be removed")
 	}
 
 	// local-model should survive

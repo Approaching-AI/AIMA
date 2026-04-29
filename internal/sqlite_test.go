@@ -27,6 +27,92 @@ func TestOpenClose(t *testing.T) {
 	}
 }
 
+func TestExternalServiceUpsertAndList(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	first := &ExternalService{
+		ID:           "external-1",
+		BaseURL:      "http://127.0.0.1:8009",
+		Kind:         "healthz",
+		Status:       "reachable",
+		Source:       "scan",
+		ModelsJSON:   `["SenseVoiceSmall"]`,
+		MetadataJSON: `{"status":"ok"}`,
+	}
+	if err := db.UpsertExternalService(ctx, first); err != nil {
+		t.Fatalf("UpsertExternalService(first): %v", err)
+	}
+
+	second := &ExternalService{
+		ID:           "external-1",
+		BaseURL:      "http://127.0.0.1:8009",
+		Kind:         "healthz",
+		Status:       "reachable",
+		Source:       "scan",
+		ModelsJSON:   `["SenseVoiceSmall","pyannote"]`,
+		MetadataJSON: `{"status":"ok","version":"2"}`,
+	}
+	if err := db.UpsertExternalService(ctx, second); err != nil {
+		t.Fatalf("UpsertExternalService(second): %v", err)
+	}
+
+	services, err := db.ListExternalServices(ctx)
+	if err != nil {
+		t.Fatalf("ListExternalServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("len = %d, want 1", len(services))
+	}
+	got := services[0]
+	if got.BaseURL != "http://127.0.0.1:8009" {
+		t.Fatalf("BaseURL = %q, want http://127.0.0.1:8009", got.BaseURL)
+	}
+	if got.ModelsJSON != `["SenseVoiceSmall","pyannote"]` {
+		t.Fatalf("ModelsJSON = %s, want updated models", got.ModelsJSON)
+	}
+	if got.FirstSeenAt.IsZero() || got.LastSeenAt.IsZero() {
+		t.Fatalf("timestamps should be populated: %+v", got)
+	}
+	if got.LastSeenAt.Before(got.FirstSeenAt) {
+		t.Fatalf("LastSeenAt %s before FirstSeenAt %s", got.LastSeenAt, got.FirstSeenAt)
+	}
+}
+
+func TestExternalServiceImportedFlagPersistsAcrossScanUpserts(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	svc := &ExternalService{
+		ID:         "external-2",
+		BaseURL:    "http://127.0.0.1:8004",
+		Kind:       "openai",
+		Status:     "reachable",
+		Source:     "scan",
+		ModelsJSON: `["whisper-large-v3-hf"]`,
+	}
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("UpsertExternalService: %v", err)
+	}
+	if err := db.SetExternalServiceImported(ctx, "http://127.0.0.1:8004", true); err != nil {
+		t.Fatalf("SetExternalServiceImported: %v", err)
+	}
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("second UpsertExternalService: %v", err)
+	}
+
+	services, err := db.ListExternalServices(ctx)
+	if err != nil {
+		t.Fatalf("ListExternalServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("len = %d, want 1", len(services))
+	}
+	if !services[0].Imported {
+		t.Fatal("Imported = false, want true after scan refresh")
+	}
+}
+
 func TestSchemaIncludesModelVariantGPUCountMin(t *testing.T) {
 	db := mustOpen(t)
 	ctx := context.Background()

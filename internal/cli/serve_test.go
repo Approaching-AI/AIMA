@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/jguan/aima/internal/mcp"
@@ -121,5 +124,76 @@ func TestResolveMCPProfile(t *testing.T) {
 				t.Fatalf("resolveMCPProfile() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunStartupAssetReconcileScansEnginesAndModels(t *testing.T) {
+	t.Parallel()
+
+	var engineCalls int
+	var modelCalls int
+	var externalCalls int
+	var gotRuntime string
+	var gotAutoImport bool
+
+	deps := &mcp.ToolDeps{
+		ScanEngines: func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) {
+			engineCalls++
+			gotRuntime = runtime
+			gotAutoImport = autoImport
+			return json.RawMessage(`[]`), nil
+		},
+		ScanModels: func(ctx context.Context) (json.RawMessage, error) {
+			modelCalls++
+			return json.RawMessage(`[]`), nil
+		},
+		ScanExternalServices: func(ctx context.Context) (json.RawMessage, error) {
+			externalCalls++
+			return json.RawMessage(`[]`), nil
+		},
+	}
+
+	runStartupAssetReconcile(context.Background(), deps)
+
+	if engineCalls != 1 {
+		t.Fatalf("ScanEngines call count = %d, want 1", engineCalls)
+	}
+	if gotRuntime != "auto" || gotAutoImport {
+		t.Fatalf("ScanEngines(%q, %v), want (auto, false)", gotRuntime, gotAutoImport)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("ScanModels call count = %d, want 1", modelCalls)
+	}
+	if externalCalls != 1 {
+		t.Fatalf("ScanExternalServices call count = %d, want 1", externalCalls)
+	}
+}
+
+func TestRunStartupAssetReconcileContinuesWhenEngineScanFails(t *testing.T) {
+	t.Parallel()
+
+	var modelCalls int
+	var externalCalls int
+	deps := &mcp.ToolDeps{
+		ScanEngines: func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) {
+			return nil, errors.New("engine scanner unavailable")
+		},
+		ScanModels: func(ctx context.Context) (json.RawMessage, error) {
+			modelCalls++
+			return json.RawMessage(`[]`), nil
+		},
+		ScanExternalServices: func(ctx context.Context) (json.RawMessage, error) {
+			externalCalls++
+			return json.RawMessage(`[]`), nil
+		},
+	}
+
+	runStartupAssetReconcile(context.Background(), deps)
+
+	if modelCalls != 1 {
+		t.Fatalf("ScanModels call count = %d, want 1", modelCalls)
+	}
+	if externalCalls != 1 {
+		t.Fatalf("ScanExternalServices call count = %d, want 1", externalCalls)
 	}
 }

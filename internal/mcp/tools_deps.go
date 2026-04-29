@@ -39,6 +39,11 @@ type ToolDeps struct {
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
 	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
 
+	// External service discovery
+	ScanExternalServices  func(ctx context.Context) (json.RawMessage, error)
+	ListExternalServices  func(ctx context.Context) (json.RawMessage, error)
+	ImportExternalService func(ctx context.Context, idOrBaseURL string, models []string) (json.RawMessage, error)
+
 	// Knowledge
 	ResolveConfig           func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
 	SearchKnowledge         func(ctx context.Context, filter map[string]string) (json.RawMessage, error)

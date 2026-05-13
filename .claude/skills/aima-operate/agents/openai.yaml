@@ -1,0 +1,7 @@
+interface:
+  display_name: "AIMA Operate"
+  short_description: "Operate and troubleshoot AIMA via MCP"
+  default_prompt: "Use $aima-operate to inspect, deploy, troubleshoot, benchmark, and save evidence-backed AIMA knowledge."
+
+policy:
+  allow_implicit_invocation: true

@@ -145,21 +145,22 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 	}
 
 	rc := &knowledge.ResolvedConfig{
-		Engine:           req.Engine,
-		EngineImage:      req.Image,
-		ModelPath:        req.ModelPath,
-		ModelName:        req.Name,
-		Slot:             slot,
-		Config:           config,
-		Command:          req.Command,
-		PortSpecs:        req.PortSpecs,
-		InitCommands:     req.InitCommands,
-		ExtraVolumes:     req.ExtraVolumes,
-		RuntimeClassName: req.RuntimeClassName,
-		CPUArch:          req.CPUArch,
-		Env:              req.Env,
-		Container:        req.Container,
-		GPUResourceName:  req.GPUResourceName,
+		Engine:             req.Engine,
+		EngineImage:        req.Image,
+		ModelPath:          req.ModelPath,
+		ModelName:          req.Name,
+		Slot:               slot,
+		Config:             config,
+		Command:            req.Command,
+		PortSpecs:          req.PortSpecs,
+		InitCommands:       req.InitCommands,
+		AcceptedConfigKeys: append([]string(nil), req.AcceptedConfigKeys...),
+		ExtraVolumes:       req.ExtraVolumes,
+		RuntimeClassName:   req.RuntimeClassName,
+		CPUArch:            req.CPUArch,
+		Env:                req.Env,
+		Container:          req.Container,
+		GPUResourceName:    req.GPUResourceName,
 	}
 
 	if req.HealthCheck != nil {

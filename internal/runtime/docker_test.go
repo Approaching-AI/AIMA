@@ -147,6 +147,31 @@ func TestBuildRunArgs_ConfigFlags(t *testing.T) {
 	assertContains(t, argStr, "--flash-attn", "bool config flag")
 }
 
+func TestBuildRunArgs_FiltersUnsupportedConfigFlags(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "z-image",
+		Engine:    "z-image-diffusers",
+		Image:     "qujing-z-image:latest",
+		Command:   []string{"python3", "server.py"},
+		ModelPath: "/data/models/z-image",
+		PortSpecs: []knowledge.StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{
+			"port":          8188,
+			"max_model_len": 8192,
+		},
+		AcceptedConfigKeys: []string{"port"},
+	}
+
+	args := r.buildRunArgs("z-image-z-image-diffusers", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--port 8188", "accepted port flag")
+	assertNotContains(t, argStr, "--max-model-len", "LLM-only context flag must not be sent to image engines")
+}
+
 func TestBuildRunArgs_Labels(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

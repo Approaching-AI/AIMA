@@ -208,7 +208,7 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	command = knowledge.AppendPortBindings(command, portBindings)
 
 	// Append config values as CLI flags, with template substitution
-	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs)) {
+	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs), req.AcceptedConfigKeys) {
 		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
 		f = strings.ReplaceAll(f, "{{.ModelPath}}", containerModelPath)
 		command = append(command, f)

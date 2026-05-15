@@ -340,6 +340,37 @@ func TestGeneratePodWithCustomStartupPorts(t *testing.T) {
 	}
 }
 
+func TestGeneratePodFiltersUnsupportedConfigFlags(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "z-image-diffusers",
+		EngineImage: "qujing-z-image:latest",
+		ModelPath:   "/data/models/z-image",
+		ModelName:   "z-image",
+		Slot:        "default",
+		Command:     []string{"python3", "server.py"},
+		PortSpecs: []StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{
+			"port":          8188,
+			"max_model_len": 8192,
+		},
+		AcceptedConfigKeys: []string{"port"},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	s := string(podYAML)
+	if !strings.Contains(s, "--port") || !strings.Contains(s, "8188") {
+		t.Fatalf("expected accepted port flag in YAML:\n%s", s)
+	}
+	if strings.Contains(s, "--max-model-len") {
+		t.Fatalf("LLM-only context flag should not be emitted for image engine:\n%s", s)
+	}
+}
+
 func TestGeneratePodEnvMerge(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Engine:      "vllm",

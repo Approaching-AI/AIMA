@@ -154,7 +154,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	command = knowledge.AppendPortBindings(command, portBindings)
 
 	// Append other config values as CLI flags, with template substitution
-	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs)) {
+	for _, f := range configToFlags(req.Config, req.Command, req.ModelPath, knowledge.PortConfigKeys(req.PortSpecs), req.AcceptedConfigKeys) {
 		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
 		f = strings.ReplaceAll(f, "{{.ModelPath}}", req.ModelPath)
 		command = append(command, f)

@@ -61,6 +61,7 @@ type ResolvedConfig struct {
 	InitCommands          []string          // pre-commands to run before main server (from engine YAML)
 	CompatibilityProbe    string            // container compatibility probe declared by engine YAML
 	RepairInitCommands    []string          // model-variant repair commands to prepend when compatibility probe needs self-heal
+	AcceptedConfigKeys    []string          // optional engine allowlist for config keys emitted as CLI flags
 	ExtraVolumes          []ContainerVolume // additional host volumes to mount (from engine YAML)
 	HealthCheck           *HealthCheck
 	Warmup                *WarmupConfig     // post-healthcheck warmup config (nil = no warmup)
@@ -230,6 +231,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		PortSpecs:          engine.Startup.Ports,
 		InitCommands:       engine.Startup.InitCommands,
 		CompatibilityProbe: engine.Startup.CompatibilityProbe,
+		AcceptedConfigKeys: append([]string(nil), engine.Startup.AcceptedConfigKeys...),
 		ExtraVolumes:       engine.Startup.ExtraVolumes,
 		Env:                engine.Startup.Env,
 		WorkDir:            engine.Startup.WorkDir,
@@ -1408,10 +1410,11 @@ func (c *Catalog) buildSyntheticConfig(engineType string, hw HardwareInfo, gmu f
 	if maxLen > 0 {
 		if key := pickDeclared([]string{"context_length", "max_model_len", "ctx_size", "max_context_tokens"}); key != "" {
 			cfg[key] = maxLen
-		} else if _, hasMFS := engineArgs["mem_fraction_static"]; !hasMFS {
+		} else if len(engineArgs) == 0 {
 			// Engines that declare mem_fraction_static (SGLang family) have
-			// no explicit context-length knob. Fall back to max_model_len
-			// only for the vLLM-shaped path.
+			// no explicit context-length knob, and non-LLM engines commonly
+			// declare only port-like args. Use the vLLM-shaped fallback only
+			// for older/unknown engine metadata with no declared args at all.
 			cfg["max_model_len"] = maxLen
 		}
 	}

@@ -15,6 +15,7 @@ func TestConfigToFlagsSkipsSelectionOnlyQuantization(t *testing.T) {
 		[]string{"llama-server", "--model", "{{.ModelPath}}"},
 		"/models/qwen3/Qwen3-4B-Q4_K_M.gguf",
 		nil,
+		nil,
 	)
 	got := strings.Join(flags, " ")
 	if strings.Contains(got, "--quantization") {
@@ -34,6 +35,7 @@ func TestConfigToFlagsFalseBoolEmitsNoPrefix(t *testing.T) {
 			"enforce_eager":    true,
 		},
 		nil, "", nil,
+		nil,
 	)
 	got := strings.Join(flags, " ")
 	if !strings.Contains(got, "--no-async-scheduling") {
@@ -58,6 +60,7 @@ func TestConfigToFlagsMapEmitsJSON(t *testing.T) {
 			},
 		},
 		nil, "", nil,
+		nil,
 	)
 	// Find the value following --speculative-config.
 	var value string
@@ -79,5 +82,29 @@ func TestConfigToFlagsMapEmitsJSON(t *testing.T) {
 	}
 	if parsed["method"] != "mtp" {
 		t.Fatalf("expected method=mtp, got %v", parsed["method"])
+	}
+}
+
+func TestConfigToFlagsHonorsAcceptedConfigKeys(t *testing.T) {
+	flags := configToFlags(
+		map[string]any{
+			"max_model_len": 8192,
+			"port":          8188,
+			"device_map":    "auto",
+		},
+		[]string{"python3", "server.py"},
+		"/models/z-image",
+		map[string]struct{}{"port": {}},
+		[]string{"port", "device_map"},
+	)
+	got := strings.Join(flags, " ")
+	if strings.Contains(got, "--max-model-len") {
+		t.Fatalf("accepted_config_keys should filter unsupported flags, got %q", got)
+	}
+	if !strings.Contains(got, "--device-map auto") {
+		t.Fatalf("accepted config key should be emitted, got %q", got)
+	}
+	if strings.Contains(got, "--port") {
+		t.Fatalf("reserved port key should not be emitted by configToFlags, got %q", got)
 	}
 }

@@ -276,11 +276,15 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		}
 		keys := make([]string, 0, len(resolved.Config))
 		portKeys := PortConfigKeys(resolved.PortSpecs)
+		acceptedKeys := AcceptedConfigKeySet(resolved.AcceptedConfigKeys)
 		for k := range resolved.Config {
 			if k == "model_path" {
 				continue
 			}
 			if _, reserved := portKeys[k]; reserved {
+				continue
+			}
+			if !ConfigKeyAccepted(k, acceptedKeys) {
 				continue
 			}
 			if !ShouldIncludeConfigFlag(resolved.Command, resolved.ModelPath, k, resolved.Config[k]) {

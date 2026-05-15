@@ -82,7 +82,7 @@ func TestResolveUsesVariantLocalPath(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "local-variant-model"},
@@ -113,7 +113,7 @@ func TestResolveUsesStorageLocalPath(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "local-storage-model"},
@@ -143,7 +143,7 @@ func TestResolveModelPathOverrideStillWins(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "override-model"},
@@ -803,6 +803,61 @@ func TestBuildSyntheticWithHardware(t *testing.T) {
 	}
 	if wc.Hardware.VRAMMinMiB == 0 {
 		t.Error("variant[1] VRAMMinMiB should be > 0 (wildcard with VRAM constraint)")
+	}
+}
+
+func TestBuildSyntheticImageModelDoesNotInjectLLMContext(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name:                "z-image-diffusers",
+					Type:                "z-image-diffusers",
+					Version:             "1.0",
+					SupportedFormats:    []string{"safetensors"},
+					SupportedModelTypes: []string{"image_gen"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{
+					DefaultArgs:        map[string]any{"port": 8188},
+					AcceptedConfigKeys: []string{"port"},
+				},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "vlm", "embedding"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"gpu_memory_utilization": 0.90,
+					"max_model_len":          8192,
+				}},
+			},
+		},
+	}
+
+	ma := cat.BuildSyntheticModelAsset(ScanMetadata{
+		Name:      "stable-diffusion-v1-5",
+		Type:      "image_gen",
+		Format:    "safetensors",
+		SizeBytes: 16 * 1024 * 1024 * 1024,
+	}, HardwareInfo{GPUArch: "Blackwell", GPUVRAMMiB: 131072, GPUCount: 1, UnifiedMemory: true, RAMTotalMiB: 131072})
+
+	if len(ma.Variants) == 0 {
+		t.Fatal("expected synthetic image variant")
+	}
+	v := ma.Variants[0]
+	if v.Engine != "z-image-diffusers" {
+		t.Fatalf("engine = %q, want z-image-diffusers", v.Engine)
+	}
+	for _, key := range []string{"max_model_len", "gpu_memory_utilization", "mem_fraction_static", "tensor_parallel_size"} {
+		if _, ok := v.DefaultConfig[key]; ok {
+			t.Fatalf("image synthetic config leaked LLM-only key %q: %#v", key, v.DefaultConfig)
+		}
+	}
+	if _, ok := v.DefaultConfig["port"]; ok {
+		t.Fatalf("port should come from engine default_args at resolve time, not synthetic variant config: %#v", v.DefaultConfig)
 	}
 }
 

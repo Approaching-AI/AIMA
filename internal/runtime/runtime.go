@@ -34,6 +34,7 @@ type DeployRequest struct {
 	PortSpecs        []knowledge.StartupPort
 	InitCommands     []string // pre-commands to run before main server (K3S, Docker)
 	ModelPath        string   // host path to model files
+	ModelType        string   // catalog model type (llm, asr, tts, image_gen, ...)
 	Port             int      // legacy fallback; prefer Config + PortSpecs
 	Config           map[string]any
 	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
@@ -147,6 +148,10 @@ func isPortFlag(s string) bool {
 // ShouldIncludeConfigFlag. Serialization rules (bool/map/scalar) live in
 // FormatConfigFlag so K3S podgen and Docker/Native runtime stay consistent.
 func configToFlags(config map[string]any, command []string, modelPath string, reservedKeys map[string]struct{}) []string {
+	return configToFlagsFor(config, knowledge.ConfigFlagContext{Command: command, ModelPath: modelPath}, reservedKeys)
+}
+
+func configToFlagsFor(config map[string]any, flagCtx knowledge.ConfigFlagContext, reservedKeys map[string]struct{}) []string {
 	if len(config) == 0 {
 		return nil
 	}
@@ -155,7 +160,7 @@ func configToFlags(config map[string]any, command []string, modelPath string, re
 		if _, reserved := reservedKeys[k]; reserved {
 			continue
 		}
-		if !knowledge.ShouldIncludeConfigFlag(command, modelPath, k, config[k]) {
+		if !knowledge.ShouldIncludeConfigFlagFor(flagCtx, k, config[k]) {
 			continue
 		}
 		keys = append(keys, k)

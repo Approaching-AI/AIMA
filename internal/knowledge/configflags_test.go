@@ -127,4 +127,34 @@ func TestShouldIncludeConfigFlag(t *testing.T) {
 			t.Fatal("quantization flag should be kept when config.json declares quantization_config")
 		}
 	})
+
+	t.Run("skip LLM-only flags for non-LLM service wrappers", func(t *testing.T) {
+		for _, key := range []string{"max_model_len", "gpu_memory_utilization", "mem_fraction_static"} {
+			if ShouldIncludeConfigFlagFor(
+				ConfigFlagContext{
+					Command:   []string{"python3", "server.py"},
+					Engine:    "z-image-diffusers",
+					ModelType: "image_gen",
+				},
+				key,
+				8192,
+			) {
+				t.Fatalf("%s should be omitted for image service wrappers", key)
+			}
+		}
+	})
+
+	t.Run("keep LLM-only flags for vLLM-like service wrappers", func(t *testing.T) {
+		if !ShouldIncludeConfigFlagFor(
+			ConfigFlagContext{
+				Command:   []string{"qwen-asr-serve", "{{.ModelPath}}"},
+				Engine:    "vllm-nightly-audio",
+				ModelType: "asr",
+			},
+			"max_model_len",
+			8192,
+		) {
+			t.Fatal("max_model_len should be kept for vLLM audio wrappers")
+		}
+	})
 }

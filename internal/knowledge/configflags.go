@@ -36,18 +36,81 @@ func FormatConfigFlag(key string, value any) []string {
 	}
 }
 
+// ConfigFlagContext describes the runtime command surface used to decide
+// whether a resolved config key is a real CLI argument or only a resolver hint.
+type ConfigFlagContext struct {
+	Command   []string
+	ModelPath string
+	Engine    string
+	ModelType string
+}
+
 // ShouldIncludeConfigFlag reports whether a resolved config key should be emitted
 // as a runtime CLI flag for the given startup command and local model path.
 // Some keys, such as quantization, are selection hints for a model artifact rather
 // than portable runtime flags across every engine.
 func ShouldIncludeConfigFlag(command []string, modelPath, key string, value any) bool {
+	return ShouldIncludeConfigFlagFor(ConfigFlagContext{Command: command, ModelPath: modelPath}, key, value)
+}
+
+// ShouldIncludeConfigFlagFor is the engine-aware form of ShouldIncludeConfigFlag.
+// It keeps legacy behavior for unknown engines, but prevents LLM-only knobs from
+// leaking into image/audio/OCR service wrappers that do not expose those flags.
+func ShouldIncludeConfigFlagFor(ctx ConfigFlagContext, key string, value any) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
 	case "":
 		return false
 	case "quantization":
-		return shouldIncludeQuantizationFlag(command, modelPath, value)
+		return shouldIncludeQuantizationFlag(ctx.Command, ctx.ModelPath, value)
 	default:
+		if isLLMOnlyConfigKey(key) && !commandAcceptsLLMConfig(ctx) {
+			return false
+		}
 		return true
+	}
+}
+
+func isLLMOnlyConfigKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "max_model_len", "max_seq_len", "max_seq_length", "max_context_len", "max_context_tokens",
+		"context_length", "ctx_size", "n_ctx", "gpu_memory_utilization", "mem_fraction_static",
+		"tensor_parallel_size", "pipeline_parallel_size", "kv_cache_dtype", "dtype", "trust_remote_code",
+		"enforce_eager", "disable_log_stats", "served_model_name", "speculative_config",
+		"mm_encoder_attn_backend":
+		return true
+	default:
+		return false
+	}
+}
+
+func commandAcceptsLLMConfig(ctx ConfigFlagContext) bool {
+	if isLLMModelType(ctx.ModelType) {
+		return true
+	}
+	if strings.TrimSpace(ctx.Engine) == "" && strings.TrimSpace(ctx.ModelType) == "" && len(ctx.Command) == 0 {
+		return true
+	}
+	for _, value := range []string{ctx.Engine, strings.Join(ctx.Command, " ")} {
+		lower := strings.ToLower(value)
+		switch {
+		case strings.Contains(lower, "vllm"),
+			strings.Contains(lower, "sglang"),
+			strings.Contains(lower, "llama"),
+			strings.Contains(lower, "ollama"),
+			strings.Contains(lower, "transformers serve"),
+			strings.Contains(lower, "qwen-asr-serve"):
+			return true
+		}
+	}
+	return false
+}
+
+func isLLMModelType(modelType string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelType)) {
+	case "llm", "vlm", "embedding":
+		return true
+	default:
+		return false
 	}
 }
 

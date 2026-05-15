@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/jguan/aima/internal/knowledge"
 )
 
 func TestConfigToFlagsSkipsSelectionOnlyQuantization(t *testing.T) {
@@ -79,5 +81,25 @@ func TestConfigToFlagsMapEmitsJSON(t *testing.T) {
 	}
 	if parsed["method"] != "mtp" {
 		t.Fatalf("expected method=mtp, got %v", parsed["method"])
+	}
+}
+
+func TestConfigToFlagsFiltersLLMOnlyArgsForImageService(t *testing.T) {
+	flags := configToFlagsFor(
+		map[string]any{
+			"port":                   8188,
+			"max_model_len":          8192,
+			"gpu_memory_utilization": 0.5,
+		},
+		knowledge.ConfigFlagContext{
+			Command:   []string{"python3", "server.py"},
+			Engine:    "z-image-diffusers",
+			ModelType: "image_gen",
+		},
+		map[string]struct{}{"port": {}},
+	)
+	got := strings.Join(flags, " ")
+	if strings.Contains(got, "--max-model-len") || strings.Contains(got, "--gpu-memory-utilization") {
+		t.Fatalf("LLM-only flags should be omitted for image services, got %q", got)
 	}
 }

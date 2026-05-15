@@ -283,7 +283,12 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 			if _, reserved := portKeys[k]; reserved {
 				continue
 			}
-			if !ShouldIncludeConfigFlag(resolved.Command, resolved.ModelPath, k, resolved.Config[k]) {
+			if !ShouldIncludeConfigFlagFor(ConfigFlagContext{
+				Command:   resolved.Command,
+				ModelPath: resolved.ModelPath,
+				Engine:    resolved.Engine,
+				ModelType: resolved.ModelType,
+			}, k, resolved.Config[k]) {
 				continue
 			}
 			flagName := "--" + strings.ReplaceAll(k, "_", "-")

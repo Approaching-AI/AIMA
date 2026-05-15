@@ -128,3 +128,20 @@ func TestToResolvedConfig(t *testing.T) {
 		t.Error("container access not mapped correctly")
 	}
 }
+
+func TestToResolvedConfigCarriesAcceptedConfigKeys(t *testing.T) {
+	req := &DeployRequest{
+		Name:               "z-image",
+		Engine:             "z-image-diffusers",
+		Image:              "qujing-z-image:latest",
+		Command:            []string{"python3", "server.py"},
+		Config:             map[string]any{"port": 8188, "max_model_len": 8192},
+		AcceptedConfigKeys: []string{"port"},
+	}
+
+	rc := toResolvedConfig(req)
+
+	if len(rc.AcceptedConfigKeys) != 1 || rc.AcceptedConfigKeys[0] != "port" {
+		t.Fatalf("AcceptedConfigKeys = %#v, want [port]", rc.AcceptedConfigKeys)
+	}
+}

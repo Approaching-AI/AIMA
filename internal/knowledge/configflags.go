@@ -10,6 +10,41 @@ import (
 	"strings"
 )
 
+func canonicalConfigKey(key string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(key)), "-", "_")
+}
+
+// AcceptedConfigKeySet normalizes an optional engine-declared config allowlist.
+// Empty means "legacy permissive mode" so older engine YAML stays compatible.
+func AcceptedConfigKeySet(keys []string) map[string]struct{} {
+	if len(keys) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = canonicalConfigKey(key)
+		if key == "" {
+			continue
+		}
+		set[key] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// ConfigKeyAccepted reports whether an engine should receive the config key as
+// a CLI flag. The allowlist is intentionally opt-in to avoid breaking older
+// catalog entries that have not declared accepted_config_keys yet.
+func ConfigKeyAccepted(key string, accepted map[string]struct{}) bool {
+	if len(accepted) == 0 {
+		return true
+	}
+	_, ok := accepted[canonicalConfigKey(key)]
+	return ok
+}
+
 // FormatConfigFlag emits CLI tokens for a single config key/value pair.
 // Returns tokens to append to args, e.g. ["--flag", "value"], ["--flag"], or ["--no-flag"].
 //
@@ -60,10 +95,11 @@ func formatFloatConfigValue(value float64, bitSize int) string {
 // ConfigFlagContext describes the runtime command surface used to decide
 // whether a resolved config key is a real CLI argument or only a resolver hint.
 type ConfigFlagContext struct {
-	Command   []string
-	ModelPath string
-	Engine    string
-	ModelType string
+	Command            []string
+	ModelPath          string
+	Engine             string
+	ModelType          string
+	AcceptedConfigKeys []string
 }
 
 // ShouldIncludeConfigFlag reports whether a resolved config key should be emitted
@@ -78,6 +114,9 @@ func ShouldIncludeConfigFlag(command []string, modelPath, key string, value any)
 // It keeps legacy behavior for unknown engines, but prevents LLM-only knobs from
 // leaking into image/audio/OCR service wrappers that do not expose those flags.
 func ShouldIncludeConfigFlagFor(ctx ConfigFlagContext, key string, value any) bool {
+	if !ConfigKeyAccepted(key, AcceptedConfigKeySet(ctx.AcceptedConfigKeys)) {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(key)) {
 	case "":
 		return false

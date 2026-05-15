@@ -28,28 +28,29 @@ type Runtime interface {
 
 // DeployRequest describes what to deploy, independent of how.
 type DeployRequest struct {
-	Name             string
-	Engine           string
-	Image            string   // container image (K3S, Docker)
-	Command          []string // startup command with {{.ModelPath}} placeholder
-	PortSpecs        []knowledge.StartupPort
-	InitCommands     []string // pre-commands to run before main server (K3S, Docker)
-	ModelPath        string   // host path to model files
-	ModelType        string   // catalog model type (llm, asr, tts, image_gen, ...)
-	Port             int      // legacy fallback; prefer Config + PortSpecs
-	Config           map[string]any
-	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
-	RuntimeClassName string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
-	HealthCheck      *HealthCheckConfig
-	Labels           map[string]string
-	BinarySource     *engine.BinarySource        // native: where to download the engine binary if missing
-	Warmup           *WarmupConfig               // post-healthcheck warmup (send dummy inference request)
-	CPUArch          string                      // "arm64", "amd64" -- for platform-specific paths in Pod spec
-	Env              map[string]string           // extra env vars (engine YAML + hardware YAML merged)
-	WorkDir          string                      // working directory for native process (from engine YAML)
-	Container        *knowledge.ContainerAccess  // vendor-specific container access (K3S, Docker)
-	GPUResourceName  string                      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
-	ExtraVolumes     []knowledge.ContainerVolume // additional host volumes to mount (K3S, Docker)
+	Name               string
+	Engine             string
+	Image              string   // container image (K3S, Docker)
+	Command            []string // startup command with {{.ModelPath}} placeholder
+	PortSpecs          []knowledge.StartupPort
+	InitCommands       []string // pre-commands to run before main server (K3S, Docker)
+	ModelPath          string   // host path to model files
+	ModelType          string   // catalog model type (llm, asr, tts, image_gen, ...)
+	Port               int      // legacy fallback; prefer Config + PortSpecs
+	Config             map[string]any
+	AcceptedConfigKeys []string
+	Partition          *PartitionRequest // resource limits (K3S+HAMi); native ignores
+	RuntimeClassName   string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
+	HealthCheck        *HealthCheckConfig
+	Labels             map[string]string
+	BinarySource       *engine.BinarySource        // native: where to download the engine binary if missing
+	Warmup             *WarmupConfig               // post-healthcheck warmup (send dummy inference request)
+	CPUArch            string                      // "arm64", "amd64" -- for platform-specific paths in Pod spec
+	Env                map[string]string           // extra env vars (engine YAML + hardware YAML merged)
+	WorkDir            string                      // working directory for native process (from engine YAML)
+	Container          *knowledge.ContainerAccess  // vendor-specific container access (K3S, Docker)
+	GPUResourceName    string                      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	ExtraVolumes       []knowledge.ContainerVolume // additional host volumes to mount (K3S, Docker)
 }
 
 // DeploymentStatus is the unified status across runtimes.

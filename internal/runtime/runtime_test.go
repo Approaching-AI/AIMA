@@ -103,3 +103,29 @@ func TestConfigToFlagsFiltersLLMOnlyArgsForImageService(t *testing.T) {
 		t.Fatalf("LLM-only flags should be omitted for image services, got %q", got)
 	}
 }
+
+func TestConfigToFlagsHonorsAcceptedConfigKeys(t *testing.T) {
+	flags := configToFlagsFor(
+		map[string]any{
+			"max_model_len": 8192,
+			"port":          8188,
+			"device_map":    "auto",
+		},
+		knowledge.ConfigFlagContext{
+			Command:            []string{"python3", "server.py"},
+			ModelPath:          "/models/z-image",
+			AcceptedConfigKeys: []string{"port", "device_map"},
+		},
+		map[string]struct{}{"port": {}},
+	)
+	got := strings.Join(flags, " ")
+	if strings.Contains(got, "--max-model-len") {
+		t.Fatalf("accepted_config_keys should filter unsupported flags, got %q", got)
+	}
+	if !strings.Contains(got, "--device-map auto") {
+		t.Fatalf("accepted config key should be emitted, got %q", got)
+	}
+	if strings.Contains(got, "--port") {
+		t.Fatalf("reserved port key should not be emitted by configToFlags, got %q", got)
+	}
+}

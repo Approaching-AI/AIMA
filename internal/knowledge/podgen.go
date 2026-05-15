@@ -291,10 +291,11 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 				continue
 			}
 			if !ShouldIncludeConfigFlagFor(ConfigFlagContext{
-				Command:   resolved.Command,
-				ModelPath: resolved.ModelPath,
-				Engine:    resolved.Engine,
-				ModelType: resolved.ModelType,
+				Command:            resolved.Command,
+				ModelPath:          resolved.ModelPath,
+				Engine:             resolved.Engine,
+				ModelType:          resolved.ModelType,
+				AcceptedConfigKeys: resolved.AcceptedConfigKeys,
 			}, k, resolved.Config[k]) {
 				continue
 			}

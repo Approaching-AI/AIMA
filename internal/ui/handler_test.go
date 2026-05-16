@@ -483,6 +483,51 @@ func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`this.callTool('deploy.defaults', { action: 'get', model: modelName })`,
+		`this.callTool('deploy.defaults', { action: 'set', model: modelName, ...payload })`,
+		`const data = await this.callTool('deploy.run', request);`,
+		`this.deployDetailOpen = false;`,
+		`await this.refreshDeployDryRun();`,
+		`deploy_started_background`,
+		`deploy_restore_recommended: 'Recommended parameters'`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing deploy detail token %q", token)
+		}
+	}
+
+	start := strings.Index(body, "async confirmDeployDetail() {")
+	if start == -1 {
+		t.Fatal("confirmDeployDetail not found")
+	}
+	end := strings.Index(body[start:], "\n    componentStatusNote(model)")
+	if end == -1 {
+		t.Fatal("could not isolate confirmDeployDetail body")
+	}
+	fnBody := body[start : start+end]
+	closeIdx := strings.Index(fnBody, `this.deployDetailOpen = false;`)
+	runIdx := strings.Index(fnBody, `const data = await this.callTool('deploy.run', request);`)
+	if closeIdx == -1 || runIdx == -1 || closeIdx > runIdx {
+		t.Fatalf("deploy detail should close before awaiting deploy.run, body=%s", fnBody)
+	}
+
+	if strings.Contains(body, "aima_deploy_defaults:") || strings.Contains(body, "localStorage.setItem(this.deployDefaultsKey()") {
+		t.Fatal("deploy defaults should not be stored only in browser localStorage")
+	}
+}
+
 func TestRegisterRoutes_IndexIncludesDirectModeRoutingAndModelCards(t *testing.T) {
 	t.Parallel()
 

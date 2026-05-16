@@ -1562,7 +1562,9 @@ body {
 }
 .modal input[type="text"],
 .modal input[type="password"],
-.modal input[type="url"] {
+.modal input[type="url"],
+.modal input[type="number"],
+.modal select {
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--border-light);
@@ -1576,7 +1578,17 @@ body {
     border-color var(--duration-fast) var(--ease-smooth),
     background var(--duration-fast) var(--ease-smooth);
 }
-.modal input:focus {
+.modal select {
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: dark;
+}
+.modal select option {
+  background: #1f1f24;
+  color: var(--text);
+}
+.modal input:focus,
+.modal select:focus {
   border-color: var(--accent);
   background: var(--msg-tool-hover);
 }
@@ -1624,6 +1636,386 @@ body {
 }
 .modal-feedback.success { color: var(--success); background: rgba(48, 209, 88, 0.1); }
 .modal-feedback.error { color: var(--error); background: rgba(255, 69, 58, 0.1); }
+.modal-feedback.warning { color: var(--warning); background: rgba(255, 159, 10, 0.12); }
+
+/* Deploy detail modal */
+.deploy-modal {
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(84vh, 820px);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.deploy-modal.maximized {
+  width: min(1080px, calc(100vw - 32px));
+  height: calc(100vh - 32px);
+  max-height: calc(100vh - 32px);
+  border-radius: 16px;
+}
+.deploy-modal.minimized {
+  width: min(420px, calc(100vw - 32px));
+  max-height: none;
+  margin: 16px;
+  border-radius: 14px;
+}
+.deploy-modal-overlay.minimized {
+  align-items: flex-end;
+  justify-content: flex-end;
+  background: transparent;
+  pointer-events: none;
+}
+.deploy-modal-overlay.minimized .deploy-modal {
+  pointer-events: auto;
+}
+.deploy-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.deploy-modal-title {
+  min-width: 0;
+}
+.deploy-modal-title h3 {
+  margin-bottom: 4px;
+  word-break: break-word;
+  font-size: 16px;
+  line-height: 1.25;
+}
+.deploy-modal-subtitle {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.deploy-modal-feedback {
+  margin: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-light);
+  padding: 8px 20px;
+  flex-shrink: 0;
+}
+.deploy-modal-body {
+  padding: 16px 20px 12px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.deploy-scroll-body {
+  padding: 16px 20px 12px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.deploy-window-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.deploy-window-btn,
+.deploy-close-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 0.5px solid var(--border-medium);
+  background: var(--input-bg);
+  color: var(--text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+.deploy-window-btn:hover,
+.deploy-close-btn:hover {
+  color: var(--text);
+  background: var(--btn-icon-hover);
+}
+.deploy-summary-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.deploy-summary-main {
+  min-width: 0;
+}
+.deploy-summary-main span,
+.deploy-chip span,
+.deploy-metric-label {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.deploy-summary-main strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.deploy-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.deploy-chip {
+  min-width: 96px;
+  flex: 1 1 96px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.deploy-chip strong,
+.deploy-metric-value {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.deploy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.deploy-info-card,
+.deploy-vram-card,
+.deploy-param-row,
+.deploy-preview {
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.deploy-info-card {
+  padding: 8px 10px;
+  min-width: 0;
+}
+.deploy-info-label {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 3px;
+}
+.deploy-info-value {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.deploy-vram-card {
+  padding: 14px;
+}
+.deploy-vram-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.deploy-vram-number {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.15;
+}
+.deploy-vram-state {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: right;
+  margin-top: 0;
+}
+.deploy-vram-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--msg-tool-hover);
+  overflow: hidden;
+}
+.deploy-vram-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  transition: width var(--duration-normal) var(--ease-smooth), background var(--duration-normal) var(--ease-smooth);
+}
+.deploy-vram-fill.warn { background: var(--warning); }
+.deploy-vram-fill.crit { background: var(--error); }
+.deploy-vram-breakdown {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.deploy-vram-breakdown span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.deploy-vram-breakdown strong {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+.deploy-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.deploy-advanced {
+  margin-top: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+}
+.deploy-advanced summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 9px 11px;
+  user-select: none;
+}
+.deploy-advanced .deploy-form-grid {
+  padding: 0 11px 11px;
+}
+.deploy-param-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.deploy-param-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+}
+.deploy-param-row input {
+  margin: 0;
+}
+.deploy-param-source {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.deploy-param-remove {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 0.5px solid var(--border-medium);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.deploy-param-remove:hover {
+  color: var(--error);
+  border-color: rgba(255, 69, 58, 0.35);
+}
+.deploy-inline-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.deploy-param-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.deploy-link-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.deploy-link-btn:hover { color: var(--accent-hover); }
+.deploy-preview {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px;
+  max-height: 110px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.deploy-suggestion-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.deploy-suggestion-btn {
+  border: 0.5px solid rgba(255, 159, 10, 0.35);
+  background: rgba(255, 159, 10, 0.1);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.deploy-suggestion-btn:hover {
+  border-color: var(--warning);
+  background: rgba(255, 159, 10, 0.16);
+}
+.deploy-suggestion-btn.applied {
+  border-color: rgba(48, 209, 88, 0.45);
+  background: rgba(48, 209, 88, 0.12);
+  color: var(--success);
+}
+.deploy-suggestion-btn:disabled {
+  cursor: default;
+}
+.deploy-sticky-actions {
+  margin: 0;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border-light);
+  background: var(--modal-bg);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+}
+.deploy-sticky-actions .modal-btn {
+  padding: 9px 16px;
+}
+.deploy-preflight-status {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 12px;
+}
+.deploy-action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
 
 /* Settings tabs */
 .settings-tabs {
@@ -2366,6 +2758,53 @@ body {
 
 @media (min-width: 769px) {
   .mobile-metrics { display: none !important; }
+}
+
+@media (max-width: 768px) {
+  .deploy-modal {
+    width: min(100vw, 640px);
+    max-height: 92vh;
+    border-radius: 20px 20px 0 0;
+    margin-top: auto;
+  }
+  .deploy-modal.maximized {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+  .deploy-modal.minimized {
+    width: calc(100vw - 24px);
+    margin: 12px;
+    border-radius: 16px;
+  }
+  .deploy-modal-overlay {
+    align-items: flex-end;
+  }
+  .deploy-modal-overlay.minimized {
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .deploy-modal-header,
+  .deploy-modal-body,
+  .deploy-scroll-body,
+  .deploy-sticky-actions {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .deploy-chip-row,
+  .deploy-grid,
+  .deploy-vram-top,
+  .deploy-form-grid,
+  .deploy-vram-breakdown {
+    grid-template-columns: 1fr;
+  }
+  .deploy-param-row {
+    grid-template-columns: 1fr;
+  }
+  .deploy-param-source {
+    white-space: normal;
+  }
 }
 
 /* Empty state */
@@ -4069,7 +4508,7 @@ body {
                     class="model-deploy-btn"
                     :class="modelDeploying[m.name] ? 'is-busy' : ''"
                     :disabled="modelDeployButtonDisabled(m.name)"
-                    @click="deployModel(m.name)"
+                    @click="openDeployDetail(m)"
                     x-text="modelDeployButtonLabel(m.name)"></button>
                 </div>
               </div>
@@ -4934,7 +5373,7 @@ body {
                       class="model-deploy-btn"
                       :class="modelDeploying[m.name] ? 'is-busy' : ''"
                       :disabled="modelDeployButtonDisabled(m.name)"
-                      @click="deployModel(m.name)"
+                      @click="openDeployDetail(m)"
                       x-text="modelDeployButtonLabel(m.name)"></button>
                   </div>
                 </div>
@@ -5065,6 +5504,162 @@ body {
       </div>
     </template>
   </div>
+
+  <!-- Deploy Detail Modal -->
+  <template x-if="deployDetailOpen">
+    <div class="modal-overlay deploy-modal-overlay" :class="{ minimized: deployDetailMinimized }" @click.self="closeDeployDetail()">
+      <div class="modal deploy-modal" :class="{ maximized: deployDetailMaximized && !deployDetailMinimized, minimized: deployDetailMinimized }" role="dialog" aria-modal="true" :aria-label="deployDetailTitle()">
+        <div class="deploy-modal-header">
+          <div class="deploy-modal-title">
+            <h3 x-text="deployDetailTitle()"></h3>
+            <div class="deploy-modal-subtitle" x-text="deployDetailMinimized ? deployPreflightStatusText() : t('deploy_detail_subtitle')"></div>
+          </div>
+          <div class="deploy-window-controls">
+            <button type="button" class="deploy-window-btn" @click="toggleDeployMinimized()" :aria-label="deployDetailMinimized ? t('deploy_restore_modal') : t('deploy_minimize_modal')" :title="deployDetailMinimized ? t('deploy_restore_modal') : t('deploy_minimize_modal')" x-text="deployDetailMinimized ? '□' : '−'"></button>
+            <button type="button" class="deploy-window-btn" x-show="!deployDetailMinimized" @click="toggleDeployMaximized()" :aria-label="deployDetailMaximized ? t('deploy_restore_modal') : t('deploy_maximize_modal')" :title="deployDetailMaximized ? t('deploy_restore_modal') : t('deploy_maximize_modal')" x-text="deployDetailMaximized ? '▣' : '□'"></button>
+            <button type="button" class="deploy-close-btn" @click="closeDeployDetail()" :aria-label="t('cancel')" title="Close">×</button>
+          </div>
+        </div>
+
+        <template x-if="deployDetailFeedback && !deployDetailMinimized">
+          <div class="modal-feedback deploy-modal-feedback" :class="deployDetailFeedback.type" x-text="deployDetailFeedback.text"></div>
+        </template>
+
+        <div class="deploy-scroll-body" x-show="!deployDetailMinimized">
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('deploy_model_info')"></div>
+          <div class="deploy-grid">
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('api_model')"></span>
+              <span class="deploy-info-value" x-text="deployDetailModel.name || '-'"></span>
+            </div>
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('deploy_model_type')"></span>
+              <span class="deploy-info-value" x-text="deployDetailModel.type || deployDetailModel.model_class || '-'"></span>
+            </div>
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('deploy_quantization')"></span>
+              <span class="deploy-info-value" x-text="deployQuantizationLabel()"></span>
+            </div>
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('wiz_format_label')"></span>
+              <span class="deploy-info-value" x-text="deployDetailModel.format || '-'"></span>
+            </div>
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('wiz_size_label')"></span>
+              <span class="deploy-info-value" x-text="deployDetailModel.size || '-'"></span>
+            </div>
+            <div class="deploy-info-card">
+              <span class="deploy-info-label" x-text="t('deploy_runtime')"></span>
+              <span class="deploy-info-value" x-text="deployDetailPlan.runtime || '-'"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('deploy_basic_config')"></div>
+          <div class="deploy-form-grid">
+            <div class="modal-field">
+              <label x-text="t('wiz_engine_label')"></label>
+              <select x-model="deployDetailForm.engine" @change="markDeployConfigDirty(); refreshDeployDryRun()">
+                <option value="" x-text="t('deploy_auto_engine')"></option>
+                <template x-for="engine in deployEngineOptions()" :key="engine">
+                  <option :value="engine" x-text="engine"></option>
+                </template>
+              </select>
+              <div class="modal-hint" x-text="deployRecommendedEngineHint()"></div>
+            </div>
+            <div class="modal-field">
+              <label x-text="t('deploy_resource_policy')"></label>
+              <select x-model="deployDetailForm.noPull" @change="markDeployConfigDirty()">
+                <option :value="true" x-text="t('deploy_local_only')"></option>
+                <option :value="false" x-text="t('deploy_allow_pull')"></option>
+              </select>
+            </div>
+            <div class="modal-field">
+              <label x-text="t('deploy_slot')"></label>
+              <input type="text" x-model="deployDetailForm.slot" @change="markDeployConfigDirty(); refreshDeployDryRun()" placeholder="default">
+            </div>
+            <div class="modal-field">
+              <label x-text="t('deploy_port')"></label>
+              <input type="number" x-model="deployDetailForm.port" @input="syncDeployPortParam()" placeholder="auto">
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('deploy_launch_params')"></div>
+          <div class="deploy-param-list">
+            <template x-for="param in visibleDeployParams()" :key="param.id">
+              <div class="deploy-param-row">
+                <input type="text" x-model="param.key" @input="markDeployParamManual(param)" :placeholder="t('deploy_param_key')">
+                <input type="text" x-model="param.value" @input="markDeployParamManual(param)" :placeholder="t('deploy_param_value')">
+                <span class="deploy-param-source" x-text="deployParamSourceLabel(param)"></span>
+                <button type="button" class="deploy-param-remove" @click="removeDeployParamById(param.id)" :aria-label="t('deploy_remove_param')">×</button>
+              </div>
+            </template>
+          </div>
+          <div class="deploy-inline-actions">
+            <div class="deploy-param-actions">
+              <button type="button" class="deploy-link-btn" @click="addDeployParam()" x-text="t('deploy_add_param')"></button>
+              <button type="button" class="deploy-link-btn" x-show="deployHiddenParamCount() > 0 || deployParamsExpanded" @click="deployParamsExpanded = !deployParamsExpanded" x-text="deployParamsExpanded ? t('deploy_collapse_params') : (t('deploy_show_more_params') + ' (' + deployHiddenParamCount() + ')')"></button>
+            </div>
+            <div class="deploy-param-actions">
+              <button type="button" class="deploy-link-btn" @click="saveDeployDefaults()" x-text="t('deploy_save_default')"></button>
+              <button type="button" class="deploy-link-btn" @click="resetDeployParams()" x-text="t('deploy_restore_recommended')"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('deploy_vram_estimate')"></div>
+          <div class="deploy-vram-card">
+            <div class="deploy-vram-top">
+              <div>
+                <div class="deploy-vram-number" x-text="fmtMiB(deployVramEstimate().required)"></div>
+                <div class="modal-hint" x-text="t('deploy_required_vram')"></div>
+              </div>
+              <div class="deploy-vram-state">
+                <div x-text="deployVramStatusText()"></div>
+                <div x-text="t('deploy_vram_budget') + ': ' + fmtMiB(deployVramEstimate().budget)"></div>
+                <div x-text="t('deploy_free_vram') + ': ' + fmtMiB(deployVramEstimate().free)"></div>
+              </div>
+            </div>
+            <div class="deploy-vram-meter">
+              <div class="deploy-vram-fill" :class="deployVramFillClass()" :style="'width:' + deployVramUsagePct() + '%'"></div>
+            </div>
+            <div class="deploy-vram-breakdown">
+              <div><span x-text="t('deploy_vram_weights')"></span><strong x-text="fmtMiB(deployVramEstimate().weights)"></strong></div>
+              <div><span x-text="t('deploy_vram_kv_cache')"></span><strong x-text="fmtMiB(deployVramEstimate().kvCache)"></strong></div>
+              <div><span x-text="t('deploy_vram_runtime')"></span><strong x-text="fmtMiB(deployVramEstimate().runtime)"></strong></div>
+              <div><span x-text="t('deploy_gpu_cap')"></span><strong x-text="deployGpuMemoryUtilizationLabel()"></strong></div>
+            </div>
+          </div>
+          <div class="modal-hint" x-text="deployVramHint()"></div>
+        </div>
+
+        <div class="modal-section" x-show="deployVramSuggestions().length > 0">
+          <div class="modal-section-title" x-text="t('deploy_suggestions')"></div>
+          <div class="deploy-suggestion-list">
+            <template x-for="suggestion in deployVramSuggestions()" :key="suggestion.key + suggestion.value">
+              <button type="button" class="deploy-suggestion-btn" :class="{ applied: deploySuggestionApplied(suggestion) }" @click="applyDeploySuggestion(suggestion)" x-text="deploySuggestionLabel(suggestion)"></button>
+            </template>
+          </div>
+        </div>
+
+        </div>
+
+        <div class="modal-actions deploy-sticky-actions" x-show="!deployDetailMinimized">
+          <div class="deploy-preflight-status" x-text="deployPreflightStatusText()"></div>
+          <div class="deploy-action-buttons">
+            <button class="modal-btn" @click="closeDeployDetail()" x-text="t('cancel')"></button>
+            <button class="modal-btn" @click="refreshDeployDryRun()" :disabled="deployDetailLoading" x-text="deployDetailLoading ? t('deploy_preflighting') : t('deploy_preflight')"></button>
+            <button class="modal-btn primary" @click="confirmDeployDetail()" :disabled="deployDetailSubmitting || deployDetailLoading" x-text="deployDetailSubmitting ? t('deploying_label') : t('deploy_confirm')"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
 
   <!-- Settings Modal -->
   <template x-if="showSettings">
@@ -5542,6 +6137,77 @@ var I18N = {
     running_label: 'Running',
     stop_label: 'Stop',
     retry_label: 'Retry',
+    deploy_detail_title: 'Deploy details',
+    deploy_detail_subtitle: 'Review AIMA recommendations, adjust launch parameters, and deploy when ready.',
+    deploy_model_info: 'Model information',
+    deploy_model_type: 'Model type',
+    deploy_quantization: 'Quantization',
+    deploy_runtime: 'Runtime',
+    deploy_vram_estimate: 'VRAM estimate',
+    deploy_required_vram: 'Required memory',
+    deploy_available_vram: 'Available',
+    deploy_vram_budget: 'Deploy budget',
+    deploy_free_vram: 'Raw free',
+    deploy_gpu_cap: 'GPU cap',
+    deploy_vram_weights: 'Weights',
+    deploy_vram_kv_cache: 'KV cache',
+    deploy_vram_runtime: 'Runtime',
+    deploy_vram_margin: 'Margin',
+    deploy_vram_unknown: 'No GPU memory data',
+    deploy_vram_insufficient: 'Short by',
+    deploy_vram_tight: 'Tight margin',
+    deploy_vram_enough: 'Free after deploy',
+    deploy_vram_hint_unknown: 'AIMA could not read GPU memory yet. You can still preflight the config.',
+    deploy_vram_hint_insufficient: 'This config is likely to fail. Try a shorter context or smaller concurrency.',
+    deploy_vram_hint_tight: 'This should be treated as risky; leave extra memory if other services are running.',
+    deploy_vram_hint_ok: 'This config has enough estimated headroom for startup.',
+    deploy_basic_config: 'Basic config',
+    deploy_auto_engine: 'Auto-select engine',
+    deploy_engine_hint: 'AIMA will choose the best available engine.',
+    deploy_recommended_engine: 'Recommended',
+    deploy_resource_policy: 'Resource policy',
+    deploy_local_only: 'Local assets only',
+    deploy_allow_pull: 'Allow downloads',
+    deploy_slot: 'Slot',
+    deploy_port: 'Port',
+    deploy_launch_params: 'Launch parameters',
+    deploy_param_key: 'parameter',
+    deploy_param_value: 'value',
+    deploy_add_param: '+ Add parameter',
+    deploy_show_more_params: 'Show more parameters',
+    deploy_collapse_params: 'Collapse parameters',
+    deploy_save_default: 'Set as default',
+    deploy_default_saved: 'Saved as this model\u2019s device-local default deployment settings.',
+    deploy_default_applied: 'Using saved device-local defaults for this model.',
+    deploy_default_save_failed: 'Could not save defaults on this device.',
+    deploy_remove_param: 'Remove parameter',
+    deploy_restore_recommended: 'Recommended parameters',
+    deploy_recommended_restored: 'AIMA regenerated recommended parameters for the current device state.',
+    deploy_source_manual: 'Manual',
+    deploy_source_recommended: 'AIMA',
+    deploy_suggestions: 'Suggestions',
+    deploy_suggest_reduce_context: 'Reduce context to',
+    deploy_suggest_reduce_seqs: 'Set max_num_seqs to 1',
+    deploy_suggest_fp8_kv: 'Use fp8 KV cache',
+    deploy_preflight: 'Preflight',
+    deploy_preflighting: 'Preflighting...',
+    deploy_preflight_stale: 'Config changed. Run preflight again before deploying.',
+    deploy_preflight_checked: 'Preflight checked',
+    deploy_preflight_not_checked: 'Not preflighted yet',
+    deploy_confirm: 'Confirm start',
+    deploy_loading_plan: 'Resolving recommended deployment config...',
+    deploy_preflight_ready: 'Preflight ready. Review and deploy when ready.',
+    deploy_preflight_failed: 'Preflight did not complete',
+    deploy_warning_swap_gmu: 'Swap is enabled on this machine. If gpu_memory_utilization is too high, startup may become very slow instead of failing quickly. Try lowering it, for example 0.8-0.9.',
+    deploy_warning_gmu_adjusted: 'AIMA lowered the GPU memory cap from {from} to {to}. Current free memory: {free}.',
+    deploy_suggestion_applied: 'Applied',
+    deploy_suggestion_applied_feedback: 'Applied {key}={value}. The memory estimate has been updated.',
+    deploy_minimize_modal: 'Minimize',
+    deploy_maximize_modal: 'Maximize',
+    deploy_restore_modal: 'Restore',
+    deploy_starting: 'Starting deployment with reviewed config...',
+    deploy_started_background: 'Deployment request submitted. The model will continue starting in the background.',
+    deploy_failed: 'Deployment failed',
     chat_placeholder: 'Ask AIMA or run a command...',
     cli_hint: 'Use <code>/cli</code> to run AIMA CLI and MCP commands.<br>Example: <code>/cli help</code> to see more.',
     cli_hint_label: 'Show /cli usage help',
@@ -5848,6 +6514,77 @@ var I18N = {
     running_label: '\u8FD0\u884C\u4E2D',
     stop_label: '\u505C\u6B62',
     retry_label: '\u91CD\u8BD5',
+    deploy_detail_title: '\u90E8\u7F72\u8BE6\u60C5',
+    deploy_detail_subtitle: '\u5148\u67E5\u770B AIMA \u63A8\u8350\u914D\u7F6E\uFF0C\u518D\u6309\u9700\u8C03\u6574\u542F\u52A8\u53C2\u6570\u3002',
+    deploy_model_info: '\u6A21\u578B\u4FE1\u606F',
+    deploy_model_type: '\u6A21\u578B\u7C7B\u578B',
+    deploy_quantization: '\u91CF\u5316\u683C\u5F0F',
+    deploy_runtime: '\u8FD0\u884C\u65B9\u5F0F',
+    deploy_vram_estimate: '\u663E\u5B58\u8BC4\u4F30',
+    deploy_required_vram: '\u6240\u9700\u663E\u5B58',
+    deploy_available_vram: '\u5F53\u524D\u53EF\u7528',
+    deploy_vram_budget: '\u90E8\u7F72\u9884\u7B97',
+    deploy_free_vram: '\u5F53\u524D\u7A7A\u95F2',
+    deploy_gpu_cap: 'GPU \u4E0A\u9650',
+    deploy_vram_weights: '\u6A21\u578B\u6743\u91CD',
+    deploy_vram_kv_cache: 'KV Cache',
+    deploy_vram_runtime: '\u8FD0\u884C\u5F00\u9500',
+    deploy_vram_margin: '\u5B89\u5168\u4F59\u91CF',
+    deploy_vram_unknown: '\u6682\u65E0\u663E\u5B58\u6570\u636E',
+    deploy_vram_insufficient: '\u7F3A\u5C11',
+    deploy_vram_tight: '\u4F59\u91CF\u504F\u7D27',
+    deploy_vram_enough: '\u90E8\u7F72\u540E\u4F59\u91CF',
+    deploy_vram_hint_unknown: '\u6682\u65F6\u8BFB\u4E0D\u5230 GPU \u663E\u5B58\uFF0C\u4ECD\u53EF\u4EE5\u5148\u505A\u9884\u68C0\u3002',
+    deploy_vram_hint_insufficient: '\u8FD9\u7EC4\u53C2\u6570\u5927\u6982\u7387\u4F1A\u663E\u5B58\u4E0D\u8DB3\uFF0C\u53EF\u4EE5\u964D\u4F4E\u4E0A\u4E0B\u6587\u6216\u5E76\u53D1\u3002',
+    deploy_vram_hint_tight: '\u8FD9\u7EC4\u53C2\u6570\u53EF\u4EE5\u5C1D\u8BD5\uFF0C\u4F46\u5EFA\u8BAE\u5148\u786E\u8BA4\u6CA1\u6709\u5176\u4ED6\u670D\u52A1\u5360\u7528\u663E\u5B58\u3002',
+    deploy_vram_hint_ok: '\u8FD9\u7EC4\u53C2\u6570\u6709\u8DB3\u591F\u7684\u4F30\u7B97\u4F59\u91CF\u3002',
+    deploy_basic_config: '\u57FA\u7840\u914D\u7F6E',
+    deploy_auto_engine: '\u81EA\u52A8\u9009\u62E9\u5F15\u64CE',
+    deploy_engine_hint: 'AIMA \u4F1A\u9009\u62E9\u5F53\u524D\u6700\u5408\u9002\u7684\u5F15\u64CE\u3002',
+    deploy_recommended_engine: '\u63A8\u8350',
+    deploy_resource_policy: '\u8D44\u6E90\u7B56\u7565',
+    deploy_local_only: '\u4EC5\u672C\u5730\u8D44\u6E90',
+    deploy_allow_pull: '\u5141\u8BB8\u4E0B\u8F7D\u7F3A\u5931\u8D44\u6E90',
+    deploy_slot: '\u8D44\u6E90\u69FD',
+    deploy_port: '\u7AEF\u53E3',
+    deploy_launch_params: '\u542F\u52A8\u53C2\u6570',
+    deploy_param_key: '\u53C2\u6570\u540D',
+    deploy_param_value: '\u53C2\u6570\u503C',
+    deploy_add_param: '+ \u6DFB\u52A0\u53C2\u6570',
+    deploy_show_more_params: '\u5C55\u5F00\u66F4\u591A\u53C2\u6570',
+    deploy_collapse_params: '\u6536\u8D77\u53C2\u6570',
+    deploy_save_default: '\u8BBE\u4E3A\u9ED8\u8BA4',
+    deploy_default_saved: '\u5DF2\u4FDD\u5B58\u4E3A\u8FD9\u53F0\u8BBE\u5907\u4E0A\u8FD9\u4E2A\u6A21\u578B\u7684\u9ED8\u8BA4\u90E8\u7F72\u8BBE\u7F6E\u3002',
+    deploy_default_applied: '\u5DF2\u4F7F\u7528\u8FD9\u4E2A\u6A21\u578B\u4E0A\u6B21\u4FDD\u5B58\u7684\u8BBE\u5907\u672C\u5730\u9ED8\u8BA4\u8BBE\u7F6E\u3002',
+    deploy_default_save_failed: '\u65E0\u6CD5\u628A\u9ED8\u8BA4\u8BBE\u7F6E\u4FDD\u5B58\u5230\u8FD9\u53F0\u8BBE\u5907\u3002',
+    deploy_remove_param: '\u5220\u9664\u53C2\u6570',
+    deploy_restore_recommended: '\u63A8\u8350\u53C2\u6570',
+    deploy_recommended_restored: 'AIMA \u5DF2\u6309\u5F53\u524D\u8BBE\u5907\u72B6\u6001\u91CD\u65B0\u751F\u6210\u63A8\u8350\u53C2\u6570\u3002',
+    deploy_source_manual: '\u624B\u52A8',
+    deploy_source_recommended: 'AIMA',
+    deploy_suggestions: '\u8C03\u53C2\u5EFA\u8BAE',
+    deploy_suggest_reduce_context: '\u5C06\u4E0A\u4E0B\u6587\u964D\u5230',
+    deploy_suggest_reduce_seqs: '\u5C06 max_num_seqs \u8BBE\u4E3A 1',
+    deploy_suggest_fp8_kv: '\u4F7F\u7528 fp8 KV cache',
+    deploy_preflight: '\u9884\u68C0',
+    deploy_preflighting: '\u9884\u68C0\u4E2D...',
+    deploy_preflight_stale: '\u914D\u7F6E\u5DF2\u4FEE\u6539\uFF0C\u5EFA\u8BAE\u90E8\u7F72\u524D\u91CD\u65B0\u9884\u68C0\u3002',
+    deploy_preflight_checked: '\u5DF2\u9884\u68C0',
+    deploy_preflight_not_checked: '\u5C1A\u672A\u9884\u68C0',
+    deploy_confirm: '\u786E\u8BA4\u542F\u52A8',
+    deploy_loading_plan: '\u6B63\u5728\u89E3\u6790\u63A8\u8350\u90E8\u7F72\u914D\u7F6E...',
+    deploy_preflight_ready: '\u9884\u68C0\u5B8C\u6210\uFF0C\u786E\u8BA4\u540E\u5373\u53EF\u90E8\u7F72\u3002',
+    deploy_preflight_failed: '\u9884\u68C0\u672A\u5B8C\u6210',
+    deploy_warning_swap_gmu: '\u8FD9\u53F0\u673A\u5668\u5F00\u542F\u4E86\u4EA4\u6362\u5185\u5B58\u3002\u5982\u679C gpu_memory_utilization \u8BBE\u5F97\u592A\u9AD8\uFF0C\u542F\u52A8\u65F6\u53EF\u80FD\u4F1A\u53D8\u5F97\u5F88\u6162\uFF0C\u800C\u4E0D\u662F\u5FEB\u901F\u62A5\u9519\u3002\u5EFA\u8BAE\u9002\u5F53\u8C03\u4F4E\uFF0C\u6BD4\u5982 0.8-0.9\u3002',
+    deploy_warning_gmu_adjusted: 'AIMA \u5DF2\u6839\u636E\u5F53\u524D\u7A7A\u95F2\u663E\u5B58\uFF0C\u628A GPU \u663E\u5B58\u4F7F\u7528\u4E0A\u9650\u4ECE {from} \u964D\u5230 {to}\u3002\u5F53\u524D\u7A7A\u95F2\u663E\u5B58\uFF1A{free}\u3002',
+    deploy_suggestion_applied: '\u5DF2\u751F\u6548',
+    deploy_suggestion_applied_feedback: '\u5DF2\u5E94\u7528 {key}={value}\uFF0C\u663E\u5B58\u4F30\u7B97\u5DF2\u540C\u6B65\u66F4\u65B0\u3002',
+    deploy_minimize_modal: '\u6700\u5C0F\u5316',
+    deploy_maximize_modal: '\u6700\u5927\u5316',
+    deploy_restore_modal: '\u8FD8\u539F',
+    deploy_starting: '\u6B63\u5728\u6309\u5F53\u524D\u914D\u7F6E\u542F\u52A8\u90E8\u7F72...',
+    deploy_started_background: '\u5DF2\u63D0\u4EA4\u542F\u52A8\u8BF7\u6C42\uFF0C\u6A21\u578B\u4F1A\u5728\u540E\u53F0\u7EE7\u7EED\u542F\u52A8\u3002',
+    deploy_failed: '\u90E8\u7F72\u5931\u8D25',
     chat_placeholder: '\u8F93\u5165\u95EE\u9898\u6216\u547D\u4EE4...',
     cli_hint: '\u4F7F\u7528 <code>/cli</code> \u6267\u884C AIMA CLI \u548C MCP \u547D\u4EE4\u3002<br>\u793A\u4F8B\uFF1A<code>/cli help</code> \u67E5\u770B\u66F4\u591A\u3002',
     cli_hint_label: '\u663E\u793A /cli \u7528\u6CD5\u63D0\u793A',
@@ -6620,6 +7357,23 @@ function aimaApp() {
     deploymentScanning: false,
     modelDeploying: {},
     deploymentStopping: {},
+    deployDetailOpen: false,
+    deployDetailLoading: false,
+    deployDetailSubmitting: false,
+    deployDetailFeedback: null,
+    deployDetailModel: {},
+    deployDetailPlan: {},
+    deployDetailRecommendedConfig: {},
+    deployDetailParams: [],
+    deployDetailForm: { engine: '', slot: '', noPull: true, port: '' },
+    deployDetailDirty: false,
+    deployDetailLastCheckedAt: '',
+    deployDetailMinimized: false,
+    deployDetailMaximized: false,
+    deployParamsExpanded: false,
+    deployDefaultsApplied: false,
+    deployDefaultsAvailable: false,
+    deploySavedDefaults: null,
     fleet: [],
     // View toggle (chat / support / explorer)
     currentView: 'chat',
@@ -8023,6 +8777,8 @@ function aimaApp() {
           unifiedMemory: unifiedMemory,
           memTotal: this.fmtMiB(unifiedMemory ? unifiedTotalMiB : totalVram),
           memUsed: this.fmtMiB(totalUsed),
+          memTotalMiB: unifiedMemory ? unifiedTotalMiB : totalVram,
+          memUsedMiB: totalUsed,
           memPct: memPct,
           temp: gm.temperature_celsius || g.temperature_celsius || 0,
           power: gm.power_draw_watts || g.power_draw_watts || 0,
@@ -8775,7 +9531,13 @@ function aimaApp() {
         ui_display_note: m.ui_display_note || '',
         ui_display_note_zh: m.ui_display_note_zh || '',
         standalone_deploy: typeof m.standalone_deploy === 'boolean' ? m.standalone_deploy : null,
-        size: this.fmtModelSize(m.size_bytes || 0, m.format || '')
+        size_bytes: m.size_bytes || 0,
+        size: this.fmtModelSize(m.size_bytes || 0, m.format || ''),
+        path: m.path || '',
+        quantization: m.quantization || '',
+        quant_src: m.quant_src || '',
+        total_params: m.total_params || '',
+        active_params: m.active_params || ''
       }));
     },
 
@@ -8811,6 +9573,554 @@ function aimaApp() {
 
     componentModels() {
       return this.models.filter(m => !this.isDeployableModel(m));
+    },
+
+    deployDetailTitle() {
+      const name = this.deployDetailModel && this.deployDetailModel.name ? this.deployDetailModel.name : '';
+      return this.t('deploy_detail_title') + (name ? ': ' + name : '');
+    },
+
+    openDeployDetail(model) {
+      const name = model && model.name ? model.name : '';
+      if (!name || this.modelDeployButtonDisabled(name)) return;
+      const fullModel = this.models.find(m => m.name === name) || model || {};
+      this.deployDetailModel = { ...fullModel };
+      this.deployDetailPlan = {};
+      this.deployDetailRecommendedConfig = {};
+      this.deployDetailParams = [];
+      this.deployDetailForm = { engine: '', slot: '', noPull: true, port: '' };
+      this.deployDetailDirty = false;
+      this.deployDetailLastCheckedAt = '';
+      this.deployParamsExpanded = false;
+      this.deployDefaultsApplied = false;
+      this.deployDetailMinimized = false;
+      this.deployDetailMaximized = false;
+      this.deployDefaultsAvailable = false;
+      this.deploySavedDefaults = null;
+      this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_loading_plan') };
+      this.deployDetailOpen = true;
+      this.refreshDeployDryRun();
+    },
+
+    closeDeployDetail() {
+      if (this.deployDetailSubmitting) return;
+      this.deployDetailOpen = false;
+      this.deployDetailFeedback = null;
+    },
+
+    toggleDeployMinimized() {
+      this.deployDetailMinimized = !this.deployDetailMinimized;
+      if (this.deployDetailMinimized) this.deployDetailMaximized = false;
+    },
+
+    toggleDeployMaximized() {
+      this.deployDetailMaximized = !this.deployDetailMaximized;
+    },
+
+    markDeployConfigDirty() {
+      this.deployDetailDirty = true;
+      if (!this.deployDetailLoading && this.deployDetailFeedback && this.deployDetailFeedback.type === 'success') {
+        this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_preflight_stale') };
+      }
+    },
+
+    async refreshDeployDryRun(forceRecommended = false) {
+      const modelName = this.deployDetailModel && this.deployDetailModel.name;
+      if (!modelName || this.deployDetailLoading) return;
+      this.deployDetailLoading = true;
+      this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_loading_plan') };
+      const manual = forceRecommended ? {} : this.deployManualParamMap();
+      const params = {
+        model: modelName,
+        engine: this.deployDetailForm.engine || '',
+        slot: this.deployDetailForm.slot || '',
+        config: forceRecommended ? {} : this.deployConfigFromParams()
+      };
+      let rerunWithSavedDefaults = false;
+      try {
+        const data = await this.callTool('deploy.dry_run', params);
+        if (!data || data._err) {
+          const msg = data && data._err ? data._err : 'dry-run returned no data';
+          this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_preflight_failed') + ': ' + msg };
+          if (this.deployDetailParams.length === 0) this.seedDeployDefaultParams();
+          return;
+        }
+        this.deployDetailPlan = data || {};
+        const cfg = data && data.config && typeof data.config === 'object' ? data.config : {};
+        this.deployDetailRecommendedConfig = { ...cfg };
+        if (!this.deployDetailForm.engine && data.engine) {
+          this.deployDetailForm.engine = data.engine;
+        }
+        this.setDeployParamsFromConfig(cfg, manual);
+        if (!this.deployDetailForm.port && cfg.port !== undefined && cfg.port !== null) {
+          this.deployDetailForm.port = String(cfg.port);
+        }
+        if (forceRecommended) {
+          this.deployDetailFeedback = { type: 'success', text: this.t('deploy_recommended_restored') };
+        } else if (!this.deployDefaultsApplied) {
+          const saved = await this.loadDeployDefaults();
+          if (saved) {
+            this.applyDeployDefaults(saved);
+            rerunWithSavedDefaults = true;
+          } else {
+            this.deployDefaultsApplied = true;
+          }
+        }
+        const warnings = this.deployPlanWarnings();
+        if (!forceRecommended || warnings.length > 0) {
+          this.deployDetailFeedback = warnings.length > 0
+            ? { type: 'warning', text: this.humanDeployWarning(warnings[0]) }
+            : { type: 'success', text: this.t('deploy_preflight_ready') };
+        }
+        this.deployDetailDirty = false;
+        this.deployDetailLastCheckedAt = new Date().toLocaleTimeString();
+      } finally {
+        this.deployDetailLoading = false;
+      }
+      if (rerunWithSavedDefaults) {
+        await this.refreshDeployDryRun();
+      }
+    },
+
+    seedDeployDefaultParams() {
+      const defaults = { max_model_len: 32768, gpu_memory_utilization: 0.9, dtype: 'auto' };
+      this.deployDetailRecommendedConfig = { ...defaults };
+      this.setDeployParamsFromConfig(defaults, {});
+    },
+
+    deployManualParamMap() {
+      const out = {};
+      for (const p of this.deployDetailParams || []) {
+        if (p && p.key && p.source === 'manual') out[p.key] = p.value;
+      }
+      return out;
+    },
+
+    setDeployParamsFromConfig(config, manual) {
+      const order = ['max_model_len', 'gpu_memory_utilization', 'tensor_parallel_size', 'max_num_seqs', 'dtype', 'kv_cache_dtype', 'port', 'served_model_name'];
+      const keys = Object.keys(config || {}).sort((a, b) => {
+        const ia = order.indexOf(a);
+        const ib = order.indexOf(b);
+        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b);
+      });
+      const seen = new Set();
+      const rows = keys.map(k => {
+        seen.add(k);
+        const isManual = Object.prototype.hasOwnProperty.call(manual || {}, k);
+        return { id: this.newDeployParamId(), key: k, value: isManual ? String(manual[k]) : this.deployParamValueToString(config[k]), source: isManual ? 'manual' : 'recommended' };
+      });
+      for (const [k, v] of Object.entries(manual || {})) {
+        if (!seen.has(k)) rows.push({ id: this.newDeployParamId(), key: k, value: String(v), source: 'manual' });
+      }
+      this.deployDetailParams = rows;
+    },
+
+    newDeployParamId() {
+      return 'param-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    },
+
+    deployParamValueToString(value) {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'object') {
+        try { return JSON.stringify(value); } catch { return String(value); }
+      }
+      return String(value);
+    },
+
+    parseDeployParamValue(value) {
+      const text = String(value ?? '').trim();
+      if (text === '') return '';
+      if (/^(true|false)$/i.test(text)) return text.toLowerCase() === 'true';
+      if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
+      if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+        try { return JSON.parse(text); } catch {}
+      }
+      return text;
+    },
+
+    deployConfigFromParams() {
+      const cfg = {};
+      for (const p of this.deployDetailParams || []) {
+        const key = String(p.key || '').trim();
+        if (!key) continue;
+        const value = this.parseDeployParamValue(p.value);
+        if (value === '') continue;
+        cfg[key] = value;
+      }
+      return cfg;
+    },
+
+    addDeployParam() {
+      this.deployDetailParams = [...(this.deployDetailParams || []), { id: this.newDeployParamId(), key: '', value: '', source: 'manual' }];
+      this.deployParamsExpanded = true;
+      this.markDeployConfigDirty();
+    },
+
+    removeDeployParam(idx) {
+      this.deployDetailParams = (this.deployDetailParams || []).filter((_, i) => i !== idx);
+      this.markDeployConfigDirty();
+    },
+
+    removeDeployParamById(id) {
+      this.deployDetailParams = (this.deployDetailParams || []).filter(p => p && p.id !== id);
+      this.markDeployConfigDirty();
+    },
+
+    markDeployParamManual(param) {
+      if (param) param.source = 'manual';
+      this.markDeployConfigDirty();
+    },
+
+    visibleDeployParams() {
+      const params = this.deployDetailParams || [];
+      return this.deployParamsExpanded ? params : params.slice(0, 4);
+    },
+
+    deployHiddenParamCount() {
+      return Math.max(0, (this.deployDetailParams || []).length - 4);
+    },
+
+    resetDeployParams() {
+      this.deployDetailForm.engine = '';
+      this.deployDetailForm.slot = '';
+      this.deployDetailForm.noPull = true;
+      this.deployDetailForm.port = '';
+      this.deployDefaultsApplied = true;
+      this.refreshDeployDryRun(true);
+    },
+
+    syncDeployPortParam() {
+      this.markDeployConfigDirty();
+      const port = String(this.deployDetailForm.port || '').trim();
+      const existing = (this.deployDetailParams || []).find(p => p.key === 'port');
+      if (!port) {
+        this.deployDetailParams = (this.deployDetailParams || []).filter(p => p.key !== 'port');
+        return;
+      }
+      if (existing) {
+        existing.value = port;
+        existing.source = 'manual';
+      } else {
+        this.deployDetailParams = [...(this.deployDetailParams || []), { id: this.newDeployParamId(), key: 'port', value: port, source: 'manual' }];
+      }
+    },
+
+    deployDefaultsPayload() {
+      return {
+        engine: this.deployDetailForm.engine || '',
+        slot: this.deployDetailForm.slot || '',
+        no_pull: this.deployDetailForm.noPull === true || this.deployDetailForm.noPull === 'true',
+        port: this.deployDetailForm.port || '',
+        config: this.deployConfigFromParams()
+      };
+    },
+
+    async saveDeployDefaults() {
+      const modelName = this.deployDetailModel && this.deployDetailModel.name;
+      if (!modelName) return;
+      try {
+        const payload = this.deployDefaultsPayload();
+        const data = await this.callTool('deploy.defaults', { action: 'set', model: modelName, ...payload });
+        if (!data || data._err) throw new Error(data && data._err ? data._err : 'deploy.defaults returned no data');
+        this.deploySavedDefaults = payload;
+        this.deployDefaultsAvailable = true;
+        this.deployDetailFeedback = { type: 'success', text: this.t('deploy_default_saved') };
+      } catch (err) {
+        this.deployDetailFeedback = { type: 'error', text: this.t('deploy_default_save_failed') };
+      }
+    },
+
+    async loadDeployDefaults() {
+      const modelName = this.deployDetailModel && this.deployDetailModel.name;
+      if (!modelName) return null;
+      const data = await this.callTool('deploy.defaults', { action: 'get', model: modelName });
+      if (!data || data._err || !data.exists || !data.defaults || typeof data.defaults !== 'object') {
+        this.deploySavedDefaults = null;
+        this.deployDefaultsAvailable = false;
+        return null;
+      }
+      this.deploySavedDefaults = data.defaults;
+      this.deployDefaultsAvailable = true;
+      return data.defaults;
+    },
+
+    applyDeployDefaults(saved) {
+      this.deployDefaultsApplied = true;
+      if (!saved || typeof saved !== 'object') return;
+      const manual = {};
+      for (const [k, v] of Object.entries(saved.config || {})) {
+        manual[k] = this.deployParamValueToString(v);
+      }
+      this.setDeployParamsFromConfig(this.deployRecommendedConfigWithDefaults(saved.config || {}), manual);
+      this.deployDetailForm.engine = saved.engine || this.deployDetailForm.engine || '';
+      this.deployDetailForm.slot = saved.slot || '';
+      this.deployDetailForm.noPull = saved.no_pull !== undefined ? !!saved.no_pull : (saved.noPull !== undefined ? !!saved.noPull : this.deployDetailForm.noPull);
+      this.deployDetailForm.port = saved.port || (saved.config && saved.config.port !== undefined ? String(saved.config.port) : this.deployDetailForm.port);
+      this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_default_applied') };
+    },
+
+    deployRecommendedConfigWithDefaults(defaultConfig) {
+      return { ...(this.deployDetailRecommendedConfig || {}), ...(defaultConfig || {}) };
+    },
+
+    deployParamSourceLabel(param) {
+      return param && param.source === 'manual' ? this.t('deploy_source_manual') : this.t('deploy_source_recommended');
+    },
+
+    deployEngineOptions() {
+      const values = [];
+      const add = v => {
+        const s = String(v || '').trim();
+        if (s && !values.includes(s)) values.push(s);
+      };
+      add(this.deployDetailPlan && this.deployDetailPlan.engine);
+      for (const e of this.engines || []) add(e.type || e.id);
+      return values;
+    },
+
+    deployRecommendedEngineHint() {
+      const engine = this.deployDetailPlan && this.deployDetailPlan.engine;
+      if (!engine) return this.t('deploy_engine_hint');
+      return this.t('deploy_recommended_engine') + ': ' + engine;
+    },
+
+    deployQuantizationLabel() {
+      const model = this.deployDetailModel || {};
+      const direct = model.quantization || this.deployDetailRecommendedConfig.quantization || '';
+      if (direct) return String(direct).toUpperCase();
+      const name = String(model.name || '').toUpperCase();
+      const match = name.match(/\b(FP4|FP8|BF16|FP16|INT8|INT4|AWQ|GPTQ|GGUF|Q[2-8]_[A-Z_0-9]+|Q[2-8])\b/);
+      return match ? match[1] : this.t('unavailable');
+    },
+
+    deployPlanWarnings() {
+      const warnings = [];
+      if (Array.isArray(this.deployDetailPlan.warnings)) warnings.push(...this.deployDetailPlan.warnings);
+      const fit = this.deployDetailPlan.fit_report || {};
+      if (Array.isArray(fit.warnings)) warnings.push(...fit.warnings);
+      if (fit.fit === false && fit.reason) warnings.unshift(fit.reason);
+      return warnings.filter(Boolean);
+    },
+
+    humanDeployWarning(warning) {
+      const text = String(warning || '').trim();
+      const lower = text.toLowerCase();
+      const gmuMatch = text.match(/gpu_memory_utilization:\s*([0-9.]+)\s*->\s*([0-9.]+)(?:\s*\(([^)]*)\))?/i);
+      if (gmuMatch) {
+        const from = Math.round(Number(gmuMatch[1]) * 100) + '%';
+        const to = Math.round(Number(gmuMatch[2]) * 100) + '%';
+        const freeMatch = String(gmuMatch[3] || '').match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*MiB\s*free/i);
+        const free = freeMatch ? (this.fmtMiB(Number(freeMatch[1])) + ' / ' + this.fmtMiB(Number(freeMatch[2]))) : this.t('unavailable');
+        return this.t('deploy_warning_gmu_adjusted').replace('{from}', from).replace('{to}', to).replace('{free}', free);
+      }
+      if (lower.includes('swap enabled') && (lower.includes('gmu') || lower.includes('gpu_memory_utilization'))) {
+        return this.t('deploy_warning_swap_gmu');
+      }
+      return text;
+    },
+
+    deployNumericConfig(keys, fallback) {
+      const cfg = this.deployConfigFromParams();
+      for (const key of keys) {
+        const value = cfg[key];
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+        const parsed = Number(value);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      }
+      return fallback;
+    },
+
+    deployModelParamBillions() {
+      const model = this.deployDetailModel || {};
+      const direct = Number(model.active_params || model.total_params || 0);
+      if (Number.isFinite(direct) && direct > 0) return direct > 1000 ? direct / 1000000000 : direct;
+      const text = String(model.name || '') + ' ' + String(model.detected_arch || '');
+      const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*b/ig)];
+      if (matches.length > 0) return Number(matches[matches.length - 1][1]) || 7;
+      return 7;
+    },
+
+    deployAvailableVramMiB() {
+      if (!this.hw || !this.hw.gpu) return 0;
+      const total = Number(this.hw.gpu.memTotalMiB || 0);
+      const used = Number(this.hw.gpu.memUsedMiB || 0);
+      if (total <= 0) return 0;
+      return Math.max(0, total - used);
+    },
+
+    deployGpuMemoryUtilization() {
+      const raw = this.deployNumericConfig(['gpu_memory_utilization', 'gpu-memory-utilization'], 1);
+      if (!Number.isFinite(raw) || raw <= 0) return 1;
+      return Math.max(0.05, Math.min(1, raw));
+    },
+
+    deployGpuMemoryUtilizationLabel() {
+      return Math.round(this.deployGpuMemoryUtilization() * 100) + '%';
+    },
+
+    deployKvCacheScale() {
+      const cfg = this.deployConfigFromParams();
+      const value = String(cfg.kv_cache_dtype || cfg['kv-cache-dtype'] || '').toLowerCase();
+      if (!value) return 1;
+      if (value.includes('fp8') || value.includes('float8')) return 0.5;
+      if (value.includes('int8') || value.includes('uint8')) return 0.5;
+      return 1;
+    },
+
+    deployVramBudgetMiB() {
+      if (!this.hw || !this.hw.gpu) return 0;
+      const total = Number(this.hw.gpu.memTotalMiB || 0);
+      const used = Number(this.hw.gpu.memUsedMiB || 0);
+      if (total <= 0) return 0;
+      const cappedFree = total * this.deployGpuMemoryUtilization() - used;
+      const free = Math.max(0, total - used);
+      if (cappedFree <= 0) return free;
+      return Math.max(0, Math.min(free, cappedFree));
+    },
+
+    deployVramEstimate() {
+      const backend = this.deployDetailPlan && this.deployDetailPlan.resource_estimate ? this.deployDetailPlan.resource_estimate : {};
+      const backendVram = Number(backend.vram_mib || 0);
+      const modelBytes = Number(this.deployDetailModel.size_bytes || 0);
+      let weights = modelBytes > 0 ? modelBytes / (1024 * 1024) : 0;
+      if (weights <= 0 && backendVram > 0) weights = backendVram * 0.58;
+      if (weights <= 0) weights = this.deployModelParamBillions() * 1024;
+      const maxLen = this.deployNumericConfig(['max_model_len', 'max-model-len', 'max_seq_len', 'context_length'], 4096);
+      const maxSeqs = this.deployNumericConfig(['max_num_seqs', 'max-num-seqs', 'max_batch_size'], 1);
+      const paramB = Math.max(1, this.deployModelParamBillions());
+      const baseKvCache = Math.max(256, (maxLen / 8192) * Math.max(1, maxSeqs) * Math.max(1, paramB / 7) * 512);
+      const kvCache = Math.max(128, baseKvCache * this.deployKvCacheScale());
+      const engine = String(this.deployDetailForm.engine || this.deployDetailPlan.engine || '').toLowerCase();
+      let runtime = engine.includes('llama') ? 512 : engine.includes('sglang') ? 1280 : 1024;
+      if (backendVram > 0) runtime = Math.max(runtime, backendVram * 0.08);
+      const margin = Math.max(512, (weights + kvCache + runtime) * 0.08);
+      const required = Math.ceil(weights + kvCache + runtime + margin);
+      const free = this.deployAvailableVramMiB();
+      const budget = this.deployVramBudgetMiB();
+      const headroom = Math.ceil(budget - required);
+      return { required, available: budget, budget, free, headroom, weights: Math.ceil(weights), kvCache: Math.ceil(kvCache), runtime: Math.ceil(runtime), margin: Math.ceil(margin) };
+    },
+
+    deployVramUsagePct() {
+      const e = this.deployVramEstimate();
+      const capacity = e.available > 0 ? e.available : e.free;
+      if (capacity <= 0) return 0;
+      return Math.max(3, Math.min(100, Math.round(e.required / capacity * 100)));
+    },
+
+    deployVramFillClass() {
+      const e = this.deployVramEstimate();
+      const capacity = e.available > 0 ? e.available : e.free;
+      if (capacity > 0 && e.required > capacity) return 'crit';
+      if (capacity > 0 && e.required > capacity * 0.85) return 'warn';
+      return '';
+    },
+
+    deployVramStatusText() {
+      const e = this.deployVramEstimate();
+      const capacity = e.available > 0 ? e.available : e.free;
+      if (capacity <= 0) return this.t('deploy_vram_unknown');
+      const spare = capacity - e.required;
+      if (spare < 0) return this.t('deploy_vram_insufficient') + ' ' + this.fmtMiB(Math.abs(spare));
+      if (spare < capacity * 0.15) return this.t('deploy_vram_tight') + ' ' + this.fmtMiB(spare);
+      return this.t('deploy_vram_enough') + ' ' + this.fmtMiB(spare);
+    },
+
+    deployVramHint() {
+      const e = this.deployVramEstimate();
+      const capacity = e.available > 0 ? e.available : e.free;
+      if (capacity <= 0) return this.t('deploy_vram_hint_unknown');
+      if (e.required > capacity) return this.t('deploy_vram_hint_insufficient');
+      if (e.required > capacity * 0.85) return this.t('deploy_vram_hint_tight');
+      return this.t('deploy_vram_hint_ok');
+    },
+
+    deployPreflightStatusText() {
+      if (this.deployDetailLoading) return this.t('deploy_preflighting');
+      if (this.deployDetailDirty) return this.t('deploy_preflight_stale');
+      if (this.deployDetailLastCheckedAt) return this.t('deploy_preflight_checked') + ' ' + this.deployDetailLastCheckedAt;
+      return this.t('deploy_preflight_not_checked');
+    },
+
+    deployVramSuggestions() {
+      const e = this.deployVramEstimate();
+      const cfg = this.deployConfigFromParams();
+      const kvApplied = String(cfg.kv_cache_dtype || cfg['kv-cache-dtype'] || '').toLowerCase().includes('fp8');
+      if (e.available <= 0 || (e.required <= e.available * 0.85 && !kvApplied)) return [];
+      const suggestions = [];
+      const maxLen = this.deployNumericConfig(['max_model_len', 'max-model-len'], 4096);
+      if (maxLen > 8192) suggestions.push({ key: 'max_model_len', value: Math.max(8192, Math.floor(maxLen / 2)), label: this.t('deploy_suggest_reduce_context') + ' ' + Math.max(8192, Math.floor(maxLen / 2)) });
+      const maxSeqs = this.deployNumericConfig(['max_num_seqs', 'max-num-seqs'], 1);
+      if (maxSeqs > 1) suggestions.push({ key: 'max_num_seqs', value: 1, label: this.t('deploy_suggest_reduce_seqs') });
+      if (!cfg.kv_cache_dtype || kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8', label: this.t('deploy_suggest_fp8_kv') });
+      return suggestions;
+    },
+
+    deploySuggestionApplied(suggestion) {
+      if (!suggestion) return false;
+      const cfg = this.deployConfigFromParams();
+      const current = cfg[suggestion.key];
+      return String(current ?? '').toLowerCase() === String(suggestion.value ?? '').toLowerCase();
+    },
+
+    deploySuggestionLabel(suggestion) {
+      if (!suggestion) return '';
+      return this.deploySuggestionApplied(suggestion)
+        ? suggestion.label + ' · ' + this.t('deploy_suggestion_applied')
+        : suggestion.label;
+    },
+
+    async applyDeploySuggestion(suggestion) {
+      if (!suggestion) return;
+      const existing = (this.deployDetailParams || []).find(p => p.key === suggestion.key);
+      if (existing) {
+        existing.value = String(suggestion.value);
+        existing.source = 'manual';
+      } else {
+        this.deployDetailParams = [...(this.deployDetailParams || []), { id: this.newDeployParamId(), key: suggestion.key, value: String(suggestion.value), source: 'manual' }];
+      }
+      this.deployParamsExpanded = true;
+      this.markDeployConfigDirty();
+      this.deployDetailFeedback = {
+        type: 'success',
+        text: this.t('deploy_suggestion_applied_feedback').replace('{key}', suggestion.key).replace('{value}', String(suggestion.value))
+      };
+      await this.refreshDeployDryRun();
+    },
+
+    async confirmDeployDetail() {
+      const modelName = this.deployDetailModel && this.deployDetailModel.name;
+      if (!modelName || this.deployDetailSubmitting) return;
+      const request = {
+        model: modelName,
+        engine: this.deployDetailForm.engine || '',
+        slot: this.deployDetailForm.slot || '',
+        config: this.deployConfigFromParams(),
+        no_pull: this.deployDetailForm.noPull === true || this.deployDetailForm.noPull === 'true'
+      };
+      this.deployDetailSubmitting = true;
+      this.modelDeploying = { ...this.modelDeploying, [modelName]: true };
+      this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_starting') };
+      this.messages.push({ role: 'system', text: 'Deploying ' + modelName + ' with reviewed config...' });
+      this.scrollChat();
+      this.deployDetailOpen = false;
+      try {
+        const data = await this.callTool('deploy.run', request);
+        if (!data || data._err) {
+          const errMsg = data && data._err ? data._err : 'tool returned no data';
+          this.messages.push({ role: 'error', text: 'Deploy ' + modelName + ' failed: ' + errMsg });
+          return;
+        }
+        const address = data && data.address ? data.address : '';
+        this.messages.push({ role: 'system', text: address ? ('Deploy ' + modelName + ' ready. Use the API Access panel for calls.') : this.t('deploy_started_background') });
+      } finally {
+        const next = { ...this.modelDeploying };
+        delete next[modelName];
+        this.modelDeploying = next;
+        this.deployDetailSubmitting = false;
+        await this.pollDeployments();
+        this.scrollChat();
+      }
     },
 
     componentStatusNote(model) {
@@ -8857,34 +10167,6 @@ function aimaApp() {
         return this.t('running_label');
       }
       return dep.startup_message || dep.startup_phase || dep.phase || this.t('deploying_label');
-    },
-
-    async deployModel(modelName) {
-      if (!modelName || this.modelDeployButtonDisabled(modelName)) return;
-
-      this.modelDeploying = { ...this.modelDeploying, [modelName]: true };
-      this.messages.push({ role: 'system', text: 'Deploying ' + modelName + ' with local assets only...' });
-      this.scrollChat();
-
-      try {
-        const data = await this.callTool('deploy.run', { model: modelName, no_pull: true });
-        if (!data || data._err) {
-          const errMsg = data && data._err ? data._err : 'tool returned no data';
-          this.messages.push({ role: 'error', text: 'Deploy ' + modelName + ' failed: ' + errMsg });
-          return;
-        }
-        const address = data && data.address ? data.address : '';
-        this.messages.push({
-          role: 'system',
-          text: address ? ('Deploy ' + modelName + ' ready. Use the API Access panel for calls.') : ('Deploy ' + modelName + ' started.')
-        });
-      } finally {
-        const next = { ...this.modelDeploying };
-        delete next[modelName];
-        this.modelDeploying = next;
-        await this.pollDeployments();
-        this.scrollChat();
-      }
     },
 
     async stopDeployment(deploymentName) {
@@ -10301,6 +11583,15 @@ function aimaApp() {
         if (key === 'escape') {
           e.preventDefault();
           this.closeOnboardingDrawer();
+        } else if ((e.ctrlKey || e.metaKey) && key === 'k') {
+          e.preventDefault();
+        }
+        return;
+      }
+      if (this.deployDetailOpen) {
+        if (key === 'escape') {
+          e.preventDefault();
+          this.closeDeployDetail();
         } else if ((e.ctrlKey || e.metaKey) && key === 'k') {
           e.preventDefault();
         }

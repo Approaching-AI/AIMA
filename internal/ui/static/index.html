@@ -5563,8 +5563,8 @@ body {
               <label x-text="t('wiz_engine_label')"></label>
               <select x-model="deployDetailForm.engine" @change="markDeployConfigDirty(); refreshDeployDryRun()">
                 <option value="" x-text="t('deploy_auto_engine')"></option>
-                <template x-for="engine in deployEngineOptions()" :key="engine">
-                  <option :value="engine" x-text="engine"></option>
+                <template x-for="engine in deployEngineOptions()" :key="engine.value">
+                  <option :value="engine.value" x-text="engine.label"></option>
                 </template>
               </select>
               <div class="modal-hint" x-text="deployRecommendedEngineHint()"></div>
@@ -9487,6 +9487,8 @@ function aimaApp() {
         id: e.id || (e.type + (e.tag || '')),
         type: e.type || 'unknown',
         variant: e.tag || '',
+        image: e.image || '',
+        version: e.version || '',
         available: e.available !== false
       }));
     },
@@ -9867,21 +9869,83 @@ function aimaApp() {
       return param && param.source === 'manual' ? this.t('deploy_source_manual') : this.t('deploy_source_recommended');
     },
 
+    isDigestEngineId(value) {
+      return /^sha256:[0-9a-f]{16,}$/i.test(String(value || '').trim());
+    },
+
+    shortEngineId(value) {
+      const s = String(value || '').trim();
+      if (!s) return '';
+      if (this.isDigestEngineId(s)) return 'sha256:' + s.slice(7, 15);
+      return s.length > 52 ? s.slice(0, 36) + '...' + s.slice(-8) : s;
+    },
+
+    deployEngineOptionName(engine) {
+      const id = String((engine && engine.id) || '').trim();
+      const type = String((engine && engine.type) || '').trim();
+      const fallback = String((engine && engine.value) || '').trim();
+      if (this.isDigestEngineId(id || fallback)) {
+        return (type && type !== 'unknown') ? type : this.shortEngineId(id || fallback);
+      }
+      if (id && type && type !== 'unknown' && id !== type && !id.includes(type)) {
+        return id + ' (' + type + ')';
+      }
+      return id || type || fallback || 'unknown';
+    },
+
+    deployEngineVersionText(engine) {
+      const version = String((engine && (engine.version || engine.variant || engine.tag)) || '').trim();
+      if (!version || version.toLowerCase() === 'latest') return '';
+      return (this.lang === 'zh' ? '\u7248\u672C ' : 'version ') + version;
+    },
+
+    deployEngineOptionLabel(engine, duplicate) {
+      const name = this.deployEngineOptionName(engine);
+      const image = String((engine && engine.image) || '').trim();
+      const suffix = image ? ' - ' + image : '';
+      const version = this.deployEngineVersionText(engine);
+      if (version) return name + suffix + ' (' + version + ')';
+      const digest = this.isDigestEngineId((engine && engine.id) || (engine && engine.value))
+        ? this.shortEngineId((engine && engine.id) || (engine && engine.value))
+        : '';
+      return name + suffix + (duplicate && digest ? ' (' + digest + ')' : '');
+    },
+
     deployEngineOptions() {
-      const values = [];
-      const add = v => {
-        const s = String(v || '').trim();
-        if (s && !values.includes(s)) values.push(s);
+      const entries = [];
+      const seen = new Set();
+      const add = (value, engine) => {
+        const s = String(value || '').trim();
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        entries.push({ value: s, engine: { ...(engine || {}), id: s, value: s } });
       };
-      add(this.deployDetailPlan && this.deployDetailPlan.engine);
-      for (const e of this.engines || []) add(e.type || e.id);
-      return values;
+      add(this.deployDetailPlan && this.deployDetailPlan.engine, {
+        id: this.deployDetailPlan && this.deployDetailPlan.engine,
+        type: this.deployDetailPlan && this.deployDetailPlan.engine,
+        image: this.deployDetailPlan && this.deployDetailPlan.engine_image
+      });
+      for (const e of this.engines || []) {
+        const id = e.id || e.type;
+        add(id, e);
+      }
+      const labelCounts = {};
+      for (const entry of entries) {
+        const base = this.deployEngineOptionLabel(entry.engine, false);
+        labelCounts[base] = (labelCounts[base] || 0) + 1;
+        entry.baseLabel = base;
+      }
+      return entries.map(entry => ({
+        value: entry.value,
+        label: this.deployEngineOptionLabel(entry.engine, labelCounts[entry.baseLabel] > 1)
+      }));
     },
 
     deployRecommendedEngineHint() {
       const engine = this.deployDetailPlan && this.deployDetailPlan.engine;
       if (!engine) return this.t('deploy_engine_hint');
-      return this.t('deploy_recommended_engine') + ': ' + engine;
+      const label = this.deployEngineOptionLabel({ id: engine, type: engine, image: this.deployDetailPlan && this.deployDetailPlan.engine_image }, false);
+      return this.t('deploy_recommended_engine') + ': ' + label;
     },
 
     deployQuantizationLabel() {

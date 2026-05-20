@@ -114,7 +114,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			req.Labels[proxy.LabelParameterCount] = parameterCount
 		}
 		if modelType := catalogModelType(cat, modelName); modelType != "" {
-			req.Labels["aima.dev/model_type"] = modelType
+			req.Labels[proxy.LabelModelType] = modelType
 		}
 		if contextWindow := contextWindowFromResolvedConfig(resolved.Config); contextWindow > 0 {
 			req.Labels["aima.dev/context_window"] = strconv.Itoa(contextWindow)
@@ -160,6 +160,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				ModelName:           modelName,
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
+				ModelType:           catalogModelType(cat, modelName),
 				Address:             existing.Address,
 				Ready:               existing.Ready,
 				ParameterCount:      firstNonEmpty(existing.Labels[proxy.LabelParameterCount], catalogModelParameterCount(cat, modelName)),
@@ -189,7 +190,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			if existing.Address != "" {
 				result["address"] = existing.Address
 			}
-			if err := setActiveLLMModelConfig(ctx, db, modelName); err != nil {
+			if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
 				return nil, err
 			}
 			return json.Marshal(result)
@@ -298,11 +299,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			ModelName:           modelName,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
+			ModelType:           catalogModelType(cat, modelName),
 			Ready:               false,
 			ParameterCount:      catalogModelParameterCount(cat, modelName),
 			ContextWindowTokens: contextWindowFromResolvedConfig(resolved.Config),
 		})
-		if err := setActiveLLMModelConfig(ctx, db, modelName); err != nil {
+		if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
 			return nil, err
 		}
 		result := map[string]any{
@@ -603,15 +605,27 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	}
 }
 
-func setActiveLLMModelConfig(ctx context.Context, db *state.DB, modelName string) error {
+func setActiveLLMModelConfigForType(ctx context.Context, db *state.DB, modelName, modelType string) error {
 	modelName = strings.TrimSpace(modelName)
 	if db == nil || modelName == "" {
+		return nil
+	}
+	if !isChatModelType(modelType) {
 		return nil
 	}
 	if err := db.SetConfig(ctx, "llm.model", modelName); err != nil {
 		return fmt.Errorf("update llm.model after deploy: %w", err)
 	}
 	return nil
+}
+
+func isChatModelType(modelType string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelType)) {
+	case "", "llm", "vlm", "chat", "text":
+		return true
+	default:
+		return false
+	}
 }
 
 func catalogModelParameterCount(cat *knowledge.Catalog, name string) string {
@@ -721,7 +735,7 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 		EstimatedTotalS:     status.EstimatedTotalS,
 		ErrorLines:          status.ErrorLines,
 		ServedModel:         deploymentUpstreamModel(status, ""),
-		ModelType:           firstNonEmpty(status.Labels["aima.dev/model_type"], catalogModelType(cat, status.Model)),
+		ModelType:           firstNonEmpty(status.Labels[proxy.LabelModelType], catalogModelType(cat, status.Model)),
 		ParameterCount:      firstNonEmpty(status.Labels[proxy.LabelParameterCount]),
 		ContextWindowTokens: contextWindowFromStatus(status),
 	}

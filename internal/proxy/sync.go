@@ -19,6 +19,7 @@ type DeploymentInfo struct {
 	Address             string            `json:"address"`
 	Runtime             string            `json:"runtime"`
 	ServedModel         string            `json:"served_model,omitempty"`
+	ModelType           string            `json:"model_type,omitempty"`
 	ParameterCount      string            `json:"parameter_count,omitempty"`
 	ContextWindowTokens int               `json:"context_window_tokens,omitempty"`
 	Labels              map[string]string `json:"labels,omitempty"`
@@ -54,6 +55,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 				ModelName:           model,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineTypeFromDeployment(d),
+				ModelType:           modelTypeFromDeployment(d),
 				Address:             d.Address,
 				Ready:               true,
 				ParameterCount:      parameterCountFromDeployment(d),
@@ -70,6 +72,10 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 			if engineType == "" {
 				engineType = b.EngineType
 			}
+			modelType := modelTypeFromDeployment(d)
+			if modelType == "" {
+				modelType = b.ModelType
+			}
 			if strings.TrimSpace(d.ServedModel) == "" && strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
 				upstreamModel = backendUpstreamModel(b)
 			}
@@ -77,6 +83,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 				ModelName:           model,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineType,
+				ModelType:           modelType,
 				Address:             b.Address,
 				BasePath:            b.BasePath,
 				Ready:               false,
@@ -89,6 +96,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 				ModelName:           model,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineTypeFromDeployment(d),
+				ModelType:           modelTypeFromDeployment(d),
 				Ready:               false,
 				ParameterCount:      parameterCountFromDeployment(d),
 				ContextWindowTokens: contextWindowFromDeployment(d),
@@ -170,6 +178,16 @@ func engineTypeFromDeployment(d *DeploymentInfo) string {
 		return value
 	}
 	return strings.TrimSpace(d.Labels["aima.dev/engine"])
+}
+
+func modelTypeFromDeployment(d *DeploymentInfo) string {
+	if d == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(d.ModelType); value != "" {
+		return value
+	}
+	return strings.TrimSpace(d.Labels[LabelModelType])
 }
 
 // StartSyncLoop runs SyncBackends immediately and then every interval until ctx is cancelled.

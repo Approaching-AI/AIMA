@@ -582,6 +582,52 @@ func TestOpenAIClient_RouteStatus_SelectsBestLocalModel(t *testing.T) {
 	}
 }
 
+func TestOpenAIClient_RouteStatus_IgnoresNonChatLocalModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"models": []map[string]any{
+				{
+					"model_name":            "z-image",
+					"engine_type":           "z-image-diffusers",
+					"model_type":            "image_gen",
+					"ready":                 true,
+					"parameter_count":       "100B",
+					"context_window_tokens": 131072,
+				},
+				{
+					"model_name":            "qwen3.5-9b",
+					"engine_type":           "vllm",
+					"model_type":            "llm",
+					"ready":                 true,
+					"parameter_count":       "9B",
+					"context_window_tokens": 32768,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewOpenAIClient(srv.URL + "/v1")
+	status := client.RouteStatus(context.Background())
+	if !status.Available {
+		t.Fatal("RouteStatus().Available = false, want true")
+	}
+	if status.SelectionReason != "best_local_model" {
+		t.Fatalf("SelectionReason = %q, want best_local_model", status.SelectionReason)
+	}
+	if status.Selected == nil || status.Selected.Model != "qwen3.5-9b" {
+		t.Fatalf("Selected = %+v, want qwen3.5-9b", status.Selected)
+	}
+	if len(status.ConfiguredEndpointProbe.Models) != 1 {
+		t.Fatalf("probe models = %d, want only the chat-capable model", len(status.ConfiguredEndpointProbe.Models))
+	}
+}
+
 func TestOpenAIClient_RouteStatus_FallsBackWhenConfiguredModelUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {

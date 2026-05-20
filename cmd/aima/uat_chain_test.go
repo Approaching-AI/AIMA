@@ -359,6 +359,31 @@ func TestDeployApplyReusesExistingSameModelDeploymentByLabel(t *testing.T) {
 	}
 }
 
+func TestSetActiveLLMModelConfigForTypeSkipsNonChatModel(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.SetConfig(ctx, "llm.model", "qwen3.5-9b"); err != nil {
+		t.Fatalf("SetConfig llm.model: %v", err)
+	}
+	if err := setActiveLLMModelConfigForType(ctx, db, "z-image", "image_gen"); err != nil {
+		t.Fatalf("setActiveLLMModelConfigForType image_gen: %v", err)
+	}
+	if got, err := db.GetConfig(ctx, "llm.model"); err != nil || got != "qwen3.5-9b" {
+		t.Fatalf("llm.model = %q, %v; want existing chat model", got, err)
+	}
+	if err := setActiveLLMModelConfigForType(ctx, db, "qwen3.6-35b-a3b", "llm"); err != nil {
+		t.Fatalf("setActiveLLMModelConfigForType llm: %v", err)
+	}
+	if got, err := db.GetConfig(ctx, "llm.model"); err != nil || got != "qwen3.6-35b-a3b" {
+		t.Fatalf("llm.model = %q, %v; want qwen3.6-35b-a3b", got, err)
+	}
+}
+
 func TestDeployDeleteFailsWhenDeploymentStillListedAfterDelete(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")

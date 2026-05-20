@@ -682,6 +682,8 @@ type resolvedTarget struct {
 type RouteCandidate struct {
 	BaseURL             string `json:"base_url"`
 	Model               string `json:"model"`
+	ModelType           string `json:"model_type,omitempty"`
+	EngineType          string `json:"engine_type,omitempty"`
 	ParameterCount      string `json:"parameter_count,omitempty"`
 	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
 	EndpointIsLoopback  bool   `json:"endpoint_is_loopback"`
@@ -899,6 +901,7 @@ func (c *OpenAIClient) discoverFleetCandidates(ctx context.Context) []RouteCandi
 		candidates = append(candidates, RouteCandidate{
 			BaseURL:             ep.BaseURL,
 			Model:               ep.Model,
+			ModelType:           "llm",
 			ParameterCount:      strings.TrimSpace(ep.ParameterCount),
 			ContextWindowTokens: ep.ContextWindowTokens,
 			EndpointIsLoopback:  IsLoopbackEndpoint(ep.BaseURL),
@@ -918,6 +921,8 @@ func routeCandidatesFromAdvertised(baseURL string, fromFleet bool, models []prox
 		candidates = append(candidates, RouteCandidate{
 			BaseURL:             baseURL,
 			Model:               model.ID,
+			ModelType:           strings.TrimSpace(model.ModelType),
+			EngineType:          strings.TrimSpace(model.EngineType),
 			ParameterCount:      strings.TrimSpace(model.ParameterCount),
 			ContextWindowTokens: model.ContextWindowTokens,
 			EndpointIsLoopback:  IsLoopbackEndpoint(baseURL),
@@ -938,12 +943,16 @@ func betterRouteCandidate(a, b RouteCandidate) bool {
 	return proxy.BetterAdvertisedModel(
 		proxy.AdvertisedModel{
 			ID:                  a.Model,
+			ModelType:           a.ModelType,
+			EngineType:          a.EngineType,
 			ParameterCount:      a.ParameterCount,
 			ContextWindowTokens: a.ContextWindowTokens,
 			Remote:              !a.EndpointIsLoopback,
 		},
 		proxy.AdvertisedModel{
 			ID:                  b.Model,
+			ModelType:           b.ModelType,
+			EngineType:          b.EngineType,
 			ParameterCount:      b.ParameterCount,
 			ContextWindowTokens: b.ContextWindowTokens,
 			Remote:              !b.EndpointIsLoopback,
@@ -1085,7 +1094,11 @@ func (c *OpenAIClient) fetchAdvertisedModels(ctx context.Context, baseURL string
 		if strings.TrimSpace(model.ID) == "" {
 			continue
 		}
-		ads = append(ads, proxy.AdvertisedModel{ID: model.ID})
+		advertised := proxy.AdvertisedModel{ID: model.ID}
+		if !proxy.IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		ads = append(ads, advertised)
 	}
 	proxy.SortAdvertisedModels(ads)
 	return ads, nil
@@ -1121,6 +1134,8 @@ func (c *OpenAIClient) fetchStatusModels(ctx context.Context, baseURL string) ([
 	var payload struct {
 		Models []struct {
 			ModelName           string `json:"model_name"`
+			ModelType           string `json:"model_type"`
+			EngineType          string `json:"engine_type"`
 			Ready               *bool  `json:"ready"`
 			Remote              bool   `json:"remote"`
 			ParameterCount      string `json:"parameter_count"`
@@ -1139,12 +1154,18 @@ func (c *OpenAIClient) fetchStatusModels(ctx context.Context, baseURL string) ([
 		if strings.TrimSpace(model.ModelName) == "" {
 			continue
 		}
-		models = append(models, proxy.AdvertisedModel{
+		advertised := proxy.AdvertisedModel{
 			ID:                  model.ModelName,
+			ModelType:           model.ModelType,
+			EngineType:          model.EngineType,
 			ParameterCount:      model.ParameterCount,
 			ContextWindowTokens: model.ContextWindowTokens,
 			Remote:              model.Remote,
-		})
+		}
+		if !proxy.IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	proxy.SortAdvertisedModels(models)
 	return models, nil

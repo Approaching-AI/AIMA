@@ -231,6 +231,7 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 			"models": []map[string]any{
 				{
 					"model_name":            "qwen3-8b",
+					"model_type":            "llm",
 					"ready":                 true,
 					"remote":                false,
 					"parameter_count":       "8B",
@@ -238,6 +239,7 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 				},
 				{
 					"model_name":            "qwen3.5-35b-a3b",
+					"model_type":            "llm",
 					"ready":                 true,
 					"remote":                false,
 					"parameter_count":       "35B",
@@ -258,6 +260,9 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 	}
 	if models[0].ParameterCount != "35B" {
 		t.Fatalf("parameter_count = %q, want 35B", models[0].ParameterCount)
+	}
+	if models[0].ModelType != "llm" {
+		t.Fatalf("model_type = %q, want llm", models[0].ModelType)
 	}
 }
 

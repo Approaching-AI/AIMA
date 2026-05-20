@@ -126,6 +126,7 @@ func TestStatusEndpoint(t *testing.T) {
 	s.RegisterBackend("qwen3-8b", &Backend{
 		ModelName:           "qwen3-8b",
 		EngineType:          "vllm",
+		ModelType:           "llm",
 		Address:             "10.42.0.5:8000",
 		Ready:               true,
 		ParameterCount:      "8B",
@@ -158,6 +159,9 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 	if got := first["parameter_count"]; got != "8B" {
 		t.Fatalf("parameter_count = %v, want 8B", got)
+	}
+	if got := first["model_type"]; got != "llm" {
+		t.Fatalf("model_type = %v, want llm", got)
 	}
 }
 

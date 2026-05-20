@@ -61,6 +61,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			s.RegisterBackend(model.ID, &Backend{
 				ModelName:           model.ID,
 				EngineType:          "remote",
+				ModelType:           model.ModelType,
 				Address:             address,
 				Ready:               true,
 				Remote:              true,
@@ -142,6 +143,8 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 	var result struct {
 		Models []struct {
 			ModelName           string `json:"model_name"`
+			ModelType           string `json:"model_type"`
+			EngineType          string `json:"engine_type"`
 			Ready               *bool  `json:"ready"`
 			Remote              bool   `json:"remote"`
 			ParameterCount      string `json:"parameter_count"`
@@ -161,12 +164,18 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 		if strings.TrimSpace(m.ModelName) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{
+		advertised := AdvertisedModel{
 			ID:                  m.ModelName,
+			ModelType:           m.ModelType,
+			EngineType:          m.EngineType,
 			ParameterCount:      m.ParameterCount,
 			ContextWindowTokens: m.ContextWindowTokens,
 			Remote:              m.Remote,
-		})
+		}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
 	if len(models) == 0 {
@@ -229,7 +238,11 @@ func advertisedModelsFromIDs(ids []string) []AdvertisedModel {
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{ID: id})
+		advertised := AdvertisedModel{ID: id}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
 	return models

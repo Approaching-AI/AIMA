@@ -198,13 +198,23 @@ func summarizeConfigured(cfg map[string]any, managed *ManagedState, proxyAddr st
 		legacyLLM = legacyManagedHint(cfg, proxyAddr)
 	}
 
-	if managed != nil && managed.LLMProvider != "" {
-		if provider := lookupMap(cfg, "models", "providers", managed.LLMProvider); providerManagedByAIMA(provider, proxyAddr) {
+	if managedOwnsChatModel(managed) {
+		summary.ChatModels = append(summary.ChatModels, configuredAgentDefaultModelsForProviders(cfg, "model", []string{managed.ChatModelProvider}, proxyAddr)...)
+	} else if managed != nil && managed.LLMProvider != "" {
+		if configured := configuredAgentDefaultModelsForProviders(cfg, "model", []string{managed.LLMProvider}, proxyAddr); len(configured) > 0 {
+			summary.ChatModels = append(summary.ChatModels, configured...)
+		} else if hasAgentDefaultModel(cfg, "model") && legacyChatModelDefaultOwned(cfg) {
+			// AIMA owns a legacy chat default, but it points at an old provider.
+			// Report drift instead of treating provider presence as fully synced.
+		} else if provider := lookupMap(cfg, "models", "providers", managed.LLMProvider); providerManagedByAIMA(provider, proxyAddr) {
 			for _, id := range providerModels(provider) {
 				summary.ChatModels = append(summary.ChatModels, id)
 			}
 		}
 	} else if legacyLLM {
+		if configured := configuredAgentDefaultModelsForProviders(cfg, "model", []string{aimaLLMProviderID, legacyLLMProviderID, aimaMediaProviderID}, proxyAddr); len(configured) > 0 {
+			summary.ChatModels = append(summary.ChatModels, configured...)
+		}
 		for _, providerID := range []string{aimaLLMProviderID, legacyLLMProviderID} {
 			if provider := lookupMap(cfg, "models", "providers", providerID); providerManagedByAIMA(provider, proxyAddr) {
 				for _, id := range providerModels(provider) {

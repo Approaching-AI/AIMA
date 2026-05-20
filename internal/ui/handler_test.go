@@ -262,11 +262,12 @@ func TestRegisterRoutes_IndexShowsAPIAccessWithoutRenderingPrivateIP(t *testing.
 		`api_access`,
 		`api_access_desc`,
 		`apiBaseDisplay()`,
-		`apiDeploymentChatCapable(dep)`,
+		`apiDeploymentChatCapable(deploymentDetailData)`,
 		`api_non_chat_hint`,
 		`copyCurrentAPIBaseURL($event)`,
-		`copyAPICurl(dep, $event)`,
+		`copyAPICurl(deploymentDetailData, $event)`,
 		`apiCurlTemplate(dep)`,
+		`openDeploymentDetail(dep)`,
 		`api_public_unconfigured`,
 	} {
 		if !strings.Contains(body, token) {
@@ -471,11 +472,12 @@ func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	body := rec.Body.String()
 	for _, token := range []string{
 		"startup_progress",
-		"startup_message || dep.startup_phase || 'Initializing...'",
-		"dep.eta ? '~' + dep.eta",
+		"deploymentShowProgress(dep)",
+		"deploymentProgressText(dep)",
+		"deploymentProgressValue(dep)",
 		"failure_detail: this.summarizeDeploymentFailure(d)",
 		"summarizeDeploymentFailure(dep)",
-		"dep.phase === 'running' && dep.ready && dep.address",
+		"deploymentStatusLabel(dep)",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)

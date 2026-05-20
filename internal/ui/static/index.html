@@ -489,6 +489,337 @@ body {
   font-size: 11px;
   line-height: 1.45;
 }
+.deployment-services-panel .panel-title {
+  font-size: 15px;
+  padding-bottom: 10px;
+}
+.deployment-service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.deployment-service-card {
+  padding: 14px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    var(--bg-panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.deployment-service-name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deployment-service-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.deployment-service-row.ready {
+  grid-template-columns: auto auto auto;
+}
+.deployment-service-row.starting {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.deployment-service-row.failed {
+  grid-template-columns: auto auto auto;
+}
+.deployment-service-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 54px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.deployment-service-badge.ready {
+  color: var(--success);
+  background: rgba(48, 209, 88, 0.14);
+}
+.deployment-service-badge.starting {
+  color: var(--warning);
+  background: rgba(255, 159, 10, 0.14);
+}
+.deployment-service-badge.failed {
+  color: var(--error);
+  background: rgba(255, 69, 58, 0.14);
+}
+.deployment-service-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.deployment-service-progress .deploy-progress {
+  height: 7px;
+  margin-top: 0;
+}
+.deployment-service-progress span {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.deployment-service-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deployment-service-row .deployment-service-error {
+  margin-top: 0;
+}
+.deployment-service-action-btn {
+  min-width: 56px;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.deployment-service-modal {
+  width: min(920px, calc(100vw - 64px));
+  max-height: 88vh;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.deploy-modal-overlay.minimized {
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0 0 18px 18px;
+  background: transparent;
+  pointer-events: none;
+}
+.deploy-modal-overlay.minimized .deployment-service-modal {
+  pointer-events: auto;
+  width: min(420px, calc(100vw - 36px));
+  max-height: none;
+}
+.deployment-service-modal.maximized {
+  width: calc(100vw - 36px);
+  height: calc(100vh - 36px);
+  max-height: none;
+}
+.deploy-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.deploy-modal-title {
+  min-width: 0;
+}
+.deploy-modal-title h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+}
+.deploy-modal-subtitle {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+.deploy-window-controls {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.deploy-window-btn,
+.deploy-close-btn {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--text-dim);
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.deploy-window-btn:hover,
+.deploy-close-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: var(--btn-icon-hover);
+}
+.deploy-window-icon {
+  position: relative;
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+}
+.deploy-window-icon::before,
+.deploy-window-icon::after {
+  content: '';
+  position: absolute;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+}
+.deploy-window-icon::after {
+  display: none;
+}
+.deploy-window-icon::before {
+  inset: 2px;
+}
+.deploy-window-icon.restore::before {
+  inset: 5px 1px 1px 5px;
+}
+.deploy-window-icon.restore::after {
+  display: block;
+  inset: 1px 5px 5px 1px;
+  background: var(--input-bg);
+}
+.deploy-scroll-body {
+  padding: 24px 28px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.deploy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.deploy-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 82px;
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+}
+.deploy-info-label,
+.deployment-diagnostics-key,
+.deployment-config-key {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.deploy-info-value,
+.deployment-diagnostics-value,
+.deployment-config-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.deployment-service-modal .api-access-card {
+  padding: 8px 14px;
+}
+.deployment-service-modal .api-access-row {
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  min-height: 40px;
+  padding: 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.deployment-service-modal .api-access-row:last-child {
+  border-bottom: none;
+}
+.api-copy-btn.icon-only {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.deployment-config-table,
+.deployment-diagnostics-table {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--input-bg);
+}
+.deployment-config-row,
+.deployment-diagnostics-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-right: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+.deployment-config-row:nth-child(2n),
+.deployment-diagnostics-row:nth-child(2n) {
+  border-right: none;
+}
+.deployment-detail-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: auto;
+}
+.deployment-detail-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.deployment-detail-status-dot.ready { background: var(--success); box-shadow: 0 0 10px rgba(48, 209, 88, 0.45); }
+.deployment-detail-status-dot.starting { background: var(--warning); box-shadow: 0 0 10px rgba(255, 159, 10, 0.42); }
+.deployment-detail-status-dot.failed { background: var(--error); box-shadow: 0 0 10px rgba(255, 69, 58, 0.42); }
+.deployment-service-footer {
+  flex-shrink: 0;
+  padding: 18px 28px;
+  border-top: 1px solid var(--border-light);
+  background: var(--modal-bg);
+}
+@media (max-width: 720px) {
+  .deployment-service-modal {
+    width: calc(100vw - 24px);
+  }
+  .deploy-grid,
+  .deployment-config-table,
+  .deployment-diagnostics-table {
+    grid-template-columns: 1fr;
+  }
+  .deployment-service-row.ready,
+  .deployment-service-row.starting,
+  .deployment-service-row.failed {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .deployment-service-row.starting .deployment-service-progress,
+  .deployment-service-row.failed .deployment-service-error {
+    grid-column: 1 / -1;
+  }
+}
 .model-list-item {
   display: flex;
   align-items: flex-start;
@@ -4615,83 +4946,45 @@ body {
       </div>
 
       <!-- Deployments Panel -->
-      <div class="panel">
-        <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('scan_label')"></button></span></div>
+      <div class="panel deployment-services-panel">
+        <div class="panel-title">&#x25B2; <span x-text="t('running_services')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('refresh_label')"></button></span></div>
         <template x-if="deployments.length === 0">
           <div class="empty" x-text="t('no_deployments')"></div>
         </template>
-        <ul class="panel-list">
+        <ul class="panel-list deployment-service-list">
           <template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail">
-            <li :class="{ starting: dep.startup_progress > 0 && dep.startup_progress < 100 }">
+            <li class="deployment-service-card" :class="deploymentTone(dep)">
               <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
               <div style="flex:1;overflow:hidden">
-                <div x-text="dep.name" style="text-overflow:ellipsis;overflow:hidden"></div>
-                <div style="font-size:10px;color:var(--text-dim)" x-text="dep.detail"></div>
-                <!-- Startup progress - show when starting or has progress -->
-                <template x-if="(dep.phase === 'starting' || dep.startup_progress > 0) && !dep.ready">
-                  <div style="margin-top:6px">
-                    <div class="deploy-progress">
-                      <div class="deploy-progress-fill starting" :style="'width:' + Math.max(5, Math.min(dep.startup_progress || 5, 95)) + '%'"></div>
+                <div class="deployment-service-name" x-text="apiDeploymentModel(dep)" :title="dep.name || apiDeploymentModel(dep)"></div>
+                <div class="deployment-service-row" :class="deploymentShowProgress(dep) ? 'starting' : (dep.phase === 'failed' ? 'failed' : 'ready')">
+                  <span class="deployment-service-badge" :class="deploymentTone(dep)" x-text="deploymentStatusLabel(dep)"></span>
+                  <template x-if="deploymentShowProgress(dep)">
+                    <div class="deployment-service-progress">
+                      <div class="deploy-progress">
+                        <div class="deploy-progress-fill starting" :style="'width:' + deploymentProgressValue(dep) + '%'"></div>
+                      </div>
+                      <span x-text="deploymentProgressText(dep)"></span>
                     </div>
-                    <div class="deploy-phase-text">
-                      <span>
-                        <span class="deploy-phase-icon">◐</span>
-                        <span x-text="dep.startup_message || dep.startup_phase || 'Initializing...'"></span>
-                      </span>
-                      <span class="deploy-eta" x-text="dep.eta ? '~' + dep.eta : (dep.startup_progress || 5) + '%'"></span>
-                    </div>
-                  </div>
-                </template>
-                <!-- Ready indicator -->
-                <template x-if="dep.phase === 'running' && dep.ready && dep.address">
-                  <div style="font-size:10px;color:var(--success);margin-top:2px;display:flex;align-items:center;gap:4px">
-                    <span>●</span>
-                    <span x-text="t('backend_ready')"></span>
-                  </div>
-                </template>
-                <template x-if="dep.phase === 'running' && dep.ready">
-                  <div class="api-access-inline">
-                    <div class="api-access-head">
-                      <span class="api-access-title" x-text="t('api_access')"></span>
-                      <span class="api-access-desc" x-text="t('api_access_desc')"></span>
-                    </div>
-                    <div class="api-access-row">
-                      <span class="api-access-label" x-text="t('api_base_url')"></span>
-                      <code class="api-access-value" x-text="apiBaseDisplay()"></code>
-                      <button type="button" class="api-copy-btn" @click="copyCurrentAPIBaseURL($event)" x-text="t('wiz_copy')"></button>
-                    </div>
-                    <div class="api-access-row">
-                      <span class="api-access-label" x-text="t('api_model')"></span>
-                      <code class="api-access-value" x-text="apiDeploymentModel(dep)"></code>
-                      <button type="button" class="api-copy-btn" @click="wizCopyText(apiDeploymentModel(dep), $event)" x-text="t('wiz_copy')"></button>
-                    </div>
-                    <div class="api-access-row">
-                      <span class="api-access-label" x-text="t('api_key')"></span>
-                      <code class="api-access-value" x-text="apiKeyDisplay()"></code>
-                      <button type="button" class="api-copy-btn" @click="copyCurrentAPIKey($event)" x-text="t('wiz_copy')"></button>
-                    </div>
-                    <div class="api-access-actions" x-show="apiDeploymentChatCapable(dep)">
-                      <button type="button" class="api-copy-btn" @click="copyAPICurl(dep, $event)" x-text="t('api_copy_curl')"></button>
-                      <button type="button" class="api-copy-btn" @click="copyOpenAISDKExample(dep, $event)" x-text="t('api_copy_openai')"></button>
-                    </div>
-                    <div class="api-public-note" x-show="!apiDeploymentChatCapable(dep)" x-text="apiNonChatHint(dep)"></div>
-                    <div class="api-public-note" x-text="t('api_public_unconfigured')"></div>
-                  </div>
-                </template>
+                  </template>
+                  <template x-if="!deploymentShowProgress(dep)">
+                    <button type="button" class="model-deploy-btn deployment-service-action-btn" @click.stop.prevent="openDeploymentDetail(dep)" x-text="t('deployment_detail_action')"></button>
+                  </template>
+                  <template x-if="dep.name">
+                    <button
+                      type="button"
+                      class="model-deploy-btn deployment-service-action-btn is-stop"
+                      :class="deploymentStopping[dep.name] ? 'is-busy' : ''"
+                      :disabled="deploymentStopping[dep.name]"
+                      @click.stop.prevent="handleDeploymentStopClick($event, dep.name)"
+                      x-text="deploymentStopping[dep.name] ? t('stop_service_progress') : t('stop_label')"></button>
+                  </template>
+                </div>
                 <!-- Error display -->
                 <template x-if="dep.phase === 'failed' && dep.failure_detail">
                   <div class="deploy-error-lines" x-text="dep.failure_detail" :title="dep.error_lines || dep.failure_detail"></div>
                 </template>
               </div>
-              <template x-if="dep.name">
-                <button
-                  type="button"
-                  class="model-deploy-btn is-stop"
-                  :class="deploymentStopping[dep.name] ? 'is-busy' : ''"
-                  :disabled="deploymentStopping[dep.name]"
-                  @click="stopDeployment(dep.name)"
-                  x-text="deploymentStopping[dep.name] ? t('deploying_label') : t('stop_label')"></button>
-              </template>
             </li>
           </template>
         </ul>
@@ -4783,80 +5076,44 @@ body {
             <span class="agent-info-value clickable" @click="openSettings()" x-text="t('configure')"></span>
           </div>
         </div>
-        <div class="panel">
-          <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('scan_label')"></button></span></div>
+        <div class="panel deployment-services-panel">
+          <div class="panel-title">&#x25B2; <span x-text="t('running_services')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('refresh_label')"></button></span></div>
           <template x-if="deployments.length === 0">
             <div class="empty" x-text="t('no_deployments')"></div>
           </template>
-          <ul class="panel-list">
+          <ul class="panel-list deployment-service-list">
             <template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail">
-              <li :class="{ starting: dep.startup_progress > 0 && dep.startup_progress < 100 }" style="flex-wrap:wrap">
+              <li class="deployment-service-card" :class="deploymentTone(dep)">
                 <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
                 <div style="flex:1;min-width:0">
-                  <div x-text="dep.name" style="text-overflow:ellipsis;overflow:hidden"></div>
-                  <div style="font-size:10px;color:var(--text-dim)" x-text="dep.detail"></div>
-                  <template x-if="dep.phase === 'running' && dep.ready && dep.address">
-                    <div style="font-size:10px;color:var(--success);margin-top:2px;display:flex;align-items:center;gap:4px">
-                      <span>●</span>
-                      <span x-text="t('backend_ready')"></span>
-                    </div>
-                  </template>
-                  <template x-if="dep.phase === 'running' && dep.ready">
-                    <div class="api-access-inline">
-                      <div class="api-access-head">
-                        <span class="api-access-title" x-text="t('api_access')"></span>
-                        <span class="api-access-desc" x-text="t('api_access_desc')"></span>
+                  <div class="deployment-service-name" x-text="apiDeploymentModel(dep)" :title="dep.name || apiDeploymentModel(dep)"></div>
+                  <div class="deployment-service-row" :class="deploymentShowProgress(dep) ? 'starting' : (dep.phase === 'failed' ? 'failed' : 'ready')">
+                    <span class="deployment-service-badge" :class="deploymentTone(dep)" x-text="deploymentStatusLabel(dep)"></span>
+                    <template x-if="deploymentShowProgress(dep)">
+                      <div class="deployment-service-progress">
+                        <div class="deploy-progress">
+                          <div class="deploy-progress-fill starting" :style="'width:' + deploymentProgressValue(dep) + '%'"></div>
+                        </div>
+                        <span x-text="deploymentProgressText(dep)"></span>
                       </div>
-                      <div class="api-access-row">
-                        <span class="api-access-label" x-text="t('api_base_url')"></span>
-                        <code class="api-access-value" x-text="apiBaseDisplay()"></code>
-                        <button type="button" class="api-copy-btn" @click="copyCurrentAPIBaseURL($event)" x-text="t('wiz_copy')"></button>
-                      </div>
-                      <div class="api-access-row">
-                        <span class="api-access-label" x-text="t('api_model')"></span>
-                        <code class="api-access-value" x-text="apiDeploymentModel(dep)"></code>
-                        <button type="button" class="api-copy-btn" @click="wizCopyText(apiDeploymentModel(dep), $event)" x-text="t('wiz_copy')"></button>
-                      </div>
-                      <div class="api-access-row">
-                        <span class="api-access-label" x-text="t('api_key')"></span>
-                        <code class="api-access-value" x-text="apiKeyDisplay()"></code>
-                        <button type="button" class="api-copy-btn" @click="copyCurrentAPIKey($event)" x-text="t('wiz_copy')"></button>
-                      </div>
-                      <div class="api-access-actions" x-show="apiDeploymentChatCapable(dep)">
-                        <button type="button" class="api-copy-btn" @click="copyAPICurl(dep, $event)" x-text="t('api_copy_curl')"></button>
-                        <button type="button" class="api-copy-btn" @click="copyOpenAISDKExample(dep, $event)" x-text="t('api_copy_openai')"></button>
-                      </div>
-                      <div class="api-public-note" x-show="!apiDeploymentChatCapable(dep)" x-text="apiNonChatHint(dep)"></div>
-                      <div class="api-public-note" x-text="t('api_public_unconfigured')"></div>
-                    </div>
-                  </template>
-                  <template x-if="(dep.phase === 'starting' || dep.startup_progress > 0) && !dep.ready">
-                    <div style="margin-top:6px">
-                      <div class="deploy-progress">
-                        <div class="deploy-progress-fill starting" :style="'width:' + Math.max(5, Math.min(dep.startup_progress || 5, 95)) + '%'"></div>
-                      </div>
-                      <div class="deploy-phase-text">
-                        <span>
-                          <span class="deploy-phase-icon">◐</span>
-                          <span x-text="dep.startup_message || dep.startup_phase || 'Initializing...'"></span>
-                        </span>
-                        <span class="deploy-eta" x-text="dep.eta ? '~' + dep.eta : (dep.startup_progress || 5) + '%'"></span>
-                      </div>
-                    </div>
-                  </template>
+                    </template>
+                    <template x-if="!deploymentShowProgress(dep)">
+                      <button type="button" class="model-deploy-btn deployment-service-action-btn" @click.stop.prevent="openDeploymentDetail(dep)" x-text="t('deployment_detail_action')"></button>
+                    </template>
+                    <template x-if="dep.name">
+                      <button
+                        type="button"
+                        class="model-deploy-btn deployment-service-action-btn is-stop"
+                        :class="deploymentStopping[dep.name] ? 'is-busy' : ''"
+                        :disabled="deploymentStopping[dep.name]"
+                        @click.stop.prevent="handleDeploymentStopClick($event, dep.name)"
+                        x-text="deploymentStopping[dep.name] ? t('stop_service_progress') : t('stop_label')"></button>
+                    </template>
+                  </div>
                 <template x-if="dep.phase === 'failed' && dep.failure_detail">
                   <div class="deploy-error-lines" x-text="dep.failure_detail" :title="dep.error_lines || dep.failure_detail"></div>
                 </template>
               </div>
-              <template x-if="dep.name">
-                <button
-                  type="button"
-                  class="model-deploy-btn is-stop"
-                  :class="deploymentStopping[dep.name] ? 'is-busy' : ''"
-                  :disabled="deploymentStopping[dep.name]"
-                  @click="stopDeployment(dep.name)"
-                  x-text="deploymentStopping[dep.name] ? t('deploying_label') : t('stop_label')"></button>
-              </template>
               </li>
             </template>
           </ul>
@@ -4980,9 +5237,35 @@ body {
           <div class="panel-title">&#x25C9; <span x-text="t('fleet')"></span></div>
           <template x-for="(d, fi) in fleet" :key="d.id || d.addr || fi"><div class="fleet-device"><span class="status-dot" :class="d.online ? 'online' : 'offline'" style="width:6px;height:6px"></span><div><div class="name" x-text="d.name || d.id"></div><div class="meta" x-text="d.meta || ''"></div></div></div></template>
         </div>
-        <div class="panel">
-          <div class="panel-title">&#x25B2; <span x-text="t('deployments')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('scan_label')"></button></span></div>
-          <ul class="panel-list"><template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail"><li style="flex-wrap:wrap"><span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span><span x-text="dep.name"></span><span class="item-detail" x-text="dep.phase === 'failed' ? (dep.failure_detail || dep.detail) : (dep.startup_message || dep.phase)"></span><template x-if="dep.startup_progress > 0 && dep.startup_progress < 100"><div style="width:100%;margin-top:2px"><div class="deploy-progress"><div class="deploy-progress-fill" :style="'width:' + dep.startup_progress + '%'"></div></div></div></template></li></template></ul>
+        <div class="panel deployment-services-panel">
+          <div class="panel-title">&#x25B2; <span x-text="t('running_services')"></span><span class="panel-title-actions"><button type="button" class="panel-action-btn" :disabled="deploymentScanning" @click="scanDeployments()" x-text="deploymentScanning ? t('scanning_label') : t('refresh_label')"></button></span></div>
+          <ul class="panel-list deployment-service-list">
+            <template x-for="dep in deployments" :key="dep.name || dep.model || dep.address || dep.detail">
+              <li class="deployment-service-card" :class="deploymentTone(dep)">
+                <span class="dot" :class="dep.phase === 'running' && dep.ready ? 'dot-green' : dep.phase === 'failed' ? 'dot-red' : 'dot-orange'"></span>
+                <div style="flex:1;min-width:0">
+                  <div class="deployment-service-name" x-text="apiDeploymentModel(dep)" :title="dep.name || apiDeploymentModel(dep)"></div>
+                  <div class="deployment-service-row" :class="deploymentShowProgress(dep) ? 'starting' : (dep.phase === 'failed' ? 'failed' : 'ready')">
+                    <span class="deployment-service-badge" :class="deploymentTone(dep)" x-text="deploymentStatusLabel(dep)"></span>
+                    <template x-if="deploymentShowProgress(dep)">
+                      <div class="deployment-service-progress">
+                        <div class="deploy-progress">
+                          <div class="deploy-progress-fill starting" :style="'width:' + deploymentProgressValue(dep) + '%'"></div>
+                        </div>
+                        <span x-text="deploymentProgressText(dep)"></span>
+                      </div>
+                    </template>
+                    <template x-if="!deploymentShowProgress(dep)">
+                      <button type="button" class="model-deploy-btn deployment-service-action-btn" @click.stop.prevent="openDeploymentDetail(dep)" x-text="t('deployment_detail_action')"></button>
+                    </template>
+                    <template x-if="dep.name">
+                      <button type="button" class="model-deploy-btn deployment-service-action-btn is-stop" :class="deploymentStopping[dep.name] ? 'is-busy' : ''" :disabled="deploymentStopping[dep.name]" @click.stop.prevent="handleDeploymentStopClick($event, dep.name)" x-text="deploymentStopping[dep.name] ? t('stop_service_progress') : t('stop_label')"></button>
+                    </template>
+                  </div>
+                </div>
+              </li>
+            </template>
+          </ul>
         </div>
       </div>
     </template>
@@ -5065,6 +5348,127 @@ body {
       </div>
     </template>
   </div>
+
+  <!-- Deployment Detail Modal -->
+  <template x-if="deploymentDetailOpen">
+    <div class="modal-overlay deploy-modal-overlay" :class="{ minimized: deploymentDetailMinimized }" @click.self="closeDeploymentDetail()">
+      <div class="modal deployment-service-modal" :class="{ maximized: deploymentDetailMaximized && !deploymentDetailMinimized }" role="dialog" aria-modal="true" :aria-label="deploymentDetailTitle()">
+        <div class="deploy-modal-header">
+          <div class="deploy-modal-title">
+            <h3 x-text="deploymentDetailTitle()"></h3>
+            <div class="deploy-modal-subtitle" x-text="deploymentDetailSubtitle()"></div>
+          </div>
+          <div class="deploy-window-controls">
+            <button type="button" class="deploy-window-btn" @click="toggleDeploymentDetailMinimized()" :aria-label="deploymentDetailMinimized ? t('deploy_restore_modal') : t('deploy_minimize_modal')" :title="deploymentDetailMinimized ? t('deploy_restore_modal') : t('deploy_minimize_modal')" x-text="deploymentDetailMinimized ? '+' : '-'"></button>
+            <button type="button" class="deploy-window-btn" x-show="!deploymentDetailMinimized" @click="toggleDeploymentDetailMaximized()" :aria-label="deploymentDetailMaximized ? t('deploy_restore_modal') : t('deploy_maximize_modal')" :title="deploymentDetailMaximized ? t('deploy_restore_modal') : t('deploy_maximize_modal')"><span class="deploy-window-icon" :class="{ restore: deploymentDetailMaximized }" aria-hidden="true"></span></button>
+            <button type="button" class="deploy-close-btn" @click="closeDeploymentDetail()" :aria-label="t('close_label')" :title="t('close_label')">&times;</button>
+          </div>
+        </div>
+
+        <template x-if="deploymentDetailFeedback && !deploymentDetailMinimized">
+          <div class="modal-feedback" :class="deploymentDetailFeedback.type" x-text="deploymentDetailFeedback.text" style="margin:16px 28px 0"></div>
+        </template>
+
+        <div class="deploy-scroll-body" x-show="!deploymentDetailMinimized">
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('deployment_service_overview')"></div>
+            <div class="deploy-grid">
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('wiz_engine_label')"></span>
+                <span class="deploy-info-value" x-text="deploymentEngineLabel(deploymentDetailData)"></span>
+              </div>
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('deployment_actual_image')"></span>
+                <span class="deploy-info-value" x-text="deploymentImageLabel(deploymentDetailData)"></span>
+              </div>
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('deploy_port')"></span>
+                <span class="deploy-info-value" x-text="deploymentPortLabel(deploymentDetailData)"></span>
+              </div>
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('deploy_runtime')"></span>
+                <span class="deploy-info-value" x-text="deploymentRuntimeLabel(deploymentDetailData)"></span>
+              </div>
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('deployment_uptime')"></span>
+                <span class="deploy-info-value" x-text="deploymentUptimeLabel(deploymentDetailData)"></span>
+              </div>
+              <div class="deploy-info-card">
+                <span class="deploy-info-label" x-text="t('deployment_gpu_memory')"></span>
+                <span class="deploy-info-value" x-text="deploymentGpuUsedLabel()"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-section" x-show="deploymentDetailData && deploymentDetailData.ready">
+            <div class="modal-section-title" x-text="t('api_access')"></div>
+            <div class="api-access-card">
+              <div class="api-access-row">
+                <span class="api-access-label" x-text="t('api_base_url')"></span>
+                <code class="api-access-value" x-text="apiBaseDisplay()"></code>
+                <button type="button" class="api-copy-btn icon-only" @click="copyCurrentAPIBaseURL($event)" :aria-label="t('wiz_copy')" title="Copy">&#10697;</button>
+              </div>
+              <div class="api-access-row">
+                <span class="api-access-label" x-text="t('api_model')"></span>
+                <code class="api-access-value" x-text="apiDeploymentModel(deploymentDetailData)"></code>
+                <button type="button" class="api-copy-btn icon-only" @click="wizCopyText(apiDeploymentModel(deploymentDetailData), $event)" :aria-label="t('wiz_copy')" title="Copy">&#10697;</button>
+              </div>
+              <div class="api-access-row">
+                <span class="api-access-label" x-text="t('api_key')"></span>
+                <code class="api-access-value" x-text="apiKeyDisplay()"></code>
+                <button type="button" class="api-copy-btn icon-only" @click="copyCurrentAPIKey($event)" :aria-label="t('wiz_copy')" title="Copy">&#10697;</button>
+              </div>
+              <div class="api-access-actions" x-show="apiDeploymentChatCapable(deploymentDetailData)">
+                <button type="button" class="api-copy-btn" @click="copyAPICurl(deploymentDetailData, $event)" x-text="t('api_copy_curl')"></button>
+                <button type="button" class="api-copy-btn" @click="copyOpenAISDKExample(deploymentDetailData, $event)" x-text="t('api_copy_openai')"></button>
+              </div>
+              <div class="api-public-note" x-show="!apiDeploymentChatCapable(deploymentDetailData)" x-text="apiNonChatHint(deploymentDetailData)"></div>
+              <div class="api-public-note" x-text="t('api_public_unconfigured')"></div>
+            </div>
+          </div>
+
+          <div class="modal-section" x-show="deploymentConfigRows().length > 0">
+            <div class="modal-section-title" x-text="t('deployment_runtime_config')"></div>
+            <div class="deployment-config-table">
+              <template x-for="row in deploymentConfigRows()" :key="row.key">
+                <div class="deployment-config-row">
+                  <span class="deployment-config-key" x-text="row.key"></span>
+                  <span class="deployment-config-value" x-text="row.value"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <div class="modal-section-title" x-text="t('deployment_diagnostics')"></div>
+            <div class="deployment-diagnostics-table">
+              <template x-for="row in deploymentDiagnosticsRows()" :key="row.key">
+                <div class="deployment-diagnostics-row">
+                  <span class="deployment-diagnostics-key" x-text="row.label"></span>
+                  <span class="deployment-diagnostics-value" x-text="row.value"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="modal-section" x-show="deploymentFailureText(deploymentDetailData)">
+            <div class="modal-section-title" x-text="t('deploy_failed')"></div>
+            <div class="deploy-error-lines" x-text="deploymentFailureText(deploymentDetailData)"></div>
+          </div>
+        </div>
+
+        <div class="modal-actions deployment-service-footer" x-show="!deploymentDetailMinimized">
+          <div class="deployment-detail-status-bar">
+            <span class="deployment-detail-status-dot" :class="deploymentTone(deploymentDetailData)"></span>
+            <span x-text="deploymentFooterStatusText()"></span>
+          </div>
+          <button class="modal-btn" @click="refreshDeploymentDetail()" :disabled="deploymentDetailLoading" x-text="deploymentDetailLoading ? t('scanning_label') : t('refresh_label')"></button>
+          <button class="modal-btn" @click="handleDeploymentStopClick($event, deploymentDetailData && deploymentDetailData.name)" :disabled="!deploymentDetailData || !deploymentDetailData.name || deploymentStopping[deploymentDetailData.name]" x-text="deploymentDetailData && deploymentStopping[deploymentDetailData.name] ? t('stop_service_progress') : t('stop_service_action')"></button>
+          <button class="modal-btn primary" @click="closeDeploymentDetail()" x-text="t('close_label')"></button>
+        </div>
+      </div>
+    </div>
+  </template>
 
   <!-- Settings Modal -->
   <template x-if="showSettings">
@@ -5480,6 +5884,8 @@ var I18N = {
     external_services: 'External services',
     fleet: 'Fleet',
     deployments: 'Deployments',
+    running_services: 'Running services',
+    refresh_label: 'Refresh',
     scan_label: 'Scan',
     scanning_label: 'Scanning...',
     agent_status: 'Agent Status',
@@ -5539,9 +5945,36 @@ var I18N = {
     hardware_group_host: 'Host',
     deploy_label: 'Deploy',
     deploying_label: 'Deploying...',
+    starting_label: 'Starting...',
     running_label: 'Running',
+    failed_label: 'Failed',
+    unknown_label: 'Unknown',
     stop_label: 'Stop',
+    close_label: 'Close',
     retry_label: 'Retry',
+    deployment_detail_action: 'Details',
+    deployment_detail_title: 'Service details',
+    deployment_detail_subtitle: 'Runtime status, API access, and current launch parameters.',
+    deployment_detail_loading: 'Loading service details...',
+    deployment_detail_failed: 'Could not load fresh service details. Showing the last known state.',
+    deployment_service_overview: 'Service overview',
+    deployment_actual_image: 'Actual image',
+    deployment_uptime: 'Runtime duration',
+    deployment_gpu_memory: 'Service GPU memory',
+    deployment_runtime_config: 'Runtime parameters',
+    deployment_diagnostics: 'Diagnostics',
+    deployment_detail_updated: 'Updated',
+    deployment_ready_state: 'Available',
+    deployment_starting_state: 'Starting',
+    deployment_stopped_state: 'Stopped',
+    deploy_port: 'Port',
+    deploy_runtime: 'Runtime',
+    deploy_failed: 'Failure',
+    stop_service_action: 'Stop service',
+    stop_service_progress: 'Stopping...',
+    deploy_minimize_modal: 'Minimize',
+    deploy_maximize_modal: 'Maximize',
+    deploy_restore_modal: 'Restore',
     chat_placeholder: 'Ask AIMA or run a command...',
     cli_hint: 'Use <code>/cli</code> to run AIMA CLI and MCP commands.<br>Example: <code>/cli help</code> to see more.',
     cli_hint_label: 'Show /cli usage help',
@@ -5786,6 +6219,8 @@ var I18N = {
     external_services: '\u5916\u90E8\u670D\u52A1',
     fleet: '\u8BBE\u5907\u7FA4',
     deployments: '\u90E8\u7F72',
+    running_services: '\u8FD0\u884C\u670D\u52A1',
+    refresh_label: '\u5237\u65B0',
     scan_label: '\u626B\u63CF',
     scanning_label: '\u626B\u63CF\u4E2D...',
     agent_status: 'Agent \u72B6\u6001',
@@ -5845,9 +6280,36 @@ var I18N = {
     hardware_group_host: '\u4E3B\u673A',
     deploy_label: '\u90E8\u7F72',
     deploying_label: '\u90E8\u7F72\u4E2D...',
+    starting_label: '\u542F\u52A8\u4E2D...',
     running_label: '\u8FD0\u884C\u4E2D',
+    failed_label: '\u5931\u8D25',
+    unknown_label: '\u672A\u77E5',
     stop_label: '\u505C\u6B62',
+    close_label: '\u5173\u95ED',
     retry_label: '\u91CD\u8BD5',
+    deployment_detail_action: '\u8BE6\u60C5',
+    deployment_detail_title: '\u670D\u52A1\u8BE6\u60C5',
+    deployment_detail_subtitle: '\u67E5\u770B\u8FD0\u884C\u72B6\u6001\u3001API \u63A5\u5165\u548C\u672C\u6B21\u542F\u52A8\u53C2\u6570\u3002',
+    deployment_detail_loading: '\u6B63\u5728\u8BFB\u53D6\u670D\u52A1\u8BE6\u60C5...',
+    deployment_detail_failed: '\u672A\u80FD\u8BFB\u53D6\u6700\u65B0\u8BE6\u60C5\uFF0C\u5DF2\u663E\u793A\u4E0A\u6B21\u72B6\u6001\u3002',
+    deployment_service_overview: '\u670D\u52A1\u6982\u89C8',
+    deployment_actual_image: '\u5B9E\u9645\u955C\u50CF',
+    deployment_uptime: '\u8FD0\u884C\u65F6\u957F',
+    deployment_gpu_memory: '\u8BE5\u670D\u52A1\u663E\u5B58\u5360\u7528',
+    deployment_runtime_config: '\u8FD0\u884C\u53C2\u6570',
+    deployment_diagnostics: '\u8BCA\u65AD',
+    deployment_detail_updated: '\u5DF2\u66F4\u65B0',
+    deployment_ready_state: '\u53EF\u7528',
+    deployment_starting_state: '\u542F\u52A8\u4E2D',
+    deployment_stopped_state: '\u5DF2\u505C\u6B62',
+    deploy_port: '\u7AEF\u53E3',
+    deploy_runtime: '\u8FD0\u884C\u65B9\u5F0F',
+    deploy_failed: '\u5931\u8D25\u539F\u56E0',
+    stop_service_action: '\u505C\u6B62\u670D\u52A1',
+    stop_service_progress: '\u505C\u6B62\u4E2D...',
+    deploy_minimize_modal: '\u6700\u5C0F\u5316',
+    deploy_maximize_modal: '\u6700\u5927\u5316',
+    deploy_restore_modal: '\u8FD8\u539F',
     chat_placeholder: '\u8F93\u5165\u95EE\u9898\u6216\u547D\u4EE4...',
     cli_hint: '\u4F7F\u7528 <code>/cli</code> \u6267\u884C AIMA CLI \u548C MCP \u547D\u4EE4\u3002<br>\u793A\u4F8B\uFF1A<code>/cli help</code> \u67E5\u770B\u66F4\u591A\u3002',
     cli_hint_label: '\u663E\u793A /cli \u7528\u6CD5\u63D0\u793A',
@@ -6620,6 +7082,13 @@ function aimaApp() {
     deploymentScanning: false,
     modelDeploying: {},
     deploymentStopping: {},
+    deploymentDetailOpen: false,
+    deploymentDetailLoading: false,
+    deploymentDetailData: null,
+    deploymentDetailFeedback: null,
+    deploymentDetailUpdatedAt: '',
+    deploymentDetailMinimized: false,
+    deploymentDetailMaximized: false,
     fleet: [],
     // View toggle (chat / support / explorer)
     currentView: 'chat',
@@ -7850,6 +8319,7 @@ function aimaApp() {
     },
 
     apiDeploymentModel(dep) {
+      if (dep && dep.served_model) return dep.served_model;
       if (dep && dep.model) return dep.model;
       if (dep && dep.name) return dep.name;
       return this.apiModelName(this.onboardingDeployModel);
@@ -8820,6 +9290,50 @@ function aimaApp() {
       return this.lang === 'zh' ? '组件' : 'Component';
     },
 
+    deploymentTone(dep) {
+      if (!dep) return 'starting';
+      if (dep.phase === 'failed') return 'failed';
+      if (dep.phase === 'running' && dep.ready) return 'ready';
+      return 'starting';
+    },
+
+    deploymentStatusLabel(dep) {
+      if (!dep) return this.t('unknown_label');
+      if (dep.phase === 'failed') return this.t('failed_label');
+      if (dep.phase === 'running' && dep.ready) return this.t('running_label');
+      if (dep.phase === 'stopped') return this.t('deployment_stopped_state');
+      return this.t('starting_label');
+    },
+
+    deploymentShowProgress(dep) {
+      if (!dep || dep.phase === 'failed') return false;
+      return dep.phase === 'starting' || (dep.phase === 'running' && !dep.ready) || (dep.startup_progress > 0 && dep.startup_progress < 100);
+    },
+
+    deploymentProgressValue(dep) {
+      const value = Number(dep && dep.startup_progress);
+      if (!Number.isFinite(value) || value <= 0) return 5;
+      return Math.max(5, Math.min(value, 95));
+    },
+
+    deploymentProgressText(dep) {
+      if (dep && dep.eta) return '~' + dep.eta;
+      return this.deploymentProgressValue(dep) + '%';
+    },
+
+    deploymentSummaryText(dep) {
+      if (!dep) return '';
+      if (dep.failure_detail) return dep.failure_detail;
+      if (dep.startup_message) return dep.startup_message;
+      if (dep.detail) return dep.detail;
+      return [dep.runtime, this.deploymentStatusLabel(dep)].filter(Boolean).join(' ');
+    },
+
+    deploymentFailureText(dep) {
+      if (!dep) return '';
+      return dep.failure_detail || dep.message || dep.error_lines || '';
+    },
+
     deploymentForModel(modelName) {
       return this.deployments.find(d => d.model === modelName || (!d.model && d.name === modelName)) || null;
     },
@@ -8910,6 +9424,164 @@ function aimaApp() {
       }
     },
 
+    handleDeploymentStopClick(event, deploymentName) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return this.stopDeployment(deploymentName);
+    },
+
+    deploymentDetailTitle() {
+      const dep = this.deploymentDetailData || {};
+      const name = dep.name || this.apiDeploymentModel(dep) || '';
+      return name ? this.t('deployment_detail_title') + ': ' + name : this.t('deployment_detail_title');
+    },
+
+    deploymentDetailSubtitle() {
+      const dep = this.deploymentDetailData || {};
+      return [this.deploymentEngineLabel(dep), this.deploymentStatusLabel(dep)].filter(Boolean).join(' · ') || this.t('deployment_detail_subtitle');
+    },
+
+    async openDeploymentDetail(dep) {
+      if (!dep) return;
+      this.deploymentDetailOpen = true;
+      this.deploymentDetailLoading = true;
+      this.deploymentDetailFeedback = { type: 'success', text: this.t('deployment_detail_loading') };
+      this.deploymentDetailData = { ...dep };
+      this.deploymentDetailUpdatedAt = '';
+      this.deploymentDetailMinimized = false;
+      this.deploymentDetailMaximized = false;
+      await this.refreshDeploymentDetail();
+    },
+
+    closeDeploymentDetail() {
+      this.deploymentDetailOpen = false;
+      this.deploymentDetailLoading = false;
+      this.deploymentDetailFeedback = null;
+      this.deploymentDetailData = null;
+      this.deploymentDetailUpdatedAt = '';
+      this.deploymentDetailMinimized = false;
+      this.deploymentDetailMaximized = false;
+    },
+
+    toggleDeploymentDetailMinimized() {
+      this.deploymentDetailMinimized = !this.deploymentDetailMinimized;
+    },
+
+    toggleDeploymentDetailMaximized() {
+      this.deploymentDetailMaximized = !this.deploymentDetailMaximized;
+    },
+
+    async refreshDeploymentDetail() {
+      const current = this.deploymentDetailData || {};
+      const name = current.name || current.model || '';
+      if (!name) return;
+      this.deploymentDetailLoading = true;
+      try {
+        await this.pollSystemStatus();
+        const data = await this.callTool('deploy.status', { name });
+        if (data && !data._err) {
+          this.deploymentDetailData = this.normalizeDeploymentDetail(data, current);
+          this.deploymentDetailFeedback = null;
+        } else {
+          this.deploymentDetailFeedback = { type: 'error', text: this.t('deployment_detail_failed') };
+        }
+        this.deploymentDetailUpdatedAt = new Date().toLocaleTimeString();
+      } finally {
+        this.deploymentDetailLoading = false;
+      }
+    },
+
+    normalizeDeploymentDetail(data, fallback) {
+      const labels = { ...((fallback && fallback.labels) || {}), ...((data && data.labels) || {}) };
+      const merged = { ...(fallback || {}), ...(data || {}), labels };
+      if (!merged.model) merged.model = labels['aima.dev/model'] || merged.name || '';
+      if (!merged.model_type) merged.model_type = data.model_type || labels['aima.dev/model_type'] || (fallback && fallback.model_type) || '';
+      if (!merged.engine) merged.engine = labels['aima.dev/engine'] || '';
+      if (!merged.image) merged.image = data.image || data.engine_image || (fallback && (fallback.image || fallback.engine_image)) || labels['aima.dev/image'] || '';
+      if (!merged.gpu_memory_mib) merged.gpu_memory_mib = data.gpu_memory_mib || (fallback && fallback.gpu_memory_mib) || 0;
+      if (!merged.gpu_memory_source) merged.gpu_memory_source = data.gpu_memory_source || (fallback && fallback.gpu_memory_source) || '';
+      if (!merged.config || typeof merged.config !== 'object') merged.config = {};
+      if (!merged.detail) merged.detail = [merged.runtime, merged.ready ? this.t('running_label') : merged.phase].filter(Boolean).join(' ');
+      if (!merged.failure_detail) merged.failure_detail = this.summarizeDeploymentFailure(merged);
+      return merged;
+    },
+
+    deploymentEngineLabel(dep) {
+      if (!dep) return '-';
+      return dep.engine || (dep.labels && dep.labels['aima.dev/engine']) || '-';
+    },
+
+    deploymentImageLabel(dep) {
+      if (!dep) return '-';
+      return dep.image || dep.engine_image || (dep.labels && dep.labels['aima.dev/image']) || '-';
+    },
+
+    deploymentRuntimeLabel(dep) {
+      return dep && dep.runtime ? dep.runtime : '-';
+    },
+
+    deploymentPortLabel(dep) {
+      if (!dep) return '-';
+      const address = dep.address || '';
+      const match = String(address).match(/:(\d+)$/);
+      if (match) return match[1];
+      if (dep.config && dep.config.port) return String(dep.config.port);
+      return '-';
+    },
+
+    deploymentGpuUsedLabel() {
+      const dep = this.deploymentDetailData || {};
+      const used = Number(dep.gpu_memory_mib || dep.gpu_memory_used_mib || 0);
+      if (!Number.isFinite(used) || used <= 0) return this.t('unavailable');
+      return this.fmtMiB(used);
+    },
+
+    deploymentUptimeLabel(dep) {
+      if (!dep) return '-';
+      const raw = dep.start_time || dep.started_at || '';
+      const ts = raw ? new Date(raw).getTime() : Number(dep.started_at_unix || 0) * 1000;
+      if (!ts || !Number.isFinite(ts)) return '-';
+      const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h';
+      return Math.floor(seconds / 86400) + 'd';
+    },
+
+    deploymentConfigRows() {
+      const dep = this.deploymentDetailData || {};
+      const cfg = dep.config && typeof dep.config === 'object' ? dep.config : {};
+      return Object.keys(cfg).sort().map(key => ({
+        key,
+        value: this.deployParamValueToString(cfg[key])
+      }));
+    },
+
+    deploymentDiagnosticsRows() {
+      const dep = this.deploymentDetailData || {};
+      return [
+        { key: 'latest_status', label: this.lang === 'zh' ? '最近状态' : 'Latest status', value: this.deploymentSummaryText(dep) || this.deploymentStatusLabel(dep) },
+        { key: 'updated_at', label: this.lang === 'zh' ? '最近刷新' : 'Last refresh', value: this.deploymentDetailUpdatedAt || '-' }
+      ];
+    },
+
+    deploymentDetailUpdatedText() {
+      return this.deploymentDetailUpdatedAt ? this.t('deployment_detail_updated') + ' ' + this.deploymentDetailUpdatedAt : '';
+    },
+
+    deploymentFooterStatusText() {
+      return [this.deploymentStatusLabel(this.deploymentDetailData), this.deploymentDetailUpdatedText()].filter(Boolean).join(' · ');
+    },
+
+    deployParamValueToString(value) {
+      if (value === null || value === undefined) return '-';
+      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    },
+
     async pollDeployments() {
       const data = await this.callTool('deploy.list');
       if (!data || data._err) return;
@@ -8924,11 +9596,21 @@ function aimaApp() {
         }
         return {
           name: d.name || 'unknown',
-          model: (d.labels && d.labels['aima.dev/model']) || '',
+          model: d.model || (d.labels && d.labels['aima.dev/model']) || '',
+          served_model: d.served_model || '',
+          engine: d.engine || (d.labels && d.labels['aima.dev/engine']) || '',
+          image: d.image || d.engine_image || '',
           model_type: d.model_type || (d.labels && d.labels['aima.dev/model_type']) || '',
           phase: d.phase || 'unknown',
           ready: d.ready || false,
           address: d.address || '',
+          runtime: d.runtime || '',
+          config: d.config || {},
+          labels: d.labels || {},
+          start_time: d.start_time || '',
+          started_at_unix: d.started_at_unix || 0,
+          gpu_memory_mib: d.gpu_memory_mib || 0,
+          gpu_memory_source: d.gpu_memory_source || '',
           detail: [d.runtime, d.ready ? this.t('running_label') : d.phase].filter(Boolean).join(' '),
           startup_phase: d.startup_phase || '',
           startup_progress: d.startup_progress || 0,

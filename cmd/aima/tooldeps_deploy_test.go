@@ -36,12 +36,21 @@ func TestDeploymentOverviewIncludesCatalogModelType(t *testing.T) {
 		}},
 	}
 	overview := deploymentOverviewFromStatus(&runtime.DeploymentStatus{
-		Name:  "qwen3-tts-0.6b-qwen-tts-fastapi",
-		Model: "qwen3-tts-0.6b",
-		Phase: "running",
-		Ready: true,
+		Name:            "qwen3-tts-0.6b-qwen-tts-fastapi",
+		Model:           "qwen3-tts-0.6b",
+		Image:           "docker.1ms.run/example/qwen-tts:latest",
+		Phase:           "running",
+		Ready:           true,
+		GPUMemoryMiB:    1536,
+		GPUMemorySource: "nvidia-smi",
 	}, cat)
 	if overview.ModelType != "tts" {
 		t.Fatalf("ModelType = %q, want tts", overview.ModelType)
+	}
+	if overview.Image != "docker.1ms.run/example/qwen-tts:latest" {
+		t.Fatalf("Image = %q, want docker.1ms.run/example/qwen-tts:latest", overview.Image)
+	}
+	if overview.GPUMemoryMiB != 1536 || overview.GPUMemorySource != "nvidia-smi" {
+		t.Fatalf("GPU memory = %d/%q, want 1536/nvidia-smi", overview.GPUMemoryMiB, overview.GPUMemorySource)
 	}
 }

@@ -441,6 +441,27 @@ func TestServiceGoUXManifestJSON(t *testing.T) {
 	}
 }
 
+func TestStatusJSONIncludesNullActiveTaskWhenCleared(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(Status{Enabled: true, Registered: true})
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	value, ok := decoded["active_task"]
+	if !ok {
+		t.Fatalf("active_task omitted from status JSON: %s", string(payload))
+	}
+	if value != nil {
+		t.Fatalf("active_task = %#v, want null", value)
+	}
+}
+
 func TestServiceDefaultEndpointUsesRootAPIBase(t *testing.T) {
 	t.Parallel()
 

@@ -7295,6 +7295,11 @@ function aimaApp() {
       if (!this.onboardingData || !this.onboardingData.stack_status) return 'docker';
       return this.onboardingData.stack_status.init_tier_recommendation || 'docker';
     },
+    wizStackReadyForScan(stack) {
+      if (!stack) return false;
+      if (stack.needs_init) return false;
+      return stack.docker === 'ready' || stack.k3s === 'ready' || stack.init_tier_recommendation === 'native';
+    },
     wizInitCommand() {
       return this.wizInitTier() === 'k3s'
         ? 'sudo $(command -v aima) onboarding init --tier k3s'
@@ -7401,7 +7406,7 @@ function aimaApp() {
           if (resp.ok) {
             var data = await resp.json();
             self.onboardingData = data;
-            if (data.stack_status && (data.stack_status.docker === 'ready' || data.stack_status.k3s === 'ready')) {
+            if (self.wizStackReadyForScan(data.stack_status)) {
               clearInterval(self.onboardingInitPolling);
               self.onboardingInitPolling = null;
               self.wizStartScan();
@@ -7493,8 +7498,7 @@ function aimaApp() {
             this.onboardingData = await resp.json();
           }
         } catch (e) { /* ignore */ }
-        if (this.onboardingData && this.onboardingData.stack_status &&
-            (this.onboardingData.stack_status.docker === 'ready' || this.onboardingData.stack_status.k3s === 'ready')) {
+        if (this.onboardingData && this.wizStackReadyForScan(this.onboardingData.stack_status)) {
           this.wizStartScan();
         } else if (!this.onboardingInitError) {
           this.onboardingInitError = 'init finished but stack is not ready yet';

@@ -920,6 +920,59 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 	}
 }
 
+func TestInstallDaemonSystemdAIMAServeStartsAfterDocker(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd tests only run on Linux")
+	}
+	useTempSystemInstallDirs(t)
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"systemctl daemon-reload": {output: nil},
+			"systemctl enable":        {output: nil},
+			"systemctl start":         {output: nil},
+		},
+	}
+
+	dir := t.TempDir()
+	inst := NewInstaller(runner, dir).WithDistDir(dir)
+
+	binPath := filepath.Join(dir, "aima")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "aima-serve", Version: "0.0.1"},
+		Source:   knowledge.StackSource{Binary: "aima"},
+		Install: knowledge.StackInstall{
+			Method:      "binary",
+			Daemon:      true,
+			Subcommand:  "serve",
+			ServiceType: "simple",
+		},
+	}
+
+	if err := inst.installDaemonSystemd(context.Background(), comp, binPath, ""); err != nil {
+		t.Fatalf("installDaemonSystemd: %v", err)
+	}
+
+	unitData, err := os.ReadFile(filepath.Join(systemdUnitDir, "aima-serve.service"))
+	if err != nil {
+		t.Fatalf("read unit file: %v", err)
+	}
+	unitContent := string(unitData)
+	if !strings.Contains(unitContent, "After=network-online.target docker.service") {
+		t.Fatalf("aima-serve unit missing docker ordering, got:\n%s", unitContent)
+	}
+	if !strings.Contains(unitContent, "Wants=network-online.target docker.service") {
+		t.Fatalf("aima-serve unit missing docker wants, got:\n%s", unitContent)
+	}
+	if !strings.Contains(unitContent, "Requires=docker.service") {
+		t.Fatalf("aima-serve unit missing docker requirement, got:\n%s", unitContent)
+	}
+}
+
 func TestInstallDaemonSystemdUnitContent(t *testing.T) {
 	// Test unit file generation without requiring Linux (test the template logic)
 	// We can't run the full installDaemonSystemd on non-Linux, but we can verify

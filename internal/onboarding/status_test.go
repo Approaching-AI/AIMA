@@ -222,6 +222,39 @@ func TestBuildStackStatus_ExposesAutoInitCapability(t *testing.T) {
 	}
 }
 
+func TestBuildStackStatus_DockerReadyButAIMAServeMissingNeedsInit(t *testing.T) {
+	orig := DetectOnboardingInitCapability
+	DetectOnboardingInitCapability = func(deps *mcp.ToolDeps) (bool, string) {
+		return true, ""
+	}
+	defer func() { DetectOnboardingInitCapability = orig }()
+
+	deps := &Deps{
+		ToolDeps: &mcp.ToolDeps{
+			StackInit: func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error) {
+				return nil, nil
+			},
+			StackStatus: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`{"components":[{"name":"docker","ready":true},{"name":"aima-serve","ready":false}],"all_ready":false}`), nil
+			},
+		},
+	}
+
+	status, err := BuildStackStatus(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("BuildStackStatus: %v", err)
+	}
+	if !status.NeedsInit {
+		t.Fatal("expected NeedsInit=true when docker is ready but aima-serve is not persistent")
+	}
+	if !status.CanAutoInit {
+		t.Fatal("expected CanAutoInit=true for missing aima-serve on Linux stack")
+	}
+	if status.InitTierRecommendation != "docker" {
+		t.Fatalf("tier = %q, want docker", status.InitTierRecommendation)
+	}
+}
+
 func TestBuildStackStatus_NativeSkippedDoesNotNeedInit(t *testing.T) {
 	orig := DetectOnboardingInitCapability
 	initCapabilityCalled := false

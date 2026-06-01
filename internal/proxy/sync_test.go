@@ -105,6 +105,43 @@ func TestSyncBackends_RegistersServedModelAliasAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestSyncBackends_DuplicateModelKeepsReadyDeployment(t *testing.T) {
+	s := NewServer()
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:    "qwen3-8b-vllm",
+			Phase:   "running",
+			Ready:   true,
+			Address: "10.42.0.73:8000",
+			Labels: map[string]string{
+				"aima.dev/model":          "qwen3-8b",
+				"aima.dev/engine":         "vllm",
+				"aima.dev/context_window": "65536",
+			},
+		},
+		{
+			Name:   "qwen3-8b-vllm.bak-20260601",
+			Phase:  "failed",
+			Ready:  false,
+			Labels: map[string]string{"aima.dev/model": "qwen3-8b"},
+		},
+	})
+
+	b := s.ListBackends()["qwen3-8b"]
+	if b == nil {
+		t.Fatal("expected backend for qwen3-8b")
+	}
+	if !b.Ready {
+		t.Fatal("ready deployment should not be overwritten by a stale not-ready duplicate")
+	}
+	if b.Address != "10.42.0.73:8000" {
+		t.Errorf("address = %q, want %q", b.Address, "10.42.0.73:8000")
+	}
+	if b.ContextWindowTokens != 65536 {
+		t.Errorf("context_window_tokens = %d, want 65536", b.ContextWindowTokens)
+	}
+}
+
 func TestSyncBackends_NotReady(t *testing.T) {
 	s := NewServer()
 	SyncBackends(s, []*DeploymentInfo{

@@ -46,8 +46,28 @@ func WriteConfig(path string, cfg map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create openclaw config dir: %w", err)
 	}
+	if err := ensureConfigOwnerWritable(path); err != nil {
+		return err
+	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("write openclaw config: %w", err)
+	}
+	return nil
+}
+
+func ensureConfigOwnerWritable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat openclaw config: %w", err)
+	}
+	if info.IsDir() || info.Mode().Perm()&0200 != 0 {
+		return nil
+	}
+	if err := os.Chmod(path, info.Mode().Perm()|0200); err != nil {
+		return fmt.Errorf("make openclaw config owner-writable: %w", err)
 	}
 	return nil
 }

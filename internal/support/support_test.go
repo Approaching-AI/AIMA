@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -331,6 +332,64 @@ func TestServiceRunRetriesTransientPollFailure(t *testing.T) {
 	}
 	if state.resultCalls != 1 {
 		t.Fatalf("resultCalls = %d, want 1", state.resultCalls)
+	}
+}
+
+func TestExecuteSingleCommandTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell background process semantics")
+	}
+
+	resultCh := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/dev-1/commands/cmd-timeout/progress", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/result", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode result body: %v", err)
+		}
+		resultCh <- body
+		writeJSON(t, w, map[string]any{"ok": true})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	svc := NewService(newMemoryStore(),
+		WithHTTPClient(server.Client()),
+		WithProgressInterval(20*time.Millisecond),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := svc.executeSingleCommand(ctx, server.URL+"/api/v1", deviceState{
+		DeviceID: "dev-1",
+		Token:    "tok-1",
+	}, pollResponse{
+		CommandID:             "cmd-timeout",
+		Command:               "sh -c 'sleep 10 &'",
+		CommandTimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("executeSingleCommand: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("timeout command took %s; child process likely survived termination", elapsed)
+	}
+
+	select {
+	case body := <-resultCh:
+		if exitCode, _ := body["exit_code"].(float64); int(exitCode) != 124 {
+			t.Fatalf("exit_code = %v, want 124; body=%+v", body["exit_code"], body)
+		}
+		if stderr, _ := body["stderr"].(string); !strings.Contains(stderr, "Command timed out after 1s") {
+			t.Fatalf("stderr missing timeout message: %q", stderr)
+		}
+	default:
+		t.Fatal("expected command result payload")
 	}
 }
 

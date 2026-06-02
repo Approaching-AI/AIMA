@@ -84,44 +84,56 @@ func (s *Service) executeSingleCommand(ctx context.Context, endpoint string, sta
 		waitCh <- cmd.Wait()
 	}()
 
+	remoteCanceled := false
+	submitCompletion := func(err error) (commandResultAckResponse, error) {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return commandResultAckResponse{}, ctx.Err()
+		}
+
+		exitCode := 0
+		switch {
+		case remoteCanceled:
+			exitCode = 130
+			stderrBuf.AppendString("\nCommand cancelled after remote request\n")
+		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+			exitCode = 124
+			stderrBuf.AppendString(fmt.Sprintf("\nCommand timed out after %ds\n", timeoutSeconds))
+			if errors.Is(err, errCommandWaitTimeout) {
+				stderrBuf.AppendString("\nCommand process did not exit cleanly after termination\n")
+			}
+		case err == nil:
+			exitCode = 0
+		default:
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+				stderrBuf.AppendString("\n" + err.Error() + "\n")
+			}
+		}
+
+		return s.submitResultWithRetry(ctx, endpoint, state, map[string]any{
+			"command_id": resp.CommandID,
+			"exit_code":  exitCode,
+			"stdout":     stdoutBuf.String(),
+			"stderr":     stderrBuf.String(),
+			"result_id":  buildResultID(s.now()),
+		})
+	}
+
 	ticker := time.NewTicker(s.progressInterval)
 	defer ticker.Stop()
 
-	remoteCanceled := false
 	for {
 		select {
 		case err := <-waitCh:
-			if errors.Is(ctx.Err(), context.Canceled) {
-				return commandResultAckResponse{}, ctx.Err()
-			}
+			return submitCompletion(err)
 
-			exitCode := 0
-			switch {
-			case remoteCanceled:
-				exitCode = 130
-				stderrBuf.AppendString("\nCommand cancelled after remote request\n")
-			case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
-				exitCode = 124
-				stderrBuf.AppendString(fmt.Sprintf("\nCommand timed out after %ds\n", timeoutSeconds))
-			case err == nil:
-				exitCode = 0
-			default:
-				var exitErr *exec.ExitError
-				if errors.As(err, &exitErr) {
-					exitCode = exitErr.ExitCode()
-				} else {
-					exitCode = 1
-					stderrBuf.AppendString("\n" + err.Error() + "\n")
-				}
-			}
-
-			return s.submitResultWithRetry(ctx, endpoint, state, map[string]any{
-				"command_id": resp.CommandID,
-				"exit_code":  exitCode,
-				"stdout":     stdoutBuf.String(),
-				"stderr":     stderrBuf.String(),
-				"result_id":  buildResultID(s.now()),
-			})
+		case <-cmdCtx.Done():
+			killCommandProcess(cmd)
+			err := waitForCommandExit(ctx, waitCh, 5*time.Second)
+			return submitCompletion(err)
 
 		case <-ticker.C:
 			elapsed := s.now().Sub(startedAt).Round(time.Second)
@@ -132,16 +144,12 @@ func (s *Service) executeSingleCommand(ctx context.Context, endpoint string, sta
 			}
 			if ack.CancelRequested || strings.EqualFold(ack.CommandStatus, "cancelled") {
 				remoteCanceled = true
-				if cmd.Process != nil {
-					_ = cmd.Process.Kill()
-				}
+				killCommandProcess(cmd)
 			}
 
 		case <-ctx.Done():
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			<-waitCh
+			killCommandProcess(cmd)
+			_ = waitForCommandExit(context.Background(), waitCh, 5*time.Second)
 			return commandResultAckResponse{}, ctx.Err()
 		}
 	}
@@ -180,14 +188,34 @@ func (s *Service) submitResultWithRetry(ctx context.Context, endpoint string, st
 }
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd", "/C", command)
+		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-lc", command)
 	}
-	return exec.CommandContext(ctx, "/bin/sh", "-lc", command)
+	configureCommandProcess(cmd)
+	return cmd
 }
 
 func buildResultID(now time.Time) string {
 	return fmt.Sprintf("res_%d", now.UnixNano())
+}
+
+var errCommandWaitTimeout = errors.New("command process did not exit after termination")
+
+func waitForCommandExit(ctx context.Context, waitCh <-chan error, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return errCommandWaitTimeout
+	}
 }
 
 type safeBuffer struct {

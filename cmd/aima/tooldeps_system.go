@@ -132,6 +132,9 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 		if b, e := json.Marshal(ac.support.Status(ctx)); e == nil {
 			status["support"] = b
 		}
+		if b, e := json.Marshal(serviceContextStatus(ac)); e == nil {
+			status["service_context"] = b
+		}
 		if deps.OpenClawStatus != nil {
 			if b, e := deps.OpenClawStatus(ctx); e == nil {
 				status["openclaw"] = b

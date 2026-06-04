@@ -92,7 +92,8 @@ func buildDiagnosticsBundle(ctx context.Context, ac *appContext, deps *mcp.ToolD
 			"goarch":   goruntime.GOARCH,
 			"data_dir": redactHomePath(dataDir),
 		},
-		"sections": map[string]any{},
+		"service_context": serviceContextStatus(ac),
+		"sections":        map[string]any{},
 	}
 
 	sections := bundle["sections"].(map[string]any)

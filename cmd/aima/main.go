@@ -154,18 +154,19 @@ func run() error {
 	mcpServer := mcp.NewServer()
 	supportSvc := support.NewService(db, support.WithLogger(slog.Default()))
 	ac := &appContext{
-		cat:      cat,
-		db:       db,
-		kStore:   knowledgeStore,
-		rt:       rt,
-		nativeRt: nativeRt,
-		dockerRt: dockerRt,
-		k3sRt:    k3sRt,
-		proxy:    proxyServer,
-		k3s:      k3sClient,
-		dataDir:  dataDir,
-		digests:  factoryDigests,
-		support:  supportSvc,
+		cat:             cat,
+		db:              db,
+		kStore:          knowledgeStore,
+		rt:              rt,
+		nativeRt:        nativeRt,
+		dockerRt:        dockerRt,
+		k3sRt:           k3sRt,
+		proxy:           proxyServer,
+		k3s:             k3sClient,
+		dataDir:         dataDir,
+		catalogLoadedAt: time.Now().UTC(),
+		digests:         factoryDigests,
+		support:         supportSvc,
 	}
 	deps := buildToolDeps(ac)
 

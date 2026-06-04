@@ -1641,7 +1641,7 @@ body {
 /* Deploy detail modal */
 .deploy-modal {
   width: min(680px, calc(100vw - 48px));
-  max-height: min(84vh, 820px);
+  max-height: min(84dvh, 820px);
   padding: 0;
   overflow: hidden;
   display: flex;
@@ -1649,8 +1649,8 @@ body {
 }
 .deploy-modal.maximized {
   width: min(1080px, calc(100vw - 32px));
-  height: calc(100vh - 32px);
-  max-height: calc(100vh - 32px);
+  height: calc(100dvh - 32px);
+  max-height: calc(100dvh - 32px);
   border-radius: 16px;
 }
 .deploy-modal.minimized {
@@ -2763,14 +2763,14 @@ body {
 @media (max-width: 768px) {
   .deploy-modal {
     width: min(100vw, 640px);
-    max-height: 92vh;
+    max-height: 92dvh;
     border-radius: 20px 20px 0 0;
     margin-top: auto;
   }
   .deploy-modal.maximized {
     width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
     border-radius: 0;
   }
   .deploy-modal.minimized {
@@ -10116,7 +10116,7 @@ function aimaApp() {
       if (maxLen > 8192) suggestions.push({ key: 'max_model_len', value: Math.max(8192, Math.floor(maxLen / 2)), label: this.t('deploy_suggest_reduce_context') + ' ' + Math.max(8192, Math.floor(maxLen / 2)) });
       const maxSeqs = this.deployNumericConfig(['max_num_seqs', 'max-num-seqs'], 1);
       if (maxSeqs > 1) suggestions.push({ key: 'max_num_seqs', value: 1, label: this.t('deploy_suggest_reduce_seqs') });
-      if (!cfg.kv_cache_dtype || kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8', label: this.t('deploy_suggest_fp8_kv') });
+      if (!kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8', label: this.t('deploy_suggest_fp8_kv') });
       return suggestions;
     },
 

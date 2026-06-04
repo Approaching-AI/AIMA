@@ -500,6 +500,7 @@ func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t 
 		`const data = await this.callTool('deploy.run', request);`,
 		`this.deployDetailOpen = false;`,
 		`await this.refreshDeployDryRun();`,
+		`if (!kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8'`,
 		`deploy_started_background`,
 		`deploy_restore_recommended: 'Recommended parameters'`,
 	} {

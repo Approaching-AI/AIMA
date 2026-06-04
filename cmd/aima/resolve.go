@@ -29,9 +29,11 @@ var autoDetectWarned sync.Map
 // resolvedDeployment holds the shared result of resolve + CheckFit,
 // used by both DeployApply and DeployDryRun.
 type resolvedDeployment struct {
-	ModelName string
-	Resolved  *knowledge.ResolvedConfig
-	Fit       *knowledge.FitReport
+	ModelName          string
+	Resolved           *knowledge.ResolvedConfig
+	ResolvedConfig     map[string]any
+	ResolvedProvenance map[string]string
+	Fit                *knowledge.FitReport
 }
 
 // queryGoldenOverrides returns config overrides from the best golden configuration
@@ -117,6 +119,8 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		return nil, err
 	}
 
+	resolvedConfig := cloneAnyMap(resolved.Config)
+	resolvedProvenance := cloneStringMap(resolved.Provenance)
 	fit := knowledge.CheckFit(resolved, hwInfo)
 	for k, v := range fit.Adjustments {
 		resolved.Config[k] = v
@@ -124,10 +128,34 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 	}
 
 	return &resolvedDeployment{
-		ModelName: canonicalName,
-		Resolved:  resolved,
-		Fit:       fit,
+		ModelName:          canonicalName,
+		Resolved:           resolved,
+		ResolvedConfig:     resolvedConfig,
+		ResolvedProvenance: resolvedProvenance,
+		Fit:                fit,
 	}, nil
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // normalizeAutoPortOverrides removes "auto" sentinels from port-like override keys

@@ -363,6 +363,70 @@ func TestNormalizeAutoPortOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveDeploymentKeepsResolvedAndEffectiveConfigSeparate(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{{
+			Metadata: knowledge.EngineMetadata{
+				Name:             "vllm-test",
+				Type:             "vllm",
+				Version:          "1.0",
+				SupportedFormats: []string{"safetensors"},
+			},
+			Hardware: knowledge.EngineHardware{GPUArch: "*"},
+			Startup: knowledge.EngineStartup{
+				Command:     []string{"vllm", "serve", "{{.ModelPath}}"},
+				DefaultArgs: map[string]any{"gpu_memory_utilization": 0.85, "port": 8000},
+			},
+			Runtime: knowledge.EngineRuntime{Default: "container"},
+		}},
+		ModelAssets: []knowledge.ModelAsset{{
+			Metadata: knowledge.ModelMetadata{Name: "demo-model", Type: "llm"},
+			Storage:  knowledge.ModelStorage{DefaultPathPattern: "/models/demo"},
+			Variants: []knowledge.ModelVariant{{
+				Name:     "demo-model-vllm",
+				Engine:   "vllm",
+				Format:   "safetensors",
+				Hardware: knowledge.ModelVariantHardware{GPUArch: "Blackwell"},
+			}},
+		}},
+	}
+
+	rd, err := resolveDeployment(ctx, cat, db, nil, knowledge.HardwareInfo{
+		GPUArch:       "Blackwell",
+		GPUVRAMMiB:    122880,
+		GPUMemFreeMiB: 64000,
+		GPUMemUsedMiB: 58880,
+		UnifiedMemory: false,
+		Platform:      "linux/arm64",
+	}, "demo-model", "vllm", "", nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveDeployment: %v", err)
+	}
+
+	if got := rd.ResolvedConfig["gpu_memory_utilization"]; got != 0.85 {
+		t.Fatalf("resolved_config gpu_memory_utilization = %v, want 0.85", got)
+	}
+	if got := rd.Resolved.Config["gpu_memory_utilization"]; got != 0.51 {
+		t.Fatalf("effective config gpu_memory_utilization = %v, want 0.51", got)
+	}
+	if got := rd.Fit.Adjustments["gpu_memory_utilization"]; got != 0.51 {
+		t.Fatalf("fit adjustment gpu_memory_utilization = %v, want 0.51", got)
+	}
+	if got := rd.ResolvedProvenance["gpu_memory_utilization"]; got != "L0" {
+		t.Fatalf("resolved provenance = %q, want L0", got)
+	}
+	if got := rd.Resolved.Provenance["gpu_memory_utilization"]; got != "L0-auto" {
+		t.Fatalf("effective provenance = %q, want L0-auto", got)
+	}
+}
+
 func TestResolveCatalogWithLocalEngineOverlayUsesInstalledContainerAsset(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")

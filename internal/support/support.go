@@ -169,7 +169,7 @@ type Status struct {
 	BudgetStatus        string            `json:"budget_status,omitempty"`
 	IsBound             bool              `json:"is_bound,omitempty"`
 	ReferralCount       int               `json:"referral_count,omitempty"`
-	ActiveTask          *TaskSnapshot     `json:"active_task,omitempty"`
+	ActiveTask          *TaskSnapshot     `json:"active_task"`
 	LastTask            *TaskSnapshot     `json:"last_task,omitempty"`
 	LastMessage         *MessageSnapshot  `json:"last_message,omitempty"`
 	Messages            []MessageSnapshot `json:"messages,omitempty"`

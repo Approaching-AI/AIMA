@@ -51,6 +51,7 @@ type ResolvedConfig struct {
 	EngineImage           string
 	ModelPath             string
 	ModelName             string
+	ModelType             string
 	ModelFormat           string
 	Slot                  string
 	Config                map[string]any
@@ -222,6 +223,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Engine:             engineType,
 		EngineAssetName:    engineAssetName,
 		ModelName:          model.Metadata.Name,
+		ModelType:          model.Metadata.Type,
 		ModelFormat:        variant.Format,
 		Slot:               slot.Name,
 		Config:             config,

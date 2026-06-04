@@ -460,3 +460,35 @@ func TestGeneratePodEnvMerge(t *testing.T) {
 		t.Errorf("SHARED_VAR = %q, want engine-wins (engine overrides hw)", envMap["SHARED_VAR"])
 	}
 }
+
+func TestGeneratePodFiltersLLMOnlyArgsForImageService(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "z-image-diffusers",
+		EngineImage: "qujing-z-image:latest",
+		ModelPath:   "/data/models/stable-diffusion-v1-5",
+		ModelName:   "stable-diffusion-v1-5",
+		ModelType:   "image_gen",
+		Slot:        "default",
+		Config: map[string]any{
+			"port":                   8188,
+			"max_model_len":          8192,
+			"gpu_memory_utilization": 0.5,
+		},
+		Command: []string{"python3", "server.py"},
+		PortSpecs: []StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	s := string(podYAML)
+	if strings.Contains(s, "--max-model-len") || strings.Contains(s, "--gpu-memory-utilization") {
+		t.Fatalf("LLM-only args should not be emitted for image services:\n%s", s)
+	}
+	if !strings.Contains(s, "--port") {
+		t.Fatalf("expected service port flag to remain:\n%s", s)
+	}
+}

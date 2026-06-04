@@ -225,6 +225,71 @@ func TestGeneratePodNilResolved(t *testing.T) {
 	}
 }
 
+func TestGeneratePodMemGuardrail(t *testing.T) {
+	// No partition: the resolver's MemLimitMiB guardrail (unified-memory hosts)
+	// must still produce a container memory ceiling so a runaway pod is
+	// OOM-killed instead of hard-hanging the machine.
+	resolved := &ResolvedConfig{
+		Engine:      "vllm",
+		EngineImage: "vllm/vllm-openai:latest",
+		ModelPath:   "/data/models/qwen3-8b",
+		ModelName:   "qwen3-8b",
+		Slot:        "primary",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve"},
+		MemLimitMiB: 110000,
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, podYAML)
+	}
+	c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	resources, ok := c["resources"].(map[string]any)
+	if !ok {
+		t.Fatal("expected resources block when MemLimitMiB is set")
+	}
+	limits := resources["limits"].(map[string]any)
+	if limits["memory"] != "110000Mi" {
+		t.Errorf("memory limit = %v, want 110000Mi", limits["memory"])
+	}
+	if limits["cpu"] != nil {
+		t.Errorf("unexpected cpu limit %v (only the memory guardrail should be set)", limits["cpu"])
+	}
+}
+
+func TestGeneratePodPartitionOverridesMemGuardrail(t *testing.T) {
+	// An explicit partition RAM limit takes precedence over the fallback guardrail.
+	resolved := &ResolvedConfig{
+		Engine:      "vllm",
+		EngineImage: "vllm/vllm-openai:latest",
+		ModelPath:   "/data/models/qwen3-8b",
+		ModelName:   "qwen3-8b",
+		Slot:        "primary",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve"},
+		MemLimitMiB: 110000,
+		Partition:   &PartitionSlot{Name: "primary", RAMMiB: 65536},
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+	c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	limits := c["resources"].(map[string]any)["limits"].(map[string]any)
+	if limits["memory"] != "65536Mi" {
+		t.Errorf("memory limit = %v, want 65536Mi (partition wins)", limits["memory"])
+	}
+}
+
 func TestGeneratePodAMDDevices(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Engine:      "rocm-engine",

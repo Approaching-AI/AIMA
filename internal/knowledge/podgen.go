@@ -371,6 +371,13 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.RAMMiB = resolved.Partition.RAMMiB
 	}
 
+	// Fall back to the resolver's memory guardrail when no partition pins a RAM
+	// limit, so unified-memory inference pods always carry a memory ceiling and
+	// a runaway container is OOM-killed instead of hard-hanging the host.
+	if data.RAMMiB == 0 && resolved.MemLimitMiB > 0 {
+		data.RAMMiB = resolved.MemLimitMiB
+	}
+
 	if resolved.HealthCheck != nil {
 		data.HealthCheckPath = resolved.HealthCheck.Path
 		if resolved.HealthCheck.TimeoutS > 0 {

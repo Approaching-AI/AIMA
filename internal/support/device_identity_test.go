@@ -231,6 +231,28 @@ func TestClassifyRegistrationErrorBrowserConfirmation(t *testing.T) {
 	}
 }
 
+func TestClassifyRegistrationErrorHardwareIdentityConflict(t *testing.T) {
+	t.Parallel()
+
+	err := classifyRegistrationError(newHTTPStatusError(http.StatusConflict, []byte(`{
+		"detail":"hardware identity conflict: cloned machine-id detected",
+		"reauth_method":"hardware_identity_conflict",
+		"device_id":"dev-existing",
+		"existing_hostname":"mt-AIBOOK-ABA14104",
+		"incoming_hostname":"devtech-AIBOOK-ABA14102"
+	}`)))
+	var prompt *RegistrationPromptError
+	if !errors.As(err, &prompt) {
+		t.Fatalf("expected RegistrationPromptError, got %T: %v", err, err)
+	}
+	if prompt.Kind != RegistrationPromptHardwareIdentity {
+		t.Fatalf("prompt kind = %q, want %q", prompt.Kind, RegistrationPromptHardwareIdentity)
+	}
+	if !strings.Contains(prompt.Error(), "hardware identity conflict") {
+		t.Fatalf("error should explain hardware identity conflict, got %q", prompt.Error())
+	}
+}
+
 func assertSessionProofRequest(t *testing.T, body map[string]string, deviceID, keyID, challengeID, nonce string) {
 	t.Helper()
 	if body["device_id"] != deviceID || body["key_id"] != keyID || body["challenge_id"] != challengeID || body["nonce"] != nonce {

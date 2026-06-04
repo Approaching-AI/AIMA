@@ -186,8 +186,9 @@ type RunOptions struct {
 type RegistrationPromptKind string
 
 const (
-	RegistrationPromptInviteOrWorker RegistrationPromptKind = "invite_or_worker"
-	RegistrationPromptRecovery       RegistrationPromptKind = "recovery_code"
+	RegistrationPromptInviteOrWorker   RegistrationPromptKind = "invite_or_worker"
+	RegistrationPromptRecovery         RegistrationPromptKind = "recovery_code"
+	RegistrationPromptHardwareIdentity RegistrationPromptKind = "hardware_identity_conflict"
 )
 
 // RegistrationPromptError indicates registration can continue after asking the
@@ -209,6 +210,11 @@ func (e *RegistrationPromptError) Error() string {
 			return fmt.Sprintf("support registration needs recovery code: %s", e.Detail)
 		}
 		return "support registration needs recovery code"
+	case RegistrationPromptHardwareIdentity:
+		if e.Detail != "" {
+			return fmt.Sprintf("support registration blocked by hardware identity conflict: %s", e.Detail)
+		}
+		return "support registration blocked by hardware identity conflict"
 	default:
 		if e.Detail != "" {
 			return e.Detail

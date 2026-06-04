@@ -760,10 +760,22 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	if serviceType == "" {
 		serviceType = "notify" // backward compat for K3S
 	}
+	afterTargets := []string{"network-online.target"}
+	wantsTargets := []string{"network-online.target"}
+	var requiresLine string
+	if name == "aima-serve" {
+		// AIMA selects its runtime during process startup. Starting after Docker
+		// prevents reboot races where the proxy comes up first, sees no Docker
+		// runtime, and never reconciles container deployments.
+		afterTargets = append(afterTargets, "docker.service")
+		wantsTargets = append(wantsTargets, "docker.service")
+		requiresLine = "Requires=docker.service"
+	}
 	unit := fmt.Sprintf(`[Unit]
 Description=AIMA managed %s (%s)
-After=network-online.target
-Wants=network-online.target
+After=%s
+Wants=%s
+%s
 
 [Service]
 Type=%s
@@ -778,7 +790,7 @@ LimitNPROC=infinity
 
 [Install]
 WantedBy=multi-user.target
-`, name, comp.Metadata.Version, serviceType, envFile, execStart)
+`, name, comp.Metadata.Version, strings.Join(afterTargets, " "), strings.Join(wantsTargets, " "), requiresLine, serviceType, envFile, execStart)
 
 	unitPath := filepath.Join(systemdUnitDir, name+".service")
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {

@@ -126,6 +126,28 @@ func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexWaitsForAIMAServePersistenceBeforeScan(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "wizStackReadyForScan(stack)") {
+		t.Fatal("index missing stack readiness helper")
+	}
+	if strings.Contains(body, `data.stack_status && (data.stack_status.docker === 'ready' || data.stack_status.k3s === 'ready')`) {
+		t.Fatal("init polling still advances on docker/k3s readiness without checking needs_init")
+	}
+	if strings.Contains(body, `(this.onboardingData.stack_status.docker === 'ready' || this.onboardingData.stack_status.k3s === 'ready')`) {
+		t.Fatal("init completion still advances on docker/k3s readiness without checking needs_init")
+	}
+}
+
 func TestRegisterRoutes_IndexUsesConsolidatedPatrolTool(t *testing.T) {
 	t.Parallel()
 

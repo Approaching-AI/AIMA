@@ -24,6 +24,7 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 			Labels: map[string]string{
 				"aima.dev/model":          "qwen3-8b",
 				"aima.dev/engine":         "vllm",
+				"aima.dev/model_type":     "llm",
 				"aima.dev/context_window": "16384",
 				LabelServedModel:          "musachat_local",
 			},
@@ -46,6 +47,9 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 	}
 	if b.ContextWindowTokens != 16384 {
 		t.Errorf("context_window_tokens = %d, want 16384", b.ContextWindowTokens)
+	}
+	if b.ModelType != "llm" {
+		t.Errorf("model type = %q, want llm", b.ModelType)
 	}
 	if b.UpstreamModel != "musachat_local" {
 		t.Errorf("upstreamModel = %q, want %q", b.UpstreamModel, "musachat_local")

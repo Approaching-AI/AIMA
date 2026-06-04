@@ -61,6 +61,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			s.RegisterBackend(model.ID, &Backend{
 				ModelName:           model.ID,
 				EngineType:          "remote",
+				ModelType:           model.ModelType,
 				Address:             address,
 				Ready:               true,
 				Remote:              true,
@@ -112,8 +113,8 @@ func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Dura
 }
 
 // QueryRemoteStatus fetches /status from a remote aima instance and returns
-// ready models with ranking metadata. Falls back to /v1/models when /status is
-// unavailable or returns an unexpected payload.
+// ready models with ranking metadata. Falls back to /v1/models only when
+// /status is unavailable or does not look like an AIMA status payload.
 func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string) []AdvertisedModel {
 	url := fmt.Sprintf("http://%s:%d/status", addr, port)
 
@@ -140,8 +141,10 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 	}
 
 	var result struct {
-		Models []struct {
+		Models *[]struct {
 			ModelName           string `json:"model_name"`
+			ModelType           string `json:"model_type"`
+			EngineType          string `json:"engine_type"`
 			Ready               *bool  `json:"ready"`
 			Remote              bool   `json:"remote"`
 			ParameterCount      string `json:"parameter_count"`
@@ -152,26 +155,33 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 		slog.Debug("remote: failed to parse status response", "url", url, "error", err)
 		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
 	}
+	if result.Models == nil {
+		slog.Debug("remote: status response missing models", "url", url)
+		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
+	}
 
-	models := make([]AdvertisedModel, 0, len(result.Models))
-	for _, m := range result.Models {
+	models := make([]AdvertisedModel, 0, len(*result.Models))
+	for _, m := range *result.Models {
 		if m.Ready != nil && !*m.Ready {
 			continue
 		}
 		if strings.TrimSpace(m.ModelName) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{
+		advertised := AdvertisedModel{
 			ID:                  m.ModelName,
+			ModelType:           m.ModelType,
+			EngineType:          m.EngineType,
 			ParameterCount:      m.ParameterCount,
 			ContextWindowTokens: m.ContextWindowTokens,
 			Remote:              m.Remote,
-		})
+		}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
-	if len(models) == 0 {
-		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
-	}
 	return models
 }
 
@@ -229,7 +239,11 @@ func advertisedModelsFromIDs(ids []string) []AdvertisedModel {
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{ID: id})
+		advertised := AdvertisedModel{ID: id}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
 	return models

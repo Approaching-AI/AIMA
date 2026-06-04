@@ -10,6 +10,8 @@ import (
 // AdvertisedModel is the minimal model metadata needed for agent-side selection.
 type AdvertisedModel struct {
 	ID                  string `json:"id"`
+	ModelType           string `json:"model_type,omitempty"`
+	EngineType          string `json:"engine_type,omitempty"`
 	ParameterCount      string `json:"parameter_count,omitempty"`
 	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
 	Remote              bool   `json:"remote,omitempty"`
@@ -27,20 +29,31 @@ func SortAdvertisedModels(models []AdvertisedModel) {
 
 // BestAdvertisedModel returns the highest-priority model from the slice.
 func BestAdvertisedModel(models []AdvertisedModel) (AdvertisedModel, bool) {
-	if len(models) == 0 {
-		return AdvertisedModel{}, false
-	}
-	best := models[0]
-	for _, candidate := range models[1:] {
+	var best AdvertisedModel
+	found := false
+	for _, candidate := range models {
+		if !IsChatCapableAdvertisedModel(candidate) {
+			continue
+		}
+		if !found {
+			best = candidate
+			found = true
+			continue
+		}
 		if BetterAdvertisedModel(candidate, best) {
 			best = candidate
 		}
 	}
-	return best, true
+	return best, found
 }
 
 // BetterAdvertisedModel reports whether a should be preferred over b.
 func BetterAdvertisedModel(a, b AdvertisedModel) bool {
+	aChat := IsChatCapableAdvertisedModel(a)
+	bChat := IsChatCapableAdvertisedModel(b)
+	if aChat != bChat {
+		return aChat && !bChat
+	}
 	aScore := modelStrengthScore(a.ID, a.ParameterCount)
 	bScore := modelStrengthScore(b.ID, b.ParameterCount)
 	if aScore != bScore {
@@ -53,6 +66,42 @@ func BetterAdvertisedModel(a, b AdvertisedModel) bool {
 		return !a.Remote && b.Remote
 	}
 	return strings.ToLower(strings.TrimSpace(a.ID)) < strings.ToLower(strings.TrimSpace(b.ID))
+}
+
+// IsChatCapableAdvertisedModel reports whether a model can be used by the
+// text/tool-calling agent. Empty type is accepted for generic OpenAI-compatible
+// endpoints, then conservative name/engine hints filter common non-chat assets.
+func IsChatCapableAdvertisedModel(model AdvertisedModel) bool {
+	switch strings.ToLower(strings.TrimSpace(model.ModelType)) {
+	case "llm", "vlm", "chat", "text":
+		return true
+	case "asr", "tts", "image_gen", "image", "video_gen", "embedding", "reranker":
+		return false
+	}
+	if hasNonChatHint(model.EngineType) || hasNonChatHint(model.ID) {
+		return false
+	}
+	return true
+}
+
+func hasNonChatHint(raw string) bool {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return false
+	}
+	if strings.Contains(raw, "diffusers") || strings.Contains(raw, "embedding") || strings.Contains(raw, "rerank") {
+		return true
+	}
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for _, token := range tokens {
+		switch token {
+		case "asr", "tts", "stt", "whisper", "speech", "image", "img", "diffusion":
+			return true
+		}
+	}
+	return false
 }
 
 func modelStrengthScore(modelID, parameterCount string) float64 {

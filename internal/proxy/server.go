@@ -31,11 +31,15 @@ const LabelServedModel = "aima.dev/served-model"
 // LabelParameterCount stores the model parameter count used for agent ranking.
 const LabelParameterCount = "aima.dev/parameter_count"
 
+// LabelModelType stores the catalog modality for agent/OpenClaw routing.
+const LabelModelType = "aima.dev/model_type"
+
 // Backend represents a running inference engine.
 type Backend struct {
 	ModelName           string            `json:"model_name"`
 	UpstreamModel       string            `json:"upstream_model,omitempty"`
 	EngineType          string            `json:"engine_type"`
+	ModelType           string            `json:"model_type,omitempty"`
 	Scheme              string            `json:"scheme,omitempty"`
 	Address             string            `json:"address"`
 	BasePath            string            `json:"base_path"`
@@ -366,6 +370,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		models = append(models, map[string]any{
 			"model_name":            b.ModelName,
 			"engine_type":           b.EngineType,
+			"model_type":            b.ModelType,
 			"ready":                 b.Ready,
 			"remote":                b.Remote,
 			"external":              b.External,
@@ -409,12 +414,16 @@ func rankedBackends(backends map[string]*Backend, readyOnly bool) []*Backend {
 		return BetterAdvertisedModel(
 			AdvertisedModel{
 				ID:                  items[i].ModelName,
+				ModelType:           items[i].ModelType,
+				EngineType:          items[i].EngineType,
 				ParameterCount:      items[i].ParameterCount,
 				ContextWindowTokens: items[i].ContextWindowTokens,
 				Remote:              items[i].Remote,
 			},
 			AdvertisedModel{
 				ID:                  items[j].ModelName,
+				ModelType:           items[j].ModelType,
+				EngineType:          items[j].EngineType,
 				ParameterCount:      items[j].ParameterCount,
 				ContextWindowTokens: items[j].ContextWindowTokens,
 				Remote:              items[j].Remote,

@@ -185,6 +185,17 @@ func TestSyncWritesConfig(t *testing.T) {
 	if managed.LLMProvider != "aima" {
 		t.Fatalf("managed llm provider = %q, want aima", managed.LLMProvider)
 	}
+	defaults := lookupMap(cfg, "agents", "defaults")
+	if defaults == nil {
+		t.Fatal("agents.defaults missing after sync")
+	}
+	chatModel, ok := defaults["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("agents.defaults.model = %T, want map", defaults["model"])
+	}
+	if got := chatModel["primary"]; got != "aima/qwen3-8b" {
+		t.Fatalf("agents.defaults.model.primary = %v, want aima/qwen3-8b", got)
+	}
 	if managed.MCPServerName != "aima" {
 		t.Fatalf("managed mcp server = %q, want aima", managed.MCPServerName)
 	}
@@ -197,6 +208,50 @@ func TestSyncWritesConfig(t *testing.T) {
 	}
 	if got := stringArgs(server["args"]); len(got) != 3 || got[0] != "mcp" || got[1] != "--profile" || got[2] != "operator" {
 		t.Fatalf("mcp.servers.aima.args = %v, want [mcp --profile operator]", got)
+	}
+}
+
+func TestMergeAIMAConfigReplacesStaleAIMAMediaChatDefault(t *testing.T) {
+	proxyAddr := "http://127.0.0.1:6188/v1"
+	existing := map[string]any{
+		"models": map[string]any{
+			"providers": map[string]any{
+				"aima-media": map[string]any{
+					"baseUrl": proxyAddr,
+					"models":  []any{map[string]any{"id": "qwen3.6-35b-a3b"}},
+				},
+			},
+		},
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"model": map[string]any{
+					"primary": "aima-media/qwen3.6-35b-a3b",
+				},
+			},
+		},
+	}
+
+	merged := MergeAIMAConfig(existing, &SyncResult{
+		LLMModels: []ModelEntry{{
+			ID:            "qwen3.5-9b",
+			Name:          "Qwen3.5 9B (AIMA)",
+			Input:         []string{"text"},
+			ContextWindow: 32768,
+			MaxTokens:     16384,
+		}},
+		ProxyAddr: proxyAddr,
+	})
+
+	defaults := lookupMap(merged, "agents", "defaults")
+	if defaults == nil {
+		t.Fatal("agents.defaults missing after merge")
+	}
+	chatModel, ok := defaults["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("agents.defaults.model = %T, want map", defaults["model"])
+	}
+	if got := chatModel["primary"]; got != "aima/qwen3.5-9b" {
+		t.Fatalf("agents.defaults.model.primary = %v, want aima/qwen3.5-9b", got)
 	}
 }
 

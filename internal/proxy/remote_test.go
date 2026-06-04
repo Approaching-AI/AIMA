@@ -266,6 +266,45 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 	}
 }
 
+func TestQueryRemoteStatus_DoesNotFallbackWhenStatusHasOnlyNonChatModels(t *testing.T) {
+	modelsCalled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"models": []map[string]any{
+					{
+						"model_name":      "flux2-dev",
+						"model_type":      "image_gen",
+						"engine_type":     "flux-diffusers",
+						"ready":           true,
+						"parameter_count": "32B",
+					},
+				},
+			})
+		case "/v1/models":
+			modelsCalled = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"data":   []map[string]string{{"id": "flux2-dev", "object": "model"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	models := QueryRemoteStatus(context.Background(), addr, port, "")
+	if len(models) != 0 {
+		t.Fatalf("models = %v, want no chat-capable models", models)
+	}
+	if modelsCalled {
+		t.Fatal("/v1/models should not be queried after authoritative /status filtered all models")
+	}
+}
+
 // newModelServer creates a test HTTP server that serves /v1/models in OpenAI format.
 func newModelServer(t *testing.T, modelNames []string) *httptest.Server {
 	t.Helper()

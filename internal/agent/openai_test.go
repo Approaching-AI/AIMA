@@ -628,6 +628,55 @@ func TestOpenAIClient_RouteStatus_IgnoresNonChatLocalModels(t *testing.T) {
 	}
 }
 
+func TestOpenAIClient_RouteStatus_DoesNotUseModelsFallbackAfterAuthoritativeNonChatStatus(t *testing.T) {
+	modelsCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"models": []map[string]any{
+					{
+						"model_name":            "flux2-dev",
+						"engine_type":           "flux-diffusers",
+						"model_type":            "image_gen",
+						"ready":                 true,
+						"parameter_count":       "32B",
+						"context_window_tokens": 32768,
+					},
+				},
+			})
+		case "/v1/models":
+			modelsCalled = true
+			json.NewEncoder(w).Encode(modelsResponse{Data: []modelData{{ID: "flux2-dev"}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewOpenAIClient(srv.URL+"/v1", WithModel("flux2-dev"))
+	status := client.RouteStatus(context.Background())
+	if status.Available {
+		t.Fatalf("RouteStatus().Available = true, want false for non-chat configured model: %+v", status.Selected)
+	}
+	if status.Selected != nil {
+		t.Fatalf("Selected = %+v, want nil", status.Selected)
+	}
+	if len(status.ConfiguredEndpointProbe.Models) != 0 {
+		t.Fatalf("probe models = %d, want 0 chat-capable models", len(status.ConfiguredEndpointProbe.Models))
+	}
+	if !status.ConfiguredEndpointProbe.Available {
+		t.Fatal("configured endpoint probe should be available when /status is authoritative")
+	}
+	if modelsCalled {
+		t.Fatal("/v1/models should not be queried after authoritative /status filtered all models")
+	}
+	if !strings.Contains(status.Error, "configured model") {
+		t.Fatalf("status error = %q, want configured model unavailable error", status.Error)
+	}
+}
+
 func TestOpenAIClient_RouteStatus_FallsBackWhenConfiguredModelUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {

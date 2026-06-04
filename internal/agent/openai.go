@@ -823,7 +823,7 @@ func (c *OpenAIClient) RouteStatus(ctx context.Context) RouteStatus {
 		},
 	}
 
-	localModels, localErr := c.fetchAdvertisedModels(ctx, baseURL)
+	localModels, localAuthoritative, localErr := c.fetchAdvertisedModels(ctx, baseURL)
 	if localErr != nil {
 		status.ConfiguredEndpointProbe.Error = localErr.Error()
 	} else {
@@ -834,7 +834,7 @@ func (c *OpenAIClient) RouteStatus(ctx context.Context) RouteStatus {
 	fleetCandidates := c.discoverFleetCandidates(ctx)
 	status.FleetCandidates = fleetCandidates
 
-	selected, reason, err := selectRouteStatus(baseURL, model, localModels, localErr, fleetCandidates)
+	selected, reason, err := selectRouteStatus(baseURL, model, localModels, localAuthoritative, localErr, fleetCandidates)
 	if selected != nil {
 		status.Available = true
 		status.Selected = selected
@@ -960,9 +960,9 @@ func betterRouteCandidate(a, b RouteCandidate) bool {
 	)
 }
 
-func selectRouteStatus(baseURL, configuredModel string, localModels []proxy.AdvertisedModel, localErr error, fleetCandidates []RouteCandidate) (*RouteCandidate, string, error) {
+func selectRouteStatus(baseURL, configuredModel string, localModels []proxy.AdvertisedModel, localAuthoritative bool, localErr error, fleetCandidates []RouteCandidate) (*RouteCandidate, string, error) {
 	if strings.TrimSpace(configuredModel) != "" {
-		if discoveryUnsupported(localErr) || (localErr == nil && len(localModels) == 0) {
+		if discoveryUnsupported(localErr) || (localErr == nil && len(localModels) == 0 && !localAuthoritative) {
 			return &RouteCandidate{
 				BaseURL:            baseURL,
 				Model:              configuredModel,
@@ -1048,7 +1048,7 @@ func (c *OpenAIClient) fetchModelsAt(ctx context.Context, baseURL string) ([]mod
 }
 
 func (c *OpenAIClient) resolveConfiguredTarget(ctx context.Context, baseURL, requestedModel string) (resolvedTarget, bool, error) {
-	models, err := c.fetchAdvertisedModels(ctx, baseURL)
+	models, authoritative, err := c.fetchAdvertisedModels(ctx, baseURL)
 	if err != nil {
 		if discoveryUnsupported(err) {
 			return resolvedTarget{BaseURL: baseURL, Model: requestedModel}, true, nil
@@ -1056,6 +1056,9 @@ func (c *OpenAIClient) resolveConfiguredTarget(ctx context.Context, baseURL, req
 		return resolvedTarget{}, false, err
 	}
 	if len(models) == 0 {
+		if authoritative {
+			return resolvedTarget{}, false, nil
+		}
 		return resolvedTarget{BaseURL: baseURL, Model: requestedModel}, true, nil
 	}
 	if matched := matchConfiguredAdvertisedModel(models, requestedModel); matched != "" {
@@ -1065,7 +1068,7 @@ func (c *OpenAIClient) resolveConfiguredTarget(ctx context.Context, baseURL, req
 }
 
 func (c *OpenAIClient) bestTargetFromEndpoint(ctx context.Context, baseURL string) (resolvedTarget, bool, error) {
-	models, err := c.fetchAdvertisedModels(ctx, baseURL)
+	models, _, err := c.fetchAdvertisedModels(ctx, baseURL)
 	if err != nil {
 		return resolvedTarget{}, false, err
 	}
@@ -1076,18 +1079,18 @@ func (c *OpenAIClient) bestTargetFromEndpoint(ctx context.Context, baseURL strin
 	return resolvedTarget{BaseURL: baseURL, Model: best.ID}, true, nil
 }
 
-func (c *OpenAIClient) fetchAdvertisedModels(ctx context.Context, baseURL string) ([]proxy.AdvertisedModel, error) {
+func (c *OpenAIClient) fetchAdvertisedModels(ctx context.Context, baseURL string) ([]proxy.AdvertisedModel, bool, error) {
 	models, err := c.fetchStatusModels(ctx, baseURL)
-	if err == nil && len(models) > 0 {
-		return models, nil
+	if err == nil {
+		return models, true, nil
 	}
 
 	fallback, fallbackErr := c.fetchModelsAt(ctx, baseURL)
 	if fallbackErr != nil {
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return nil, fallbackErr
+		return nil, false, fallbackErr
 	}
 	ads := make([]proxy.AdvertisedModel, 0, len(fallback))
 	for _, model := range fallback {
@@ -1101,7 +1104,7 @@ func (c *OpenAIClient) fetchAdvertisedModels(ctx context.Context, baseURL string
 		ads = append(ads, advertised)
 	}
 	proxy.SortAdvertisedModels(ads)
-	return ads, nil
+	return ads, false, nil
 }
 
 func (c *OpenAIClient) fetchStatusModels(ctx context.Context, baseURL string) ([]proxy.AdvertisedModel, error) {
@@ -1132,7 +1135,7 @@ func (c *OpenAIClient) fetchStatusModels(ctx context.Context, baseURL string) ([
 	}
 
 	var payload struct {
-		Models []struct {
+		Models *[]struct {
 			ModelName           string `json:"model_name"`
 			ModelType           string `json:"model_type"`
 			EngineType          string `json:"engine_type"`
@@ -1145,9 +1148,12 @@ func (c *OpenAIClient) fetchStatusModels(ctx context.Context, baseURL string) ([
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode status: %w", err)
 	}
+	if payload.Models == nil {
+		return nil, fmt.Errorf("status payload missing models")
+	}
 
-	models := make([]proxy.AdvertisedModel, 0, len(payload.Models))
-	for _, model := range payload.Models {
+	models := make([]proxy.AdvertisedModel, 0, len(*payload.Models))
+	for _, model := range *payload.Models {
 		if model.Ready != nil && !*model.Ready {
 			continue
 		}

@@ -149,6 +149,7 @@ func toResolvedConfig(req *DeployRequest) *knowledge.ResolvedConfig {
 		EngineImage:      req.Image,
 		ModelPath:        req.ModelPath,
 		ModelName:        req.Name,
+		ModelType:        req.ModelType,
 		Slot:             slot,
 		Config:           config,
 		Command:          req.Command,

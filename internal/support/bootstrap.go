@@ -88,14 +88,22 @@ func (s *Service) Bootstrap(ctx context.Context, opts BootstrapOptions) (Bootstr
 
 	state, endpoint, resp, err := s.ensureRegistered(ctx, req)
 	if err != nil {
-		// Prompt errors mean the edge is waiting on user input; keep state
-		// at "unregistered" so offline-first semantics stay accurate. Only
-		// genuine server/network failures get tagged "failed".
+		// Prompt/browser-confirmation errors mean the edge is waiting on user
+		// input; keep state at "unregistered" so offline-first semantics stay
+		// accurate. Only genuine server/network failures get tagged "failed".
 		var prompt *RegistrationPromptError
 		if errors.As(err, &prompt) {
 			if setErr := s.store.SetConfig(ctx, cloud.ConfigRegistrationState, cloud.StateUnregistered); setErr != nil {
 				s.logger.Warn("restore registration_state=unregistered after prompt error",
 					"error", setErr, "prompt_kind", prompt.Kind)
+			}
+			return BootstrapResult{}, err
+		}
+		var browser *BrowserConfirmationError
+		if errors.As(err, &browser) {
+			if setErr := s.store.SetConfig(ctx, cloud.ConfigRegistrationState, cloud.StateUnregistered); setErr != nil {
+				s.logger.Warn("restore registration_state=unregistered after browser confirmation error",
+					"error", setErr, "device_id", browser.DeviceID)
 			}
 			return BootstrapResult{}, err
 		}
@@ -265,10 +273,10 @@ var (
 //   - success (Bootstrap returns nil): worker returns, leaving the edge ready
 //     for outbound Central/aima-service calls.
 //   - context cancellation: worker returns without an error.
-//   - RegistrationPromptError (invalid invite / recovery required): worker
-//     gives up because the condition cannot be fixed without user input. The
-//     CLI / onboarding wizard is expected to re-trigger Bootstrap after the
-//     user provides the missing credential.
+//   - RegistrationPromptError or BrowserConfirmationError: worker gives up
+//     because the condition cannot be fixed without user input. The CLI /
+//     onboarding wizard is expected to re-trigger Bootstrap after the user
+//     resolves the prompt.
 //
 // Other failures (network down, 5xx, timeouts) keep looping.
 func (s *Service) StartRegistrationWorker(ctx context.Context, opts BootstrapOptions) {
@@ -291,6 +299,12 @@ func (s *Service) StartRegistrationWorker(ctx context.Context, opts BootstrapOpt
 		if errors.As(err, &prompt) {
 			s.logger.Warn("device registration blocked on user input — run `aima device register` after providing the credential",
 				"kind", prompt.Kind, "detail", prompt.Detail)
+			return
+		}
+		var browser *BrowserConfirmationError
+		if errors.As(err, &browser) {
+			s.logger.Warn("device registration blocked on browser confirmation — run `aima device register` to complete recovery",
+				"device_id", browser.DeviceID, "user_code", browser.UserCode, "verification_uri", browser.VerificationURI)
 			return
 		}
 		s.logger.Warn("device registration failed; retrying",

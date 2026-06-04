@@ -124,3 +124,30 @@ func TestBuildDiagnosticsBundleRecordsSectionErrors(t *testing.T) {
 		t.Fatalf("hardware error = %v, want context canceled", hardware["error"])
 	}
 }
+
+func TestServiceContextReportsStaleOverlayHint(t *testing.T) {
+	tmp := t.TempDir()
+	overlayDir := tmp + string(os.PathSeparator) + "catalog" + string(os.PathSeparator) + "user" + string(os.PathSeparator) + "models"
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	overlayFile := overlayDir + string(os.PathSeparator) + "demo.patch.yaml"
+	if err := os.WriteFile(overlayFile, []byte("kind: model_asset_patch\nmetadata:\n  name: demo\n"), 0o644); err != nil {
+		t.Fatalf("write overlay: %v", err)
+	}
+	newer := time.Now().Add(5 * time.Minute)
+	if err := os.Chtimes(overlayFile, newer, newer); err != nil {
+		t.Fatalf("chtimes overlay: %v", err)
+	}
+
+	status := serviceContextStatus(&appContext{
+		dataDir:         tmp,
+		catalogLoadedAt: time.Now(),
+	})
+	if status["overlay_newer_than_catalog"] != true {
+		t.Fatalf("overlay_newer_than_catalog = %v, want true; status=%v", status["overlay_newer_than_catalog"], status)
+	}
+	if status["reload_hint"] == "" {
+		t.Fatalf("reload_hint missing: %v", status)
+	}
+}

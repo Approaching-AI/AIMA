@@ -283,7 +283,12 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 			if _, reserved := portKeys[k]; reserved {
 				continue
 			}
-			if !ShouldIncludeConfigFlag(resolved.Command, resolved.ModelPath, k, resolved.Config[k]) {
+			if !ShouldIncludeConfigFlagFor(ConfigFlagContext{
+				Command:   resolved.Command,
+				ModelPath: resolved.ModelPath,
+				Engine:    resolved.Engine,
+				ModelType: resolved.ModelType,
+			}, k, resolved.Config[k]) {
 				continue
 			}
 			flagName := "--" + strings.ReplaceAll(k, "_", "-")
@@ -369,6 +374,13 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.GPUCoresPercent = resolved.Partition.GPUCoresPercent
 		data.CPUCores = resolved.Partition.CPUCores
 		data.RAMMiB = resolved.Partition.RAMMiB
+	}
+
+	// Fall back to the resolver's memory guardrail when no partition pins a RAM
+	// limit, so unified-memory inference pods always carry a memory ceiling and
+	// a runaway container is OOM-killed instead of hard-hanging the host.
+	if data.RAMMiB == 0 && resolved.MemLimitMiB > 0 {
+		data.RAMMiB = resolved.MemLimitMiB
 	}
 
 	if resolved.HealthCheck != nil {

@@ -105,6 +105,11 @@ func classifyRegistrationError(err error) error {
 			ExpiresIn:               payloadInt(statusErr.Payload, "expires_in"),
 			Interval:                payloadInt(statusErr.Payload, "interval"),
 		}
+	case isHardwareIdentityConflict(statusErr):
+		return &RegistrationPromptError{
+			Kind:   RegistrationPromptHardwareIdentity,
+			Detail: statusErr.Detail,
+		}
 	case needsRecoveryPrompt(detail):
 		return &RegistrationPromptError{
 			Kind:   RegistrationPromptRecovery,
@@ -126,6 +131,14 @@ func isBrowserConfirmation(err *httpStatusError) bool {
 	}
 	method := strings.ToLower(strings.TrimSpace(payloadString(err.Payload, "reauth_method")))
 	return err.StatusCode == http.StatusConflict && method == "browser_confirmation"
+}
+
+func isHardwareIdentityConflict(err *httpStatusError) bool {
+	if err == nil || err.Payload == nil {
+		return false
+	}
+	method := strings.ToLower(strings.TrimSpace(payloadString(err.Payload, "reauth_method")))
+	return err.StatusCode == http.StatusConflict && method == "hardware_identity_conflict"
 }
 
 func payloadString(payload map[string]any, key string) string {

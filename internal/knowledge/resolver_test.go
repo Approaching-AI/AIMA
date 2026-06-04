@@ -120,6 +120,35 @@ variants:
 	}
 }
 
+func TestResolveMemGuardrail(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// Unified-memory host: a memory ceiling is computed (total minus 10% / 4 GiB reserve).
+	unified := HardwareInfo{
+		GPUArch:       "TestArch",
+		CPUArch:       "x86_64",
+		UnifiedMemory: true,
+		RAMTotalMiB:   122000,
+	}
+	resolved, err := cat.Resolve(unified, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if want := 122000 - 12200; resolved.MemLimitMiB != want {
+		t.Errorf("MemLimitMiB = %d, want %d", resolved.MemLimitMiB, want)
+	}
+
+	// Discrete-GPU host (or unknown RAM): no guardrail — prior unbounded behavior.
+	discrete := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", RAMTotalMiB: 122000}
+	resolved2, err := cat.Resolve(discrete, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved2.MemLimitMiB != 0 {
+		t.Errorf("MemLimitMiB = %d, want 0 for discrete-GPU host", resolved2.MemLimitMiB)
+	}
+}
+
 func TestResolveWithUserOverrides(t *testing.T) {
 	cat := mustLoadCatalog(t)
 
@@ -159,7 +188,7 @@ func TestResolveUsesVariantLocalPath(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "local-variant-model"},
@@ -190,7 +219,7 @@ func TestResolveUsesStorageLocalPath(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "local-storage-model"},
@@ -220,7 +249,7 @@ func TestResolveModelPathOverrideStillWins(t *testing.T) {
 		EngineAssets: []EngineAsset{{
 			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
 			Hardware: EngineHardware{GPUArch: "*"},
-			Startup: EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
 		}},
 		ModelAssets: []ModelAsset{{
 			Metadata: ModelMetadata{Name: "override-model"},

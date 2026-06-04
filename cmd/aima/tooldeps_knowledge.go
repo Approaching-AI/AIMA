@@ -591,10 +591,11 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 			}
 		}
 		status := map[string]any{
-			"factory_assets": catalogSize(factoryCat),
-			"overlay_assets": catalogSize(overlayCat),
-			"shadowed":       shadowed,
-			"parse_warnings": parseWarnings,
+			"factory_assets":  catalogSize(factoryCat),
+			"overlay_assets":  catalogSize(overlayCat),
+			"shadowed":        shadowed,
+			"parse_warnings":  parseWarnings,
+			"service_context": serviceContextStatus(ac),
 		}
 		return json.Marshal(status)
 	}

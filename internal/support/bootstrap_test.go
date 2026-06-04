@@ -190,6 +190,33 @@ func TestBootstrap_ConflictSurfacesPromptError(t *testing.T) {
 	}
 }
 
+func TestBootstrap_BrowserConfirmationKeepsUnregisteredState(t *testing.T) {
+	t.Parallel()
+	fx := newBootstrapFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{
+			"detail":"browser confirmation required to recover existing device credentials",
+			"reauth_method":"browser_confirmation",
+			"device_id":"dev-bound",
+			"user_code":"BLUE-MOON-1234",
+			"device_code":"device-flow-code",
+			"verification_uri":"https://aimaserver.com/device",
+			"verification_uri_complete":"https://aimaserver.com/device?user_code=BLUE-MOON-1234",
+			"expires_in":900,
+			"interval":5
+		}`))
+	})
+
+	_, err := fx.svc.Bootstrap(context.Background(), BootstrapOptions{InviteCode: "X"})
+	var browser *BrowserConfirmationError
+	if !errors.As(err, &browser) {
+		t.Fatalf("expected BrowserConfirmationError, got %T: %v", err, err)
+	}
+	if got := fx.store.mustGet(cloud.ConfigRegistrationState); got != cloud.StateUnregistered {
+		t.Errorf("registration_state = %q, want unregistered", got)
+	}
+}
+
 func TestBootstrap_DefaultInviteCodeRegistersWhenNoInviteConfigured(t *testing.T) {
 	// Cannot run in parallel: we rely on no env var leakage.
 	fx := newBootstrapFixture(t, successRegisterHandler(t, "dev-default-invite"))
@@ -325,6 +352,51 @@ func TestStartRegistrationWorker_StopsOnPromptError(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Errorf("expected exactly 1 attempt on prompt error, got %d", attempts)
+	}
+}
+
+func TestStartRegistrationWorker_StopsOnBrowserConfirmation(t *testing.T) {
+	t.Parallel()
+	var attempts int
+	fx := newBootstrapFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{
+			"detail":"browser confirmation required to recover existing device credentials",
+			"reauth_method":"browser_confirmation",
+			"device_id":"dev-bound",
+			"user_code":"BLUE-MOON-1234",
+			"device_code":"device-flow-code",
+			"verification_uri":"https://aimaserver.com/device",
+			"verification_uri_complete":"https://aimaserver.com/device?user_code=BLUE-MOON-1234",
+			"expires_in":900,
+			"interval":5
+		}`))
+	})
+
+	origMin := minRegistrationBackoffForTest()
+	setMinRegistrationBackoffForTest(10 * time.Millisecond)
+	defer setMinRegistrationBackoffForTest(origMin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		fx.svc.StartRegistrationWorker(ctx, BootstrapOptions{InviteCode: "RECOVER"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("worker should exit immediately on browser confirmation, not keep retrying")
+	}
+	if attempts != 1 {
+		t.Errorf("expected exactly 1 attempt on browser confirmation, got %d", attempts)
+	}
+	if got := fx.store.mustGet(cloud.ConfigRegistrationState); got != cloud.StateUnregistered {
+		t.Errorf("registration_state = %q, want unregistered", got)
 	}
 }
 

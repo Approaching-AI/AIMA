@@ -50,6 +50,7 @@ type Hardware struct {
 type StackStatusInfo struct {
 	Docker                 string `json:"docker"`
 	K3S                    string `json:"k3s"`
+	AIMAServe              string `json:"aima_serve,omitempty"`
 	NeedsInit              bool   `json:"needs_init"`
 	InitTierRecommendation string `json:"init_tier_recommendation"`
 	CanAutoInit            bool   `json:"can_auto_init"`

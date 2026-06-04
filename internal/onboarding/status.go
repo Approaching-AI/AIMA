@@ -141,6 +141,7 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 	result := StackStatusInfo{
 		Docker:                 "not_installed",
 		K3S:                    "not_installed",
+		AIMAServe:              "not_installed",
 		NeedsInit:              false,
 		InitTierRecommendation: "docker",
 	}
@@ -167,9 +168,17 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 		return result, fmt.Errorf("parse stack status: %w", err)
 	}
 
+	sawAIMAServe := false
 	for _, comp := range initResult.Components {
 		name := strings.ToLower(comp.Name)
 		switch {
+		case name == "aima-serve":
+			sawAIMAServe = true
+			if comp.Ready {
+				result.AIMAServe = "ready"
+			} else if comp.Skipped {
+				result.AIMAServe = "skipped"
+			}
 		case strings.Contains(name, "docker"):
 			if comp.Ready {
 				result.Docker = "ready"
@@ -187,14 +196,21 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 
 	// Native-only hosts (macOS/Windows/local llama.cpp paths) intentionally skip
 	// Docker/K3S. Treat that as a valid first-run state, not a broken stack.
-	if result.Docker == "skipped" && result.K3S == "skipped" {
+	if result.Docker == "skipped" && result.K3S == "skipped" && (!sawAIMAServe || result.AIMAServe == "skipped") {
 		result.NeedsInit = false
 		result.InitTierRecommendation = "native"
 		return result, nil
 	}
 
-	// Determine needs_init: true if neither docker nor k3s is ready
+	// Determine needs_init: true if neither docker nor k3s is ready, or if the
+	// Linux aima-serve daemon catalog entry exists but is not managed by
+	// systemd. Without that second condition, a device with Docker already ready
+	// can skip init and leave the UI/API as a foreground process that disappears
+	// after reboot.
 	if result.Docker != "ready" && result.K3S != "ready" {
+		result.NeedsInit = true
+	}
+	if sawAIMAServe && result.AIMAServe != "ready" && result.AIMAServe != "skipped" {
 		result.NeedsInit = true
 	}
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/jguan/aima/internal/agent"
 	"github.com/jguan/aima/internal/k3s"
 	"github.com/jguan/aima/internal/knowledge"
@@ -15,17 +17,18 @@ import (
 // It collects the local variables that buildToolDeps() closures previously
 // captured, enabling those closures to be split into separate files.
 type appContext struct {
-	cat      *knowledge.Catalog
-	db       *state.DB
-	kStore   *knowledge.Store
-	rt       runtime.Runtime // default runtime (K3S > Docker > Native)
-	nativeRt runtime.Runtime
-	dockerRt runtime.Runtime
-	k3sRt    runtime.Runtime
-	proxy    *proxy.Server
-	k3s      *k3s.Client
-	dataDir  string
-	digests  map[string]string // factory catalog digests
-	support  *support.Service
-	eventBus *agent.EventBus // shared EventBus for Explorer events
+	cat             *knowledge.Catalog
+	db              *state.DB
+	kStore          *knowledge.Store
+	rt              runtime.Runtime // default runtime (K3S > Docker > Native)
+	nativeRt        runtime.Runtime
+	dockerRt        runtime.Runtime
+	k3sRt           runtime.Runtime
+	proxy           *proxy.Server
+	k3s             *k3s.Client
+	dataDir         string
+	catalogLoadedAt time.Time
+	digests         map[string]string // factory catalog digests
+	support         *support.Service
+	eventBus        *agent.EventBus // shared EventBus for Explorer events
 }

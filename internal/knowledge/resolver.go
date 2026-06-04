@@ -51,6 +51,7 @@ type ResolvedConfig struct {
 	EngineImage           string
 	ModelPath             string
 	ModelName             string
+	ModelType             string
 	ModelFormat           string
 	Slot                  string
 	Config                map[string]any
@@ -88,6 +89,7 @@ type ResolvedConfig struct {
 	// Resource estimates (zero = unknown)
 	EstimatedVRAMMiB int               // expected VRAM usage from model variant
 	ResourceEstimate *ResourceEstimate // full cost(path, R) estimate
+	MemLimitMiB      int               // container memory ceiling (0 = none) — safety guardrail on unified-memory hosts
 
 	// Amplifier info (from engine selection)
 	AmplifierScore float64 // performance multiplier of selected engine
@@ -221,6 +223,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Engine:             engineType,
 		EngineAssetName:    engineAssetName,
 		ModelName:          model.Metadata.Name,
+		ModelType:          model.Metadata.Type,
 		ModelFormat:        variant.Format,
 		Slot:               slot.Name,
 		Config:             config,
@@ -292,6 +295,25 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 			resolved.EstimatedVRAMMiB = variant.Hardware.VRAMMinMiB
 		}
 		resolved.ResourceEstimate = estimateResources(engine, variant, hw)
+	}
+
+	// Container memory guardrail. On unified-memory hosts (GB10, Apple M-series,
+	// AMD APU) the GPU shares system RAM, so a runaway container — e.g. a vLLM
+	// torch.compile / JIT storm or an OOM during model load — can exhaust all
+	// memory and hard-hang the whole machine (no SSH, requires a power cycle).
+	// Cap the container below total RAM so the cgroup OOM-killer reaps the pod
+	// (which then restarts) instead of the kernel thrashing the host. Reserve
+	// 10% (min 4 GiB) for the OS; the remaining ~90% comfortably fits typical
+	// gpu_memory_utilization (0.7–0.9) reservations. Discrete-GPU hosts keep the
+	// prior unbounded behavior since their GPU memory is separate from system RAM.
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		reserve := hw.RAMTotalMiB / 10
+		if reserve < 4096 {
+			reserve = 4096
+		}
+		if limit := hw.RAMTotalMiB - reserve; limit > 0 {
+			resolved.MemLimitMiB = limit
+		}
 	}
 
 	// Prefer an explicit user override, otherwise honor catalog local_path
@@ -387,11 +409,6 @@ type engineCandidate struct {
 // Returns nil map if no golden config exists (graceful degradation).
 type GoldenConfigFunc func(hardware, engine, model string) map[string]any
 
-// engineUnblockedByLocalImage decides whether a blocked engine should be
-// reconsidered because its image is already present in the local runtime. Used
-// by findEngine to recover gracefully when an upstream registry removes a tag
-// that an edge device has cached. When the checker returns true, we WARN to
-// keep the decision visible in serve.log and fall through to normal matching.
 // engineImageRef builds the "name:tag" reference for an engine's container image.
 func engineImageRef(ea *EngineAsset) string {
 	if ea.Image.Name == "" {
@@ -414,6 +431,11 @@ func engineImageCachedLocally(ea *EngineAsset, ropts *resolveOpts) bool {
 	return ref != "" && ropts.LocalImageChecker(ref)
 }
 
+// engineUnblockedByLocalImage decides whether a blocked engine should be
+// reconsidered because its image is already present in the local runtime. Used
+// by findEngine to recover gracefully when an upstream registry removes a tag
+// that an edge device has cached. When the checker returns true, we WARN to
+// keep the decision visible in serve.log and fall through to normal matching.
 func engineUnblockedByLocalImage(ea *EngineAsset, ropts *resolveOpts) bool {
 	if !engineImageCachedLocally(ea, ropts) {
 		return false

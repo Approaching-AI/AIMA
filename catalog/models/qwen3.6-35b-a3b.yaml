@@ -29,7 +29,11 @@ variants:
       gpu_arch: Blackwell
       vram_min_mib: 40960
       unified_memory: true
-    engine: vllm
+    # qwen3.6 (qwen3_5_moe arch) needs the qwen3_5-capable vLLM build shipped by
+    # the vllm-nightly engine. The stock `vllm` engine (nvcr.io/nvidia/vllm:26.01,
+    # vLLM 0.13) cannot load Qwen3_5MoeForConditionalGeneration and fails the
+    # deploy compatibility check, so this text-only path runs on vllm-nightly.
+    engine: vllm-nightly
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.80

@@ -43,6 +43,83 @@ func TestResolveBasic(t *testing.T) {
 	}
 }
 
+func TestInferEngineTypePrefersLocalImage(t *testing.T) {
+	engYAML := func(name, etype, img, mult string) []byte {
+		return []byte(`kind: engine_asset
+metadata:
+  name: ` + name + `
+  type: ` + etype + `
+image:
+  name: ` + img + `
+  tag: "v1"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 0
+startup:
+  command: ["serve"]
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  performance_multiplier: ` + mult + `
+time_constraints:
+  cold_start_s: [10, 30]
+`)
+	}
+	fsys := fstest.MapFS{
+		"engines/fast.yaml": &fstest.MapFile{Data: engYAML("eng-fast-1.0", "eng-fast", "fast/img", "2.0")},
+		"engines/slow.yaml": &fstest.MapFile{Data: engYAML("eng-slow-1.0", "eng-slow", "slow/img", "1.0")},
+		"models/img-model.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: img-test-model
+  type: llm
+storage:
+  formats: [safetensors]
+  sources:
+    - type: huggingface
+      repo: test/img-test-model
+variants:
+  - name: img-test-model-fast
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+    engine: eng-fast
+    format: safetensors
+  - name: img-test-model-slow
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+    engine: eng-slow
+    format: safetensors
+`)},
+	}
+	cat, err := LoadCatalog(fsys)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	hw := HardwareInfo{GPUArch: "Blackwell", CPUArch: "arm64"}
+
+	// No image checker: the higher-multiplier engine wins (default behavior).
+	eng, err := cat.InferEngineType("img-test-model", hw)
+	if err != nil {
+		t.Fatalf("InferEngineType: %v", err)
+	}
+	if eng != "eng-fast" {
+		t.Errorf("without checker: engine = %q, want eng-fast (highest multiplier)", eng)
+	}
+
+	// Only the slower engine's image is cached locally — it must be preferred
+	// over the higher-multiplier engine whose image cannot be obtained.
+	eng, err = cat.InferEngineType("img-test-model", hw,
+		WithLocalImageChecker(func(ref string) bool { return ref == "slow/img:v1" }))
+	if err != nil {
+		t.Fatalf("InferEngineType: %v", err)
+	}
+	if eng != "eng-slow" {
+		t.Errorf("with local image: engine = %q, want eng-slow (cached beats higher multiplier)", eng)
+	}
+}
+
 func TestResolveWithUserOverrides(t *testing.T) {
 	cat := mustLoadCatalog(t)
 

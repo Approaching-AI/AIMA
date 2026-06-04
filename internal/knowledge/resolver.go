@@ -380,6 +380,7 @@ type engineCandidate struct {
 	coldStartS int  // engine cold start upper bound (0 = unknown)
 	offload    bool // selected via effective_R (offload path)
 	exactArch  bool // true if gpu_arch matched exactly (not wildcard)
+	imageLocal bool // true if the engine container image is cached in the local runtime
 }
 
 // GoldenConfigFunc returns the golden (L2c) config overrides for a hardware/engine/model triple.
@@ -391,23 +392,35 @@ type GoldenConfigFunc func(hardware, engine, model string) map[string]any
 // by findEngine to recover gracefully when an upstream registry removes a tag
 // that an edge device has cached. When the checker returns true, we WARN to
 // keep the decision visible in serve.log and fall through to normal matching.
-func engineUnblockedByLocalImage(ea *EngineAsset, ropts *resolveOpts) bool {
-	if ropts == nil || ropts.LocalImageChecker == nil {
-		return false
-	}
+// engineImageRef builds the "name:tag" reference for an engine's container image.
+func engineImageRef(ea *EngineAsset) string {
 	if ea.Image.Name == "" {
-		return false
+		return ""
 	}
 	ref := ea.Image.Name
 	if ea.Image.Tag != "" {
 		ref += ":" + ea.Image.Tag
 	}
-	if !ropts.LocalImageChecker(ref) {
+	return ref
+}
+
+// engineImageCachedLocally reports whether the engine's container image is
+// present in the local runtime cache (per the caller-supplied checker).
+func engineImageCachedLocally(ea *EngineAsset, ropts *resolveOpts) bool {
+	if ropts == nil || ropts.LocalImageChecker == nil {
+		return false
+	}
+	ref := engineImageRef(ea)
+	return ref != "" && ropts.LocalImageChecker(ref)
+}
+
+func engineUnblockedByLocalImage(ea *EngineAsset, ropts *resolveOpts) bool {
+	if !engineImageCachedLocally(ea, ropts) {
 		return false
 	}
 	slog.Warn("engine marked blocked but image cached locally — using it anyway",
 		"engine", ea.Metadata.Name,
-		"image", ref,
+		"image", engineImageRef(ea),
 		"status_reason", ea.Metadata.StatusReason)
 	return true
 }
@@ -500,6 +513,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			}
 
 			exact := v.Hardware.GPUArch == hw.GPUArch
+			imgLocal := engineImageCachedLocally(engine, &ropts)
 
 			if fitsRawVRAM {
 				mult := engine.Amplifier.PerformanceMultiplier
@@ -511,6 +525,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 					multiplier: mult,
 					coldStartS: coldStartMax,
 					exactArch:  exact,
+					imageLocal: imgLocal,
 				})
 				continue
 			}
@@ -529,6 +544,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 						coldStartS: coldStartMax,
 						offload:    true,
 						exactArch:  exact,
+						imageLocal: imgLocal,
 					})
 				}
 			}
@@ -555,21 +571,34 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			// If all filtered out, keep all candidates (graceful degradation)
 		}
 
-		// Rank: exact arch > wildcard, then highest multiplier, then non-offload > offload,
-		// then lower cold_start as final tiebreaker.
+		// Rank: exact arch > wildcard, then image-cached-locally > needs-pull,
+		// then highest multiplier, then non-offload > offload, then lower
+		// cold_start as final tiebreaker. Preferring a locally-cached image keeps
+		// auto-selection from picking a higher-scored variant whose image cannot
+		// be obtained (offline, or a local-only/blocked image that isn't present),
+		// which would otherwise fail at pull time. When no candidate is cached the
+		// order is unchanged, so online pull-and-deploy still works.
 		best := candidates[0]
 		for _, c := range candidates[1:] {
-			if c.exactArch && !best.exactArch {
-				best = c
-			} else if c.exactArch == best.exactArch {
-				if c.multiplier > best.multiplier {
+			if c.exactArch != best.exactArch {
+				if c.exactArch {
 					best = c
-				} else if c.multiplier == best.multiplier {
-					if !c.offload && best.offload {
-						best = c
-					} else if c.offload == best.offload && c.coldStartS > 0 && best.coldStartS > 0 && c.coldStartS < best.coldStartS {
-						best = c
-					}
+				}
+				continue
+			}
+			if c.imageLocal != best.imageLocal {
+				if c.imageLocal {
+					best = c
+				}
+				continue
+			}
+			if c.multiplier > best.multiplier {
+				best = c
+			} else if c.multiplier == best.multiplier {
+				if !c.offload && best.offload {
+					best = c
+				} else if c.offload == best.offload && c.coldStartS > 0 && best.coldStartS > 0 && c.coldStartS < best.coldStartS {
+					best = c
 				}
 			}
 		}

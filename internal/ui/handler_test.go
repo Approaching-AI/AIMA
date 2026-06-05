@@ -533,6 +533,23 @@ func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t 
 		`if (!kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8'`,
 		`deploy_started_background`,
 		`deploy_restore_recommended: 'Recommended parameters'`,
+		`deploy_compat_title: 'Image architecture preflight'`,
+		`deploy_compat_title: '\u955C\u50CF\u67B6\u6784\u9884\u68C0'`,
+		`x-text="t('deploy_compat_title')"`,
+		`handleDeployEngineChange($event)`,
+		`handleDeployEngineChange(event) {`,
+		`deployDryRunSeq: 0`,
+		`const seq = ++this.deployDryRunSeq;`,
+		`if (seq !== this.deployDryRunSeq) return;`,
+		`this.deployDetailPlan = { ...this.deployDetailPlan, compatibility: null };`,
+		`deployEngineRequestValue()`,
+		`deploySelectedEngineMeta()`,
+		`deployPlanMatchesSelectedEngine()`,
+		`deployCompatibilityRows()`,
+		`typeof c.image_available_in_docker === 'boolean'`,
+		`typeof c.image_available_in_containerd === 'boolean'`,
+		`.deploy-compat-grid,`,
+		`model.detected_arch`,
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing deploy detail token %q", token)
@@ -552,6 +569,22 @@ func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t 
 	runIdx := strings.Index(fnBody, `const data = await this.callTool('deploy.run', request);`)
 	if closeIdx == -1 || runIdx == -1 || closeIdx > runIdx {
 		t.Fatalf("deploy detail should close before awaiting deploy.run, body=%s", fnBody)
+	}
+
+	start = strings.Index(body, "async refreshDeployDryRun(forceRecommended = false) {")
+	if start == -1 {
+		t.Fatal("refreshDeployDryRun not found")
+	}
+	end = strings.Index(body[start:], "\n    seedDeployDefaultParams()")
+	if end == -1 {
+		t.Fatal("could not isolate refreshDeployDryRun body")
+	}
+	fnBody = body[start : start+end]
+	if strings.Contains(fnBody, "if (!modelName || this.deployDetailLoading) return;") {
+		t.Fatalf("refreshDeployDryRun still drops newer preflights while loading, body=%s", fnBody)
+	}
+	if !strings.Contains(fnBody, "const requestEngine = forceRecommended ? '' : this.deployEngineRequestValue();") {
+		t.Fatalf("refreshDeployDryRun should map selected engine before dry-run, body=%s", fnBody)
 	}
 
 	if strings.Contains(body, "aima_deploy_defaults:") || strings.Contains(body, "localStorage.setItem(this.deployDefaultsKey()") {

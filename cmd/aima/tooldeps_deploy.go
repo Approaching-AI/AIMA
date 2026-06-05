@@ -693,6 +693,7 @@ type deploymentOverview struct {
 	Name                string `json:"name"`
 	Model               string `json:"model"`
 	Engine              string `json:"engine,omitempty"`
+	Image               string `json:"image,omitempty"`
 	Slot                string `json:"slot,omitempty"`
 	Phase               string `json:"phase"`
 	Status              string `json:"status"`
@@ -704,6 +705,8 @@ type deploymentOverview struct {
 	Message             string `json:"message,omitempty"`
 	Restarts            int    `json:"restarts,omitempty"`
 	ExitCode            *int   `json:"exit_code,omitempty"`
+	GPUMemoryMiB        int    `json:"gpu_memory_mib,omitempty"`
+	GPUMemorySource     string `json:"gpu_memory_source,omitempty"`
 	StartupPhase        string `json:"startup_phase,omitempty"`
 	StartupProgress     int    `json:"startup_progress,omitempty"`
 	StartupMessage      string `json:"startup_message,omitempty"`
@@ -724,6 +727,7 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 		Name:                status.Name,
 		Model:               status.Model,
 		Engine:              status.Engine,
+		Image:               status.Image,
 		Slot:                status.Slot,
 		Phase:               status.Phase,
 		Status:              status.Phase,
@@ -735,6 +739,8 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 		Message:             status.Message,
 		Restarts:            status.Restarts,
 		ExitCode:            status.ExitCode,
+		GPUMemoryMiB:        status.GPUMemoryMiB,
+		GPUMemorySource:     status.GPUMemorySource,
 		StartupPhase:        status.StartupPhase,
 		StartupProgress:     status.StartupProgress,
 		StartupMessage:      status.StartupMessage,

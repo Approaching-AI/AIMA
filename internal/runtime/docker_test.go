@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -378,6 +379,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "running", Running: true, StartedAt: "2026-03-03T00:00:00Z"},
 			},
 			wantPhase: "running",
@@ -392,6 +394,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "exited", ExitCode: 1},
 			},
 			wantPhase: "failed",
@@ -410,6 +413,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "exited", ExitCode: 0},
 			},
 			wantPhase: "stopped",
@@ -424,6 +428,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "restarting", ExitCode: 2, Restarting: true},
 			},
 			wantPhase: "failed",
@@ -442,6 +447,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "created"},
 			},
 			wantPhase: "starting",
@@ -466,6 +472,119 @@ func TestDockerInspectToStatus(t *testing.T) {
 				t.Errorf("runtime = %q, want %q", ds.Runtime, "docker")
 			}
 		})
+	}
+}
+
+func TestDockerInspectToStatusIncludesImageAndLaunchConfig(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"vllm", "serve"}
+	di.Config.Cmd = []string{
+		"--gpu-memory-utilization", "0.6",
+		"--max-model-len=131072",
+		"--served-model-name", "GLM-4.6V-Flash-FP4",
+		"--trust-remote-code",
+		"--no-enable-prefix-caching",
+	}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if ds.Image != "nvcr.io/nvidia/vllm:26.01-py3" {
+		t.Fatalf("Image = %q, want nvcr.io/nvidia/vllm:26.01-py3", ds.Image)
+	}
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.6 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.6", ds.Config["gpu_memory_utilization"])
+	}
+	if got, ok := ds.Config["max_model_len"].(int); !ok || got != 131072 {
+		t.Fatalf("max_model_len = %#v, want 131072", ds.Config["max_model_len"])
+	}
+	if got := ds.Config["served_model_name"]; got != "GLM-4.6V-Flash-FP4" {
+		t.Fatalf("served_model_name = %#v, want GLM-4.6V-Flash-FP4", got)
+	}
+	if got, ok := ds.Config["trust_remote_code"].(bool); !ok || !got {
+		t.Fatalf("trust_remote_code = %#v, want true", ds.Config["trust_remote_code"])
+	}
+	if got, ok := ds.Config["enable_prefix_caching"].(bool); !ok || got {
+		t.Fatalf("enable_prefix_caching = %#v, want false", ds.Config["enable_prefix_caching"])
+	}
+}
+
+func TestDockerInspectToStatusParsesShellLaunchConfig(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm-shell"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"/bin/bash"}
+	di.Config.Cmd = []string{
+		"-c",
+		"python - <<'PY'\nprint('init')\nPY\n && exec vllm serve /models --gpu-memory-utilization 0.6 --served-model-name 'GLM-4.6V-Flash-FP4'",
+	}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.6 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.6", ds.Config["gpu_memory_utilization"])
+	}
+	if got := ds.Config["served_model_name"]; got != "GLM-4.6V-Flash-FP4" {
+		t.Fatalf("served_model_name = %#v, want GLM-4.6V-Flash-FP4", got)
+	}
+}
+
+func TestDockerInspectToStatusParsesCombinedShellCommandFlag(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm-shell-lc"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"/bin/bash"}
+	di.Config.Cmd = []string{"-lc", "exec vllm serve /models --gpu-memory-utilization 0.7 --max-model-len 65536"}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.7 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.7", ds.Config["gpu_memory_utilization"])
+	}
+	if got, ok := ds.Config["max_model_len"].(int); !ok || got != 65536 {
+		t.Fatalf("max_model_len = %#v, want 65536", ds.Config["max_model_len"])
+	}
+}
+
+func TestParseNvidiaMemoryMiB(t *testing.T) {
+	tests := map[string]int{
+		"1700":     1700,
+		"1700 MiB": 1700,
+		" 42 ":     42,
+		"N/A":      0,
+		"":         0,
+	}
+	for input, want := range tests {
+		if got := parseNvidiaMemoryMiB(input); got != want {
+			t.Fatalf("parseNvidiaMemoryMiB(%q) = %d, want %d", input, got, want)
+		}
+	}
+}
+
+func TestDockerContainerMatchTokensPrefersContainerID(t *testing.T) {
+	tokens := dockerContainerMatchTokens("qwen3-vllm", "abcdef1234567890")
+	if strings.Join(tokens, ",") != "abcdef1234567890,abcdef123456" {
+		t.Fatalf("tokens = %#v, want full and short container IDs only", tokens)
+	}
+}
+
+func TestParentPIDFromProcStat(t *testing.T) {
+	stat := "12345 (python worker) S 6789 1 1 0 -1 4194560"
+	if got := parentPIDFromProcStat(stat); got != "6789" {
+		t.Fatalf("parentPIDFromProcStat = %q, want 6789", got)
+	}
+}
+
+func TestIsDescendantPIDIncludesSelf(t *testing.T) {
+	if !isDescendantPID(context.Background(), "12345", "12345") {
+		t.Fatal("expected a container main PID to match itself")
 	}
 }
 

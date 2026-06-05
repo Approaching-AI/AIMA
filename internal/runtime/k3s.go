@@ -246,6 +246,7 @@ func podToStatus(pod *k3s.PodStatus) *DeploymentStatus {
 
 	ds := &DeploymentStatus{
 		Name:     pod.Name,
+		Image:    pod.ContainerImage,
 		Phase:    phase,
 		Ready:    ready,
 		Address:  addr,

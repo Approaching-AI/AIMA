@@ -9612,17 +9612,15 @@ function aimaApp() {
       if (!data || typeof data !== 'object') return;
       this.supportState = this.mergeSupportState(data);
       this.supportConnected = data.enabled === true && data.registered === true;
-      // On first poll, seed _supportSeen with current state so stale data
-      // doesn't appear as new chat messages.
+      // On first poll, initialize non-message de-dupe state without advancing
+      // msgSeq. Existing support.messages are still user-visible history.
       if (!this._supportSeen.initialized) {
         this._supportSeen.initialized = true;
         if (data.device_id) this._supportSeen.connection = data.device_id;
         if (this.supportState.activeTask) this._supportSeen.activeTask = this.supportTaskSignature(this.supportState.activeTask);
         if (this.supportState.lastTask) this._supportSeen.lastTask = this.supportTaskSignature(this.supportState.lastTask);
-        const msgs = this.supportState.messages || [];
-        if (msgs.length > 0) this._supportSeen.msgSeq = msgs[msgs.length - 1].seq || 0;
-        return;
       }
+      this.syncSupportMessages();
       this.syncSupportPageUpdates();
     },
 
@@ -9766,76 +9764,47 @@ function aimaApp() {
 
     syncSupportMessages() {
       const support = this.supportState || {};
-      let changed = false;
 
-      // Process in-memory message log (seq-based, no messages lost)
+      // Keep support progress out of the main Agent chat. The support page
+      // renders support.messages via syncSupportPageUpdates().
       const msgs = support.messages || [];
       const seenSeq = this._supportSeen.msgSeq || 0;
       for (const m of msgs) {
         if (!m.seq || m.seq <= seenSeq) continue;
         this._supportSeen.msgSeq = m.seq;
-        const msg = (m.message || '').trim();
-        if (!msg) continue;
-
-        // Format based on type
-        let prefix = '[support] ';
-        if (m.type === 'command_intent') prefix = '[running] ';
-        else if (m.type === 'notification') prefix = '';
-        else if (m.type === 'task_completion') prefix = '[task] ';
-        else if (m.type === 'info_request') prefix = '[question] ';
-        else if (m.type === 'choice') prefix = '[choice] ';
-        else if (m.type === 'approval') prefix = '[approval] ';
-
-        this.messages.push({ role: 'ai', text: prefix + msg });
-        changed = true;
       }
 
-      // Track active task changes (for task status updates not covered by message log)
+      // Track de-dupe state only; do not mirror support state into chat.
       const activeSig = this.supportTaskSignature(support.activeTask);
       if (activeSig && activeSig !== this._supportSeen.activeTask) {
-        const task = support.activeTask;
-        let text = 'Support task active: ' + (task.task_id || 'pending');
-        if (task.status) text += ' (' + task.status + ')';
-        if (task.target) text += ' - ' + task.target;
-        this.messages.push({ role: 'ai', text: text });
         this._supportSeen.activeTask = activeSig;
-        changed = true;
       } else if (!activeSig) {
         this._supportSeen.activeTask = '';
       }
 
-      // Track task completion
       const lastTaskSig = this.supportTaskSignature(support.lastTask);
       if (lastTaskSig && lastTaskSig !== this._supportSeen.lastTask) {
-        const task = support.lastTask;
-        let text = 'Support task ' + (task.task_id || 'pending') + ' finished';
-        if (task.status) text += ': ' + task.status;
-        this.messages.push({ role: 'ai', text: text });
         this._supportSeen.lastTask = lastTaskSig;
-        changed = true;
       }
 
-      // Track initial connection (only if no messages from log yet)
       const connectionSig = support.enabled && support.registered && support.deviceId ? support.deviceId : '';
-      if (connectionSig && connectionSig !== this._supportSeen.connection && !activeSig && !lastTaskSig && msgs.length === 0) {
-        this.messages.push({ role: 'ai', text: 'Support connected as device ' + support.deviceId });
+      if (connectionSig && connectionSig !== this._supportSeen.connection) {
         this._supportSeen.connection = connectionSig;
-        changed = true;
-      }
-
-      if (changed) {
-        this.scrollChat();
+      } else if (!connectionSig) {
+        this._supportSeen.connection = '';
       }
     },
 
     primeSupportPageSeen() {
-      if (this._supportPageSeen.initialized) return;
+      if (this._supportPageSeen.initialized) {
+        this.syncSupportPageUpdates();
+        return;
+      }
       this._supportPageSeen.initialized = true;
       if (this.supportState.deviceId) this._supportPageSeen.connection = this.supportState.deviceId;
       if (this.supportState.activeTask) this._supportPageSeen.activeTask = this.supportTaskSignature(this.supportState.activeTask);
       if (this.supportState.lastTask) this._supportPageSeen.lastTask = this.supportTaskSignature(this.supportState.lastTask);
-      const msgs = this.supportState.messages || [];
-      if (msgs.length > 0) this._supportPageSeen.msgSeq = msgs[msgs.length - 1].seq || 0;
+      this.syncSupportPageUpdates();
     },
 
     appendSupportPageMessage(text, type) {

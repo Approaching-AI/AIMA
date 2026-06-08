@@ -7,12 +7,84 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
-// detectGGUFModels detects all GGUF models in a directory.
-// GGUF models don't have config.json, so we detect one model per .gguf file.
-// Each GGUF file gets its own Path (file path, not directory) for uniqueness.
+// ggufShardRe matches llama.cpp split-GGUF filenames, e.g.
+// "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00002.gguf" → (base, index, total).
+var ggufShardRe = regexp.MustCompile(`(?i)^(.+)-(\d+)-of-(\d+)\.gguf$`)
+
+// ggufGroup is one logical GGUF model: either a single file, or a set of split
+// shards that llama.cpp loads by opening the first shard.
+type ggufGroup struct {
+	name    string   // model name: filename without .gguf and shard suffix
+	primary string   // path to load (first shard, or the only file)
+	parts   []string // all files belonging to this model
+}
+
+// isMMProjFile reports whether a GGUF base filename is a multimodal projector
+// (mmproj). A projector is an attachment to a vision model, not a standalone
+// model, so it must not be surfaced as a deployable model. The scanner already
+// skips "mmproj" subdirectories (scanner.yaml); this covers the file-name form.
+func isMMProjFile(baseNoExt string) bool {
+	return strings.Contains(strings.ToLower(baseNoExt), "mmproj")
+}
+
+// groupGGUFModels collapses split shards into one logical model and drops mmproj
+// projectors. A non-split .gguf stays a single-file model. Output is
+// deterministic for sorted input: grouped shards (first-seen order) then
+// singles (input order).
+func groupGGUFModels(files []string) []ggufGroup {
+	type acc struct {
+		group  *ggufGroup
+		minIdx int
+	}
+	groups := map[string]*acc{}
+	var order []string
+	var singles []ggufGroup
+
+	for _, f := range files {
+		base := filepath.Base(f)
+		nameNoExt := base[:len(base)-len(filepath.Ext(base))]
+		if isMMProjFile(nameNoExt) {
+			continue // projector, not a standalone model
+		}
+		if m := ggufShardRe.FindStringSubmatch(base); m != nil {
+			groupName := m[1]
+			idx, _ := strconv.Atoi(m[2])
+			key := filepath.Dir(f) + string(filepath.Separator) + groupName
+			a, ok := groups[key]
+			if !ok {
+				a = &acc{group: &ggufGroup{name: groupName, primary: f}, minIdx: idx}
+				groups[key] = a
+				order = append(order, key)
+			}
+			a.group.parts = append(a.group.parts, f)
+			if idx < a.minIdx { // primary = lowest-numbered shard
+				a.minIdx = idx
+				a.group.primary = f
+			}
+		} else {
+			singles = append(singles, ggufGroup{name: nameNoExt, primary: f, parts: []string{f}})
+		}
+	}
+
+	out := make([]ggufGroup, 0, len(order)+len(singles))
+	for _, key := range order {
+		g := groups[key].group
+		sort.Strings(g.parts)
+		out = append(out, *g)
+	}
+	return append(out, singles...)
+}
+
+// detectGGUFModels detects GGUF models in a directory. Split shards
+// ("...-00001-of-00003.gguf") collapse into one model whose Path is the first
+// shard (llama.cpp auto-loads the rest) and whose size is the sum of all parts;
+// mmproj projector files are excluded.
 func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize int64) []*ModelInfo {
 	weightFiles := findAllWeightFiles(dir, entries, p.weightExts)
 	if len(weightFiles) == 0 {
@@ -20,30 +92,30 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize
 	}
 
 	var models []*ModelInfo
-	for _, weightPath := range weightFiles {
-		// Check individual file size against minimum
-		info, err := os.Stat(weightPath)
-		if err != nil {
-			continue
+	for _, g := range groupGGUFModels(weightFiles) {
+		// Size = sum of all shards; compare the whole model against the minimum.
+		var totalSize int64
+		for _, part := range g.parts {
+			if info, err := os.Stat(part); err == nil {
+				totalSize += info.Size()
+			}
 		}
-		if info.Size() < minSize {
+		if totalSize < minSize {
 			continue
 		}
 
-		// Use the file path as the model path (unique per GGUF file)
-		// This allows multiple GGUF files in the same directory to be detected
 		model := &ModelInfo{
-			ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(weightPath))),
-			Name:       strings.TrimSuffix(filepath.Base(weightPath), ".gguf"),
+			ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(g.primary))),
+			Name:       g.name,
 			Type:       p.typeHint,
-			Path:       weightPath, // Use file path for uniqueness
+			Path:       g.primary, // first shard — llama.cpp loads the rest automatically
 			Format:     p.format,
-			SizeBytes:  info.Size(),
+			SizeBytes:  totalSize,
 			ModelClass: "unknown",
 		}
 
-		// Parse GGUF header metadata for arch, params, class
-		if meta := parseGGUFMeta(weightPath); meta != nil {
+		// Parse GGUF header metadata for arch, params, class (from the first shard)
+		if meta := parseGGUFMeta(g.primary); meta != nil {
 			modelType := jsonStr(meta, "model_type", "")
 			model.DetectedArch = detectArch(modelType)
 			if model.Type == "" {
@@ -64,9 +136,8 @@ func detectGGUFModels(dir string, entries []os.DirEntry, p ModelPattern, minSize
 			}
 		}
 
-		// Detect quantization from filename
-		weightName := filepath.Base(weightPath)
-		model.Quantization, model.QuantSrc = detectQuantization(nil, weightName, p.format)
+		// Detect quantization from the primary file name
+		model.Quantization, model.QuantSrc = detectQuantization(nil, filepath.Base(g.primary), p.format)
 
 		if model.Type == "" {
 			model.Type = "llm" // Default GGUF models to LLM

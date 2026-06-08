@@ -195,6 +195,18 @@ const terminatingPodJSON = `{
       "aima.dev/model": "qwen3-8b"
     }
   },
+  "spec": {
+    "containers": [
+      {
+        "image": "nvcr.io/nvidia/vllm:26.01-py3",
+        "ports": [
+          {
+            "containerPort": 8000
+          }
+        ]
+      }
+    ]
+  },
   "status": {
     "phase": "Running",
     "podIP": "10.42.0.5",
@@ -216,6 +228,18 @@ const runningPodJSON = `{
       "aima.dev/engine": "vllm",
       "aima.dev/model": "qwen3-8b"
     }
+  },
+  "spec": {
+    "containers": [
+      {
+        "image": "nvcr.io/nvidia/vllm:26.01-py3",
+        "ports": [
+          {
+            "containerPort": 8000
+          }
+        ]
+      }
+    ]
   },
   "status": {
     "phase": "Running",
@@ -619,5 +643,18 @@ func TestParsePodJSON_DeletionTimestamp(t *testing.T) {
 	}
 	if !pod.Ready {
 		t.Fatal("expected raw pod readiness to reflect container status before runtime mapping")
+	}
+}
+
+func TestParsePodJSON_ContainerImage(t *testing.T) {
+	pod, err := parsePodJSON([]byte(runningPodJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod.ContainerImage != "nvcr.io/nvidia/vllm:26.01-py3" {
+		t.Fatalf("ContainerImage = %q, want nvcr.io/nvidia/vllm:26.01-py3", pod.ContainerImage)
+	}
+	if pod.ContainerPort != 8000 {
+		t.Fatalf("ContainerPort = %d, want 8000", pod.ContainerPort)
 	}
 }

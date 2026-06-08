@@ -284,10 +284,10 @@ func TestRegisterRoutes_IndexShowsAPIAccessWithoutRenderingPrivateIP(t *testing.
 		`api_access`,
 		`api_access_desc`,
 		`apiBaseDisplay()`,
-		`apiDeploymentChatCapable(dep)`,
+		`apiDeploymentChatCapable(deploymentDetailData)`,
 		`api_non_chat_hint`,
 		`copyCurrentAPIBaseURL($event)`,
-		`copyAPICurl(dep, $event)`,
+		`copyAPICurl(deploymentDetailData, $event)`,
 		`apiCurlTemplate(dep)`,
 		`api_public_unconfigured`,
 	} {
@@ -493,11 +493,19 @@ func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	body := rec.Body.String()
 	for _, token := range []string{
 		"startup_progress",
-		"startup_message || dep.startup_phase || 'Initializing...'",
-		"dep.eta ? '~' + dep.eta",
+		"deployment-service-card",
+		"deploymentShowProgress(dep)",
+		"deploymentProgressValue(dep)",
+		"deploymentProgressText(dep)",
+		"openDeploymentDetail(dep)",
+		"deploymentDetailOpen",
+		"deploymentDetailRequestSeq",
+		"this.callTool('deploy.status', { name })",
+		"clearMissingGpuMemory: true",
+		"deploymentGpuMemoryMiB(d)",
+		"handleDeploymentStopClick($event, deploymentDetailData.name, { closeDetail: true })",
 		"failure_detail: this.summarizeDeploymentFailure(d)",
 		"summarizeDeploymentFailure(dep)",
-		"dep.phase === 'running' && dep.ready && dep.address",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)

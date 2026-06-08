@@ -295,6 +295,7 @@ func (r *DockerRuntime) Status(ctx context.Context, name string) (*DeploymentSta
 
 	di := inspects[0]
 	ds := r.inspectToStatus(di)
+	r.enrichGPUMemory(ctx, ds, di.ID, di.State.Pid)
 	asset := findEngineAsset(r.engineAssets, ds.Labels["aima.dev/engine"])
 	if asset != nil && ds.EstimatedTotalS == 0 && len(asset.TimeConstraints.ColdStartS) >= 2 {
 		ds.EstimatedTotalS = asset.TimeConstraints.ColdStartS[1]
@@ -357,6 +358,7 @@ func (r *DockerRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
 
 		ds := &DeploymentStatus{
 			Name:    ps.Names,
+			Image:   ps.Image,
 			Phase:   phase,
 			Ready:   ready,
 			Address: addr,
@@ -402,6 +404,7 @@ func (r *DockerRuntime) Logs(ctx context.Context, name string, tailLines int) (s
 // --- internal types ---
 
 type dockerInspect struct {
+	ID    string `json:"Id"`
 	Name  string `json:"Name"`
 	State struct {
 		Status     string `json:"Status"` // running, created, exited, paused, restarting
@@ -409,17 +412,165 @@ type dockerInspect struct {
 		ExitCode   int    `json:"ExitCode"`
 		Running    bool   `json:"Running"`
 		Restarting bool   `json:"Restarting"`
+		Pid        int    `json:"Pid"`
 	} `json:"State"`
 	Config struct {
-		Labels map[string]string `json:"Labels"`
+		Entrypoint []string          `json:"Entrypoint"`
+		Cmd        []string          `json:"Cmd"`
+		Image      string            `json:"Image"`
+		Labels     map[string]string `json:"Labels"`
 	} `json:"Config"`
 }
 
 type dockerPsEntry struct {
+	ID        string `json:"ID"`
+	Image     string `json:"Image"`
 	Names     string `json:"Names"`
 	Status    string `json:"Status"`
 	Labels    string `json:"Labels"`
 	CreatedAt string `json:"CreatedAt"`
+}
+
+func (r *DockerRuntime) enrichGPUMemory(ctx context.Context, ds *DeploymentStatus, containerID string, containerPID int) {
+	if ds == nil || ds.Name == "" || ds.Phase != "running" {
+		return
+	}
+	if containerPID <= 0 || strings.TrimSpace(containerID) == "" {
+		pidOut, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Pid}} {{.Id}}", ds.Name).CombinedOutput()
+		if err == nil {
+			fields := strings.Fields(string(pidOut))
+			if len(fields) > 0 && containerPID <= 0 {
+				containerPID, _ = strconv.Atoi(fields[0])
+			}
+			if len(fields) > 1 && strings.TrimSpace(containerID) == "" {
+				containerID = fields[1]
+			}
+		}
+	}
+	usedMiB := containerNvidiaGPUMemoryMiB(ctx, ds.Name, containerID, containerPID)
+	if usedMiB <= 0 {
+		return
+	}
+	ds.GPUMemoryMiB = usedMiB
+	ds.GPUMemorySource = "nvidia-smi"
+}
+
+func containerNvidiaGPUMemoryMiB(ctx context.Context, containerName, containerID string, containerPID int) int {
+	if containerPID <= 0 && strings.TrimSpace(containerName) == "" && strings.TrimSpace(containerID) == "" {
+		return 0
+	}
+	smiCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(smiCtx, "nvidia-smi",
+		"--query-compute-apps=pid,used_gpu_memory",
+		"--format=csv,noheader,nounits",
+	).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	totalMiB := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), ",", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		pid := strings.TrimSpace(parts[0])
+		memMiB := parseNvidiaMemoryMiB(parts[1])
+		if pid == "" || memMiB <= 0 {
+			continue
+		}
+		if processBelongsToDockerContainer(ctx, pid, containerName, containerID, containerPID) {
+			totalMiB += memMiB
+		}
+	}
+	return totalMiB
+}
+
+func parseNvidiaMemoryMiB(value string) int {
+	value = strings.TrimSpace(value)
+	value = strings.TrimSuffix(value, "MiB")
+	value = strings.TrimSpace(value)
+	if fields := strings.Fields(value); len(fields) > 0 {
+		value = fields[0]
+	}
+	memMiB, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return memMiB
+}
+
+func processBelongsToDockerContainer(ctx context.Context, pid, containerName, containerID string, containerPID int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", pid, "cgroup"))
+	if err == nil {
+		cgroup := strings.ToLower(string(data))
+		for _, token := range dockerContainerMatchTokens(containerName, containerID) {
+			if token != "" && strings.Contains(cgroup, token) {
+				return true
+			}
+		}
+	}
+	if containerPID <= 0 {
+		return false
+	}
+	return isDescendantPID(ctx, pid, strconv.Itoa(containerPID))
+}
+
+func dockerContainerMatchTokens(containerName, containerID string) []string {
+	id := strings.ToLower(strings.TrimSpace(containerID))
+	shortID := id
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	if id != "" {
+		return []string{id, shortID}
+	}
+	name := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(containerName), "/"))
+	return []string{name}
+}
+
+func isDescendantPID(ctx context.Context, childPID, parentPID string) bool {
+	current := strings.TrimSpace(childPID)
+	parentPID = strings.TrimSpace(parentPID)
+	if current == "" || parentPID == "" {
+		return false
+	}
+	if current == parentPID {
+		return true
+	}
+	for i := 0; i < 16; i++ {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", current, "stat"))
+		if err != nil {
+			return false
+		}
+		ppid := parentPIDFromProcStat(string(data))
+		if ppid == "" || ppid == "0" || ppid == "1" {
+			return false
+		}
+		if ppid == parentPID {
+			return true
+		}
+		current = ppid
+	}
+	return false
+}
+
+func parentPIDFromProcStat(stat string) string {
+	stat = strings.TrimSpace(stat)
+	endComm := strings.LastIndex(stat, ")")
+	if endComm < 0 || endComm+2 >= len(stat) {
+		return ""
+	}
+	fields := strings.Fields(stat[endComm+1:])
+	if len(fields) < 2 {
+		return ""
+	}
+	return fields[1]
 }
 
 func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
@@ -466,9 +617,11 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 
 	ds := &DeploymentStatus{
 		Name:    name,
+		Image:   di.Config.Image,
 		Phase:   phase,
 		Ready:   ready,
 		Address: addr,
+		Config:  dockerLaunchConfigFromInspect(di),
 		Labels:  labels,
 		Runtime: "docker",
 	}
@@ -480,6 +633,159 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	}
 
 	return ds
+}
+
+func dockerLaunchConfigFromInspect(di dockerInspect) map[string]any {
+	args := make([]string, 0, len(di.Config.Entrypoint)+len(di.Config.Cmd))
+	args = append(args, di.Config.Entrypoint...)
+	args = append(args, di.Config.Cmd...)
+	if shellArgs := dockerShellCommandArgs(args); len(shellArgs) > 0 {
+		if config := parseLaunchConfigFlags(shellArgs); len(config) > 0 {
+			return config
+		}
+	}
+	return parseLaunchConfigFlags(args)
+}
+
+func dockerShellCommandArgs(args []string) []string {
+	for i := 0; i+1 < len(args); i++ {
+		name := shellExecutableName(args[i])
+		if name != "bash" && name != "sh" {
+			continue
+		}
+		for j := i + 1; j+1 < len(args); j++ {
+			if !isShellCommandFlag(args[j]) {
+				continue
+			}
+			command := strings.TrimSpace(args[j+1])
+			if command == "" {
+				return nil
+			}
+			if idx := strings.LastIndex(command, " exec "); idx >= 0 {
+				command = command[idx+6:]
+			} else if strings.HasPrefix(command, "exec ") {
+				command = strings.TrimSpace(strings.TrimPrefix(command, "exec "))
+			}
+			return splitShellFields(command)
+		}
+	}
+	return nil
+}
+
+func isShellCommandFlag(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "-c" {
+		return true
+	}
+	if strings.HasPrefix(value, "--") || !strings.HasPrefix(value, "-") {
+		return false
+	}
+	return strings.Contains(value[1:], "c")
+}
+
+func shellExecutableName(value string) string {
+	value = strings.TrimSpace(value)
+	if idx := strings.LastIndexAny(value, `/\`); idx >= 0 {
+		return value[idx+1:]
+	}
+	return value
+}
+
+func parseLaunchConfigFlags(args []string) map[string]any {
+	config := make(map[string]any)
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" || !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		key, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		boolValue := true
+		if strings.HasPrefix(key, "no-") {
+			key = strings.TrimPrefix(key, "no-")
+			boolValue = false
+		}
+		key = strings.ReplaceAll(key, "-", "_")
+		if !hasValue && i+1 < len(args) && !strings.HasPrefix(strings.TrimSpace(args[i+1]), "--") {
+			value = args[i+1]
+			hasValue = true
+			i++
+		}
+		if hasValue {
+			config[key] = parseLaunchConfigValue(value)
+		} else {
+			config[key] = boolValue
+		}
+	}
+	return config
+}
+
+func splitShellFields(input string) []string {
+	var fields []string
+	var b strings.Builder
+	var quote rune
+	escaped := false
+	for _, r := range input {
+		if escaped {
+			b.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quote != '\'' && r == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if b.Len() > 0 {
+				fields = append(fields, b.String())
+				b.Reset()
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	if escaped {
+		b.WriteRune('\\')
+	}
+	if b.Len() > 0 {
+		fields = append(fields, b.String())
+	}
+	return fields
+}
+
+func parseLaunchConfigValue(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.EqualFold(value, "true") {
+		return true
+	}
+	if strings.EqualFold(value, "false") {
+		return false
+	}
+	if i, err := strconv.Atoi(value); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		return f
+	}
+	return value
 }
 
 // enrichDockerProgress reads container logs and matches engine patterns.

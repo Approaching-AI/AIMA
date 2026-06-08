@@ -6,9 +6,23 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
-	"strconv"
-	"strings"
 )
+
+// Windows hardware detection via CIM. Win32 WMIC was removed in Windows 11 24H2+,
+// so every query shells out to PowerShell's Get-CimInstance and is parsed by the
+// build-tag-free helpers in cim.go.
+
+const (
+	cimCPUScript      = "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed | ConvertTo-Json -Compress"
+	cimRAMScript      = "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress"
+	cimPageFileScript = "Get-CimInstance Win32_PageFileUsage | Select-Object AllocatedBaseSize | ConvertTo-Json -Compress"
+	cimCPULoadScript  = "Get-CimInstance Win32_Processor | Select-Object LoadPercentage | ConvertTo-Json -Compress"
+	cimGPUScript      = "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,AdapterCompatibility,PNPDeviceID,AdapterRAM | ConvertTo-Json -Compress"
+)
+
+func runCIM(ctx context.Context, runner CommandRunner, script string) ([]byte, error) {
+	return runner.Run(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+}
 
 func detectCPU(ctx context.Context, runner CommandRunner) CPUInfo {
 	info := CPUInfo{
@@ -17,142 +31,41 @@ func detectCPU(ctx context.Context, runner CommandRunner) CPUInfo {
 		Threads: runtime.NumCPU(),
 	}
 
-	out, err := runner.Run(ctx, "wmic", "cpu", "get", "Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed", "/format:csv")
+	out, err := runCIM(ctx, runner, cimCPUScript)
 	if err != nil {
-		slog.Warn("wmic cpu detection failed, using defaults", "error", err)
+		slog.Warn("CIM cpu detection failed, using defaults", "error", err)
 		return info
 	}
 
-	parseWMICCPU(string(out), &info)
+	parseCIMCPU(string(out), &info)
 	return info
-}
-
-func parseWMICCPU(output string, info *CPUInfo) {
-	// wmic csv output has a header line, then data lines.
-	// Format: Node,MaxClockSpeed,Name,NumberOfCores,NumberOfLogicalProcessors
-	lines := nonEmptyLines(output)
-	if len(lines) < 2 {
-		return
-	}
-
-	// Find column indices from header
-	header := splitCSV(lines[0])
-	colIdx := make(map[string]int)
-	for i, h := range header {
-		colIdx[strings.TrimSpace(h)] = i
-	}
-
-	fields := splitCSV(lines[1])
-
-	if idx, ok := colIdx["Name"]; ok && idx < len(fields) {
-		info.Model = fields[idx]
-	}
-	if idx, ok := colIdx["NumberOfCores"]; ok && idx < len(fields) {
-		if n, err := strconv.Atoi(fields[idx]); err == nil {
-			info.Cores = n
-		}
-	}
-	if idx, ok := colIdx["NumberOfLogicalProcessors"]; ok && idx < len(fields) {
-		if n, err := strconv.Atoi(fields[idx]); err == nil {
-			info.Threads = n
-		}
-	}
-	if idx, ok := colIdx["MaxClockSpeed"]; ok && idx < len(fields) {
-		if mhz, err := strconv.ParseFloat(fields[idx], 64); err == nil {
-			info.FreqGHz = mhz / 1000.0
-		}
-	}
 }
 
 func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 	info := RAMInfo{}
 
-	out, err := runner.Run(ctx, "wmic", "os", "get", "TotalVisibleMemorySize,FreePhysicalMemory", "/format:csv")
+	out, err := runCIM(ctx, runner, cimRAMScript)
 	if err != nil {
-		slog.Warn("wmic RAM detection failed, using defaults", "error", err)
+		slog.Warn("CIM RAM detection failed, using defaults", "error", err)
 		return info
 	}
+	parseCIMRAM(string(out), &info)
 
-	parseWMICRAM(string(out), &info)
-
-	// Detect swap (pagefile) size
-	if swapOut, err := runner.Run(ctx, "wmic", "pagefile", "get", "AllocatedBaseSize", "/format:csv"); err == nil {
-		parseWMICSwap(string(swapOut), &info)
+	// Pagefile (swap) is best-effort; system-managed hosts may report nothing.
+	if swapOut, err := runCIM(ctx, runner, cimPageFileScript); err == nil {
+		parseCIMSwap(string(swapOut), &info)
 	}
 
 	return info
 }
 
-func parseWMICSwap(output string, info *RAMInfo) {
-	lines := nonEmptyLines(output)
-	if len(lines) < 2 {
-		return
-	}
-	header := splitCSV(lines[0])
-	colIdx := make(map[string]int)
-	for i, h := range header {
-		colIdx[strings.TrimSpace(h)] = i
-	}
-	fields := splitCSV(lines[1])
-	if idx, ok := colIdx["AllocatedBaseSize"]; ok && idx < len(fields) {
-		if mb, err := strconv.Atoi(strings.TrimSpace(fields[idx])); err == nil {
-			info.SwapTotalMiB = mb
-		}
-	}
-}
-
-func parseWMICRAM(output string, info *RAMInfo) {
-	// Format: Node,FreePhysicalMemory,TotalVisibleMemorySize
-	lines := nonEmptyLines(output)
-	if len(lines) < 2 {
-		return
-	}
-
-	header := splitCSV(lines[0])
-	colIdx := make(map[string]int)
-	for i, h := range header {
-		colIdx[strings.TrimSpace(h)] = i
-	}
-
-	fields := splitCSV(lines[1])
-
-	if idx, ok := colIdx["TotalVisibleMemorySize"]; ok && idx < len(fields) {
-		if kb, err := strconv.ParseInt(fields[idx], 10, 64); err == nil {
-			info.TotalMiB = int(kb / 1024)
-		}
-	}
-	if idx, ok := colIdx["FreePhysicalMemory"]; ok && idx < len(fields) {
-		if kb, err := strconv.ParseInt(fields[idx], 10, 64); err == nil {
-			info.AvailableMiB = int(kb / 1024)
-		}
-	}
-}
-
 func collectCPUMetrics(ctx context.Context, runner CommandRunner) CPUMetrics {
-	out, err := runner.Run(ctx, "wmic", "cpu", "get", "LoadPercentage", "/format:csv")
+	out, err := runCIM(ctx, runner, cimCPULoadScript)
 	if err != nil {
-		slog.Warn("wmic CPU metrics failed, using defaults", "error", err)
+		slog.Warn("CIM CPU metrics failed, using defaults", "error", err)
 		return CPUMetrics{}
 	}
-
-	lines := nonEmptyLines(string(out))
-	if len(lines) < 2 {
-		return CPUMetrics{}
-	}
-
-	header := splitCSV(lines[0])
-	colIdx := make(map[string]int)
-	for i, h := range header {
-		colIdx[strings.TrimSpace(h)] = i
-	}
-
-	fields := splitCSV(lines[1])
-	if idx, ok := colIdx["LoadPercentage"]; ok && idx < len(fields) {
-		if pct, err := strconv.ParseFloat(fields[idx], 64); err == nil {
-			return CPUMetrics{UsagePercent: pct}
-		}
-	}
-	return CPUMetrics{}
+	return CPUMetrics{UsagePercent: parseCIMCPULoad(string(out))}
 }
 
 func collectRAMMetrics(ctx context.Context, runner CommandRunner) RAMMetrics {
@@ -166,4 +79,16 @@ func collectRAMMetrics(ctx context.Context, runner CommandRunner) RAMMetrics {
 		AvailableMiB: ram.AvailableMiB,
 		UsedMiB:      used,
 	}
+}
+
+// detectPlatformGPU detects GPUs via Win32_VideoController (CIM) as a Windows
+// fallback for when no vendor SMI tool (nvidia-smi/rocm-smi) is on PATH — the
+// common case on AMD APU hosts. See parseWindowsGPUs for the limitations.
+func detectPlatformGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
+	out, err := runCIM(ctx, runner, cimGPUScript)
+	if err != nil {
+		slog.Debug("CIM GPU detection unavailable", "error", err)
+		return nil
+	}
+	return parseWindowsGPUs(string(out))
 }

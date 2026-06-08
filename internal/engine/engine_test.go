@@ -787,6 +787,40 @@ func TestScanPreinstalledProbeUsesDiscoveredBinaryPath(t *testing.T) {
 	}
 }
 
+func TestScanNativeFindsBinaryInExtraDirs(t *testing.T) {
+	// Engines installed off the system drive in arbitrary dirs (e.g. Windows
+	// D:\tools\llama-b9180-win-hip-radeon-x64) are neither in distDir nor on
+	// PATH. AIMA_ENGINE_DIR feeds those dirs in via ScanOptions.ExtraDirs.
+	distDir := t.TempDir()
+	engineDir := t.TempDir()
+	binPath := filepath.Join(engineDir, "llama-server.exe")
+	if err := os.WriteFile(binPath, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:      distDir,
+		Platform:     "windows-amd64",
+		BinaryAssets: map[string]string{"llama-server": "llamacpp", "llama-server.exe": "llamacpp"},
+		ExtraDirs:    []string{engineDir},
+	})
+	if err != nil {
+		t.Fatalf("scan native: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 native engine, got %d", len(results))
+	}
+	if got := results[0].Type; got != "llamacpp" {
+		t.Errorf("Type = %q, want llamacpp", got)
+	}
+	if got := results[0].BinaryPath; got != binPath {
+		t.Errorf("BinaryPath = %q, want %q", got, binPath)
+	}
+	if got := results[0].RuntimeType; got != "native" {
+		t.Errorf("RuntimeType = %q, want native", got)
+	}
+}
+
 func TestPullImageNameConstruction(t *testing.T) {
 	// Verify image refs are built correctly for host-only registries, namespace
 	// prefixes, and fully-qualified repository overrides.

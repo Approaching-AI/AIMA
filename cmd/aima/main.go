@@ -1145,10 +1145,20 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		}
 		platform := goruntime.GOOS + "-" + goruntime.GOARCH
 		distDir := filepath.Join(dataDir, "dist", platform)
+		// AIMA_ENGINE_DIR lists dirs holding pre-installed engine binaries that
+		// live off PATH and off dist (e.g. Windows D:\tools\llama-b9180-...\).
+		// Accepts an OS path list, mirroring AIMA_MODEL_DIR.
+		var engineExtraDirs []string
+		for _, dir := range filepath.SplitList(os.Getenv("AIMA_ENGINE_DIR")) {
+			if dir = strings.TrimSpace(dir); dir != "" {
+				engineExtraDirs = append(engineExtraDirs, dir)
+			}
+		}
 		images, err := engine.ScanUnified(ctx, engine.ScanOptions{
 			AssetPatterns:      assetPatterns,
 			Runner:             &execRunner{},
 			DistDir:            distDir,
+			ExtraDirs:          engineExtraDirs,
 			Platform:           platform,
 			BinaryAssets:       binaryAssets,
 			AutoImport:         autoImport,

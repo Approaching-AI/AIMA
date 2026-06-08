@@ -2149,6 +2149,70 @@ body {
 }
 .deploy-vram-fill.warn { background: var(--warning); }
 .deploy-vram-fill.crit { background: var(--error); }
+.deploy-compat-card {
+  padding: 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.deploy-compat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.deploy-compat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.deploy-compat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 12px currentColor;
+}
+.deploy-compat-dot.ok { background: var(--success); color: var(--success); }
+.deploy-compat-dot.blocked { background: var(--error); color: var(--error); }
+.deploy-compat-dot.repairable { background: var(--warning); color: var(--warning); }
+.deploy-compat-dot.unknown,
+.deploy-compat-dot.skipped { background: var(--text-tertiary); color: var(--text-tertiary); }
+.deploy-compat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.deploy-compat-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+  border-right: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+.deploy-compat-row:nth-child(2n) {
+  border-right: none;
+}
+.deploy-compat-row:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+.deploy-compat-key {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.deploy-compat-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
 .deploy-vram-breakdown {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3088,6 +3152,7 @@ body {
   .deployment-config-table,
   .deployment-diagnostics-table,
   .deploy-vram-top,
+  .deploy-compat-grid,
   .deploy-form-grid,
   .deploy-vram-breakdown {
     grid-template-columns: 1fr;
@@ -3102,6 +3167,19 @@ body {
   }
   .deployment-config-row:last-child,
   .deployment-diagnostics-row:last-child {
+    border-bottom: none;
+  }
+  .deploy-compat-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .deploy-compat-row {
+    border-right: none;
+  }
+  .deploy-compat-row:nth-last-child(-n + 2) {
+    border-bottom: 1px solid var(--border-light);
+  }
+  .deploy-compat-row:last-child {
     border-bottom: none;
   }
   .deploy-param-row {
@@ -5919,7 +5997,7 @@ body {
           <div class="deploy-form-grid">
             <div class="modal-field">
               <label x-text="t('wiz_engine_label')"></label>
-              <select x-model="deployDetailForm.engine" @change="markDeployConfigDirty(); refreshDeployDryRun()">
+              <select x-model="deployDetailForm.engine" @change="handleDeployEngineChange($event)">
                 <option value="" x-text="t('deploy_auto_engine')"></option>
                 <template x-for="engine in deployEngineOptions()" :key="engine.value">
                   <option :value="engine.value" x-text="engine.label"></option>
@@ -5966,6 +6044,28 @@ body {
               <button type="button" class="deploy-link-btn" @click="saveDeployDefaults()" x-text="t('deploy_save_default')"></button>
               <button type="button" class="deploy-link-btn" @click="resetDeployParams()" x-text="t('deploy_restore_recommended')"></button>
             </div>
+          </div>
+        </div>
+
+        <div class="modal-section">
+          <div class="modal-section-title" x-text="t('deploy_compat_title')"></div>
+          <div class="deploy-compat-card">
+            <div class="deploy-compat-head">
+              <div class="deploy-compat-status">
+                <span class="deploy-compat-dot" :class="deployCompatibilityStatus()"></span>
+                <span x-text="deployCompatibilityStatusLabel()"></span>
+              </div>
+              <div class="modal-hint" x-text="t('deploy_compat_hint')"></div>
+            </div>
+            <div class="deploy-compat-grid">
+              <template x-for="row in deployCompatibilityRows()" :key="row.key">
+                <div class="deploy-compat-row">
+                  <span class="deploy-compat-key" x-text="row.label"></span>
+                  <span class="deploy-compat-value" x-text="row.value"></span>
+                </div>
+              </template>
+            </div>
+            <div class="modal-hint" x-show="deployCompatibilityReason()" x-text="deployCompatibilityReason()"></div>
           </div>
         </div>
 
@@ -6693,6 +6793,25 @@ var I18N = {
     deploy_recommended_restored: 'AIMA regenerated recommended parameters for the current device state.',
     deploy_source_manual: 'Manual',
     deploy_source_recommended: 'AIMA',
+    deploy_compat_title: 'Image architecture preflight',
+    deploy_compat_hint: 'Confirms the selected image can recognize this model architecture. Startup can still fail later because of memory, ports, parameters, or runtime state.',
+    deploy_compat_ok: 'Image preflight passed',
+    deploy_compat_blocked: 'Will fail before startup',
+    deploy_compat_repairable: 'Needs startup repair',
+    deploy_compat_unknown: 'Compatibility unknown',
+    deploy_compat_skipped: 'Probe skipped',
+    deploy_compat_stale: 'Configuration changed. Run preflight again to refresh the image result.',
+    deploy_compat_reason_image_reads_config: 'The selected image can read this model configuration.',
+    deploy_compat_engine_asset: 'Engine asset',
+    deploy_compat_engine_image: 'Actual image',
+    deploy_compat_model_type: 'Model architecture',
+    deploy_compat_probe: 'Probe',
+    deploy_compat_image_state: 'Local image',
+    deploy_compat_distribution: 'Image source',
+    deploy_compat_image_docker: 'Docker',
+    deploy_compat_image_containerd: 'containerd',
+    deploy_compat_present: 'present',
+    deploy_compat_missing: 'missing',
     deploy_suggestions: 'Suggestions',
     deploy_suggest_reduce_context: 'Reduce context to',
     deploy_suggest_reduce_seqs: 'Set max_num_seqs to 1',
@@ -7095,6 +7214,25 @@ var I18N = {
     deploy_recommended_restored: 'AIMA \u5DF2\u6309\u5F53\u524D\u8BBE\u5907\u72B6\u6001\u91CD\u65B0\u751F\u6210\u63A8\u8350\u53C2\u6570\u3002',
     deploy_source_manual: '\u624B\u52A8',
     deploy_source_recommended: 'AIMA',
+    deploy_compat_title: '\u955C\u50CF\u67B6\u6784\u9884\u68C0',
+    deploy_compat_hint: '\u5DF2\u786E\u8BA4\u5F53\u524D\u955C\u50CF\u80FD\u8BC6\u522B\u8BE5\u6A21\u578B\u67B6\u6784\uFF1B\u5B9E\u9645\u542F\u52A8\u4ECD\u53EF\u80FD\u53D7\u663E\u5B58\u3001\u7AEF\u53E3\u3001\u53C2\u6570\u6216\u8FD0\u884C\u65F6\u72B6\u6001\u5F71\u54CD\u3002',
+    deploy_compat_ok: '\u955C\u50CF\u9884\u68C0\u901A\u8FC7',
+    deploy_compat_blocked: '\u9884\u68C0\u53D1\u73B0\u4F1A\u5931\u8D25',
+    deploy_compat_repairable: '\u9700\u8981\u542F\u52A8\u524D\u4FEE\u590D',
+    deploy_compat_unknown: '\u517C\u5BB9\u6027\u6682\u4E0D\u786E\u5B9A',
+    deploy_compat_skipped: '\u672A\u8FD0\u884C\u63A2\u9488',
+    deploy_compat_stale: '\u914D\u7F6E\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u68C0\u4EE5\u5237\u65B0\u955C\u50CF\u7ED3\u679C\u3002',
+    deploy_compat_reason_image_reads_config: '\u5F53\u524D\u955C\u50CF\u53EF\u4EE5\u8BFB\u53D6\u8BE5\u6A21\u578B\u914D\u7F6E\u3002',
+    deploy_compat_engine_asset: '\u5B9E\u9645\u5F15\u64CE',
+    deploy_compat_engine_image: '\u5B9E\u9645\u955C\u50CF',
+    deploy_compat_model_type: '\u6A21\u578B\u67B6\u6784',
+    deploy_compat_probe: '\u68C0\u67E5\u65B9\u5F0F',
+    deploy_compat_image_state: '\u672C\u5730\u955C\u50CF',
+    deploy_compat_distribution: '\u955C\u50CF\u6765\u6E90',
+    deploy_compat_image_docker: 'Docker',
+    deploy_compat_image_containerd: 'containerd',
+    deploy_compat_present: '\u5DF2\u5B58\u5728',
+    deploy_compat_missing: '\u672A\u627E\u5230',
     deploy_suggestions: '\u8C03\u53C2\u5EFA\u8BAE',
     deploy_suggest_reduce_context: '\u5C06\u4E0A\u4E0B\u6587\u964D\u5230',
     deploy_suggest_reduce_seqs: '\u5C06 max_num_seqs \u8BBE\u4E3A 1',
@@ -7902,6 +8040,7 @@ function aimaApp() {
     deployDetailForm: { engine: '', slot: '', noPull: true, port: '' },
     deployDetailDirty: false,
     deployDetailLastCheckedAt: '',
+    deployDryRunSeq: 0,
     deployDetailMinimized: false,
     deployDetailMaximized: false,
     deployParamsExpanded: false,
@@ -10166,27 +10305,45 @@ function aimaApp() {
     },
 
     markDeployConfigDirty() {
+      this.deployDryRunSeq++;
+      this.deployDetailLoading = false;
       this.deployDetailDirty = true;
-      if (!this.deployDetailLoading && this.deployDetailFeedback && this.deployDetailFeedback.type === 'success') {
+      this.deployDetailLastCheckedAt = '';
+      if (this.deployDetailPlan && this.deployDetailPlan.compatibility) {
+        this.deployDetailPlan = { ...this.deployDetailPlan, compatibility: null };
+      }
+      if (this.deployDetailFeedback && (this.deployDetailFeedback.type === 'success' || this.deployDetailFeedback.text === this.t('deploy_loading_plan'))) {
         this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_preflight_stale') };
       }
     },
 
+    handleDeployEngineChange(event) {
+      const value = event && event.target ? event.target.value : this.deployDetailForm.engine;
+      this.deployDetailForm.engine = value || '';
+      this.markDeployConfigDirty();
+      this.refreshDeployDryRun();
+    },
+
     async refreshDeployDryRun(forceRecommended = false) {
       const modelName = this.deployDetailModel && this.deployDetailModel.name;
-      if (!modelName || this.deployDetailLoading) return;
+      if (!modelName) return;
+      const seq = ++this.deployDryRunSeq;
+      const requestEngine = forceRecommended ? '' : this.deployEngineRequestValue();
       this.deployDetailLoading = true;
       this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_loading_plan') };
       const manual = forceRecommended ? {} : this.deployManualParamMap();
       const params = {
         model: modelName,
-        engine: this.deployDetailForm.engine || '',
+        engine: requestEngine,
         slot: this.deployDetailForm.slot || '',
         config: forceRecommended ? {} : this.deployConfigFromParams()
       };
       let rerunWithSavedDefaults = false;
       try {
         const data = await this.callTool('deploy.dry_run', params);
+        if (seq !== this.deployDryRunSeq) return;
+        if (!this.deployDetailOpen || (this.deployDetailModel && this.deployDetailModel.name) !== modelName) return;
+        if (!forceRecommended && this.deployEngineRequestValue() !== requestEngine) return;
         if (!data || data._err) {
           const msg = data && data._err ? data._err : 'dry-run returned no data';
           this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_preflight_failed') + ': ' + msg };
@@ -10206,7 +10363,10 @@ function aimaApp() {
         if (forceRecommended) {
           this.deployDetailFeedback = { type: 'success', text: this.t('deploy_recommended_restored') };
         } else if (!this.deployDefaultsApplied) {
-          const saved = await this.loadDeployDefaults();
+          const saved = await this.loadDeployDefaults(modelName);
+          if (seq !== this.deployDryRunSeq) return;
+          if (!this.deployDetailOpen || (this.deployDetailModel && this.deployDetailModel.name) !== modelName) return;
+          if (requestEngine && this.deployEngineRequestValue() !== requestEngine) return;
           if (saved) {
             this.applyDeployDefaults(saved);
             rerunWithSavedDefaults = true;
@@ -10223,7 +10383,7 @@ function aimaApp() {
         this.deployDetailDirty = false;
         this.deployDetailLastCheckedAt = new Date().toLocaleTimeString();
       } finally {
-        this.deployDetailLoading = false;
+        if (seq === this.deployDryRunSeq) this.deployDetailLoading = false;
       }
       if (rerunWithSavedDefaults) {
         await this.refreshDeployDryRun();
@@ -10355,7 +10515,7 @@ function aimaApp() {
 
     deployDefaultsPayload() {
       return {
-        engine: this.deployDetailForm.engine || '',
+        engine: this.deployEngineRequestValue(),
         slot: this.deployDetailForm.slot || '',
         no_pull: this.deployDetailForm.noPull === true || this.deployDetailForm.noPull === 'true',
         port: this.deployDetailForm.port || '',
@@ -10378,10 +10538,11 @@ function aimaApp() {
       }
     },
 
-    async loadDeployDefaults() {
-      const modelName = this.deployDetailModel && this.deployDetailModel.name;
+    async loadDeployDefaults(targetModelName) {
+      const modelName = targetModelName || (this.deployDetailModel && this.deployDetailModel.name);
       if (!modelName) return null;
       const data = await this.callTool('deploy.defaults', { action: 'get', model: modelName });
+      if (targetModelName && (!this.deployDetailOpen || (this.deployDetailModel && this.deployDetailModel.name) !== targetModelName)) return null;
       if (!data || data._err || !data.exists || !data.defaults || typeof data.defaults !== 'object') {
         this.deploySavedDefaults = null;
         this.deployDefaultsAvailable = false;
@@ -10426,17 +10587,37 @@ function aimaApp() {
       return s.length > 52 ? s.slice(0, 36) + '...' + s.slice(-8) : s;
     },
 
-    deployEngineOptionName(engine) {
-      const id = String((engine && engine.id) || '').trim();
+    trimImageName(value) {
+      const s = String(value || '').trim();
+      if (!s) return '';
+      if (this.isDigestEngineId(s)) return this.shortEngineId(s);
+      return s.length > 58 ? s.slice(0, 38) + '...' + s.slice(-14) : s;
+    },
+
+    engineDisplayName(engine) {
       const type = String((engine && engine.type) || '').trim();
-      const fallback = String((engine && engine.value) || '').trim();
-      if (this.isDigestEngineId(id || fallback)) {
-        return (type && type !== 'unknown') ? type : this.shortEngineId(id || fallback);
+      const id = String((engine && engine.id) || '').trim();
+      const value = String((engine && engine.value) || '').trim();
+      const candidate = type && type !== 'unknown' ? type : (id || value);
+      return this.shortEngineId(candidate) || 'unknown';
+    },
+
+    engineDisplayMeta(engine) {
+      if (!engine) return '';
+      const pieces = [];
+      const id = String(engine.id || engine.value || '').trim();
+      const image = this.trimImageName(engine.image || engine.engine_image || '');
+      const version = String(engine.version || engine.variant || engine.tag || '').trim();
+      if (image) pieces.push((this.lang === 'zh' ? '\u955C\u50CF\uFF1A' : 'image: ') + image);
+      if (version) pieces.push((this.lang === 'zh' ? '\u7248\u672C\uFF1A' : 'version: ') + version);
+      if (pieces.length === 0 && this.isDigestEngineId(id)) {
+        pieces.push((this.lang === 'zh' ? 'ID\uFF1A' : 'id: ') + this.shortEngineId(id));
       }
-      if (id && type && type !== 'unknown' && id !== type && !id.includes(type)) {
-        return id + ' (' + type + ')';
-      }
-      return id || type || fallback || 'unknown';
+      return pieces.join('  /  ');
+    },
+
+    deployEngineOptionName(engine) {
+      return this.engineDisplayName(engine);
     },
 
     deployEngineVersionText(engine) {
@@ -10447,14 +10628,19 @@ function aimaApp() {
 
     deployEngineOptionLabel(engine, duplicate) {
       const name = this.deployEngineOptionName(engine);
-      const image = String((engine && engine.image) || '').trim();
-      const suffix = image ? ' - ' + image : '';
-      const version = this.deployEngineVersionText(engine);
-      if (version) return name + suffix + ' (' + version + ')';
+      const image = this.trimImageName(engine && engine.image);
+      const version = String((engine && (engine.version || engine.variant || engine.tag)) || '').trim();
+      const meta = [];
+      if (image) meta.push((this.lang === 'zh' ? '\u955C\u50CF\uFF1A' : 'image: ') + image);
+      if (version && version.toLowerCase() !== 'latest') {
+        meta.push((this.lang === 'zh' ? '\u7248\u672C\uFF1A' : 'version: ') + version);
+      }
       const digest = this.isDigestEngineId((engine && engine.id) || (engine && engine.value))
         ? this.shortEngineId((engine && engine.id) || (engine && engine.value))
         : '';
-      return name + suffix + (duplicate && digest ? ' (' + digest + ')' : '');
+      if (duplicate && digest) meta.push('ID: ' + digest);
+      if (meta.length === 0) return name;
+      return this.lang === 'zh' ? name + '\uFF08' + meta.join('\uFF0C') + '\uFF09' : name + ' (' + meta.join(', ') + ')';
     },
 
     deployEngineOptions() {
@@ -10466,8 +10652,8 @@ function aimaApp() {
         seen.add(s);
         entries.push({ value: s, engine: { ...(engine || {}), id: s, value: s } });
       };
-      add(this.deployDetailPlan && this.deployDetailPlan.engine, {
-        id: this.deployDetailPlan && this.deployDetailPlan.engine,
+      add(this.deployDetailPlan && (this.deployDetailPlan.engine_asset || this.deployDetailPlan.engine), {
+        id: this.deployDetailPlan && (this.deployDetailPlan.engine_asset || this.deployDetailPlan.engine),
         type: this.deployDetailPlan && this.deployDetailPlan.engine,
         image: this.deployDetailPlan && this.deployDetailPlan.engine_image
       });
@@ -10488,10 +10674,52 @@ function aimaApp() {
     },
 
     deployRecommendedEngineHint() {
-      const engine = this.deployDetailPlan && this.deployDetailPlan.engine;
+      const engine = this.deployDetailPlan && (this.deployDetailPlan.engine_asset || this.deployDetailPlan.engine);
       if (!engine) return this.t('deploy_engine_hint');
-      const label = this.deployEngineOptionLabel({ id: engine, type: engine, image: this.deployDetailPlan && this.deployDetailPlan.engine_image }, false);
+      const image = this.deployDetailPlan && this.deployDetailPlan.engine_image;
+      const label = this.deployEngineOptionLabel({ id: engine, type: this.deployDetailPlan && this.deployDetailPlan.engine, image }, false);
       return this.t('deploy_recommended_engine') + ': ' + label;
+    },
+
+    deploySelectedEngineMeta() {
+      const selected = String(this.deployDetailForm.engine || '').trim();
+      if (!selected) return {};
+      const found = (this.engines || []).find(e => String(e.id || e.type || '').trim() === selected);
+      if (found) {
+        return {
+          id: found.id || selected,
+          type: found.type || '',
+          image: found.image || '',
+          version: found.version || found.variant || found.tag || ''
+        };
+      }
+      return { id: selected, type: '', image: '' };
+    },
+
+    deployEngineRequestValue(value) {
+      const selected = String(value !== undefined ? value : this.deployDetailForm.engine || '').trim();
+      if (!selected) return '';
+      const found = (this.engines || []).find(e => String(e.id || e.type || '').trim() === selected);
+      if (found && found.type) return found.type;
+      return selected;
+    },
+
+    deployPlanMatchesSelectedEngine() {
+      const selectedRaw = String(this.deployDetailForm.engine || '').trim();
+      if (!selectedRaw) return true;
+      const selected = this.deploySelectedEngineMeta();
+      const selectedValues = [
+        selectedRaw,
+        this.deployEngineRequestValue(selectedRaw),
+        selected.id,
+        selected.type
+      ].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
+      const planValues = [
+        this.deployDetailPlan && this.deployDetailPlan.engine_asset,
+        this.deployDetailPlan && this.deployDetailPlan.engine
+      ].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
+      if (selectedValues.length === 0 || planValues.length === 0) return true;
+      return selectedValues.some(v => planValues.includes(v));
     },
 
     deployQuantizationLabel() {
@@ -10510,6 +10738,78 @@ function aimaApp() {
       if (Array.isArray(fit.warnings)) warnings.push(...fit.warnings);
       if (fit.fit === false && fit.reason) warnings.unshift(fit.reason);
       return warnings.filter(Boolean);
+    },
+
+    deployCompatibility() {
+      if (this.deployDetailDirty || !this.deployDetailLastCheckedAt || !this.deployPlanMatchesSelectedEngine()) {
+        return { status: 'unknown', reason: this.t('deploy_compat_stale') };
+      }
+      return (this.deployDetailPlan && this.deployDetailPlan.compatibility && typeof this.deployDetailPlan.compatibility === 'object')
+        ? this.deployDetailPlan.compatibility
+        : {};
+    },
+
+    deployCompatibilityStatus() {
+      const status = String(this.deployCompatibility().status || 'unknown').toLowerCase();
+      return ['ok', 'blocked', 'repairable', 'skipped'].includes(status) ? status : 'unknown';
+    },
+
+    deployCompatibilityStatusLabel() {
+      const status = this.deployCompatibilityStatus();
+      if (status === 'ok') return this.t('deploy_compat_ok');
+      if (status === 'blocked') return this.t('deploy_compat_blocked');
+      if (status === 'repairable') return this.t('deploy_compat_repairable');
+      if (status === 'skipped') return this.t('deploy_compat_skipped');
+      return this.t('deploy_compat_unknown');
+    },
+
+    deployCompatibilityReason() {
+      const reason = String(this.deployCompatibility().reason || '').trim();
+      if (!reason) return '';
+      const lower = reason.toLowerCase();
+      if (lower === 'selected image can read this model configuration') {
+        return this.t('deploy_compat_reason_image_reads_config');
+      }
+      return reason;
+    },
+
+    deployCompatibilityRows() {
+      const c = this.deployCompatibility();
+      const selected = this.deploySelectedEngineMeta();
+      const model = this.deployDetailModel || {};
+      const checked = !(this.deployDetailDirty || !this.deployDetailLastCheckedAt) && this.deployPlanMatchesSelectedEngine();
+      const fallbackEngine = checked ? (this.deployDetailPlan.engine || '') : '';
+      const fallbackImage = checked ? (this.deployDetailPlan.engine_image || '') : '';
+      const rawEngineAsset = c.engine_asset || c.engine || selected.id || selected.type || fallbackEngine || '';
+      const engineAsset = rawEngineAsset ? this.engineDisplayName({
+        id: rawEngineAsset,
+        type: c.engine || selected.type || fallbackEngine
+      }) : '';
+      const engineImage = this.trimImageName(c.engine_image || selected.image || fallbackImage) || '-';
+      const dockerState = typeof c.image_available_in_docker === 'boolean'
+        ? (c.image_available_in_docker ? this.t('deploy_compat_present') : this.t('deploy_compat_missing'))
+        : this.t('unavailable');
+      const containerdState = typeof c.image_available_in_containerd === 'boolean'
+        ? (c.image_available_in_containerd ? this.t('deploy_compat_present') : this.t('deploy_compat_missing'))
+        : this.t('unavailable');
+      const imageState = [
+        this.t('deploy_compat_image_docker') + ': ' + dockerState,
+        this.t('deploy_compat_image_containerd') + ': ' + containerdState
+      ].join(' / ');
+      const modelType = c.model_type
+        || (Array.isArray(c.model_architectures) ? c.model_architectures.join(', ') : '')
+        || model.detected_arch
+        || model.model_type
+        || model.type
+        || '-';
+      return [
+        { key: 'engine_asset', label: this.t('deploy_compat_engine_asset'), value: engineAsset || '-' },
+        { key: 'engine_image', label: this.t('deploy_compat_engine_image'), value: engineImage },
+        { key: 'model_type', label: this.t('deploy_compat_model_type'), value: modelType },
+        { key: 'probe', label: this.t('deploy_compat_probe'), value: c.probe || '-' },
+        { key: 'image_state', label: this.t('deploy_compat_image_state'), value: imageState },
+        { key: 'distribution', label: this.t('deploy_compat_distribution'), value: c.engine_distribution || '-' }
+      ];
     },
 
     humanDeployWarning(warning) {
@@ -10703,7 +11003,7 @@ function aimaApp() {
       if (!modelName || this.deployDetailSubmitting) return;
       const request = {
         model: modelName,
-        engine: this.deployDetailForm.engine || '',
+        engine: this.deployEngineRequestValue(),
         slot: this.deployDetailForm.slot || '',
         config: this.deployConfigFromParams(),
         no_pull: this.deployDetailForm.noPull === true || this.deployDetailForm.noPull === 'true'

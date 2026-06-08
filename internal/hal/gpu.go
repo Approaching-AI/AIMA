@@ -128,6 +128,11 @@ func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
 			return gpu
 		}
 	}
+	// Platform fallback (Windows CIM) for hosts without a vendor SMI tool on PATH.
+	if gpu := detectPlatformGPU(ctx, runner); gpu != nil {
+		enrichGPU(ctx, runner, gpu)
+		return gpu
+	}
 	if gpu := detectAMDDRM(ctx, runner); gpu != nil {
 		enrichGPU(ctx, runner, gpu)
 		return gpu

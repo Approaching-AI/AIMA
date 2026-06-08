@@ -5,19 +5,44 @@ metadata:
   family: glm
   parameter_count: "30B"
   released_at: "2025-11"
+  # Scan-name alias: on-disk GGUF name so the local scanner matches this asset.
+  aliases:
+    - GLM-4.7-Flash-Q4_K_M
 storage:
-  formats: [safetensors]
+  formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
       repo: THUDM/GLM-4.7-Flash
       format: safetensors
+    - type: huggingface
+      repo: unsloth/GLM-4.7-Flash-GGUF
+      format: gguf
     - type: modelscope
       repo: ZhipuAI/GLM-4.7-Flash
       format: safetensors
     - type: local_path
       path: ""
 variants:
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # GLM-4.7-Flash 30B-A3B MoE (llama.cpp arch deepseek2), Q4_K_M ~18GB, all layers offloaded.
+  - name: glm-4.7-flash-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 20480
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      ctx_size: 8192
+    expected_performance:
+      startup_time_s: 20
+      cold_start_time_s: 40
+      tokens_per_second: [48, 60]
+      latency_first_token_ms: [30, 200]
+      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q4_K_M (deepseek2 arch, 30B-A3B MoE) all 999 layers offloaded: 58.9 tok/s decode, 83 tok/s prompt."
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # BF16 ~59GB, 128GB unified memory 可容纳
   # Glm4MoeLiteForCausalLM 架构 (glm4_moe_lite model_type)

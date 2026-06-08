@@ -5,6 +5,9 @@ metadata:
   family: qwen
   parameter_count: "35B"
   released_at: "2025-12"
+  # Scan-name alias: on-disk GGUF name so the local scanner matches this asset.
+  aliases:
+    - Qwen3.5-35B-A3B-Q4_K_M
 storage:
   formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
@@ -363,5 +366,6 @@ variants:
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 60
-      tokens_per_second: [3, 15]
+      tokens_per_second: [3, 63]
       latency_first_token_ms: [80, 400]
+      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q4_K_M (35B-A3B MoE, ~3.5B active) all 999 layers offloaded: 63 tok/s decode, 101 tok/s prompt. Lower end of range is weak-device CPU-offload fallback."

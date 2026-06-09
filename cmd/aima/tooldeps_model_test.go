@@ -581,3 +581,56 @@ func writeScanModelFixture(dir string, weightSize int) error {
 	}
 	return os.WriteFile(filepath.Join(dir, "model.safetensors"), make([]byte, weightSize), 0o644)
 }
+
+// A speculative draft head (e.g. DFlash/MTP), declared only as a variant's
+// speculative_config.model in the catalog, must be marked non-standalone so the
+// UI does not offer to deploy it on its own. Its parent model stays deployable.
+func TestAnnotateModelsFromCatalog_SpeculativeDraftNotStandalone(t *testing.T) {
+	cat := &knowledge.Catalog{
+		ModelAssets: []knowledge.ModelAsset{{
+			Metadata: knowledge.ModelMetadata{
+				Name:    "qwen3.6-35b-a3b",
+				Aliases: []string{"Qwen3.6-35B-A3B"},
+			},
+			Variants: []knowledge.ModelVariant{{
+				Name: "dflash",
+				DefaultConfig: map[string]any{
+					"speculative_config": map[string]any{
+						"method": "dflash",
+						"model":  "/models/Qwen3.6-35B-A3B-DFlash",
+					},
+				},
+			}},
+		}},
+	}
+	models := []*state.Model{
+		{Name: "Qwen3.6-35B-A3B"},               // parent: stays deployable
+		{Name: "Qwen3.6-35B-A3B-DFlash"},        // draft (safetensors)
+		{Name: "Qwen3.6-35B-A3B-DFlash-Q4_K_M"}, // draft (gguf quant)
+	}
+
+	annotateModelsFromCatalog(models, cat)
+
+	byName := make(map[string]*state.Model, len(models))
+	for _, m := range models {
+		byName[m.Name] = m
+	}
+
+	for _, name := range []string{"Qwen3.6-35B-A3B-DFlash", "Qwen3.6-35B-A3B-DFlash-Q4_K_M"} {
+		m := byName[name]
+		if m.StandaloneDeploy == nil || *m.StandaloneDeploy {
+			t.Errorf("%s: StandaloneDeploy = %v, want non-nil false", name, m.StandaloneDeploy)
+		}
+		if m.UIRole != "draft" {
+			t.Errorf("%s: UIRole = %q, want %q", name, m.UIRole, "draft")
+		}
+	}
+
+	parent := byName["Qwen3.6-35B-A3B"]
+	if parent.StandaloneDeploy != nil && !*parent.StandaloneDeploy {
+		t.Errorf("parent model must not be marked non-standalone")
+	}
+	if parent.UIRole == "draft" {
+		t.Errorf("parent model must not be tagged as a draft")
+	}
+}

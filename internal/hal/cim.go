@@ -2,8 +2,34 @@ package hal
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 )
+
+// llamaDeviceVRAMRe captures the total VRAM (MiB) from a llama.cpp
+// `--list-devices` line such as
+// "  ROCm0: AMD Radeon(TM) 8060S Graphics (110456 MiB, 110301 MiB free)".
+var llamaDeviceVRAMRe = regexp.MustCompile(`\(([0-9]+)\s*MiB`)
+
+// parseLlamaROCmVRAMMiB extracts the iGPU's total usable VRAM (MiB) as reported
+// by the inference engine itself. On AMD APUs (Strix Halo) Win32 AdapterRAM
+// saturates at 4 GiB and there is no rocm-smi, so the ROCm-capable llama.cpp's
+// own device enumeration is the authoritative source of the GPU-addressable
+// pool (dedicated VRAM + GTT). Returns 0 when no device line is present.
+func parseLlamaROCmVRAMMiB(output string) int {
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(line, "MiB") {
+			continue
+		}
+		if m := llamaDeviceVRAMRe.FindStringSubmatch(line); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
 
 // CIM (Common Information Model) parsing for Windows hardware detection.
 //

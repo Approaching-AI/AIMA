@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -65,8 +66,14 @@ func (r *Reconciler) Scan(ctx context.Context) ([]Overview, error) {
 	if err != nil {
 		return nil, err
 	}
+	own := r.ownDeploymentAddrs()
 	out := make([]Overview, 0, len(services))
 	for _, svc := range services {
+		// Skip AIMA's own deployment backends (e.g. native llama.cpp on :8080);
+		// they are managed deployments, not importable external services.
+		if _, ok := own[normalizeHostPort(svc.BaseURL)]; ok {
+			continue
+		}
 		overview := OverviewFromScan(svc)
 		if err := r.store.UpsertExternalService(ctx, RecordFromOverview(overview)); err != nil {
 			slog.Warn("external service scan: failed to persist service", "base_url", svc.BaseURL, "error", err)
@@ -93,7 +100,9 @@ func (r *Reconciler) List(ctx context.Context) ([]Overview, error) {
 	for _, row := range rows {
 		out = append(out, OverviewFromRecord(row))
 	}
-	return out, nil
+	// Hide AIMA's own deployment backends that a prior scan may have recorded
+	// (e.g. a native llama.cpp deployment on llama.cpp's default port 8080).
+	return filterOutOwnDeployments(out, r.ownDeploymentAddrs()), nil
 }
 
 func (r *Reconciler) Import(ctx context.Context, idOrBaseURL string, models []string) (ImportResult, error) {
@@ -403,4 +412,65 @@ func sameStringSet(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// normalizeHostPort reduces a base URL or address to a comparable "host:port",
+// dropping scheme/path and folding loopback/any-interface hosts to 127.0.0.1 so
+// a scanned endpoint can be matched against an AIMA deployment address.
+func normalizeHostPort(addr string) string {
+	addr = strings.TrimSpace(strings.ToLower(addr))
+	if addr == "" {
+		return ""
+	}
+	if i := strings.Index(addr, "://"); i >= 0 {
+		addr = addr[i+3:]
+	}
+	if i := strings.IndexByte(addr, '/'); i >= 0 {
+		addr = addr[:i]
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch host {
+	case "localhost", "::1", "[::1]", "0.0.0.0", "":
+		host = "127.0.0.1"
+	}
+	return host + ":" + port
+}
+
+// ownDeploymentAddrs returns the set of host:port addresses backing AIMA's own
+// (non-external) proxy deployments. The external scanner probes llama.cpp's
+// default port 8080, which an AIMA native deployment also binds, so these must
+// be excluded to avoid surfacing AIMA's own backend as an importable service.
+func (r *Reconciler) ownDeploymentAddrs() map[string]struct{} {
+	own := make(map[string]struct{})
+	if r.proxy == nil {
+		return own
+	}
+	for _, b := range r.proxy.ListBackends() {
+		if b == nil || b.External {
+			continue
+		}
+		if a := normalizeHostPort(b.Address); a != "" {
+			own[a] = struct{}{}
+		}
+	}
+	return own
+}
+
+// filterOutOwnDeployments drops services whose address matches an AIMA-owned
+// deployment backend.
+func filterOutOwnDeployments(services []Overview, own map[string]struct{}) []Overview {
+	if len(own) == 0 {
+		return services
+	}
+	out := make([]Overview, 0, len(services))
+	for _, svc := range services {
+		if _, ok := own[normalizeHostPort(svc.BaseURL)]; ok {
+			continue
+		}
+		out = append(out, svc)
+	}
+	return out
 }

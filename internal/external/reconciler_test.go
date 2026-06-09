@@ -370,3 +370,71 @@ func TestRestoreKeepsImportedSubsetOnRestore(t *testing.T) {
 		t.Fatal("new-model backend should be restored")
 	}
 }
+
+func TestNormalizeHostPort(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"127.0.0.1:8080", "127.0.0.1:8080"},
+		{"http://127.0.0.1:8080", "127.0.0.1:8080"},
+		{"http://127.0.0.1:8080/v1", "127.0.0.1:8080"},
+		{"localhost:8080", "127.0.0.1:8080"},
+		{"http://localhost:8080", "127.0.0.1:8080"},
+		{"0.0.0.0:8080", "127.0.0.1:8080"},
+		{"10.42.0.8:8000", "10.42.0.8:8000"},
+	}
+	for _, c := range cases {
+		if got := normalizeHostPort(c.in); got != c.want {
+			t.Errorf("normalizeHostPort(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// AIMA's own native deployment binds llama.cpp's default port 8080, which the
+// external scanner also probes. List must not surface AIMA's own deployment
+// backend as an importable external service; genuine external services stay.
+func TestListExcludesOwnDeploymentServices(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open(:memory:): %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, svc := range []*state.ExternalService{
+		{ID: "own-8080", BaseURL: "http://127.0.0.1:8080", Kind: "openai", Status: "reachable", Source: "scan", ModelsJSON: `["Qwen3.6-27B-Q4_K_M.gguf"]`},
+		{ID: "real-ollama", BaseURL: "http://127.0.0.1:11434", Kind: "ollama", Status: "reachable", Source: "scan", ModelsJSON: `["llama3"]`},
+	} {
+		if err := db.UpsertExternalService(ctx, svc); err != nil {
+			t.Fatalf("UpsertExternalService: %v", err)
+		}
+	}
+
+	proxyServer := proxy.NewServer()
+	// AIMA's own native deployment backend (External defaults to false).
+	proxyServer.RegisterBackend("Qwen3.6-27B-Q4_K_M", &proxy.Backend{
+		ModelName: "Qwen3.6-27B-Q4_K_M",
+		Address:   "127.0.0.1:8080",
+		Ready:     true,
+	})
+
+	services, err := NewReconciler(db, proxyServer).List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, svc := range services {
+		if svc.BaseURL == "http://127.0.0.1:8080" {
+			t.Errorf("List returned AIMA's own deployment as external service: %s", svc.BaseURL)
+		}
+	}
+	var sawOllama bool
+	for _, svc := range services {
+		if svc.BaseURL == "http://127.0.0.1:11434" {
+			sawOllama = true
+		}
+	}
+	if !sawOllama {
+		t.Errorf("genuine external service (ollama) was wrongly excluded; got %d services", len(services))
+	}
+}

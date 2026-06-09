@@ -2,7 +2,52 @@
 
 package hal
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+// On Windows 11 builds where wmic has been removed, CPU detection must fall
+// back to PowerShell CIM. The mock runner returns ErrNotFound for the wmic
+// command (not in its map), exercising the fallback path.
+func TestDetectCPUFallsBackToCIMWhenWMICMissing(t *testing.T) {
+	runner := newMockRunner(map[string]mockResult{
+		"powershell -NoProfile -Command " + cimCPUCommand: {
+			output: []byte("Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed\nAMD Ryzen AI Max+ 395 w/ Radeon 8060S Graphics,16,32,3000\n"),
+		},
+	})
+	info := detectCPU(context.Background(), runner)
+	if info.Model != "AMD Ryzen AI Max+ 395 w/ Radeon 8060S Graphics" {
+		t.Errorf("Model = %q, want CIM-detected name", info.Model)
+	}
+	if info.Cores != 16 || info.Threads != 32 {
+		t.Errorf("Cores/Threads = %d/%d, want 16/32", info.Cores, info.Threads)
+	}
+	if info.FreqGHz != 3.0 {
+		t.Errorf("FreqGHz = %v, want 3", info.FreqGHz)
+	}
+}
+
+func TestDetectRAMFallsBackToCIMWhenWMICMissing(t *testing.T) {
+	runner := newMockRunner(map[string]mockResult{
+		"powershell -NoProfile -Command " + cimRAMCommand: {
+			output: []byte("TotalVisibleMemorySize,FreePhysicalMemory\n134217728,67108864\n"),
+		},
+		"powershell -NoProfile -Command " + cimSwapCommand: {
+			output: []byte("AllocatedBaseSize\n8192\n"),
+		},
+	})
+	info := detectRAM(context.Background(), runner)
+	if info.TotalMiB != 131072 {
+		t.Errorf("TotalMiB = %d, want 131072 (128 GiB)", info.TotalMiB)
+	}
+	if info.AvailableMiB != 65536 {
+		t.Errorf("AvailableMiB = %d, want 65536", info.AvailableMiB)
+	}
+	if info.SwapTotalMiB != 8192 {
+		t.Errorf("SwapTotalMiB = %d, want 8192", info.SwapTotalMiB)
+	}
+}
 
 func TestParseWMICCPU(t *testing.T) {
 	tests := []struct {

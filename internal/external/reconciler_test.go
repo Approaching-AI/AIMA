@@ -438,3 +438,67 @@ func TestListExcludesOwnDeploymentServices(t *testing.T) {
 		t.Errorf("genuine external service (ollama) was wrongly excluded; got %d services", len(services))
 	}
 }
+
+func TestStaleScannedAddrs(t *testing.T) {
+	existing := []*state.ExternalService{
+		{BaseURL: "http://127.0.0.1:8080", Source: "scan", Status: "reachable"},                 // vanished -> stale
+		{BaseURL: "http://127.0.0.1:11434", Source: "scan", Status: "reachable"},                // still reachable
+		{BaseURL: "http://127.0.0.1:9000", Source: "scan", Status: "reachable", Imported: true}, // imported -> keep
+		{BaseURL: "http://127.0.0.1:5000", Source: "scan", Status: "unreachable"},               // already marked -> skip
+	}
+	reachable := map[string]struct{}{"http://127.0.0.1:11434": {}}
+	got := staleScannedAddrs(existing, reachable, map[string]struct{}{})
+	if len(got) != 1 || got[0] != "http://127.0.0.1:8080" {
+		t.Fatalf("got %v, want [http://127.0.0.1:8080]", got)
+	}
+}
+
+func TestStaleScannedAddrsSkipsOwnDeployment(t *testing.T) {
+	existing := []*state.ExternalService{{BaseURL: "http://127.0.0.1:8080", Source: "scan", Status: "reachable"}}
+	own := map[string]struct{}{"127.0.0.1:8080": {}}
+	if got := staleScannedAddrs(existing, map[string]struct{}{}, own); len(got) != 0 {
+		t.Errorf("own deployment must not be marked stale, got %v", got)
+	}
+}
+
+// A scanned service that has died (status unreachable) must drop out of List,
+// while a reachable scanned service and an imported (even if offline) one stay.
+func TestListHidesVanishedScannedService(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, svc := range []*state.ExternalService{
+		{ID: "dead", BaseURL: "http://127.0.0.1:8080", Kind: "openai", Status: "unreachable", Source: "scan", ModelsJSON: `["x"]`},
+		{ID: "live", BaseURL: "http://127.0.0.1:11434", Kind: "ollama", Status: "reachable", Source: "scan", ModelsJSON: `["y"]`},
+		{ID: "imp", BaseURL: "http://127.0.0.1:9000", Kind: "openai", Status: "unreachable", Source: "scan", ModelsJSON: `["z"]`},
+	} {
+		if err := db.UpsertExternalService(ctx, svc); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+	if err := db.SetExternalServiceImportedModels(ctx, "http://127.0.0.1:9000", true, []string{"z"}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	services, err := NewReconciler(db, proxy.NewServer()).List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, s := range services {
+		seen[s.BaseURL] = true
+	}
+	if seen["http://127.0.0.1:8080"] {
+		t.Error("vanished scanned service :8080 should be hidden")
+	}
+	if !seen["http://127.0.0.1:11434"] {
+		t.Error("reachable scanned service :11434 should be shown")
+	}
+	if !seen["http://127.0.0.1:9000"] {
+		t.Error("imported service :9000 should be shown even when unreachable")
+	}
+}

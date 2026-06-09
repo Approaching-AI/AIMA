@@ -85,6 +85,13 @@ func (r *Reconciler) Scan(ctx context.Context) ([]Overview, error) {
 	for _, svc := range out {
 		reachable[svc.BaseURL] = struct{}{}
 	}
+	// Mark previously-discovered services that have disappeared (e.g. an
+	// undeployed model's backend) unreachable so they stop being listed.
+	for _, url := range staleScannedAddrs(existing, reachable, own) {
+		if err := r.store.SetExternalServiceStatus(ctx, url, "unreachable", "not found in last scan"); err != nil {
+			slog.Warn("external service scan: failed to mark stale service unreachable", "base_url", url, "error", err)
+		}
+	}
 	if err := r.Restore(ctx, reachable); err != nil {
 		slog.Warn("external service scan: failed to restore imported services", "error", err)
 	}
@@ -98,7 +105,13 @@ func (r *Reconciler) List(ctx context.Context) ([]Overview, error) {
 	}
 	out := make([]Overview, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, OverviewFromRecord(row))
+		ov := OverviewFromRecord(row)
+		// Hide auto-discovered services that have vanished (dead scanned, not
+		// imported) — e.g. the backend of a model the user just undeployed.
+		if ov.Source == "scan" && !ov.Imported && strings.EqualFold(ov.Status, "unreachable") {
+			continue
+		}
+		out = append(out, ov)
 	}
 	// Hide AIMA's own deployment backends that a prior scan may have recorded
 	// (e.g. a native llama.cpp deployment on llama.cpp's default port 8080).
@@ -473,4 +486,28 @@ func filterOutOwnDeployments(services []Overview, own map[string]struct{}) []Ove
 		out = append(out, svc)
 	}
 	return out
+}
+
+// staleScannedAddrs returns base URLs of auto-discovered (scanned, non-imported)
+// services that were not seen in the latest scan and are not AIMA's own
+// deployments — i.e. services that have disappeared (e.g. a model that was
+// undeployed) and should be marked unreachable so they drop out of the list.
+func staleScannedAddrs(existing []*state.ExternalService, reachable, own map[string]struct{}) []string {
+	var stale []string
+	for _, ex := range existing {
+		if ex == nil || ex.Imported || ex.Source != "scan" {
+			continue
+		}
+		if strings.EqualFold(ex.Status, "unreachable") {
+			continue
+		}
+		if _, ok := reachable[ex.BaseURL]; ok {
+			continue
+		}
+		if _, ok := own[normalizeHostPort(ex.BaseURL)]; ok {
+			continue
+		}
+		stale = append(stale, ex.BaseURL)
+	}
+	return stale
 }

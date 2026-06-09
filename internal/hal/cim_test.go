@@ -259,6 +259,19 @@ func TestParseWindowsGPUs(t *testing.T) {
 	})
 }
 
+func TestParseLlamaROCmVRAMMiB(t *testing.T) {
+	out := "Available devices:\n  ROCm0: AMD Radeon(TM) 8060S Graphics (110456 MiB, 110301 MiB free)\n"
+	if got := parseLlamaROCmVRAMMiB(out); got != 110456 {
+		t.Errorf("got %d, want 110456", got)
+	}
+	if got := parseLlamaROCmVRAMMiB(""); got != 0 {
+		t.Errorf("empty -> %d, want 0", got)
+	}
+	if got := parseLlamaROCmVRAMMiB("no rocm devices available"); got != 0 {
+		t.Errorf("no match -> %d, want 0", got)
+	}
+}
+
 func TestParseCIMInstalledMemoryBytes(t *testing.T) {
 	// Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum
 	if got := parseCIMInstalledMemoryBytes(`{"Sum":137438953472}`); got != 137438953472 {

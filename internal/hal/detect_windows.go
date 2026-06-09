@@ -15,6 +15,7 @@ import (
 const (
 	cimCPUScript      = "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed | ConvertTo-Json -Compress"
 	cimRAMScript      = "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress"
+	cimPhysMemScript  = "Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum | Select-Object Sum | ConvertTo-Json -Compress"
 	cimPageFileScript = "Get-CimInstance Win32_PageFileUsage | Select-Object AllocatedBaseSize | ConvertTo-Json -Compress"
 	cimCPULoadScript  = "Get-CimInstance Win32_Processor | Select-Object LoadPercentage | ConvertTo-Json -Compress"
 	cimGPUScript      = "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,AdapterCompatibility,PNPDeviceID,AdapterRAM | ConvertTo-Json -Compress"
@@ -50,6 +51,12 @@ func detectRAM(ctx context.Context, runner CommandRunner) RAMInfo {
 		return info
 	}
 	parseCIMRAM(string(out), &info)
+
+	// Report true installed memory: unified-memory APUs (Strix Halo) expose only
+	// a fraction to the OS, carving the rest out for the iGPU.
+	if physOut, err := runCIM(ctx, runner, cimPhysMemScript); err == nil {
+		applyInstalledMemoryTotal(&info, parseCIMInstalledMemoryBytes(string(physOut)))
+	}
 
 	// Pagefile (swap) is best-effort; system-managed hosts may report nothing.
 	if swapOut, err := runCIM(ctx, runner, cimPageFileScript); err == nil {

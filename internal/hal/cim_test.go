@@ -258,3 +258,40 @@ func TestParseWindowsGPUs(t *testing.T) {
 		}
 	})
 }
+
+func TestParseCIMInstalledMemoryBytes(t *testing.T) {
+	// Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum
+	if got := parseCIMInstalledMemoryBytes(`{"Sum":137438953472}`); got != 137438953472 {
+		t.Errorf("got %d, want 137438953472 (128 GiB)", got)
+	}
+	if got := parseCIMInstalledMemoryBytes(``); got != 0 {
+		t.Errorf("empty output -> %d, want 0", got)
+	}
+}
+
+func TestApplyInstalledMemoryTotal(t *testing.T) {
+	// Strix Halo: OS sees ~32 GiB but 128 GiB is installed (rest carved out for
+	// the iGPU). Report the full installed total; recompute available as
+	// total - OS-used so it stays meaningful.
+	info := RAMInfo{TotalMiB: 32406, AvailableMiB: 20198} // OS-used = 12208
+	applyInstalledMemoryTotal(&info, 137438953472)
+	if info.TotalMiB != 131072 {
+		t.Errorf("TotalMiB = %d, want 131072 (128 GiB)", info.TotalMiB)
+	}
+	if want := 131072 - (32406 - 20198); info.AvailableMiB != want {
+		t.Errorf("AvailableMiB = %d, want %d", info.AvailableMiB, want)
+	}
+}
+
+func TestApplyInstalledMemoryTotalNoShrink(t *testing.T) {
+	// Normal box: installed nameplate not larger than OS-visible -> no change.
+	info := RAMInfo{TotalMiB: 32000, AvailableMiB: 16000}
+	applyInstalledMemoryTotal(&info, int64(31000)*1024*1024)
+	if info.TotalMiB != 32000 || info.AvailableMiB != 16000 {
+		t.Errorf("unexpected change: %+v", info)
+	}
+	applyInstalledMemoryTotal(&info, 0) // no data -> no change
+	if info.TotalMiB != 32000 {
+		t.Errorf("zero installed changed total: %+v", info)
+	}
+}

@@ -79,6 +79,40 @@ func parseCIMRAM(output string, info *RAMInfo) {
 	}
 }
 
+// parseCIMInstalledMemoryBytes reads the summed DIMM capacity (bytes) from
+// `Win32_PhysicalMemory | Measure-Object Capacity -Sum` JSON ({"Sum":N}).
+func parseCIMInstalledMemoryBytes(output string) int64 {
+	objs := decodeCIMObjects(output)
+	if len(objs) == 0 {
+		return 0
+	}
+	return jsonInt(objs[0], "Sum")
+}
+
+// applyInstalledMemoryTotal overrides RAMInfo.TotalMiB with the true installed
+// memory (sum of DIMM capacity) when it exceeds the OS-visible total. On
+// unified-memory APUs (e.g. Strix Halo) the OS only sees a fraction with the
+// rest carved out for the iGPU, so the installed total is the meaningful figure.
+// AvailableMiB is recomputed as total minus OS-used so it stays correct on both
+// unified and conventional hosts.
+func applyInstalledMemoryTotal(info *RAMInfo, installedBytes int64) {
+	if installedBytes <= 0 {
+		return
+	}
+	total := int(installedBytes / (1024 * 1024))
+	if total <= info.TotalMiB {
+		return
+	}
+	osUsed := info.TotalMiB - info.AvailableMiB
+	if osUsed < 0 {
+		osUsed = 0
+	}
+	info.TotalMiB = total
+	if avail := total - osUsed; avail >= 0 {
+		info.AvailableMiB = avail
+	}
+}
+
 // parseCIMSwap sums AllocatedBaseSize (MiB) across all Win32_PageFileUsage rows.
 func parseCIMSwap(output string, info *RAMInfo) {
 	total := 0

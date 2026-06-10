@@ -3,10 +3,25 @@
 AIMA for the **AMD Ryzen AI Max+ 395 / Radeon 8060S "Strix Halo"** on Windows 11.
 Built from `develop` + the platform fixes below. Preview/handoff build — **not an official release**.
 
-- Binary: `dist/aima-windows-amd64.exe` (`aima version` → `v0.5-dev-amd-strix-halo`)
-- Launcher: `dist/serve.bat`
+### Builds (version-stamped filenames — newer builds do NOT overwrite older ones)
 
-## Fixes included (vs develop) — all in PRs #78–#83
+| File | `aima version` | Date | Notes |
+|------|----------------|------|-------|
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | **latest** — adds out-of-box HIP engine (#85, #86). `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo.exe` | `v0.5-dev-amd-strix-halo` | 2026-06-09 | prior build (#78–#83 only, **no** HIP engine auto-download). Kept for rollback. |
+
+Both built from the same source line (commit `fc3ef41`); the file name matches the
+exe's own `aima version` string. Launcher: `dist/serve.bat` (edit the exe name there to
+switch builds).
+
+> **2026-06-10 rebuild** — now includes the out-of-box AMD-HIP engine work (#85, #86):
+> AIMA **auto-downloads a Strix-Halo-adapted ROCm/HIP llama.cpp** on first deploy, and a
+> pre-installed engine you point `AIMA_ENGINE_DIR` at is the one that actually launches
+> ("scanned ⇒ launchable"). **Manually setting `AIMA_ENGINE_DIR` is no longer required** —
+> verified on the 395: empty dist + no `AIMA_ENGINE_DIR` → `aima deploy <gguf> --engine llamacpp`
+> auto-fetches `llama-b9330-bin-win-hip-radeon-x64` and runs all layers on the iGPU (~33 t/s).
+
+## Fixes included (vs develop) — PRs #78–#86
 
 - **Windows hardware detection**: `wmic` was removed in Win11 24H2, so CPU/RAM detection
   returned empty. Now uses PowerShell **CIM** (`Get-CimInstance`), detects the **AMD iGPU**,
@@ -19,13 +34,26 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
   models. (#82)
 - **External services**: AIMA's own deployment backend (llama.cpp default port 8080) is not
   re-listed as importable, and dead/undeployed services drop out of the list. (#83)
+- **Out-of-box AMD-HIP llama.cpp engine**: new `llamacpp-hip-windows` catalog asset
+  (`go:embed`'d, pins official `b9330` `win-hip-radeon-x64`) so a no-NVIDIA Strix Halo box
+  auto-downloads the *right* ROCm/HIP llama.cpp — not the CUDA `llamacpp-universal` (which
+  would run CPU-only) nor the linux-only vulkan/rocm assets. (#85)
+- **Scanned ⇒ launchable**: the native runtime resolves the engine binary against
+  `AIMA_ENGINE_DIR` (order: dist → `AIMA_ENGINE_DIR` → auto-download → PATH), so a
+  pre-installed llama.cpp of **any version** is the one that actually launches — fixes the
+  partner's "deploy falls back to bare `llama-server` → command not found". (#86)
 
 ## Run
 
-1. Put a **ROCm/HIP** build of llama.cpp somewhere and set `AIMA_ENGINE_DIR` to it in
-   `serve.bat` (the CUDA build will not start on a no-NVIDIA box).
-2. Run `serve.bat`.
-3. Open `http://localhost:6188/ui/`.
+1. Run `serve.bat`. The llama.cpp engine is handled automatically:
+   - **No engine on the box?** On first `aima deploy <model> --engine llamacpp` AIMA
+     auto-downloads the official ROCm/HIP build (`b9330`, `win-hip-radeon-x64`) and runs
+     on the iGPU. No setup needed. (#85)
+   - **Already have your own llama.cpp build (any version)?** Set `AIMA_ENGINE_DIR` in
+     `serve.bat` to its folder — AIMA launches *that exact binary*, so your llama.cpp
+     version is supported regardless of what AIMA ships. Must be a **ROCm/HIP** build,
+     not the CUDA build (CUDA won't start on a no-NVIDIA box). (#86)
+2. Open `http://localhost:6188/ui/`.
 
 **LAN access** (other machines): it binds `0.0.0.0:6188`, but Windows Firewall auto-creates an
 *inbound block* rule for `aima.exe` on first listen. Remove it and add an allow rule:

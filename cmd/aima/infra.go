@@ -300,10 +300,19 @@ func buildNativeRuntime(dataDir string, engineAssets []knowledge.EngineAsset) ru
 	platform := goruntime.GOOS + "-" + goruntime.GOARCH
 	distDir := filepath.Join(dataDir, "dist", platform)
 	bm := engine.NewBinaryManager(distDir)
+	// Pre-installed engine dirs (AIMA_ENGINE_DIR) — the SAME source the engine
+	// scanner reads — so a scanned native engine binary is also launchable.
+	var engineDirs []string
+	for _, dir := range filepath.SplitList(os.Getenv("AIMA_ENGINE_DIR")) {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			engineDirs = append(engineDirs, dir)
+		}
+	}
 	return runtime.NewNativeRuntime(
 		filepath.Join(dataDir, "logs"),
 		distDir,
 		filepath.Join(dataDir, "deployments"),
+		runtime.WithEngineDirs(engineDirs),
 		runtime.WithBinaryResolver(func(ctx context.Context, src *engine.BinarySource) (string, error) {
 			if !deployAutoPullAllowed(ctx) {
 				name := "engine binary"

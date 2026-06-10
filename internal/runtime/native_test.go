@@ -1132,3 +1132,31 @@ func TestDeployAppendsCustomPortFlags(t *testing.T) {
 		t.Fatalf("command = %q, should not contain synthesized --port flag", argStr)
 	}
 }
+
+func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
+	// A native engine binary discovered by scanning AIMA_ENGINE_DIR must also be
+	// launchable: the native runtime resolves the bare binary name against the same
+	// engine dirs, so "scanned ⇒ launchable" holds even when it is not in dist/PATH.
+	dir := t.TempDir()
+	fileName := "llama-server"
+	if runtime.GOOS == "windows" {
+		fileName += ".exe"
+	}
+	want := filepath.Join(dir, fileName)
+	if err := os.WriteFile(want, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+
+	// Empty dir entries are skipped; the bare name resolves to the absolute path.
+	r := &NativeRuntime{engineDirs: []string{"", dir}}
+	if got := r.findInEngineDirs("llama-server"); got != want {
+		t.Errorf("findInEngineDirs = %q, want %q", got, want)
+	}
+	// Missing binary and no configured dirs both resolve to empty.
+	if got := r.findInEngineDirs("nope"); got != "" {
+		t.Errorf("missing binary: got %q, want empty", got)
+	}
+	if got := (&NativeRuntime{}).findInEngineDirs("llama-server"); got != "" {
+		t.Errorf("no engine dirs: got %q, want empty", got)
+	}
+}

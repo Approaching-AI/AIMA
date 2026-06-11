@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,22 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			modelPath, modelPathErr = resolveLocalModelPathNoPull(modelName, resolved, dataDir)
 			if modelPathErr != nil {
 				return nil, modelPathErr
+			}
+		}
+
+		// Auto-wire the multimodal projector for llama.cpp VL models. A GGUF vision
+		// model ships a co-located mmproj-*.gguf, and llama-server needs --mmproj to
+		// accept images. If the caller didn't set it, inject the projector path so
+		// vision works zero-config (it flows through configToFlags as --mmproj).
+		if resolved.ModelFormat == "gguf" && strings.HasPrefix(strings.ToLower(resolved.Engine), "llamacpp") {
+			if _, set := resolved.Config["mmproj"]; !set {
+				if mm := findColocatedMMProj(modelPath); mm != "" {
+					if resolved.Config == nil {
+						resolved.Config = map[string]any{}
+					}
+					resolved.Config["mmproj"] = mm
+					slog.Info("auto-wired multimodal projector for vision", "model", modelName, "mmproj", mm)
+				}
 			}
 		}
 
@@ -849,4 +866,39 @@ func normalizeServedModelName(modelName, raw string) string {
 		return modelName
 	}
 	return served
+}
+
+// findColocatedMMProj returns the path of a multimodal projector (mmproj-*.gguf)
+// next to a GGUF model, preferring an f16 projector for quality. Returns "" when
+// none is present (i.e. the model is not multimodal). modelPath may be the model
+// file or its directory; the projector is expected in the same directory.
+func findColocatedMMProj(modelPath string) string {
+	dir := modelPath
+	if fi, err := os.Stat(modelPath); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(modelPath)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var f16, other string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		lower := strings.ToLower(e.Name())
+		if !strings.HasSuffix(lower, ".gguf") || !strings.Contains(lower, "mmproj") {
+			continue
+		}
+		full := filepath.Join(dir, e.Name())
+		if strings.Contains(lower, "f16") || strings.Contains(lower, "fp16") {
+			f16 = full
+		} else if other == "" {
+			other = full
+		}
+	}
+	if f16 != "" {
+		return f16
+	}
+	return other
 }

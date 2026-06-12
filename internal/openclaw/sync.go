@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jguan/aima/internal/openclaw/plugins"
 	"github.com/jguan/aima/internal/openclaw/skills"
@@ -35,6 +38,8 @@ type SyncResult struct {
 	MCPServer      *MCPServerEntry `json:"mcpServer,omitempty"`
 	ProxyAddr      string          `json:"proxyAddr"`
 	APIKey         string          `json:"apiKey,omitempty"`
+	ProxyReachable bool            `json:"proxyReachable"`
+	ProxyWarning   string          `json:"proxyWarning,omitempty"`
 	ConfigPath     string          `json:"configPath"`
 	ConfigExists   bool            `json:"configExists"`
 	Written        bool            `json:"written"`
@@ -86,6 +91,19 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		ConfigPath: deps.ConfigPath,
 		MCPServer:  desiredMCPServer(deps),
 	}
+
+	// Preflight: the provider we write points OpenClaw's chat data plane at
+	// deps.ProxyAddr (the `aima serve` proxy, default :6188). If serve is not
+	// listening there — or an HTTP_PROXY env intercepts loopback — OpenClaw
+	// fails every request with a connection error/timeout that looks nothing
+	// like a config problem. Probe it now and surface a loud, actionable
+	// warning instead of letting the partner discover it inside OpenClaw.
+	result.ProxyReachable, result.ProxyWarning = probeProxyReachable(ctx, deps.ProxyAddr, deps.proxyAPIKey())
+	if !result.ProxyReachable {
+		slog.Warn("openclaw sync: AIMA proxy preflight failed",
+			"proxy", deps.ProxyAddr, "detail", result.ProxyWarning)
+	}
+
 	var ttsIDs []string
 
 	for _, b := range backends {
@@ -188,6 +206,58 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		"config", deps.ConfigPath)
 
 	return result, nil
+}
+
+// probeProxyReachable checks whether the AIMA serve proxy is actually reachable
+// at proxyAddr — the address the OpenClaw provider written by this sync points at
+// for the chat data plane. It runs two probes so the warning can name the real
+// failure mode:
+//
+//  1. direct (no proxy): is `aima serve` listening at all? The MCP control plane
+//     (`aima mcp`) does NOT open this port, so wiring only the MCP server leaves
+//     nothing serving :6188 and every OpenClaw request dies with a connection error.
+//  2. env-proxy: mirrors clients that honor HTTP_PROXY/HTTPS_PROXY (OpenClaw runs on
+//     Node, which does). If the direct probe succeeds but this one fails, an env
+//     proxy is intercepting loopback and OpenClaw will time out even though curl
+//     (which bypasses the proxy for localhost) works.
+//
+// Returns (reachable, warning). reachable is true only when both probes succeed.
+// A malformed/empty address is treated as reachable (no false alarm).
+func probeProxyReachable(ctx context.Context, proxyAddr, apiKey string) (bool, string) {
+	addr := strings.TrimSpace(proxyAddr)
+	if addr == "" {
+		return true, ""
+	}
+	probeURL := strings.TrimRight(addr, "/") + "/models"
+
+	probe := func(proxyFn func(*http.Request) (*url.URL, error)) error {
+		reqCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			return nil // can't build probe — don't raise a false alarm
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		client := &http.Client{Transport: &http.Transport{Proxy: proxyFn}}
+		defer client.CloseIdleConnections()
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		// Any HTTP status (200/401/404/...) proves serve is listening.
+		resp.Body.Close()
+		return nil
+	}
+
+	if err := probe(nil); err != nil {
+		return false, fmt.Sprintf("AIMA proxy not reachable at %s — nothing is serving this port, so OpenClaw will fail every request with a connection error/timeout. Start the data plane with `aima serve` (note: the MCP server `aima mcp` does NOT open this port). Underlying error: %v", addr, err)
+	}
+	if err := probe(http.ProxyFromEnvironment); err != nil {
+		return false, fmt.Sprintf("AIMA proxy at %s is reachable directly but NOT through your HTTP_PROXY/HTTPS_PROXY environment — OpenClaw runs on Node and routes loopback through that proxy, so it will time out even though curl works. Set NO_PROXY=127.0.0.1,localhost,::1 (and lowercase no_proxy) for the OpenClaw process, or unset the proxy. Underlying error: %v", addr, err)
+	}
+	return true, ""
 }
 
 func desiredMCPServer(deps *Deps) *MCPServerEntry {

@@ -218,6 +218,121 @@ func TestServiceAskForHelpAndRun(t *testing.T) {
 	}
 }
 
+func TestServiceAskForHelpKeepsSavedTokenWhenActiveTaskProbeIsTransient(t *testing.T) {
+	t.Parallel()
+
+	var activeTaskCalls int
+	var registerCalls int
+	var taskCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/self-register", func(w http.ResponseWriter, r *http.Request) {
+		registerCalls++
+		http.Error(w, `{"detail":"unexpected register"}`, http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/active-task", func(w http.ResponseWriter, r *http.Request) {
+		activeTaskCalls++
+		http.Error(w, `{"detail":"temporary overload"}`, http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		taskCalls++
+		writeJSON(t, w, map[string]any{"task_id": "task-1", "status": "created"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	store := newMemoryStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.SetConfig(ctx, ConfigEndpoint, server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConfig(ctx, configStateDeviceID, "dev-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConfig(ctx, configStateToken, "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(store, WithHTTPClient(server.Client()))
+	result, err := svc.AskForHelp(ctx, AskRequest{
+		Description: "deploy dify",
+		Endpoint:    server.URL,
+		InviteCode:  "invite-123",
+	})
+	if err != nil {
+		t.Fatalf("AskForHelp: %v", err)
+	}
+	if !result.Created || result.TaskID != "task-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if registerCalls != 0 {
+		t.Fatalf("registerCalls = %d, want 0", registerCalls)
+	}
+	if activeTaskCalls != 4 {
+		t.Fatalf("activeTaskCalls = %d, want 4", activeTaskCalls)
+	}
+	if taskCalls != 1 {
+		t.Fatalf("taskCalls = %d, want 1", taskCalls)
+	}
+}
+
+func TestServiceAskForHelpRetriesTransientActiveTaskPreflight(t *testing.T) {
+	t.Parallel()
+
+	var activeTaskCalls int
+	var taskCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/self-register", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"device_id":        "dev-1",
+			"token":            "tok-1",
+			"recovery_code":    "rec-1",
+			"token_expires_at": time.Now().Add(48 * time.Hour).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/active-task", func(w http.ResponseWriter, r *http.Request) {
+		activeTaskCalls++
+		if activeTaskCalls == 1 {
+			http.Error(w, `{"detail":"temporary overload"}`, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(t, w, map[string]any{"has_active_task": false})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		taskCalls++
+		writeJSON(t, w, map[string]any{"task_id": "task-1", "status": "created"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	store := newMemoryStore()
+	svc := NewService(store, WithHTTPClient(server.Client()))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := svc.AskForHelp(ctx, AskRequest{
+		Description: "deploy dify",
+		Endpoint:    server.URL,
+		InviteCode:  "invite-123",
+	})
+	if err != nil {
+		t.Fatalf("AskForHelp: %v", err)
+	}
+	if !result.Created || result.TaskID != "task-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if activeTaskCalls != 2 {
+		t.Fatalf("activeTaskCalls = %d, want 2", activeTaskCalls)
+	}
+	if taskCalls != 1 {
+		t.Fatalf("taskCalls = %d, want 1", taskCalls)
+	}
+}
+
 func TestServiceRunRetriesTransientPollFailure(t *testing.T) {
 	t.Parallel()
 

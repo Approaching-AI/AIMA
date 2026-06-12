@@ -60,6 +60,7 @@ const (
 	configIdentityStorageClass      = "support.identity.storage_class"
 
 	defaultPollInterval     = 5 * time.Second
+	askActiveTaskRetryDelay = 500 * time.Millisecond
 	defaultProgressInterval = 5 * time.Second
 	defaultDisabledRetry    = 5 * time.Second
 	defaultPreviewLimit     = 16 * 1024
@@ -347,11 +348,18 @@ func (s *Service) AskForHelp(ctx context.Context, req AskRequest) (AskResult, er
 		return AskResult{}, fmt.Errorf("enable support: %w", err)
 	}
 
-	active, err := s.getActiveTask(ctx, endpoint, state)
+	active, err := s.getActiveTaskForAsk(ctx, endpoint, state)
+	activeKnown := err == nil
 	if err != nil {
-		return AskResult{}, err
+		if isTransientError(err) && strings.TrimSpace(req.Description) != "" {
+			s.logger.Warn("support active-task preflight failed; attempting task creation", "error", err)
+		} else {
+			return AskResult{}, err
+		}
 	}
-	s.persistActiveTask(ctx, active.TaskID, active.Status, active.Target)
+	if activeKnown {
+		s.persistActiveTask(ctx, active.TaskID, active.Status, active.Target)
+	}
 
 	result := AskResult{
 		Enabled:             true,
@@ -382,7 +390,7 @@ func (s *Service) AskForHelp(ctx context.Context, req AskRequest) (AskResult, er
 		return result, nil
 	}
 
-	if active.HasActiveTask {
+	if activeKnown && active.HasActiveTask {
 		result.TaskID = active.TaskID
 		result.TaskStatus = active.Status
 		result.TaskTarget = active.Target
@@ -394,7 +402,7 @@ func (s *Service) AskForHelp(ctx context.Context, req AskRequest) (AskResult, er
 	if err != nil {
 		var statusErr *httpStatusError
 		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusConflict {
-			active, activeErr := s.getActiveTask(ctx, endpoint, state)
+			active, activeErr := s.getActiveTaskForAsk(ctx, endpoint, state)
 			if activeErr != nil {
 				return AskResult{}, activeErr
 			}
@@ -789,7 +797,10 @@ func (s *Service) ensureRegistered(ctx context.Context, req AskRequest) (deviceS
 	}
 
 	if state.DeviceID != "" && state.Token != "" {
-		if _, err := s.getActiveTask(ctx, endpoint, state); err == nil {
+		if _, err := s.getActiveTaskForAsk(ctx, endpoint, state); err == nil {
+			return state, endpoint, nil, nil
+		} else if isTransientError(err) {
+			s.logger.Warn("support active-task registration probe failed; keeping saved token", "error", err)
 			return state, endpoint, nil, nil
 		} else if !isAuthError(err) {
 			return deviceState{}, "", nil, err
@@ -921,6 +932,17 @@ func (s *Service) getActiveTask(ctx context.Context, endpoint string, state devi
 		return activeTaskResponse{}, err
 	}
 	return resp, nil
+}
+
+func (s *Service) getActiveTaskForAsk(ctx context.Context, endpoint string, state deviceState) (activeTaskResponse, error) {
+	active, err := s.getActiveTask(ctx, endpoint, state)
+	if err == nil || !isTransientError(err) {
+		return active, err
+	}
+	if retryErr := s.retryTransient(ctx, "ask_active_task", err, askActiveTaskRetryDelay); retryErr != nil {
+		return activeTaskResponse{}, retryErr
+	}
+	return s.getActiveTask(ctx, endpoint, state)
 }
 
 func (s *Service) createTask(ctx context.Context, endpoint string, state deviceState, description string) (deviceTaskResponse, error) {

@@ -7,12 +7,19 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | **latest** — adds out-of-box HIP engine (#85, #86). `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | **latest** — adds VL/OpenClaw deploy fixes (#87–#91). `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | out-of-box HIP engine (#85, #86). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo.exe` | `v0.5-dev-amd-strix-halo` | 2026-06-09 | prior build (#78–#83 only, **no** HIP engine auto-download). Kept for rollback. |
 
-Both built from the same source line (commit `fc3ef41`); the file name matches the
-exe's own `aima version` string. Launcher: `dist/serve.bat` (edit the exe name there to
-switch builds).
+The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
+(edit the exe name there to switch builds).
+
+> **2026-06-12 rebuild** — adds the VL-model + OpenClaw deploy fixes on top of the HIP
+> engine work: native deploy readiness no longer false-times-out (#87), the deploy launcher
+> **no longer pops a `cmd` console window** (#88), `Qwen2.5-VL-3B-Instruct` catalog knowledge
+> (#89), **zero-config vision** — llama.cpp `--mmproj` is auto-wired for VL models (#90), and
+> `aima openclaw sync` now **preflight-probes the `:6188` proxy** and warns loudly when it is
+> unreachable instead of letting OpenClaw fail with an opaque connection-error/timeout (#91).
 
 > **2026-06-10 rebuild** — now includes the out-of-box AMD-HIP engine work (#85, #86):
 > AIMA **auto-downloads a Strix-Halo-adapted ROCm/HIP llama.cpp** on first deploy, and a
@@ -21,7 +28,7 @@ switch builds).
 > verified on the 395: empty dist + no `AIMA_ENGINE_DIR` → `aima deploy <gguf> --engine llamacpp`
 > auto-fetches `llama-b9330-bin-win-hip-radeon-x64` and runs all layers on the iGPU (~33 t/s).
 
-## Fixes included (vs develop) — PRs #78–#86
+## Fixes included (vs develop) — PRs #78–#91
 
 - **Windows hardware detection**: `wmic` was removed in Win11 24H2, so CPU/RAM detection
   returned empty. Now uses PowerShell **CIM** (`Get-CimInstance`), detects the **AMD iGPU**,
@@ -42,6 +49,19 @@ switch builds).
   `AIMA_ENGINE_DIR` (order: dist → `AIMA_ENGINE_DIR` → auto-download → PATH), so a
   pre-installed llama.cpp of **any version** is the one that actually launches — fixes the
   partner's "deploy falls back to bare `llama-server` → command not found". (#86)
+- **Native deploy readiness**: `deploy.apply` returned a sanitized pod name the readiness
+  poll couldn't find, so a deploy that was actually serving reported "not ready within 1m".
+  It now returns the real runtime deployment name. (#87)
+- **No `cmd` popup on deploy**: the Windows launcher is wrapped in a hidden VBS launcher, so
+  starting an engine no longer flashes a `C:\WINDOWS\SYSTEM32\cmd.exe` console window. (#88)
+- **Qwen2.5-VL-3B-Instruct catalog knowledge** (type `vlm`, scan-name aliases, verified
+  Strix Halo perf) so the model is recognized, deployable, and syncs into OpenClaw. (#89)
+- **Zero-config vision**: for a VL gguf, AIMA auto-detects the colocated `mmproj-*.gguf` and
+  injects `--mmproj`, so vision works with no manual flag. (#90)
+- **OpenClaw sync preflight**: `aima openclaw sync` probes the `:6188` data-plane proxy (direct
+  + env-proxy) and emits a loud warning + `proxyReachable`/`proxyWarning` when it is not
+  reachable — so "OpenClaw provider times out" is diagnosed as *serve not running* or
+  *HTTP_PROXY intercepting loopback* instead of an opaque failure. (#91)
 
 ## Run
 
@@ -71,6 +91,14 @@ Settings → General → API Key = `local`.
 Install OpenClaw, then deploy a model in AIMA. AIMA automatically writes an `aima` provider into
 `~/.openclaw/openclaw.json` (`baseUrl http://127.0.0.1:6188/v1`, the matching `apiKey`, and the
 deployed models), so OpenClaw connects to the local model with zero manual config.
+
+> **Don't hand-write the provider** — run `aima openclaw sync` (or rely on serve's auto-sync). It
+> fills the correct `apiKey` and the exact model `id` from `/v1/models`; hand-writing those is the
+> usual cause of 401/404. The chat data plane goes through **`aima serve` on `:6188`** (this
+> `serve.bat`), which must stay running — the MCP server `aima mcp` is the *control* plane and does
+> **not** open `:6188`. If OpenClaw reports a **connection error / timeout** while `curl` to `:6188`
+> works, an `HTTP_PROXY`/`HTTPS_PROXY` env in the OpenClaw process is routing loopback through a
+> proxy — set `NO_PROXY=127.0.0.1,localhost,::1` for it. Sync now preflight-checks all of this (#91).
 
 ## 连线灵机云 (remote assist)
 

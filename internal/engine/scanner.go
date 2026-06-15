@@ -49,6 +49,7 @@ type ScanOptions struct {
 	AssetPatterns      map[string][]string // engine type -> patterns from Engine Asset YAML
 	Runner             CommandRunner
 	DistDir            string                                  // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
+	ExtraDirs          []string                                // extra dirs to scan for native binaries (from AIMA_ENGINE_DIR); engines installed off-PATH/off-dist
 	Platform           string                                  // current platform (e.g., "windows-amd64")
 	BinaryAssets       map[string]string                       // binary name -> engine type (native engines)
 	AutoImport         bool                                    // when true, auto-import Docker-only images to K3S containerd (heavy; use only during init)
@@ -128,7 +129,10 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 	return allEngines, nil
 }
 
-// ScanNative discovers native engine binaries in distDir and PATH.
+// ScanNative discovers native engine binaries in distDir, the AIMA_ENGINE_DIR
+// extra dirs, and PATH. Engines installed off the system drive in arbitrary
+// dirs (e.g. D:\tools\llama-b9180-win-hip-radeon-x64\llama-server.exe) are
+// neither in distDir nor on PATH, so ExtraDirs is the path for those.
 func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	if opts.DistDir == "" {
 		return nil, fmt.Errorf("distDir not configured")
@@ -150,97 +154,72 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	var found []*EngineImage
 	seen := make(map[string]bool)
 
-	// Scan distDir
-	if entries, err := os.ReadDir(opts.DistDir); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if seen[name] {
-				continue
-			}
-			// Check if this is a known engine binary (with or without .exe)
-			binaryName := name
-			if strings.HasSuffix(name, ".exe") {
-				binaryName = strings.TrimSuffix(name, ".exe")
-			}
-			engineType, ok1 := filenameLookup[binaryName]
-			if !ok1 {
-				engineType, ok1 = filenameLookup[name]
-			}
-			if ok1 {
-				path := filepath.Join(opts.DistDir, name)
-				info, err := entry.Info()
-				if err != nil {
-					continue
-				}
-				binaryID := binaryHash(name)
-				found = append(found, &EngineImage{
-					ID:          binaryID,
-					Type:        engineType,
-					Image:       "",
-					Tag:         "",
-					SizeBytes:   info.Size(),
-					Platform:    opts.Platform,
-					RuntimeType: "native",
-					BinaryPath:  path,
-					Available:   true,
-				})
-				seen[name] = true
-			}
-		}
+	// distDir holds AIMA's own managed copy → dir-independent ID. Extra dirs and
+	// PATH dirs may hold the same binary name in different locations → salt the ID
+	// with the dir so they stay distinct. First match for a filename wins (seen).
+	found = append(found, scanDirForEngineBinaries(opts.DistDir, filenameLookup, seen, opts.Platform, false)...)
+	for _, dir := range opts.ExtraDirs {
+		found = append(found, scanDirForEngineBinaries(dir, filenameLookup, seen, opts.Platform, true)...)
 	}
-
-	// Scan PATH for additional binaries
-	pathEnv := os.Getenv("PATH")
-	if pathEnv != "" {
+	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
 		sep := string(os.PathListSeparator)
 		for _, dir := range strings.Split(pathEnv, sep) {
-			if entries, err := os.ReadDir(dir); err == nil {
-				for _, entry := range entries {
-					if entry.IsDir() {
-						continue
-					}
-					name := entry.Name()
-					if seen[name] {
-						continue
-					}
-					// Check if this is a known engine binary
-					binaryName := name
-					if strings.HasSuffix(name, ".exe") {
-						binaryName = strings.TrimSuffix(name, ".exe")
-					}
-					engineType, ok1 := filenameLookup[binaryName]
-					if !ok1 {
-						engineType, ok1 = filenameLookup[name]
-					}
-					if ok1 {
-						path := filepath.Join(dir, name)
-						info, err := entry.Info()
-						if err != nil {
-							continue
-						}
-						binaryID := binaryHash(name + "-" + dir)
-						found = append(found, &EngineImage{
-							ID:          binaryID,
-							Type:        engineType,
-							Image:       "",
-							Tag:         "",
-							SizeBytes:   info.Size(),
-							Platform:    opts.Platform,
-							RuntimeType: "native",
-							BinaryPath:  path,
-							Available:   true,
-						})
-						seen[name] = true
-					}
-				}
-			}
+			found = append(found, scanDirForEngineBinaries(dir, filenameLookup, seen, opts.Platform, true)...)
 		}
 	}
 
 	return found, nil
+}
+
+// scanDirForEngineBinaries returns native engines for known binaries located
+// directly in dir (never recurses). saltID controls whether the engine ID is
+// salted with the dir, so the same binary name in multiple dirs yields distinct
+// IDs. Binaries whose filename is already in seen are skipped (first dir wins).
+func scanDirForEngineBinaries(dir string, filenameLookup map[string]string, seen map[string]bool, platform string, saltID bool) []*EngineImage {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var found []*EngineImage
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if seen[name] {
+			continue
+		}
+		// Match known engine binary with or without .exe suffix.
+		engineType, ok := filenameLookup[strings.TrimSuffix(name, ".exe")]
+		if !ok {
+			engineType, ok = filenameLookup[name]
+		}
+		if !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		id := binaryHash(name)
+		if saltID {
+			id = binaryHash(name + "-" + dir)
+		}
+		found = append(found, &EngineImage{
+			ID:          id,
+			Type:        engineType,
+			SizeBytes:   info.Size(),
+			Platform:    platform,
+			RuntimeType: "native",
+			BinaryPath:  filepath.Join(dir, name),
+			Available:   true,
+		})
+		seen[name] = true
+	}
+	return found
 }
 
 // probePreinstalled discovers pre-installed engines by checking known paths

@@ -309,7 +309,13 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			return nil, err
 		}
 		result := map[string]any{
-			"name":  deployName,
+			// Return the name the runtime actually registered the deployment under
+			// (req.Name == modelName), NOT the sanitized pod name. The readiness
+			// poller (deployRunCore.waitForDeployment) and the UI look up status by
+			// this name; the native runtime keys deployments by req.Name, so the
+			// sanitized deployName never matched → status was never found → the deploy
+			// looked stuck "not ready" even though the engine was serving fine.
+			"name":  req.Name,
 			"model": modelName, "engine": resolved.Engine,
 			"slot": resolved.Slot, "status": "deploying",
 			"runtime": activeRt.Name(),

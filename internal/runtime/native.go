@@ -61,8 +61,9 @@ type BinaryResolveFunc func(ctx context.Context, source *engine.BinarySource) (s
 // NativeRuntime manages inference engines as direct OS processes.
 type NativeRuntime struct {
 	logDir          string
-	distDir         string // e.g. ~/.aima/dist/windows-amd64/
-	deployDir       string // e.g. ~/.aima/deployments/ — persisted deployment metadata
+	distDir         string   // e.g. ~/.aima/dist/windows-amd64/
+	engineDirs      []string // pre-installed engine dirs (AIMA_ENGINE_DIR) — same source the engine scanner uses
+	deployDir       string   // e.g. ~/.aima/deployments/ — persisted deployment metadata
 	resolveBinary   BinaryResolveFunc
 	engineAssets    []knowledge.EngineAsset
 	processes       map[string]*nativeProcess
@@ -98,6 +99,16 @@ func WithBinaryResolver(fn BinaryResolveFunc) NativeOption {
 func WithNativeEngineAssets(assets []knowledge.EngineAsset) NativeOption {
 	return func(r *NativeRuntime) {
 		r.engineAssets = assets
+	}
+}
+
+// WithEngineDirs registers pre-installed engine directories (from AIMA_ENGINE_DIR).
+// The native binary resolver checks these — the SAME dirs the engine scanner uses —
+// so a bare engine name (e.g. "llama-server") that was discovered by scanning is also
+// launchable, even when it is neither in dist nor on PATH. Keeps "scanned ⇒ launchable".
+func WithEngineDirs(dirs []string) NativeOption {
+	return func(r *NativeRuntime) {
+		r.engineDirs = dirs
 	}
 }
 
@@ -177,17 +188,19 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		return fmt.Errorf("create log file: %w", err)
 	}
 
-	// Resolve binary: dist/ first, then auto-download if source is available
-	if r.distDir != "" {
-		if resolved := r.findInDist(command[0]); resolved != "" {
+	// Resolve binary: dist/ first, then the pre-installed engine dirs
+	// (AIMA_ENGINE_DIR — the SAME dirs the engine scanner uses, so anything scanning
+	// found is launchable), then auto-download if a source is available.
+	if resolved := r.findInDist(command[0]); resolved != "" {
+		command[0] = resolved
+	} else if resolved := r.findInEngineDirs(command[0]); resolved != "" {
+		command[0] = resolved
+	} else if r.resolveBinary != nil && req.BinarySource != nil {
+		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
+		if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
 			command[0] = resolved
-		} else if r.resolveBinary != nil && req.BinarySource != nil {
-			slog.Info("binary not in dist, attempting auto-download", "binary", command[0])
-			if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
-				command[0] = resolved
-			} else {
-				slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
-			}
+		} else {
+			slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
 		}
 	}
 
@@ -852,14 +865,32 @@ func (r *NativeRuntime) loadAllMeta() []*deploymentMeta {
 // findInDist checks for a binary in the dist directory.
 // On Windows, also tries with .exe suffix.
 func (r *NativeRuntime) findInDist(name string) string {
+	return findBinaryIn([]string{r.distDir}, name)
+}
+
+// findInEngineDirs resolves a bare engine binary name against the pre-installed
+// engine dirs (AIMA_ENGINE_DIR). This mirrors how the engine scanner discovers
+// binaries, so an engine that scanning found is also the one that gets launched.
+func (r *NativeRuntime) findInEngineDirs(name string) string {
+	return findBinaryIn(r.engineDirs, name)
+}
+
+// findBinaryIn returns the absolute path of name (with .exe on Windows) in the
+// first of dirs that contains it.
+func findBinaryIn(dirs []string, name string) string {
 	candidates := []string{name}
 	if goruntime.GOOS == "windows" && !strings.HasSuffix(name, ".exe") {
 		candidates = append(candidates, name+".exe")
 	}
-	for _, c := range candidates {
-		p := filepath.Join(r.distDir, c)
-		if _, err := os.Stat(p); err == nil {
-			return p
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		for _, c := range candidates {
+			p := filepath.Join(dir, c)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
 		}
 	}
 	return ""

@@ -15,6 +15,7 @@ import (
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/model"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 
@@ -97,6 +98,15 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					resolved.Config["mmproj"] = mm
 					slog.Info("auto-wired multimodal projector for vision", "model", modelName, "mmproj", mm)
 				}
+			}
+
+			// Hardware-aware context sizing: a high catalog/user ctx_size can exceed
+			// what the detected memory holds — llama-server would OOM at load. Clamp
+			// ctx_size down to fit weights + projector + KV cache (and cap at the
+			// model's trained context), degrading gracefully instead of failing.
+			if clamped, oldCtx, newCtx, reason := fitContextToMemory(modelPath, resolved.Config, hwInfo); clamped {
+				slog.Warn("clamped context window to fit hardware memory",
+					"model", modelName, "ctx_size_requested", oldCtx, "ctx_size_applied", newCtx, "detail", reason)
 			}
 		}
 
@@ -774,6 +784,114 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 		ParameterCount:      firstNonEmpty(status.Labels[proxy.LabelParameterCount]),
 		ContextWindowTokens: contextWindowFromStatus(status),
 	}
+}
+
+// fitContextToMemory shrinks config["ctx_size"] so the llama.cpp KV cache plus
+// model weights and the multimodal projector fit the detected memory, and caps it
+// at the model's trained context. It only ever lowers ctx_size — never raises it.
+// Returns (clamped, requestedCtx, appliedCtx, reason). It is a no-op (clamped=false)
+// when ctx_size is unset, the GGUF architecture can't be read, or memory is unknown,
+// so unsupported models/hardware degrade gracefully instead of erroring.
+func fitContextToMemory(modelPath string, config map[string]any, hw knowledge.HardwareInfo) (bool, int, int, string) {
+	reqCtx := contextWindowFromResolvedConfig(config)
+	if reqCtx <= 0 || modelPath == "" || config == nil {
+		return false, 0, 0, ""
+	}
+	arch, ok := model.ReadKVArch(modelPath)
+	if !ok {
+		return false, 0, 0, "" // can't estimate KV → leave ctx_size untouched
+	}
+
+	nonKVMiB := fileSizeMiB(modelPath)
+	if mm, _ := config["mmproj"].(string); mm != "" {
+		nonKVMiB += fileSizeMiB(mm)
+	}
+
+	target, reasons := clampContextForMemory(reqCtx, arch.NCtxTrain, arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
+	if target >= reqCtx {
+		return false, reqCtx, reqCtx, ""
+	}
+	config["ctx_size"] = target
+	return true, reqCtx, target, strings.Join(reasons, "; ")
+}
+
+// clampContextForMemory computes the largest context window ≤ reqCtx that fits:
+// (a) the model's trained context (nCtxTrain, 0 = unknown/skip) and (b) the KV
+// budget left after weights+projector in usableMiB (0 = unknown/skip). kvPerTok
+// is the f16 KV bytes per token. It floors at a minimally useful context. Pure
+// (no I/O) for testability.
+func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, nonKVMiB int) (int, []string) {
+	const (
+		computeReserveMiB = 1024 // llama.cpp compute buffers
+		minCtx            = 2048 // floor — keep a usable context even on tiny memory
+	)
+	target := reqCtx
+	var reasons []string
+
+	if nCtxTrain > 0 && target > nCtxTrain {
+		target = nCtxTrain
+		reasons = append(reasons, fmt.Sprintf("capped at trained context %d", nCtxTrain))
+	}
+
+	if usableMiB > 0 && kvPerTok > 0 {
+		kvBudgetMiB := int(float64(usableMiB)*0.90) - nonKVMiB - computeReserveMiB
+		if kvBudgetMiB < 0 {
+			kvBudgetMiB = 0
+		}
+		maxCtx := int(int64(kvBudgetMiB) * 1024 * 1024 / kvPerTok)
+		maxCtx -= maxCtx % 256 // clean multiple
+		if maxCtx < target {
+			target = maxCtx
+			reasons = append(reasons, fmt.Sprintf("%d MiB usable, weights+projector %d MiB, KV %d B/token",
+				usableMiB, nonKVMiB, kvPerTok))
+		}
+	}
+
+	if target < minCtx {
+		target = minCtx
+	}
+	return target, reasons
+}
+
+// usableMemoryMiB returns the memory budget an all-layers-offloaded llama.cpp
+// model can use: GPU VRAM for discrete GPUs, or system RAM minus an OS reserve
+// for unified-memory / CPU hosts. Returns 0 when memory is unknown.
+func usableMemoryMiB(hw knowledge.HardwareInfo) int {
+	ramReserve := func(total int) int {
+		reserve := total / 4
+		if reserve < 2048 {
+			reserve = 2048
+		}
+		if reserve > 16384 {
+			reserve = 16384
+		}
+		return reserve
+	}
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		return hw.RAMTotalMiB - ramReserve(hw.RAMTotalMiB)
+	}
+	if hw.GPUVRAMMiB > 0 {
+		if hw.GPUMemFreeMiB > 0 {
+			return hw.GPUMemFreeMiB
+		}
+		return hw.GPUVRAMMiB
+	}
+	if hw.RAMTotalMiB > 0 {
+		return hw.RAMTotalMiB - ramReserve(hw.RAMTotalMiB)
+	}
+	return 0
+}
+
+// fileSizeMiB returns the file's size in MiB, or 0 if it can't be stat'd.
+func fileSizeMiB(path string) int {
+	if path == "" {
+		return 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size() / (1024 * 1024))
 }
 
 func contextWindowFromResolvedConfig(config map[string]any) int {

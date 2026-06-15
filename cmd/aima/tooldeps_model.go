@@ -153,28 +153,41 @@ func annotateModelsFromCatalog(models []*state.Model, cat *knowledge.Catalog) {
 			assetsByName[strings.ToLower(strings.TrimSpace(alias))] = ma
 		}
 	}
+	draftKeys := cat.SpeculativeDraftModelKeys()
+
 	for _, m := range models {
 		if m == nil {
 			continue
 		}
-		ma := assetsByName[strings.ToLower(strings.TrimSpace(m.Name))]
-		if ma == nil {
-			continue
+		if ma := assetsByName[strings.ToLower(strings.TrimSpace(m.Name))]; ma != nil {
+			if strings.TrimSpace(m.ModelClass) == "" {
+				m.ModelClass = strings.TrimSpace(ma.Metadata.ModelClass)
+			}
+			if strings.TrimSpace(m.UIRole) == "" {
+				m.UIRole = strings.TrimSpace(ma.UI.Role)
+			}
+			if strings.TrimSpace(m.UIDisplayNote) == "" {
+				m.UIDisplayNote = strings.TrimSpace(ma.UI.DisplayNote)
+			}
+			if strings.TrimSpace(m.UIDisplayNoteZh) == "" {
+				m.UIDisplayNoteZh = strings.TrimSpace(ma.UI.DisplayNoteZh)
+			}
+			if m.StandaloneDeploy == nil {
+				m.StandaloneDeploy = ma.Capabilities.StandaloneDeploy
+			}
 		}
-		if strings.TrimSpace(m.ModelClass) == "" {
-			m.ModelClass = strings.TrimSpace(ma.Metadata.ModelClass)
-		}
-		if strings.TrimSpace(m.UIRole) == "" {
-			m.UIRole = strings.TrimSpace(ma.UI.Role)
-		}
-		if strings.TrimSpace(m.UIDisplayNote) == "" {
-			m.UIDisplayNote = strings.TrimSpace(ma.UI.DisplayNote)
-		}
-		if strings.TrimSpace(m.UIDisplayNoteZh) == "" {
-			m.UIDisplayNoteZh = strings.TrimSpace(ma.UI.DisplayNoteZh)
-		}
-		if m.StandaloneDeploy == nil {
-			m.StandaloneDeploy = ma.Capabilities.StandaloneDeploy
+
+		// Speculative draft heads (e.g. DFlash/MTP) are companions of their
+		// parent model — the catalog names them via each variant's
+		// speculative_config.model — not independently deployable models.
+		if draftKeys[knowledge.NormalizeModelKey(m.Name)] {
+			if m.StandaloneDeploy == nil {
+				notStandalone := false
+				m.StandaloneDeploy = &notStandalone
+			}
+			if strings.TrimSpace(m.UIRole) == "" {
+				m.UIRole = "draft"
+			}
 		}
 	}
 }

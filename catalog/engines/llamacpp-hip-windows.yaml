@@ -1,0 +1,42 @@
+kind: engine_asset
+_profile: llamacpp
+metadata:
+  name: llamacpp-hip-windows
+  type: llamacpp
+  version: "b9330"
+  supported_model_types: [llm, vlm, embedding]
+hardware:
+  # RDNA3.5 == AMD Ryzen AI Max+ 395 "Strix Halo" Radeon 8060S iGPU (gfx1151).
+  # Exact gpu_arch match so the native-runtime engine resolver — which on a
+  # native host skips engines whose source has no binary for the host platform
+  # (resolver.go: "Skip native-only incompatibility") — selects this Windows
+  # HIP build instead of the linux-only llamacpp-vulkan or the NVIDIA-only
+  # win-cuda llamacpp-universal source. This is what makes auto-download pick
+  # the right (ROCm/HIP) llama.cpp on a no-NVIDIA AMD box, with no AIMA_ENGINE_DIR.
+  gpu_arch: RDNA3.5
+  vram_min_mib: 0
+amplifier:
+  features:
+    - rocm_hip_offload
+  performance_gain: "AMD ROCm/HIP GPU offload on Strix Halo (RDNA3.5), all layers on the iGPU"
+time_constraints:
+  cold_start_s: [5, 30]
+  model_switch_s: [5, 30]
+power_constraints:
+  typical_draw_watts: [20, 90]
+runtime:
+  default: "native"
+  platform_recommendations:
+    windows/amd64: "native"
+source:
+  binary: "llama-server"
+  # Native binary only — official llama.cpp Windows ROCm/HIP release. Self-contained
+  # (bundles ggml-hip.dll + rocblas), so no separate ROCm install is required.
+  platforms: [windows/amd64]
+  url_template: "https://github.com/ggml-org/llama.cpp/releases/download/{version}/llama-{version}-bin-{platform_file}"
+  platform_files:
+    windows/amd64: "win-hip-radeon-x64.zip"
+  mirror_templates:
+    - "https://ghfast.top/{url}"
+    - "https://cf.ghproxy.cc/{url}"
+    - "https://gh-proxy.com/{url}"

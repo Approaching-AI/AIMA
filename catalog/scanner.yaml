@@ -38,6 +38,15 @@ config:
     - vision_model
     - audio_encoder
     - projection
+    # OS / tooling junk — never holds deployable models, and keeps a
+    # drive-root scan from pulling in deleted or system files.
+    - "$recycle.bin"
+    - "system volume information"
+    - "$windows.~bt"
+    - "$windows.~ws"
+    - node_modules
+    - .git
+    - .cache_tmp
 
   # Directory patterns that indicate parent models/pipelines
   # Subdirectories of these paths will be skipped during recursion

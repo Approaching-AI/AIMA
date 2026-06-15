@@ -39,8 +39,12 @@ type ScanOptions struct {
 func DefaultScanPaths() []string {
 	var paths []string
 
-	if dir := os.Getenv("AIMA_MODEL_DIR"); dir != "" {
-		paths = append(paths, dir)
+	// AIMA_MODEL_DIR accepts a list ("D:\a;D:\b" on Windows, "/a:/b" on Linux)
+	// so users with models in several non-standard directories don't need junctions.
+	for _, dir := range filepath.SplitList(os.Getenv("AIMA_MODEL_DIR")) {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			paths = append(paths, dir)
+		}
 	}
 
 	home, err := os.UserHomeDir()
@@ -52,6 +56,14 @@ func DefaultScanPaths() []string {
 		)
 	}
 
+	// Honor relocated model-manager caches via their standard env vars.
+	if hf := strings.TrimSpace(os.Getenv("HF_HOME")); hf != "" {
+		paths = append(paths, filepath.Join(hf, "hub"))
+	}
+	if om := strings.TrimSpace(os.Getenv("OLLAMA_MODELS")); om != "" {
+		paths = append(paths, om)
+	}
+
 	if runtime.GOOS == "linux" {
 		paths = append(paths,
 			"/mnt/data/models",
@@ -61,7 +73,25 @@ func DefaultScanPaths() []string {
 		paths = append(paths, discoverOptModelPaths()...)
 	}
 
-	return paths
+	// Platform extras — on Windows, conventional model dirs on every fixed drive
+	// (D:\models, D:\lmstudio\models, ...) so models off the system drive are found.
+	paths = append(paths, platformExtraScanPaths()...)
+
+	return dedupePaths(paths)
+}
+
+// dedupePaths removes empty and duplicate entries, preserving order.
+func dedupePaths(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := in[:0]
+	for _, p := range in {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // discoverOptModelPaths finds vendor-preloaded model directories under /opt.

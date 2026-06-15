@@ -7,12 +7,21 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | **latest** — adds VL/OpenClaw deploy fixes (#87–#91). `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | **latest** — hardware-aware context sizing + 128K default. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | VL/OpenClaw deploy fixes (#87–#91). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | out-of-box HIP engine (#85, #86). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo.exe` | `v0.5-dev-amd-strix-halo` | 2026-06-09 | prior build (#78–#83 only, **no** HIP engine auto-download). Kept for rollback. |
 
 The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
 (edit the exe name there to switch builds).
+
+> **2026-06-15 rebuild** — **hardware-aware context sizing.** On deploy, AIMA reads the
+> GGUF's real architecture and clamps llama.cpp `ctx_size` to fit the detected memory
+> (weights + projector + KV cache) and the model's trained context, lowering it only when
+> needed. So the catalog can ship a large default (Qwen2.5-VL-3B is now **128000 / 128K** —
+> big enough for OpenClaw's agent prompt, which injects all MCP tool schemas) without risking
+> an out-of-memory crash on smaller machines: big boxes get the full context, constrained
+> boxes auto-shrink to what fits. Override per-deploy with `--config ctx_size=N` if needed.
 
 > **2026-06-12 rebuild** — adds the VL-model + OpenClaw deploy fixes on top of the HIP
 > engine work: native deploy readiness no longer false-times-out (#87), the deploy launcher
@@ -62,6 +71,11 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
   + env-proxy) and emits a loud warning + `proxyReachable`/`proxyWarning` when it is not
   reachable — so "OpenClaw provider times out" is diagnosed as *serve not running* or
   *HTTP_PROXY intercepting loopback* instead of an opaque failure. (#91)
+- **Hardware-aware context sizing**: on llama.cpp GGUF deploys, AIMA reads the model's GGUF
+  architecture (`model.ReadKVArch`) and clamps `ctx_size` to fit detected memory
+  (weights + projector + KV cache) and the trained context — lowering only when needed. Lets
+  the catalog ship a large default (Qwen2.5-VL-3B → 128000) that fixes agent context-overflow
+  without OOM-ing smaller machines.
 
 ## Run
 

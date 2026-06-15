@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -254,10 +255,100 @@ func probeProxyReachable(ctx context.Context, proxyAddr, apiKey string) (bool, s
 	if err := probe(nil); err != nil {
 		return false, fmt.Sprintf("AIMA proxy not reachable at %s — nothing is serving this port, so OpenClaw will fail every request with a connection error/timeout. Start the data plane with `aima serve` (note: the MCP server `aima mcp` does NOT open this port). Underlying error: %v", addr, err)
 	}
-	if err := probe(http.ProxyFromEnvironment); err != nil {
-		return false, fmt.Sprintf("AIMA proxy at %s is reachable directly but NOT through your HTTP_PROXY/HTTPS_PROXY environment — OpenClaw runs on Node and routes loopback through that proxy, so it will time out even though curl works. Set NO_PROXY=127.0.0.1,localhost,::1 (and lowercase no_proxy) for the OpenClaw process, or unset the proxy. Underlying error: %v", addr, err)
+	if proxyURL := proxyURLForClient(probeURL); proxyURL != nil {
+		if err := probe(http.ProxyURL(proxyURL)); err != nil {
+			return false, proxyWarningForEnv(addr, err)
+		}
 	}
 	return true, ""
+}
+
+func proxyURLForClient(rawURL string) *url.URL {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil
+	}
+	if noProxyMatches(u) {
+		return nil
+	}
+
+	rawProxy := ""
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		rawProxy = firstProxyEnv("HTTPS_PROXY", "https_proxy")
+	case "http":
+		rawProxy = firstProxyEnv("HTTP_PROXY", "http_proxy")
+	}
+	if rawProxy == "" {
+		rawProxy = firstProxyEnv("ALL_PROXY", "all_proxy")
+	}
+	if rawProxy == "" {
+		return nil
+	}
+	if !strings.Contains(rawProxy, "://") {
+		rawProxy = "http://" + rawProxy
+	}
+	proxyURL, err := url.Parse(rawProxy)
+	if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+		return nil
+	}
+	return proxyURL
+}
+
+func firstProxyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func noProxyMatches(u *url.URL) bool {
+	rawNoProxy := firstProxyEnv("NO_PROXY", "no_proxy")
+	if rawNoProxy == "" {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(u.Hostname()), "[]")
+	port := u.Port()
+	for _, token := range strings.Split(rawNoProxy, ",") {
+		if noProxyTokenMatches(strings.TrimSpace(strings.ToLower(token)), host, port) {
+			return true
+		}
+	}
+	return false
+}
+
+func noProxyTokenMatches(token, host, port string) bool {
+	if token == "" {
+		return false
+	}
+	if token == "*" {
+		return true
+	}
+	tokenHost := token
+	tokenPort := ""
+	if h, p, err := net.SplitHostPort(token); err == nil {
+		tokenHost, tokenPort = h, p
+	}
+	tokenHost = strings.Trim(tokenHost, "[]")
+	if tokenPort != "" && tokenPort != port {
+		return false
+	}
+	if tokenHost == host {
+		return true
+	}
+	if strings.HasPrefix(tokenHost, "*.") {
+		return strings.HasSuffix(host, tokenHost[1:])
+	}
+	if strings.HasPrefix(tokenHost, ".") {
+		return strings.HasSuffix(host, tokenHost)
+	}
+	return strings.HasSuffix(host, "."+tokenHost)
+}
+
+func proxyWarningForEnv(addr string, err error) string {
+	return fmt.Sprintf("AIMA proxy at %s is reachable directly but NOT through your HTTP_PROXY/HTTPS_PROXY environment — OpenClaw runs on Node and routes loopback through that proxy, so it will time out even though curl works. Set NO_PROXY=127.0.0.1,localhost,::1 (and lowercase no_proxy) for the OpenClaw process, or unset the proxy. Underlying error: %v", addr, err)
 }
 
 func desiredMCPServer(deps *Deps) *MCPServerEntry {

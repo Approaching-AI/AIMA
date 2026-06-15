@@ -1,0 +1,53 @@
+kind: model_asset
+metadata:
+  name: qwen2.5-vl-3b-instruct
+  type: vlm
+  family: qwen
+  parameter_count: "3B"
+  released_at: "2025-01"
+  # Scan-name alias: on-disk GGUF name so the local scanner matches this asset
+  # (otherwise deploy/openclaw-sync fall back to auto-detect, which has no type
+  # and is skipped by openclaw sync → the model never reaches OpenClaw).
+  aliases:
+    - Qwen2.5-VL-3B-Instruct-Q4_K_M
+openclaw:
+  # Multimodal chat (text + image): surface as a chat provider in OpenClaw so it
+  # is usable from the chat UI, not only as a vision/image tool.
+  chat_provider: true
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen2.5-VL-3B-Instruct
+      format: safetensors
+    - type: huggingface
+      repo: ggml-org/Qwen2.5-VL-3B-Instruct-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen2.5-VL-3B-Instruct
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Q4_K_M ~1.8GB. Vision (image input) requires the mmproj projector — start
+  # llama-server with --mmproj <mmproj-*.gguf> (pass `--config mmproj=<path>`),
+  # otherwise the model serves text only.
+  - name: qwen2.5-vl-3b-instruct-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 4096
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      ctx_size: 8192
+    expected_performance:
+      startup_time_s: 10
+      cold_start_time_s: 20
+      tokens_per_second: [60, 95]
+      latency_first_token_ms: [20, 150]
+      notes: "Verified 2026-06-10 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9330 HIP, Q4_K_M all 999 layers offloaded: text decode ~90 tok/s. Vision verified working when started with --mmproj (mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf): correctly identified a solid-color test image."

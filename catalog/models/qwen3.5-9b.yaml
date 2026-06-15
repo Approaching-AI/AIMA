@@ -5,6 +5,10 @@ metadata:
   family: qwen
   parameter_count: "9B"
   released_at: "2025-09"
+  # Scan-name aliases: on-disk GGUF dir/file names so the local model scanner
+  # matches this catalog asset instead of falling back to auto-detect.
+  aliases:
+    - Qwen3.5-9B-Q4_K_M
 openclaw:
   chat_provider: false
 http:
@@ -110,3 +114,4 @@ variants:
       cold_start_time_s: 30
       tokens_per_second: [10, 40]
       latency_first_token_ms: [30, 150]
+      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU (RDNA3.5), llama.cpp b9180 HIP, Q4_K_M all 999 layers offloaded: 33.8 tok/s decode, 206 tok/s prompt."

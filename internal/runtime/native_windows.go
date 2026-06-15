@@ -44,12 +44,25 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 		return 0, fmt.Errorf("write launcher script: %w", err)
 	}
 
+	// Wrap the bat in a hidden-window VBS launcher so no cmd.exe console flashes
+	// on the interactive desktop. The bat's cmd is the engine process's parent
+	// and would otherwise stay visible for the whole life of the deployment.
+	// WScript.Shell.Run(cmd, 0, False) => window style 0 = hidden, no wait.
+	vbsPath := filepath.Join(r.logDir, name+"-launcher.vbs")
+	vbs := fmt.Sprintf("CreateObject(\"WScript.Shell\").Run \"\"\"%s\"\"\", 0, False\r\n", batPath)
+	if err := os.WriteFile(vbsPath, []byte(vbs), 0o644); err != nil {
+		os.Remove(batPath)
+		return 0, fmt.Errorf("write launcher vbs: %w", err)
+	}
+
 	// Create a one-time scheduled task with /it (interactive token).
 	taskName := "AIMA-deploy-" + name
+	trCmd := fmt.Sprintf("wscript.exe //B //Nologo \"%s\"", vbsPath)
 	createOut, err := exec.Command("schtasks", "/create", "/tn", taskName,
-		"/tr", batPath, "/sc", "once", "/st", "00:00", "/it", "/f").CombinedOutput()
+		"/tr", trCmd, "/sc", "once", "/st", "00:00", "/it", "/f").CombinedOutput()
 	if err != nil {
 		os.Remove(batPath)
+		os.Remove(vbsPath)
 		return 0, fmt.Errorf("schtasks create: %w (output: %s)", err, string(createOut))
 	}
 
@@ -58,6 +71,7 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 	if err != nil {
 		exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
 		os.Remove(batPath)
+		os.Remove(vbsPath)
 		return 0, fmt.Errorf("schtasks run: %w (output: %s)", err, string(runOut))
 	}
 
@@ -92,6 +106,7 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 	// Clean up scheduled task definition (engine process continues running).
 	exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
 	os.Remove(batPath)
+	os.Remove(vbsPath)
 
 	if pid == 0 {
 		return 0, fmt.Errorf("discover PID after schtasks launch: binary=%s port=%d", binaryName, port)

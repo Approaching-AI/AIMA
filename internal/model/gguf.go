@@ -207,10 +207,12 @@ func parseGGUFMeta(path string) map[string]any {
 
 	keyMap := map[string]string{
 		".block_count":                       "num_hidden_layers",
+		".context_length":                    "max_position_embeddings",
 		".embedding_length":                  "hidden_size",
 		".feed_forward_length":               "intermediate_size",
 		".attention.head_count":              "num_attention_heads",
 		".attention.head_count_kv":           "num_key_value_heads",
+		".attention.key_length":              "head_dim",
 		".vocab_size":                        "vocab_size",
 		".expert_count":                      "num_experts",
 		".expert_used_count":                 "num_experts_per_tok",
@@ -231,6 +233,49 @@ func parseGGUFMeta(path string) map[string]any {
 	}
 
 	return config
+}
+
+// KVArch holds the GGUF architecture fields needed to size the KV cache.
+type KVArch struct {
+	NLayer    int // transformer blocks (block_count)
+	NHeadKV   int // KV heads (head_count_kv; equals head_count for MHA)
+	HeadDim   int // per-head dimension
+	NCtxTrain int // trained context length (max_position_embeddings); 0 if unknown
+}
+
+// KVBytesPerToken returns the f16 KV-cache size for one token across all layers:
+// 2 (K+V) * n_layer * n_head_kv * head_dim * 2 bytes.
+func (a KVArch) KVBytesPerToken() int64 {
+	return int64(2) * int64(a.NLayer) * int64(a.NHeadKV) * int64(a.HeadDim) * 2
+}
+
+// ReadKVArch parses a GGUF file's header and returns the architecture needed to
+// estimate KV-cache memory. ok is false when the file can't be parsed or lacks
+// the required fields (caller should then skip memory-based context sizing).
+func ReadKVArch(path string) (KVArch, bool) {
+	meta := parseGGUFMeta(path)
+	if meta == nil {
+		return KVArch{}, false
+	}
+	nLayer := jsonInt(meta, "num_hidden_layers")
+	nHeadKV := jsonInt(meta, "num_key_value_heads")
+	nHead := jsonInt(meta, "num_attention_heads")
+	if nHeadKV == 0 {
+		nHeadKV = nHead // MHA: KV heads == attention heads
+	}
+	headDim := jsonInt(meta, "head_dim")
+	if headDim == 0 && nHead > 0 {
+		headDim = jsonInt(meta, "hidden_size") / nHead
+	}
+	if nLayer == 0 || nHeadKV == 0 || headDim == 0 {
+		return KVArch{}, false
+	}
+	return KVArch{
+		NLayer:    nLayer,
+		NHeadKV:   nHeadKV,
+		HeadDim:   headDim,
+		NCtxTrain: jsonInt(meta, "max_position_embeddings"),
+	}, true
 }
 
 func ggufReadString(r io.Reader) (string, error) {

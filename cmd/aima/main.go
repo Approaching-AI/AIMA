@@ -315,12 +315,18 @@ func run() error {
 	}
 	inferenceHTTPRoutes := inferencehttp.RegisterRoutes(inferenceHTTPDeps)
 	openclawDeps := &openclaw.Deps{
-		Backends:   openClawBackendAdapter{proxyServer},
-		Catalog:    catalogAdapter{cat},
-		ConfigPath: openclaw.DefaultConfigPath(),
+		Backends: openClawBackendAdapter{proxyServer},
+		Catalog:  catalogAdapter{cat},
+		// Config dir is overridable so a partner using a custom dir name (e.g.
+		// .byClaw) can target it: AIMA_OPENCLAW_CONFIG=<path>/openclaw.json. Skills,
+		// extensions and managed-state all follow filepath.Dir(ConfigPath).
+		ConfigPath: firstNonEmpty(os.Getenv("AIMA_OPENCLAW_CONFIG"), openclaw.DefaultConfigPath()),
 		ProxyAddr:  fmt.Sprintf("http://127.0.0.1:%d/v1", proxy.DefaultPort),
 		APIKey:     proxyServer.APIKey,
 		MCPCommand: mcpCommand,
+		// Whether sync sets the synced model as OpenClaw's primary. Partner-owned via
+		// AIMA_OPENCLAW_SET_DEFAULT (unset=set primary; false=leave user's primary).
+		SetDefaultModel: openclawSetDefaultFromEnv(),
 	}
 	proxyServer.SetRequestRewriter(inferencehttp.RequestBodyRewriter(inferenceHTTPDeps.Catalog))
 	refreshOpenClawBackends := func(ctx context.Context) {

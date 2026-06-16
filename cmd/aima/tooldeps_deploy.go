@@ -867,13 +867,15 @@ func usableMemoryMiB(hw knowledge.HardwareInfo) int {
 		}
 		return reserve
 	}
-	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
-		return hw.RAMTotalMiB - ramReserve(hw.RAMTotalMiB)
+	// An all-layers-offloaded llama.cpp model is bounded by GPU memory. For a
+	// unified-memory APU this is the carved iGPU pool (read via ROCm), which is the
+	// correct budget — NOT the OS-visible system RAM, which Win32 under-reports on
+	// such APUs (e.g. Strix Halo shows ~32 GB OS RAM but ~110 GB iGPU VRAM). Prefer
+	// GPU memory whenever it's known; fall back to system RAM only for CPU-only hosts.
+	if hw.GPUMemFreeMiB > 0 {
+		return hw.GPUMemFreeMiB
 	}
 	if hw.GPUVRAMMiB > 0 {
-		if hw.GPUMemFreeMiB > 0 {
-			return hw.GPUMemFreeMiB
-		}
 		return hw.GPUVRAMMiB
 	}
 	if hw.RAMTotalMiB > 0 {

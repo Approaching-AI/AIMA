@@ -89,6 +89,7 @@ func TestUsableMemoryMiB(t *testing.T) {
 		{"unified 128GB reserves 16GB cap", knowledge.HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 131072}, 131072 - 16384},
 		{"unified 16GB reserves 1/4", knowledge.HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 16384}, 16384 - 4096},
 		{"unified 8GB reserve floored at 2GB", knowledge.HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 8192}, 8192 - 2048},
+		{"unified APU prefers iGPU pool over under-detected OS RAM", knowledge.HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 32768, GPUVRAMMiB: 110456}, 110456},
 		{"discrete prefers free VRAM", knowledge.HardwareInfo{GPUVRAMMiB: 8192, GPUMemFreeMiB: 7000}, 7000},
 		{"discrete falls back to total VRAM", knowledge.HardwareInfo{GPUVRAMMiB: 8192}, 8192},
 		{"cpu-only uses system RAM", knowledge.HardwareInfo{RAMTotalMiB: 32768}, 32768 - 8192},

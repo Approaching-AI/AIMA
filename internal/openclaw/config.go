@@ -138,6 +138,16 @@ func mergeLLMProvider(cfg map[string]any, managed, next *ManagedState, result *S
 }
 
 func mergeChatModelDefault(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {
+	if result != nil && result.SkipDefaultModel {
+		// Partner opted out of AIMA managing the primary model: leave whatever the
+		// user has set as their default untouched, but carry forward any prior AIMA
+		// ownership record so toggling this back on still works cleanly.
+		if managed != nil {
+			next.ChatModelProvider = managed.ChatModelProvider
+			next.ChatModelModels = managed.ChatModelModels
+		}
+		return
+	}
 	desired := uniqueSorted(modelIDs(result.LLMModels))
 	if len(desired) == 0 {
 		if managedOwnsChatModel(managed) {

@@ -24,6 +24,10 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
 > OpenClaw). These large defaults stay safe via the deploy-time auto-clamp — which now sizes
 > against the **iGPU memory pool** (≈110 GB on Strix Halo) instead of the OS-visible system
 > RAM (≈32 GB, which Win32 under-reports on APUs), so it no longer risks shrinking contexts.
+> Also adds two **partner-controllable env knobs** for `openclaw sync` (both honor CLI sync
+> and the serve auto-sync loop): `AIMA_OPENCLAW_SET_DEFAULT=false` registers the provider but
+> leaves the user's primary chat model untouched; `AIMA_OPENCLAW_CONFIG=<path>/openclaw.json`
+> writes the config (and skills/extensions) to a custom dir, e.g. `.byClaw` instead of `.openclaw`.
 
 > **2026-06-15 rebuild** — **hardware-aware context sizing.** On deploy, AIMA reads the
 > GGUF's real architecture and clamps llama.cpp `ctx_size` to fit the detected memory

@@ -7,13 +7,23 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | **latest** — hardware-aware context sizing + 128K default. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | **latest** — GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | hardware-aware context sizing + 128K VL default. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | VL/OpenClaw deploy fixes (#87–#91). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | out-of-box HIP engine (#85, #86). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo.exe` | `v0.5-dev-amd-strix-halo` | 2026-06-09 | prior build (#78–#83 only, **no** HIP engine auto-download). Kept for rollback. |
 
 The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
 (edit the exe name there to switch builds).
+
+> **2026-06-16 rebuild** — **partner context windows + APU memory fix.** Catalog defaults
+> now carry each model's full trained context, verified loading + serving on the Strix Halo
+> iGPU: **GLM-4.7-Flash 202752**, **Qwen3.6-35B-A3B 262144 (256K)** (new llama.cpp variant +
+> `-UD-Q4_K_M`/`q4_k_m` aliases), and a new **Qwen3-Embedding-4B** entry that deploys in
+> `--embedding` mode and serves `/v1/embeddings` (2560-dim; deploy-only, not synced into
+> OpenClaw). These large defaults stay safe via the deploy-time auto-clamp — which now sizes
+> against the **iGPU memory pool** (≈110 GB on Strix Halo) instead of the OS-visible system
+> RAM (≈32 GB, which Win32 under-reports on APUs), so it no longer risks shrinking contexts.
 
 > **2026-06-15 rebuild** — **hardware-aware context sizing.** On deploy, AIMA reads the
 > GGUF's real architecture and clamps llama.cpp `ctx_size` to fit the detected memory

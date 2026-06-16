@@ -40,6 +40,7 @@ type SyncResult struct {
 	APIKey         string          `json:"apiKey,omitempty"`
 	ProxyReachable bool            `json:"proxyReachable"`
 	ProxyWarning   string          `json:"proxyWarning,omitempty"`
+	SkipDefaultModel bool          `json:"skipDefaultModel,omitempty"`
 	ConfigPath     string          `json:"configPath"`
 	ConfigExists   bool            `json:"configExists"`
 	Written        bool            `json:"written"`
@@ -90,6 +91,8 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		APIKey:     deps.proxyAPIKey(),
 		ConfigPath: deps.ConfigPath,
 		MCPServer:  desiredMCPServer(deps),
+		// Skip touching OpenClaw's primary chat model only when explicitly disabled.
+		SkipDefaultModel: deps.SetDefaultModel != nil && !*deps.SetDefaultModel,
 	}
 
 	// Preflight: the provider we write points OpenClaw's chat data plane at

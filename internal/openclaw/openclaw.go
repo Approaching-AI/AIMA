@@ -15,6 +15,11 @@ type Deps struct {
 	ProxyAddr  string        // e.g. "http://127.0.0.1:6188/v1"
 	APIKey     func() string // AIMA proxy API key getter (may return empty)
 	MCPCommand string        // Absolute path or command name for spawning `aima mcp`
+	// SetDefaultModel controls whether sync sets the synced LLM as OpenClaw's
+	// primary/default chat model. nil = default (set it); *false = register the
+	// provider+models but leave the user's current primary untouched. Lets a
+	// partner own that choice at the product level (env AIMA_OPENCLAW_SET_DEFAULT).
+	SetDefaultModel *bool
 }
 
 // BackendLister provides read-only access to the proxy's backend table.

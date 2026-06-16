@@ -703,6 +703,21 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// openclawSetDefaultFromEnv reads AIMA_OPENCLAW_SET_DEFAULT as a tri-state:
+// unset/unparseable → nil (default: AIMA sets the primary chat model); otherwise
+// the parsed bool (false = leave the user's primary model untouched).
+func openclawSetDefaultFromEnv() *bool {
+	v := strings.TrimSpace(os.Getenv("AIMA_OPENCLAW_SET_DEFAULT"))
+	if v == "" {
+		return nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+	return &b
+}
+
 func populateDeploymentOverviewFields(status *runtime.DeploymentStatus) {
 	if status == nil {
 		return

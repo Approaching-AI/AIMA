@@ -7,16 +7,42 @@ metadata:
   released_at: "2026-04"
   aliases:
     - Qwen3.6-35B-A3B
+    - Qwen3.6-35B-A3B-UD-Q4_K_M
+    - qwen3.6-35b-a3b-q4_k_m
 storage:
-  formats: [safetensors]
+  formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
       repo: Qwen/Qwen3.6-35B-A3B
       format: safetensors
+    - type: huggingface
+      repo: unsloth/Qwen3.6-35B-A3B-GGUF
+      format: gguf
     - type: local_path
       path: ""
 variants:
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Qwen3.6-35B-A3B MoE, UD-Q4_K_M ~21GB, all layers offloaded. Native context 262144.
+  - name: qwen3.6-35b-a3b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 24576
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      # Full trained context (262144 / 256K). Deploy auto-clamps it down to fit
+      # hardware memory on smaller machines, so this large default is safe.
+      ctx_size: 262144
+    expected_performance:
+      startup_time_s: 30
+      cold_start_time_s: 60
+      tokens_per_second: [55, 70]
+      latency_first_token_ms: [30, 250]
+      notes: "Context verified 2026-06-16 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, UD-Q4_K_M all 999 layers offloaded: llama-server loads & serves n_ctx=262144 (full trained context)."
   # --- GB10 (Blackwell, 128GB unified, Docker/K3S) ---
   # 实测稳定路径是 text-only vLLM:
   # - language_model_only=true

@@ -36,13 +36,16 @@ variants:
     default_config:
       quantization: int4
       n_gpu_layers: 999
-      ctx_size: 8192
+      # Full trained context (202752). Deploy auto-clamps it down to fit hardware
+      # memory on smaller machines (weights ~18GB + KV cache), so this large default
+      # is safe everywhere.
+      ctx_size: 202752
     expected_performance:
       startup_time_s: 20
       cold_start_time_s: 40
       tokens_per_second: [48, 60]
       latency_first_token_ms: [30, 200]
-      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q4_K_M (deepseek2 arch, 30B-A3B MoE) all 999 layers offloaded: 58.9 tok/s decode, 83 tok/s prompt."
+      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q4_K_M (deepseek2 arch, 30B-A3B MoE) all 999 layers offloaded: 58.9 tok/s decode, 83 tok/s prompt. Context verified 2026-06-16: llama-server loads & serves n_ctx=202752 (full trained context) on the iGPU."
   # --- GB10 (Blackwell, 128GB unified, K3S) ---
   # BF16 ~59GB, 128GB unified memory 可容纳
   # Glm4MoeLiteForCausalLM 架构 (glm4_moe_lite model_type)

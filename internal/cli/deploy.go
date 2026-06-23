@@ -14,6 +14,7 @@ func newDeployCmd(app *App) *cobra.Command {
 		engineType      string
 		slot            string
 		dryRun          bool
+		noPull          bool
 		configOverrides []string
 		maxColdStartS   int
 	)
@@ -46,7 +47,7 @@ func newDeployCmd(app *App) *cobra.Command {
 				return nil
 			}
 
-			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap, false)
+			data, err := app.ToolDeps.DeployRun(ctx, modelName, engineType, slot, configMap, noPull, nil, nil, nil)
 			if err != nil {
 				return fmt.Errorf("deploy %s: %w", modelName, err)
 			}
@@ -59,6 +60,7 @@ func newDeployCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&engineType, "engine", "", "Engine type (e.g., vllm, llamacpp)")
 	cmd.Flags().StringVar(&slot, "slot", "", "Partition slot name")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployment without executing")
+	cmd.Flags().BoolVar(&noPull, "no-pull", false, "Skip auto-downloading missing engine/model")
 	cmd.Flags().StringSliceVar(&configOverrides, "config", nil, "Config overrides (key=value, can repeat)")
 	cmd.Flags().IntVar(&maxColdStartS, "max-cold-start", 0, "Max acceptable cold start seconds (0=no constraint)")
 	cmd.AddCommand(newDeployListCmd(app))

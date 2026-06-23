@@ -29,16 +29,18 @@ func TestExecuteLineDeployUsesRealCLIFlags(t *testing.T) {
 		gotModel  string
 		gotSlot   string
 		gotConfig map[string]any
+		gotNoPull bool
 	)
-	app.ToolDeps.DeployApply = func(ctx context.Context, engine, model, slot string, config map[string]any, noPull bool) (json.RawMessage, error) {
-		gotEngine = engine
+	app.ToolDeps.DeployRun = func(ctx context.Context, model, engineType, slot string, config map[string]any, noPull bool, onPhase func(string, string), onProgress func(engine.ProgressEvent), onModelProgress func(int64, int64)) (json.RawMessage, error) {
+		gotEngine = engineType
 		gotModel = model
 		gotSlot = slot
 		gotConfig = config
-		return json.RawMessage(`{"status":"ok"}`), nil
+		gotNoPull = noPull
+		return json.RawMessage(`{"status":"ready","name":"qwen3-8b-llamacpp","address":"127.0.0.1:8080","runtime":"native"}`), nil
 	}
 
-	result := ExecuteLine(context.Background(), app, `deploy qwen3-8b --engine llamacpp --slot slot-1 --config gpu_memory_utilization=0.9 --config max_model_len=4096 --max-cold-start 12`, nil)
+	result := ExecuteLine(context.Background(), app, `deploy qwen3-8b --engine llamacpp --slot slot-1 --config gpu_memory_utilization=0.9 --config max_model_len=4096 --max-cold-start 12 --no-pull`, nil)
 	if result.ExitCode != 0 {
 		t.Fatalf("ExecuteLine exit_code=%d error=%q output=%q", result.ExitCode, result.Error, result.Output)
 	}
@@ -51,6 +53,9 @@ func TestExecuteLineDeployUsesRealCLIFlags(t *testing.T) {
 	}
 	if gotSlot != "slot-1" {
 		t.Fatalf("slot = %q, want %q", gotSlot, "slot-1")
+	}
+	if !gotNoPull {
+		t.Fatal("expected no-pull=true")
 	}
 	if gotConfig["gpu_memory_utilization"] != 0.9 {
 		t.Fatalf("gpu_memory_utilization = %#v, want 0.9", gotConfig["gpu_memory_utilization"])

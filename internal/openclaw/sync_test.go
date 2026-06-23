@@ -211,6 +211,50 @@ func TestSyncWritesConfig(t *testing.T) {
 	}
 }
 
+func TestSyncUsesBackendModelTypeWhenCatalogMisses(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"Qwen3.5-2B-Q4_K_M": {
+				ModelName:  "Qwen3.5-2B-Q4_K_M",
+				EngineType: "llamacpp",
+				ModelType:  "llm",
+				Address:    "http://127.0.0.1:8080",
+				Ready:      true,
+			},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	provider := lookupMap(cfg, "models", "providers", "aima")
+	if provider == nil {
+		t.Fatal("aima provider missing")
+	}
+	models, ok := provider["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("provider models = %#v, want one model", provider["models"])
+	}
+	model, ok := models[0].(map[string]any)
+	if !ok || model["id"] != "Qwen3.5-2B-Q4_K_M" {
+		t.Fatalf("provider model = %#v, want Qwen3.5-2B-Q4_K_M", models[0])
+	}
+	defaultModel := lookupMap(cfg, "agents", "defaults", "model")
+	if defaultModel == nil || defaultModel["primary"] != "aima/Qwen3.5-2B-Q4_K_M" {
+		t.Fatalf("agents.defaults.model = %#v, want aima/Qwen3.5-2B-Q4_K_M", defaultModel)
+	}
+}
+
 func TestMergeAIMAConfigReplacesStaleAIMAMediaChatDefault(t *testing.T) {
 	proxyAddr := "http://127.0.0.1:6188/v1"
 	existing := map[string]any{

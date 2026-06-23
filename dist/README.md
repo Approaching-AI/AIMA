@@ -7,7 +7,8 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | **latest** — GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260618.exe` | `v0.5-dev-amd-strix-halo-20260618` | 2026-06-18 | **latest** — runtime offline/mirror/private registry support + deploy/OpenClaw sync stabilization. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | hardware-aware context sizing + 128K VL default. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | VL/OpenClaw deploy fixes (#87–#91). Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260610.exe` | `v0.5-dev-amd-strix-halo-20260610` | 2026-06-10 | out-of-box HIP engine (#85, #86). Kept for rollback. |
@@ -15,6 +16,20 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
 (edit the exe name there to switch builds).
+
+> **2026-06-18 rebuild** — **runtime pull resilience + OpenClaw deploy sync stability.**
+> Runtime acquisition now supports offline native packages (`.zip`, `.tgz`/`.tar.gz`, folder,
+> or single exe) via `AIMA_ENGINE_BUNDLE`, `AIMA_ENGINE_ARCHIVE`, `AIMA_ENGINE_OFFLINE_PACKAGE`,
+> or `aima engine import <package>`. It also supports enterprise binary mirrors via
+> `AIMA_ENGINE_MIRROR_BASE` / `AIMA_ENGINE_MIRROR`, `AIMA_ENGINE_MIRROR_TEMPLATE`, and
+> `AIMA_ENGINE_URL_REWRITE`; plus private OCI runtime registries via `AIMA_ENGINE_REGISTRY` /
+> `AIMA_ENGINE_REGISTRIES`. `aima deploy` now runs the full deploy workflow instead of returning
+> immediately after apply: it waits for the model to become ready and then best-effort syncs
+> OpenClaw. OpenClaw sync also falls back to the deployed backend's `model_type` for local or
+> synthetic model names, and writes `agents.defaults.model` by default so deploys do not stop at
+> `models.providers`. Keep `AIMA_OPENCLAW_SET_DEFAULT=false` if the user wants to preserve an
+> existing OpenClaw default model. Use `aima deploy --no-pull <model>` when the runtime must come
+> only from a pre-installed/offline package.
 
 > **2026-06-16 rebuild** — **partner context windows + APU memory fix.** Catalog defaults
 > now carry each model's full trained context, verified loading + serving on the Strix Halo
@@ -51,7 +66,7 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
 > verified on the 395: empty dist + no `AIMA_ENGINE_DIR` → `aima deploy <gguf> --engine llamacpp`
 > auto-fetches `llama-b9330-bin-win-hip-radeon-x64` and runs all layers on the iGPU (~33 t/s).
 
-## Fixes included (vs develop) — PRs #78–#91
+## Fixes included (vs develop) — PRs #78–#91 + 2026-06-18 partner fixes
 
 - **Windows hardware detection**: `wmic` was removed in Win11 24H2, so CPU/RAM detection
   returned empty. Now uses PowerShell **CIM** (`Get-CimInstance`), detects the **AMD iGPU**,
@@ -90,6 +105,14 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
   (weights + projector + KV cache) and the trained context — lowering only when needed. Lets
   the catalog ship a large default (Qwen2.5-VL-3B → 128000) that fixes agent context-overflow
   without OOM-ing smaller machines.
+- **Offline / mirror / private runtime pull**: native llama.cpp runtimes can be installed from
+  local offline packages before AIMA tries the network, binary downloads can be redirected through
+  enterprise mirrors or URL-rewrite rules, and container runtime pulls can prefer private OCI
+  registries.
+- **Deploy-driven OpenClaw sync**: `aima deploy` waits for readiness and triggers OpenClaw sync,
+  so provider and `agents` config update together after a successful deploy. Non-catalog/local
+  model names use the backend `model_type` fallback, avoiding missed syncs for alias names such
+  as partner-local Qwen builds.
 
 ## Run
 
@@ -101,6 +124,10 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
      `serve.bat` to its folder — AIMA launches *that exact binary*, so your llama.cpp
      version is supported regardless of what AIMA ships. Must be a **ROCm/HIP** build,
      not the CUDA build (CUDA won't start on a no-NVIDIA box). (#86)
+   - **Offline or enterprise network?** Put the native llama.cpp package on disk and set
+     `AIMA_ENGINE_OFFLINE_PACKAGE=D:\path\llama.zip` before running `aima deploy`; or set
+     `AIMA_ENGINE_MIRROR_BASE=https://repo.company.local/aima/engines` /
+     `AIMA_ENGINE_REGISTRIES=registry.company.local/aima` to prefer internal repositories.
 2. Open `http://localhost:6188/ui/`.
 
 **LAN access** (other machines): it binds `0.0.0.0:6188`, but Windows Firewall auto-creates an

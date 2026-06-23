@@ -157,9 +157,6 @@ func mergeChatModelDefault(cfg map[string]any, managed, next *ManagedState, resu
 		}
 		return
 	}
-	if !canManageChatModelDefault(cfg, managed) {
-		return
-	}
 	setAgentDefaultModel(cfg, "model", aimaLLMProviderID, desired)
 	next.ChatModelProvider = aimaLLMProviderID
 	next.ChatModelModels = desired

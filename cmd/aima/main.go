@@ -1401,6 +1401,17 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				onPhase(phase, msg)
 			}
 		}
+		syncOpenClawAfterReady := func() {
+			if deps == nil || deps.OpenClawSync == nil {
+				return
+			}
+			if _, err := deps.OpenClawSync(ctx, false); err != nil {
+				slog.Warn("deploy: openclaw sync after ready failed", "model", model, "error", err)
+				notify("warning", "OpenClaw sync failed after deploy: "+err.Error())
+			} else {
+				slog.Info("deploy: openclaw sync complete after ready", "model", model)
+			}
+		}
 
 		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration) (json.RawMessage, error) {
 			notify("waiting", deployName)
@@ -1453,6 +1464,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 						if status.Runtime != "" {
 							runtimeName = status.Runtime
 						}
+						syncOpenClawAfterReady()
 						return json.Marshal(map[string]any{
 							"name": deployName, "model": model, "engine": resolvedEngine,
 							"runtime": runtimeName, "address": status.Address, "status": "ready",
@@ -1526,6 +1538,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 					if status.Runtime != "" {
 						runtimeName = status.Runtime
 					}
+					syncOpenClawAfterReady()
 					return json.Marshal(map[string]any{
 						"name": deployName, "model": model, "engine": plan.Engine,
 						"runtime": runtimeName, "address": status.Address, "status": "ready",

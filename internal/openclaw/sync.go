@@ -31,20 +31,20 @@ var deployedPluginRoots = []string{
 
 // SyncResult holds the categorized models ready for OpenClaw config generation.
 type SyncResult struct {
-	LLMModels      []ModelEntry    `json:"llmModels,omitempty"`
-	VLMModels      []ModelEntry    `json:"vlmModels,omitempty"`
-	ASRModels      []AudioEntry    `json:"asrModels,omitempty"`
-	TTSModel       *TTSEntry       `json:"ttsModel,omitempty"`
-	ImageGenModels []ImageGenEntry `json:"imageGenModels,omitempty"`
-	MCPServer      *MCPServerEntry `json:"mcpServer,omitempty"`
-	ProxyAddr      string          `json:"proxyAddr"`
-	APIKey         string          `json:"apiKey,omitempty"`
-	ProxyReachable bool            `json:"proxyReachable"`
-	ProxyWarning   string          `json:"proxyWarning,omitempty"`
-	SkipDefaultModel bool          `json:"skipDefaultModel,omitempty"`
-	ConfigPath     string          `json:"configPath"`
-	ConfigExists   bool            `json:"configExists"`
-	Written        bool            `json:"written"`
+	LLMModels        []ModelEntry    `json:"llmModels,omitempty"`
+	VLMModels        []ModelEntry    `json:"vlmModels,omitempty"`
+	ASRModels        []AudioEntry    `json:"asrModels,omitempty"`
+	TTSModel         *TTSEntry       `json:"ttsModel,omitempty"`
+	ImageGenModels   []ImageGenEntry `json:"imageGenModels,omitempty"`
+	MCPServer        *MCPServerEntry `json:"mcpServer,omitempty"`
+	ProxyAddr        string          `json:"proxyAddr"`
+	APIKey           string          `json:"apiKey,omitempty"`
+	ProxyReachable   bool            `json:"proxyReachable"`
+	ProxyWarning     string          `json:"proxyWarning,omitempty"`
+	SkipDefaultModel bool            `json:"skipDefaultModel,omitempty"`
+	ConfigPath       string          `json:"configPath"`
+	ConfigExists     bool            `json:"configExists"`
+	Written          bool            `json:"written"`
 }
 
 // MCPServerEntry describes the stdio MCP server entry AIMA wants OpenClaw to use.
@@ -115,7 +115,10 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 			continue
 		}
 
-		modelType := deps.Catalog.ModelType(b.ModelName)
+		modelType := strings.TrimSpace(deps.Catalog.ModelType(b.ModelName))
+		if modelType == "" {
+			modelType = strings.TrimSpace(b.ModelType)
+		}
 		switch modelType {
 		case "llm", "vlm":
 			ctxWindow := b.ContextWindowTokens // prefer actual deployment config

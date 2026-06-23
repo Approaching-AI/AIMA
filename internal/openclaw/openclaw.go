@@ -31,6 +31,7 @@ type BackendLister interface {
 type Backend struct {
 	ModelName           string
 	EngineType          string
+	ModelType           string
 	Address             string
 	Ready               bool
 	Remote              bool

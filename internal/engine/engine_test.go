@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -318,6 +319,86 @@ func TestBinaryManagerEnsureUsesProbePathsForPreinstalledEngine(t *testing.T) {
 	}
 	if path != probePath {
 		t.Fatalf("Ensure path = %q, want %q", path, probePath)
+	}
+}
+
+func TestBinaryManagerEnsureInstallsLocalZipBundle(t *testing.T) {
+	t.Parallel()
+
+	distDir := t.TempDir()
+	bundleDir := t.TempDir()
+	binaryName := "llama-server"
+	binaryFile := binaryName
+	if goruntime.GOOS == "windows" {
+		binaryFile += ".exe"
+	}
+	archivePath := filepath.Join(bundleDir, "llama-runtime.zip")
+	zipFile, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create zip: %v", err)
+	}
+	zw := zip.NewWriter(zipFile)
+	header := &zip.FileHeader{Name: "llama-runtime/" + binaryFile, Method: zip.Deflate}
+	header.SetMode(0o755)
+	w, err := zw.CreateHeader(header)
+	if err != nil {
+		t.Fatalf("create zip entry: %v", err)
+	}
+	if _, err := w.Write([]byte("bin")); err != nil {
+		t.Fatalf("write zip entry: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip writer: %v", err)
+	}
+	if err := zipFile.Close(); err != nil {
+		t.Fatalf("close zip file: %v", err)
+	}
+
+	mgr := NewBinaryManager(distDir)
+	source := &BinarySource{
+		Binary:       binaryName,
+		Platforms:    []string{goruntime.GOOS + "/" + goruntime.GOARCH},
+		LocalBundles: []string{archivePath},
+	}
+
+	path, downloaded, err := mgr.Ensure(context.Background(), source, nil)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if !downloaded {
+		t.Fatal("Ensure should report local bundle installation")
+	}
+	want := filepath.Join(distDir, binaryFile)
+	if path != want {
+		t.Fatalf("Ensure path = %q, want %q", path, want)
+	}
+	if data, err := os.ReadFile(want); err != nil || string(data) != "bin" {
+		t.Fatalf("installed binary = %q, %v; want bin", data, err)
+	}
+}
+
+func TestBuildDownloadSourceListUsesEnterpriseMirrors(t *testing.T) {
+	t.Setenv("AIMA_ENGINE_MIRROR_BASE", "https://repo.local/aima")
+	t.Setenv("AIMA_ENGINE_MIRROR_TEMPLATE", "https://proxy.local/{filename},https://encoded.local/{escaped_url}")
+	t.Setenv("AIMA_ENGINE_URL_REWRITE", "https://github.com/=>https://gitcache.local/")
+
+	primary := "https://github.com/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-win-hip-radeon-x64.zip"
+	got := buildDownloadSourceList(primary, []string{"https://catalog.local/llama.zip"})
+	wantPrefix := []string{
+		"https://repo.local/aima/llama-b9330-bin-win-hip-radeon-x64.zip",
+		"https://proxy.local/llama-b9330-bin-win-hip-radeon-x64.zip",
+		"https://encoded.local/https%3A%2F%2Fgithub.com%2Fggml-org%2Fllama.cpp%2Freleases%2Fdownload%2Fb9330%2Fllama-b9330-bin-win-hip-radeon-x64.zip",
+		"https://gitcache.local/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-win-hip-radeon-x64.zip",
+		"https://catalog.local/llama.zip",
+		primary,
+	}
+	if len(got) != len(wantPrefix) {
+		t.Fatalf("sources = %#v, want %#v", got, wantPrefix)
+	}
+	for i := range wantPrefix {
+		if got[i] != wantPrefix[i] {
+			t.Fatalf("sources[%d] = %q, want %q\nall=%#v", i, got[i], wantPrefix[i], got)
+		}
 	}
 }
 

@@ -215,7 +215,7 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 				if err := engine.Pull(ctx, engine.PullOptions{
 					Image:      ea.Image.Name,
 					Tag:        ea.Image.Tag,
-					Registries: ea.Image.Registries,
+					Registries: engineRegistriesWithEnv(ea.Image.Registries),
 					SizeHintMB: ea.Image.SizeApproxMB,
 					OnProgress: reportProgress,
 					Runner:     &execRunner{},
@@ -256,8 +256,28 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err != nil {
 			return fmt.Errorf("resolve path %s: %w", path, err)
 		}
+		importNative := func() error {
+			distPlatform := goruntime.GOOS + "-" + goruntime.GOARCH
+			distDir := filepath.Join(dataDir, "dist", distPlatform)
+			mgr := engine.NewBinaryManager(distDir)
+			if err := mgr.ImportBundle(ctx, absPath, "", nil); err != nil {
+				return err
+			}
+			_, _ = scanEnginesCore(ctx, "native", false)
+			return nil
+		}
+		if looksLikeNativeEngineBundle(absPath) {
+			if err := importNative(); err != nil {
+				return fmt.Errorf("import native engine bundle from %s: %w", path, err)
+			}
+			return nil
+		}
 		if err := engine.Import(ctx, absPath, &execRunner{}); err != nil {
-			return fmt.Errorf("import engine from %s: %w", path, err)
+			if nativeErr := importNative(); nativeErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("import engine from %s as container image failed: %w; native bundle import also failed: %v", path, err, nativeErr)
+			}
 		}
 		// Refresh DB: imported image only visible via runtime scan
 		_, _ = scanEnginesCore(ctx, "auto", false)
@@ -307,6 +327,24 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		return db.DeleteEngine(ctx, name)
 	}
 
+}
+
+func looksLikeNativeEngineBundle(path string) bool {
+	info, err := os.Stat(path)
+	if err == nil && info.IsDir() {
+		return true
+	}
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".zip"),
+		strings.HasSuffix(lower, ".tgz"),
+		strings.HasSuffix(lower, ".tar.gz"),
+		strings.HasSuffix(lower, ".exe"),
+		strings.HasSuffix(lower, ".appimage"):
+		return true
+	default:
+		return false
+	}
 }
 
 // suppress "imported and not used" for packages only used in type literals

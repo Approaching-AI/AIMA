@@ -69,6 +69,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		modelName = rd.ModelName
 		resolved := rd.Resolved
 		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
+		modelType := firstNonEmpty(resolved.ModelType, catalogModelType(cat, modelName))
 
 		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
 		if modelPathErr != nil {
@@ -118,7 +119,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			PortSpecs:        append([]knowledge.StartupPort(nil), resolved.PortSpecs...),
 			InitCommands:     resolved.InitCommands,
 			ModelPath:        modelPath,
-			ModelType:        catalogModelType(cat, modelName),
+			ModelType:        modelType,
 			Config:           resolved.Config,
 			RuntimeClassName: resolved.RuntimeClassName,
 			CPUArch:          resolved.CPUArch,
@@ -141,7 +142,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {
 			req.Labels[proxy.LabelParameterCount] = parameterCount
 		}
-		if modelType := catalogModelType(cat, modelName); modelType != "" {
+		if modelType != "" {
 			req.Labels[proxy.LabelModelType] = modelType
 		}
 		if contextWindow := contextWindowFromResolvedConfig(resolved.Config); contextWindow > 0 {
@@ -188,7 +189,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				ModelName:           modelName,
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
-				ModelType:           catalogModelType(cat, modelName),
+				ModelType:           modelType,
 				Address:             existing.Address,
 				Ready:               existing.Ready,
 				ParameterCount:      firstNonEmpty(existing.Labels[proxy.LabelParameterCount], catalogModelParameterCount(cat, modelName)),
@@ -218,7 +219,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			if existing.Address != "" {
 				result["address"] = existing.Address
 			}
-			if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
+			if err := setActiveLLMModelConfigForType(ctx, db, modelName, modelType); err != nil {
 				return nil, err
 			}
 			return json.Marshal(result)
@@ -227,6 +228,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		// Auto-import from Docker or pre-pull from registries if needed.
 		// Note: containerd operations require root; skip gracefully if not root.
 		if activeRt.Name() == "k3s" && req.Image != "" {
+			engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
 			inContainerd := engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{})
 			if !inContainerd {
 				inDocker := engine.ImageExistsInDocker(ctx, req.Image, &execRunner{})
@@ -242,16 +244,16 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 							slog.Warn("auto-import failed, K3S will try registries.yaml", "image", req.Image, "error", importErr)
 						}
 					}
-				} else if activeRt.Name() == "k3s" && len(resolved.EngineRegistries) > 0 {
+				} else if activeRt.Name() == "k3s" && len(engineRegistries) > 0 {
 					if !allowAutoPull {
 						return nil, fmt.Errorf("engine image %s not found in K3S containerd and auto-pull is disabled", req.Image)
 					}
-					slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
+					slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(engineRegistries))
 					imgName, imgTag := splitImageRef(req.Image)
 					if pullErr := engine.Pull(ctx, engine.PullOptions{
 						Image:          imgName,
 						Tag:            imgTag,
-						Registries:     resolved.EngineRegistries,
+						Registries:     engineRegistries,
 						Runner:         &execRunner{},
 						ExpectedDigest: resolved.EngineDigest,
 					}); pullErr != nil {
@@ -267,7 +269,8 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				fullRef += ":latest"
 			}
 			if !engine.ImageExistsInDocker(ctx, fullRef, &execRunner{}) {
-				if len(resolved.EngineRegistries) > 0 {
+				engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
+				if len(engineRegistries) > 0 {
 					if !allowAutoPull {
 						return nil, fmt.Errorf("engine image %s not found in Docker and auto-pull is disabled", req.Image)
 					}
@@ -276,13 +279,13 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					if pullErr := engine.Pull(ctx, engine.PullOptions{
 						Image:          imgName,
 						Tag:            imgTag,
-						Registries:     resolved.EngineRegistries,
+						Registries:     engineRegistries,
 						Runner:         &execRunner{},
 						ExpectedDigest: resolved.EngineDigest,
 					}); pullErr != nil {
 						return nil, fmt.Errorf("auto-pull engine image %s: %w", req.Image, pullErr)
 					}
-					if aliasErr := ensureDockerImageAlias(ctx, &execRunner{}, req.Image, resolved.EngineRegistries); aliasErr != nil {
+					if aliasErr := ensureDockerImageAlias(ctx, &execRunner{}, req.Image, engineRegistries); aliasErr != nil {
 						return nil, fmt.Errorf("normalize pulled docker image %s: %w", req.Image, aliasErr)
 					}
 				} else {
@@ -327,12 +330,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			ModelName:           modelName,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
-			ModelType:           catalogModelType(cat, modelName),
+			ModelType:           modelType,
 			Ready:               false,
 			ParameterCount:      catalogModelParameterCount(cat, modelName),
 			ContextWindowTokens: contextWindowFromResolvedConfig(resolved.Config),
 		})
-		if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
+		if err := setActiveLLMModelConfigForType(ctx, db, modelName, modelType); err != nil {
 			return nil, err
 		}
 		result := map[string]any{
@@ -672,7 +675,7 @@ func catalogModelParameterCount(cat *knowledge.Catalog, name string) string {
 		return ""
 	}
 	for _, model := range cat.ModelAssets {
-		if strings.EqualFold(model.Metadata.Name, name) {
+		if modelAssetNameMatches(model, name) {
 			return strings.TrimSpace(model.Metadata.ParameterCount)
 		}
 	}
@@ -684,7 +687,7 @@ func catalogModelType(cat *knowledge.Catalog, name string) string {
 		return ""
 	}
 	for i := range cat.ModelAssets {
-		if strings.EqualFold(cat.ModelAssets[i].Metadata.Name, name) {
+		if modelAssetNameMatches(cat.ModelAssets[i], name) {
 			return strings.TrimSpace(cat.ModelAssets[i].Metadata.Type)
 		}
 	}
@@ -692,6 +695,18 @@ func catalogModelType(cat *knowledge.Catalog, name string) string {
 		return strings.TrimSpace(ma.Metadata.Type)
 	}
 	return ""
+}
+
+func modelAssetNameMatches(model knowledge.ModelAsset, name string) bool {
+	if strings.EqualFold(model.Metadata.Name, name) {
+		return true
+	}
+	for _, alias := range model.Metadata.Aliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

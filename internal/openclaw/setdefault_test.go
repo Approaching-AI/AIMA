@@ -36,3 +36,32 @@ func TestMergeSkipDefaultModel(t *testing.T) {
 		t.Error("skip: agents.defaults.model must be left untouched")
 	}
 }
+
+func TestMergeDefaultModelOverridesExistingWhenNotSkipped(t *testing.T) {
+	result := &SyncResult{
+		LLMModels: []ModelEntry{{
+			ID: "qwen3-8b", Name: "Qwen3 8B", Input: []string{"text"},
+			ContextWindow: 32768, MaxTokens: 16384,
+		}},
+		ProxyAddr: "http://127.0.0.1:6188/v1",
+	}
+	existing := map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"model": map[string]any{"primary": "minimax/MiniMax-M2.1"},
+			},
+		},
+	}
+
+	cfg, managed := MergeAIMAConfigWithState(existing, nil, result)
+	defaultModel := lookupMap(cfg, "agents", "defaults", "model")
+	if defaultModel == nil {
+		t.Fatal("agents.defaults.model missing")
+	}
+	if got := defaultModel["primary"]; got != "aima/qwen3-8b" {
+		t.Fatalf("primary = %v, want aima/qwen3-8b", got)
+	}
+	if managed.ChatModelProvider != "aima" {
+		t.Fatalf("managed chat provider = %q, want aima", managed.ChatModelProvider)
+	}
+}

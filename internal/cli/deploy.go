@@ -144,6 +144,9 @@ func newUndeployCmd(app *App) *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Deployment %s removed\n", name)
+			// A6: undeploy only stops the service; model files are kept on purpose
+			// (re-downloading is expensive). Point users at the cleanup command.
+			fmt.Fprintf(cmd.OutOrStdout(), "Note: model files are kept. To free disk: aima model remove --delete-files %s\n", name)
 			return nil
 		},
 	}

@@ -44,6 +44,9 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	dataDir := ac.dataDir
 
 	deps.DeployApply = func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		// A1: keep the user's original input before it's canonicalized below, so the
+		// result can surface the original↔canonical mapping (requested_model).
+		requestedModel := modelName
 		if noPull {
 			ctx = withDeployAutoPull(ctx, false)
 		}
@@ -205,10 +208,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 			existingName := firstNonEmpty(existing.Name, deployName)
 			result := map[string]any{
-				"name":    existingName,
-				"model":   modelName,
-				"engine":  resolved.Engine,
-				"slot":    resolved.Slot,
+				"name":            existingName,
+				"model":           modelName,
+				"requested_model": requestedModel,
+				"engine":          resolved.Engine,
+				"slot":            resolved.Slot,
 				"status":  status,
 				"phase":   existing.Phase,
 				"runtime": runtimeName,
@@ -346,7 +350,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			// sanitized deployName never matched → status was never found → the deploy
 			// looked stuck "not ready" even though the engine was serving fine.
 			"name":  req.Name,
-			"model": modelName, "engine": resolved.Engine,
+			"model": modelName, "requested_model": requestedModel, "engine": resolved.Engine,
 			"slot": resolved.Slot, "status": "deploying",
 			"runtime": activeRt.Name(),
 			"config":  resolved.Config,
@@ -386,6 +390,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 
 		result := map[string]any{
 			"model":                rd.ModelName,
+			"requested_model":      modelName,
 			"engine":               resolved.Engine,
 			"engine_image":         resolved.EngineImage,
 			"slot":                 resolved.Slot,
@@ -517,6 +522,18 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 		}
 		if len(matches) == 0 {
+			// A1: deploy canonicalizes the model name (e.g. the alias
+			// "Qwen2.5-VL-3B-Instruct-Q4_K_M" deploys as "qwen2.5-vl-3b-instruct"),
+			// but undeploy with the original alias would not match. Canonicalize the
+			// query and retry so alias-deploy → alias-undeploy works.
+			if canonical := canonicalModelAlt(cat, name); canonical != "" {
+				matches = findExactDeploymentNameMatches(ctx, canonical, nil, rt, nativeRt, dockerRt)
+				if len(matches) == 0 {
+					matches = findMatchingDeployments(ctx, canonical, nil, rt, nativeRt, dockerRt)
+				}
+			}
+		}
+		if len(matches) == 0 {
 			return fmt.Errorf("deployment %q not found", name)
 		}
 		if len(matches) > 1 {
@@ -581,6 +598,14 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
 		s, err := findDeploymentStatus(ctx, name, suppressRecentlyDeleted, rt, nativeRt, dockerRt)
 		if err != nil {
+			// A1: retry with the canonical name so `status <alias>` works too.
+			if canonical := canonicalModelAlt(cat, name); canonical != "" {
+				if s2, err2 := findDeploymentStatus(ctx, canonical, suppressRecentlyDeleted, rt, nativeRt, dockerRt); err2 == nil {
+					s, err = s2, nil
+				}
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 		populateDeploymentOverviewFields(s)
@@ -627,9 +652,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		if err != nil {
 			// Exact pod name failed -- search by model label across all runtimes.
+			// A1: also match the canonical name so `logs <alias>` works.
+			canonical := canonicalModelAlt(cat, name)
 			allDeps := listAllRuntimes(ctx, rt, nativeRt, dockerRt)
 			for _, d := range allDeps {
-				if deploymentMatchesQuery(d, name) {
+				if deploymentMatchesQuery(d, name) || (canonical != "" && deploymentMatchesQuery(d, canonical)) {
 					// Try each runtime for logs by actual deployment name.
 					for _, tryRt := range []runtime.Runtime{rt, nativeRt, dockerRt} {
 						if tryRt == nil {
@@ -714,6 +741,22 @@ func firstNonEmpty(values ...string) string {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			return trimmed
 		}
+	}
+	return ""
+}
+
+// canonicalModelAlt returns the canonical catalog model name for a query when it
+// differs from the input (e.g. an alias carrying a quant suffix / different case),
+// or "" otherwise. Deployments are stored under the canonical name, so name-taking
+// commands (undeploy/status/logs) use this to also accept the original deploy-time
+// alias the user typed.
+func canonicalModelAlt(cat *knowledge.Catalog, name string) string {
+	if cat == nil {
+		return ""
+	}
+	c := strings.TrimSpace(cat.ResolveCatalogModelName(name))
+	if c != "" && !strings.EqualFold(c, name) {
+		return c
 	}
 	return ""
 }

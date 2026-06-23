@@ -7,7 +7,8 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260618.exe` | `v0.5-dev-amd-strix-halo-20260618` | 2026-06-18 | **latest** — runtime offline/mirror/private registry support + deploy/OpenClaw sync stabilization. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260623.exe` | `v0.5-dev-amd-strix-halo-20260623` | 2026-06-23 | **latest** — integration fixes A1 (undeploy by original name) / A5 (sync-loop switch) / A6 (undeploy disk hint); see `AIMA集成问题-解决说明-20260623.md`. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260618.exe` | `v0.5-dev-amd-strix-halo-20260618` | 2026-06-18 | runtime offline/mirror/private registry support + deploy/OpenClaw sync stabilization. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | hardware-aware context sizing + 128K VL default. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260612.exe` | `v0.5-dev-amd-strix-halo-20260612` | 2026-06-12 | VL/OpenClaw deploy fixes (#87–#91). Kept for rollback. |

@@ -1366,6 +1366,10 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			if deps == nil || deps.OpenClawSync == nil {
 				return
 			}
+			if !openClawImplicitSyncAllowed(ctx, db) {
+				slog.Info("deploy: openclaw sync skipped by policy", "model", model)
+				return
+			}
 			if _, err := deps.OpenClawSync(ctx, false); err != nil {
 				slog.Warn("deploy: openclaw sync after ready failed", "model", model, "error", err)
 				notify("warning", "OpenClaw sync failed after deploy: "+err.Error())

@@ -116,6 +116,7 @@ func TestScanContinuesAfterUnreachableEndpoint(t *testing.T) {
 
 	services, err := Scan(context.Background(), ScanOptions{
 		Endpoints: []string{"http://127.0.0.1:1", server.URL},
+		Ports:     []int{1},
 		Client:    server.Client(),
 	})
 	if err != nil {

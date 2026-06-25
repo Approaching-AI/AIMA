@@ -7,7 +7,8 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260623.exe` | `v0.5-dev-amd-strix-halo-20260623` | 2026-06-23 | **latest** — integration fixes A1 (undeploy by original name) / A5 (sync-loop switch) / A6 (undeploy disk hint); see `AIMA集成问题-解决说明-20260623.md`. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260625.exe` | `v0.5-dev-amd-strix-halo-20260625` | 2026-06-25 | **latest** — fixes cross-process OpenClaw sync policy, Windows native stale metadata detection, and 395 long-context llama.cpp stability defaults; see `AIMA集成问题-补充排查与修复-20260625.md`. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260623.exe` | `v0.5-dev-amd-strix-halo-20260623` | 2026-06-23 | integration fixes A1 (undeploy by original name) / A5 (sync-loop switch) / A6 (undeploy disk hint); see `AIMA集成问题-解决说明-20260623.md`. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260618.exe` | `v0.5-dev-amd-strix-halo-20260618` | 2026-06-18 | runtime offline/mirror/private registry support + deploy/OpenClaw sync stabilization. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260615.exe` | `v0.5-dev-amd-strix-halo-20260615` | 2026-06-15 | hardware-aware context sizing + 128K VL default. Kept for rollback. |
@@ -17,6 +18,16 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
 (edit the exe name there to switch builds).
+
+> **2026-06-25 rebuild** — **OpenClaw sync policy + 395 long-context stability.**
+> `serve --no-openclaw-sync` now persists `openclaw.sync=manual`, and `aima deploy`
+> honors the same policy before its ready-after OpenClaw sync, so implicit sync is
+> disabled across processes while explicit `aima openclaw sync` remains available.
+> Windows native deployment recovery now checks that the listening port's PID matches
+> the deployment metadata PID, avoiding stale metadata/port reuse being reported as a
+> ready model. Qwen3.6-35B-A3B and GLM-4.7-Flash Strix Halo GGUF defaults now use
+> `--parallel 1 --cache-ram 0` to avoid llama.cpp auto-4-slot + prompt-cache ROCm
+> allocation spikes at 262144/202752 context.
 
 > **2026-06-18 rebuild** — **runtime pull resilience + OpenClaw deploy sync stability.**
 > Runtime acquisition now supports offline native packages (`.zip`, `.tgz`/`.tar.gz`, folder,
@@ -67,7 +78,7 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
 > verified on the 395: empty dist + no `AIMA_ENGINE_DIR` → `aima deploy <gguf> --engine llamacpp`
 > auto-fetches `llama-b9330-bin-win-hip-radeon-x64` and runs all layers on the iGPU (~33 t/s).
 
-## Fixes included (vs develop) — PRs #78–#91 + 2026-06-18 partner fixes
+## Fixes included (vs develop) — PRs #78–#91 + 2026-06-18/25 partner fixes
 
 - **Windows hardware detection**: `wmic` was removed in Win11 24H2, so CPU/RAM detection
   returned empty. Now uses PowerShell **CIM** (`Get-CimInstance`), detects the **AMD iGPU**,
@@ -114,6 +125,14 @@ The file name matches the exe's own `aima version` string. Launcher: `dist/serve
   so provider and `agents` config update together after a successful deploy. Non-catalog/local
   model names use the backend `model_type` fallback, avoiding missed syncs for alias names such
   as partner-local Qwen builds.
+- **OpenClaw manual-sync policy is cross-process**: `serve --no-openclaw-sync` now persists
+  `openclaw.sync=manual`, and `deploy` reads it before any implicit ready-after sync. Use
+  `aima config set openclaw.sync auto` to re-enable implicit sync.
+- **Windows native stale metadata guard**: a recovered native deployment is considered matching
+  only when the listening port PID equals the persisted deployment PID, avoiding false ready
+  reports from port reuse.
+- **395 large-context llama.cpp stability**: Qwen3.6-35B-A3B and GLM-4.7-Flash defaults set
+  `parallel=1` and `cache_ram=0`, reducing ROCm allocation spikes on ultra-long contexts.
 
 ## Run
 

@@ -108,7 +108,18 @@ func newServeCmd(app *App) *cobra.Command {
 				}
 				go proxy.StartSyncLoop(ctx, app.Proxy, listFn, 5*time.Second)
 			}
-			if app.OpenClaw != nil && openClawAutoSyncEnabled(noOpenClawSync) {
+			openClawLoopEnabled := openClawAutoSyncEnabled(noOpenClawSync)
+			if noOpenClawSync && app.ToolDeps != nil && app.ToolDeps.SetConfig != nil {
+				if err := app.ToolDeps.SetConfig(ctx, openclaw.ConfigKeySyncMode, openclaw.SyncModeManual); err != nil {
+					slog.Warn("persist openclaw sync policy failed", "error", err)
+				}
+			}
+			if openClawLoopEnabled && app.ToolDeps != nil && app.ToolDeps.GetConfig != nil {
+				if mode, err := app.ToolDeps.GetConfig(ctx, openclaw.ConfigKeySyncMode); err == nil {
+					openClawLoopEnabled = openclaw.AutoSyncEnabledForMode(mode)
+				}
+			}
+			if app.OpenClaw != nil && openClawLoopEnabled {
 				go openclaw.StartSyncLoop(ctx, app.OpenClaw, 10*time.Second)
 			} else if app.OpenClaw != nil {
 				slog.Info("openclaw auto-sync loop disabled; sync only via `aima openclaw sync`")
@@ -374,11 +385,7 @@ func openClawAutoSyncEnabled(noFlag bool) bool {
 	if noFlag {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("AIMA_OPENCLAW_SYNC"))) {
-	case "manual", "off", "false", "0", "no":
-		return false
-	}
-	return true
+	return openclaw.AutoSyncEnabledFromEnv()
 }
 
 func validateServeSecurity(addr, mcpAddr string, mcpEnabled bool, apiKey string, allowInsecure bool) error {

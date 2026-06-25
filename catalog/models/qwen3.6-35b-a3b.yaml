@@ -55,6 +55,11 @@ variants:
       # Full trained context (262144 / 256K). Deploy auto-clamps it down to fit
       # hardware memory on smaller machines, so this large default is safe.
       ctx_size: 262144
+      # Strix Halo long-context HIP runs are most stable with one slot and no
+      # llama.cpp prompt cache; auto parallelism otherwise selects 4 slots and
+      # can push ROCm compute/prompt-cache buffers over the allocation limit.
+      parallel: 1
+      cache_ram: 0
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 60

@@ -43,12 +43,13 @@ func processMatchesMeta(meta *deploymentMeta) bool {
 		}
 		return commandLineMatches(strings.TrimSpace(string(out)), meta.Command)
 	}
-	// On non-Linux (macOS, Windows): fall back to port check as best-effort.
-	// If the port the deployment was using is still alive, assume the process is ours.
+	// On Windows, Task Scheduler launches detached engine processes. Verify the
+	// listener PID discovered from the port instead of treating any live port as
+	// this deployment; otherwise stale metadata can masquerade as a ready model.
 	if meta.Port > 0 {
-		return portAlive(meta.Port)
+		return findProcessPIDByPort(meta.Port) == meta.PID
 	}
-	return false
+	return pidAlive(meta.PID)
 }
 
 func commandPrefixMatches(actual, expected []string) bool {

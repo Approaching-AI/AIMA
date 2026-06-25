@@ -95,6 +95,7 @@ var supportedConfigKeys = []string{
 	"support.endpoint",
 	"support.invite_code",
 	"support.worker_code",
+	"openclaw.sync",
 }
 
 var validConfigKeys = func() map[string]bool {

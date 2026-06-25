@@ -69,21 +69,26 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		for _, w := range rd.Fit.Warnings {
 			slog.Warn("deploy fitness", "warning", w)
 		}
-		modelName = rd.ModelName
+		// Verbatim model identity: keep `modelName` as the EXACT name passed to
+		// `aima deploy` — that is the published identity used by the proxy route,
+		// /v1/models, the aima.dev/model label, llm.model, and openclaw. Do NOT
+		// canonicalize it. `canonicalName` is the catalog-canonical id, used ONLY
+		// for catalog/path/pull lookups that are not alias-aware.
+		canonicalName := rd.ModelName
 		resolved := rd.Resolved
 		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
-		modelType := firstNonEmpty(resolved.ModelType, catalogModelType(cat, modelName))
+		modelType := firstNonEmpty(resolved.ModelType, catalogModelType(cat, canonicalName))
 
-		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
+		modelPath, modelPathErr := resolveLocalModelPathNoPull(canonicalName, resolved, dataDir)
 		if modelPathErr != nil {
 			if !allowAutoPull {
 				return nil, modelPathErr
 			}
-			slog.Info("model not found locally, auto-pulling", "model", modelName)
-			if pullErr := pullModelCore(ctx, modelName, nil, nil); pullErr != nil {
-				return nil, fmt.Errorf("auto-pull model %s: %w", modelName, pullErr)
+			slog.Info("model not found locally, auto-pulling", "model", canonicalName)
+			if pullErr := pullModelCore(ctx, canonicalName, nil, nil); pullErr != nil {
+				return nil, fmt.Errorf("auto-pull model %s: %w", canonicalName, pullErr)
 			}
-			modelPath, modelPathErr = resolveLocalModelPathNoPull(modelName, resolved, dataDir)
+			modelPath, modelPathErr = resolveLocalModelPathNoPull(canonicalName, resolved, dataDir)
 			if modelPathErr != nil {
 				return nil, modelPathErr
 			}
@@ -142,7 +147,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				proxy.LabelServedModel: upstreamModel,
 			},
 		}
-		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {
+		if parameterCount := catalogModelParameterCount(cat, canonicalName); parameterCount != "" {
 			req.Labels[proxy.LabelParameterCount] = parameterCount
 		}
 		if modelType != "" {
@@ -195,7 +200,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				ModelType:           modelType,
 				Address:             existing.Address,
 				Ready:               existing.Ready,
-				ParameterCount:      firstNonEmpty(existing.Labels[proxy.LabelParameterCount], catalogModelParameterCount(cat, modelName)),
+				ParameterCount:      firstNonEmpty(existing.Labels[proxy.LabelParameterCount], catalogModelParameterCount(cat, canonicalName)),
 				ContextWindowTokens: firstPositiveInt(contextWindowFromStatus(existing), contextWindowFromResolvedConfig(resolved.Config)),
 			})
 			runtimeName := activeRt.Name()
@@ -324,11 +329,17 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, fmt.Errorf("compatibility validation refreshed %s in Docker, but syncing that image into K3S containerd requires root", req.Image)
 			}
 		}
-		if err := allocateDeploymentPorts(ctx, deployName, activeRt.Name(), req, resolved.Provenance, listAllRuntimes(ctx, rt, nativeRt, dockerRt)); err != nil {
+		releasePorts, err := allocateDeploymentPorts(ctx, deployName, activeRt.Name(), req, resolved.Provenance, listAllRuntimes(ctx, rt, nativeRt, dockerRt))
+		if err != nil {
 			return nil, fmt.Errorf("allocate ports: %w", err)
 		}
-		if err := activeRt.Deploy(ctx, req); err != nil {
-			return nil, fmt.Errorf("deploy: %w", err)
+		deployErr := activeRt.Deploy(ctx, req)
+		// Deploy persists deployment metadata (including host-port labels)
+		// synchronously before returning, so reservedHostPorts() now covers the
+		// chosen ports. Release the in-flight reservation regardless of outcome.
+		releasePorts()
+		if deployErr != nil {
+			return nil, fmt.Errorf("deploy: %w", deployErr)
 		}
 		proxyServer.RegisterBackend(modelName, &proxy.Backend{
 			ModelName:           modelName,
@@ -336,7 +347,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			EngineType:          resolved.Engine,
 			ModelType:           modelType,
 			Ready:               false,
-			ParameterCount:      catalogModelParameterCount(cat, modelName),
+			ParameterCount:      catalogModelParameterCount(cat, canonicalName),
 			ContextWindowTokens: contextWindowFromResolvedConfig(resolved.Config),
 		})
 		if err := setActiveLLMModelConfigForType(ctx, db, modelName, modelType); err != nil {

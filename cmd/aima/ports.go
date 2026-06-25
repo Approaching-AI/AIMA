@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -19,6 +20,25 @@ const (
 	portDialTimeout   = time.Second
 )
 
+// inFlightPorts tracks host ports that an in-flight deploy has already chosen but
+// whose engine has not yet bound the socket. llama.cpp can take 40s+ to load a
+// model before it listens, so during that window the port is neither reported by
+// reservedHostPorts() (deployment metadata not persisted yet) nor detected by
+// localPortAlive() (nothing is listening). Without this registry two near-
+// simultaneous deploys both see the port as free and pick the same one, and the
+// second engine fails to bind ("address already in use"). Entries are released
+// once the deployment metadata is persisted, after which reservedHostPorts()
+// covers the port instead. The mutex also serializes port selection across
+// concurrent deploys.
+var (
+	inFlightPortsMu sync.Mutex
+	inFlightPorts   = make(map[int]struct{})
+)
+
+// allocateDeploymentPorts resolves and reserves host ports for req. It returns a
+// release func that the caller MUST invoke once the deployment metadata has been
+// persisted (i.e. right after the runtime's Deploy returns, success or failure),
+// which hands the reservation off to reservedHostPorts().
 func allocateDeploymentPorts(
 	ctx context.Context,
 	owner string,
@@ -26,24 +46,33 @@ func allocateDeploymentPorts(
 	req *runtime.DeployRequest,
 	provenance map[string]string,
 	deployments []*runtime.DeploymentStatus,
-) error {
+) (func(), error) {
+	noop := func() {}
 	if req == nil {
-		return nil
+		return noop, nil
 	}
 
 	bindings := requestPortBindings(req)
 	if len(bindings) == 0 {
 		applyPortLabels(runtimeName, req, nil)
-		return nil
+		return noop, nil
 	}
 
 	hostIndexes := hostPortBindingIndexes(runtimeName, req, bindings)
 	if len(hostIndexes) == 0 {
 		applyPortLabels(runtimeName, req, bindings)
-		return nil
+		return noop, nil
 	}
 
+	// Serialize selection and treat ports reserved by other in-flight deploys as
+	// unavailable for the duration of the choice.
+	inFlightPortsMu.Lock()
+	defer inFlightPortsMu.Unlock()
+
 	reservedPorts := reservedHostPorts(deployments, owner)
+	for p := range inFlightPorts {
+		reservedPorts[p] = struct{}{}
+	}
 	ownerPorts := ownerHostPorts(deployments, owner)
 	selectedPorts := make(map[int]struct{}, len(hostIndexes))
 	if req.Config == nil {
@@ -65,7 +94,7 @@ func allocateDeploymentPorts(
 		}
 		port, err := chooseHostPort(binding.Port, explicit, reservedPorts, selectedPorts)
 		if err != nil {
-			return err
+			return noop, err
 		}
 		bindings[idx].Port = port
 		if binding.ConfigKey != "" {
@@ -75,7 +104,20 @@ func allocateDeploymentPorts(
 	}
 
 	applyPortLabels(runtimeName, req, bindings)
-	return nil
+
+	chosen := make([]int, 0, len(selectedPorts))
+	for p := range selectedPorts {
+		inFlightPorts[p] = struct{}{}
+		chosen = append(chosen, p)
+	}
+	release := func() {
+		inFlightPortsMu.Lock()
+		defer inFlightPortsMu.Unlock()
+		for _, p := range chosen {
+			delete(inFlightPorts, p)
+		}
+	}
+	return release, nil
 }
 
 func requestPortBindings(req *runtime.DeployRequest) []knowledge.PortBinding {

@@ -7,7 +7,8 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 | File | `aima version` | Date | Notes |
 |------|----------------|------|-------|
-| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260625.exe` | `v0.5-dev-amd-strix-halo-20260625` | 2026-06-25 | **latest** — fixes cross-process OpenClaw sync policy, Windows native stale metadata detection, and 395 long-context llama.cpp stability defaults; see `AIMA集成问题-补充排查与修复-20260625.md`. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260625b.exe` | `v0.5-dev-amd-strix-halo-20260625b` | 2026-06-25 | **latest** — port-allocation in-flight reservation (a later deploy no longer steals a still-loading deploy's port) + **verbatim deploy model name** (served identity = the exact name passed to `aima deploy`, incl. quant suffix, e.g. `Qwen3.6-35B-A3B-UD-Q4_K_M`; `/v1/models` and routing use it). ⚠ **Reverses A1** canonicalization for the served identity. see `AIMA集成问题-补充修复-20260625b.md`. `serve.bat` uses this one. |
+| `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260625.exe` | `v0.5-dev-amd-strix-halo-20260625` | 2026-06-25 | cross-process OpenClaw sync policy, Windows native stale metadata detection, and 395 long-context llama.cpp stability defaults; see `AIMA集成问题-补充排查与修复-20260625.md`. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260623.exe` | `v0.5-dev-amd-strix-halo-20260623` | 2026-06-23 | integration fixes A1 (undeploy by original name) / A5 (sync-loop switch) / A6 (undeploy disk hint); see `AIMA集成问题-解决说明-20260623.md`. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260618.exe` | `v0.5-dev-amd-strix-halo-20260618` | 2026-06-18 | runtime offline/mirror/private registry support + deploy/OpenClaw sync stabilization. Kept for rollback. |
 | `dist/aima-windows-amd64-v0.5-dev-amd-strix-halo-20260616.exe` | `v0.5-dev-amd-strix-halo-20260616` | 2026-06-16 | GLM/Qwen3.6-35B/Embedding context windows + clamp uses iGPU pool. Kept for rollback. |
@@ -18,6 +19,24 @@ Built from `develop` + the platform fixes below. Preview/handoff build — **not
 
 The file name matches the exe's own `aima version` string. Launcher: `dist/serve.bat`
 (edit the exe name there to switch builds).
+
+> **2026-06-25b rebuild** — **port-allocation race + verbatim model name.**
+> (1) Port allocation now keeps an in-process in-flight reservation: a port that a
+> still-loading deploy has chosen (llama.cpp takes 40s+ to bind) is treated as taken
+> by concurrent deploys, so a later deploy no longer lands on the same port and
+> bind-kills the earlier service. (2) `aima deploy <name>` now preserves the EXACT
+> name as the served identity — the proxy route, `/v1/models`, `aima.dev/model`,
+> `llm.model` and OpenClaw all use `Qwen3.6-35B-A3B-UD-Q4_K_M` verbatim (incl. the
+> precision suffix), so requests with that name stop 404-ing. Internal catalog/path
+> lookups still use the canonical id. **This reverses A1's canonicalization for the
+> served identity** — coordinate before adopting as the official line. Verified
+> end-to-end on Strix Halo (deploy → `/v1/models` returns the suffixed name → chat
+> with it returns 200 → undeploy by the same name). See `AIMA集成问题-补充修复-20260625b.md`.
+> Note on the separate `failed to remove sequence` engine abort: reproduced as
+> **engine-build-specific** — AIMA's auto-downloaded **b9330** and b9180 both serve
+> Qwen3.6-35B at ctx 262144 with no abort; the crash came from a custom engine set
+> via `AIMA_ENGINE_DIR` (`ProgramData\Lenovo\baiying-llm`). Use the auto-downloaded
+> b9330, not a custom build.
 
 > **2026-06-25 rebuild** — **OpenClaw sync policy + 395 long-context stability.**
 > `serve --no-openclaw-sync` now persists `openclaw.sync=manual`, and `aima deploy`

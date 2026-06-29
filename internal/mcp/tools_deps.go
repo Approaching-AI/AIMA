@@ -156,9 +156,11 @@ type ToolDeps struct {
 	SyncStatus func(ctx context.Context) (json.RawMessage, error)
 
 	// OpenClaw integration
-	OpenClawSync   func(ctx context.Context, dryRun bool) (json.RawMessage, error)
-	OpenClawStatus func(ctx context.Context) (json.RawMessage, error)
-	OpenClawClaim  func(ctx context.Context, sections []string, dryRun bool) (json.RawMessage, error)
+	OpenClawSync    func(ctx context.Context, dryRun bool) (json.RawMessage, error)
+	OpenClawStatus  func(ctx context.Context) (json.RawMessage, error)
+	OpenClawClaim   func(ctx context.Context, sections []string, dryRun bool) (json.RawMessage, error)
+	OpenClawExclude func(ctx context.Context, model string) (json.RawMessage, error)
+	OpenClawInclude func(ctx context.Context, model string) (json.RawMessage, error)
 
 	// Onboarding wizard (multi-action)
 	OnboardingStart     func(ctx context.Context, locale string) (json.RawMessage, error)

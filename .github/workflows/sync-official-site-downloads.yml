@@ -1,0 +1,52 @@
+name: Sync official site downloads
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-site-downloads-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release assets
+        run: make release-assets
+
+      - name: Resolve release asset directory
+        run: |
+          asset_dir="$(find build/release -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+          if [ -z "$asset_dir" ]; then
+            echo "No release asset directory found under build/release" >&2
+            exit 1
+          fi
+          echo "AIMA_SYNC_ASSET_DIR=$asset_dir" >> "$GITHUB_ENV"
+
+      - name: Sync to official site server
+        env:
+          AIMA_DOWNLOAD_SSH_KEY: ${{ secrets.AIMA_DOWNLOAD_SSH_KEY }}
+          AIMA_DOWNLOAD_SSH_TARGET: ${{ secrets.AIMA_DOWNLOAD_SSH_TARGET || 'root@121.37.119.185' }}
+          AIMA_DOWNLOAD_REMOTE_ROOT: ${{ secrets.AIMA_DOWNLOAD_REMOTE_ROOT || '/root/aima-service/.data/aima-downloads' }}
+          AIMA_SYNC_REF: ${{ github.sha }}
+          AIMA_SYNC_FETCH: "false"
+        run: bash scripts/sync-official-site-downloads.sh

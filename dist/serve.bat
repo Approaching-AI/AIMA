@@ -18,4 +18,4 @@ REM 3) A stable API key for the UI / clients (kept in sync into OpenClaw automat
 set AIMA_API_KEY=local
 REM 4) Serve: UI+proxy on :6188, MCP on :9090, bound to all interfaces for LAN access.
 REM    Points at the latest dated build; older builds in this folder are kept for rollback.
-"%~dp0aima-windows-amd64-v0.5-dev-amd-strix-halo-20260629b.exe" serve --addr 0.0.0.0:6188 --api-key local --mcp
+"%~dp0aima-windows-amd64-v0.5-dev-amd-strix-halo-20260629c.exe" serve --addr 0.0.0.0:6188 --api-key local --mcp

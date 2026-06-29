@@ -60,16 +60,15 @@ variants:
       # can push ROCm compute/prompt-cache buffers over the allocation limit.
       parallel: 1
       cache_ram: 0
-      # Qwen3.6-A3B is a hybrid Gated-DeltaNet (recurrent) MoE. llama.cpp's
-      # recurrent memory can't be partially truncated, so when llama-server reuses
-      # a slot's cached prefix it calls llama_memory_seq_rm(seq, p0>0, -1), which
-      # fails -> GGML_ABORT ("failed to remove sequence ... p0=10") and the server
-      # crashes the moment a second prefix-overlapping request arrives (e.g. the
-      # deploy warmup's second identical "Hello"). cache_ram:0 only disables the
-      # RAM prompt cache, NOT the in-slot prefix reuse; cache_prompt:false does,
-      # forcing a full KV clear (seq_rm(0,-1), valid on recurrent) each turn.
-      # Verified on AMD Strix Halo (b9180 & b9196 HIP).
-      cache_prompt: false
+      # ENGINE REQUIREMENT: use llama.cpp >= b9330. Qwen3.6-A3B is a hybrid
+      # Gated-DeltaNet (recurrent) MoE; on b9180/b9196 the engine hard-ABORTs on
+      # this model's recurrent partial seq_rm during prefix-cache reuse
+      # (common.cpp "failed to remove sequence ... p0=10", e.g. the deploy warmup's
+      # 2nd identical request) -> deploy fails. Upstream fixed it by b9330; verified
+      # same-machine A/B (Strix Halo HIP): b9196 CRASHES, b9330 SURVIVES, identical
+      # command. AIMA auto-downloads b9330 (engine llamacpp-hip-windows); if you pin
+      # AIMA_ENGINE_DIR to your own build, it MUST be b9330+. No --no-cache-prompt
+      # workaround is needed on b9330 (keeps prompt cache = full speed).
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 60

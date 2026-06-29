@@ -662,7 +662,12 @@ func (r *NativeRuntime) warmup(proc *nativeProcess, cfg *WarmupConfig, client *h
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", proc.port)
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, modelName, prompt, maxTokens)
+	// cache_prompt:false makes the warmup NOT populate/reuse the slot prompt cache.
+	// Otherwise a second identical warmup re-hits a 100%-cached prompt; llama.cpp must
+	// re-eval >=1 token, so it drops the last cached token via a partial seq_rm — which
+	// ABORTs on hybrid recurrent models (Qwen3.6-A3B) on llama.cpp < b9330. Opting only
+	// the warmup out of the cache avoids it without affecting real serving (full speed).
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d,"cache_prompt":false}`, modelName, prompt, maxTokens)
 
 	slog.Info("warming up engine", "name", proc.name, "url", url)
 	resp, err := client.Post(url, "application/json", strings.NewReader(body))

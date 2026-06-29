@@ -65,7 +65,10 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, model, prompt, maxTokens)
+	// cache_prompt:false so this readiness probe does not reuse the engine warmup's
+	// cached prompt — a second identical fully-cached request forces a partial seq_rm
+	// that ABORTs hybrid recurrent models on llama.cpp < b9330. Real serving is unaffected.
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d,"cache_prompt":false}`, model, prompt, maxTokens)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		return false

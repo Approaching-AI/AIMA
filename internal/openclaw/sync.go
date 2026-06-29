@@ -108,11 +108,22 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 			"proxy", deps.ProxyAddr, "detail", result.ProxyWarning)
 	}
 
+	// Read managed state up front so the categorization loop can skip models the
+	// user has revoked from sync (ExcludedModels). The same state is reused for
+	// the merge below.
+	managed, err := ReadManagedState(deps.ConfigPath)
+	if err != nil {
+		return result, fmt.Errorf("openclaw sync: %w", err)
+	}
+
 	var ttsIDs []string
 
 	for _, b := range backends {
 		if !b.Ready || b.Remote {
 			continue
+		}
+		if managed.IsExcluded(b.ModelName) {
+			continue // user revoked this model from OpenClaw sync
 		}
 
 		modelType := strings.TrimSpace(deps.Catalog.ModelType(b.ModelName))
@@ -176,12 +187,10 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		result.ConfigExists = true
 	}
 
-	managed, err := ReadManagedState(deps.ConfigPath)
-	if err != nil {
-		return result, fmt.Errorf("openclaw sync: %w", err)
-	}
-
 	merged, nextManaged := MergeAIMAConfigWithState(existing, managed, result)
+	// Preserve user revocations across the reconcile: MergeAIMAConfigWithState
+	// rebuilds nextManaged from "what AIMA wrote", which never includes them.
+	nextManaged.ExcludedModels = managed.ExcludedModels
 	if dryRun {
 		return result, nil
 	}

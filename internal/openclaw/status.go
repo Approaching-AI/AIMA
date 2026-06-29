@@ -32,6 +32,9 @@ type Status struct {
 	Expected       ModelSummary    `json:"expected"`
 	Configured     ModelSummary    `json:"configured"`
 	Claimable      ModelSummary    `json:"claimable,omitempty"`
+	// ExcludedModels are models the user revoked from sync; Sync skips them until
+	// `aima openclaw include <model>` clears the mark.
+	ExcludedModels []string        `json:"excluded_models,omitempty"`
 	Issues         []string        `json:"issues,omitempty"`
 }
 
@@ -68,6 +71,7 @@ func Inspect(ctx context.Context, deps *Deps) (*Status, error) {
 		status.Issues = append(status.Issues, managedErr.Error())
 		managed = &ManagedState{Version: managedStateVersion}
 	}
+	status.ExcludedModels = managed.ExcludedModels
 
 	if info, err := os.Stat(deps.ConfigPath); err == nil && !info.IsDir() {
 		status.ConfigExists = true

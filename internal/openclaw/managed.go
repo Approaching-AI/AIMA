@@ -27,6 +27,24 @@ type ManagedState struct {
 	AudioAuthProvider       string   `json:"audio_auth_provider,omitempty"`
 	PluginAllow             []string `json:"plugin_allow,omitempty"`
 	MCPServerName           string   `json:"mcp_server_name,omitempty"`
+	// ExcludedModels are models the user has revoked from OpenClaw sync. Sync
+	// skips them (removed from the config and never re-added) until Include
+	// clears the mark. Persistent + reversible: this is user intent, not "what
+	// AIMA wrote", so it survives the reconcile that rewrites the rest.
+	ExcludedModels []string `json:"excluded_models,omitempty"`
+}
+
+// IsExcluded reports whether the model has been revoked from OpenClaw sync.
+func (s *ManagedState) IsExcluded(model string) bool {
+	if s == nil {
+		return false
+	}
+	for _, m := range s.ExcludedModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
 }
 
 func ManagedStatePath(configPath string) string {
@@ -87,7 +105,8 @@ func (s *ManagedState) Empty() bool {
 		len(s.ImageGenerationModels) == 0 &&
 		s.AudioAuthProvider == "" &&
 		len(s.PluginAllow) == 0 &&
-		s.MCPServerName == ""
+		s.MCPServerName == "" &&
+		len(s.ExcludedModels) == 0
 }
 
 func normalizeManagedState(state *ManagedState) {
@@ -101,6 +120,7 @@ func normalizeManagedState(state *ManagedState) {
 	state.ImageModelModels = uniqueSorted(state.ImageModelModels)
 	state.ImageGenerationModels = uniqueSorted(state.ImageGenerationModels)
 	state.PluginAllow = uniqueSorted(state.PluginAllow)
+	state.ExcludedModels = uniqueSorted(state.ExcludedModels)
 	if state.MediaProvider != "" && len(state.AudioModels) == 0 && len(state.VisionModels) == 0 {
 		state.MediaProvider = ""
 	}

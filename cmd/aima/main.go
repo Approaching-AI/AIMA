@@ -367,6 +367,28 @@ func run() error {
 		}
 		return json.Marshal(result)
 	}
+	deps.OpenClawExclude = func(ctx context.Context, model string) (json.RawMessage, error) {
+		refreshOpenClawBackends(ctx)
+		if err := openclaw.Exclude(ctx, openclawDeps, model); err != nil {
+			return nil, err
+		}
+		result, err := openclaw.Inspect(ctx, openclawDeps)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OpenClawInclude = func(ctx context.Context, model string) (json.RawMessage, error) {
+		refreshOpenClawBackends(ctx)
+		if err := openclaw.Include(ctx, openclawDeps, model); err != nil {
+			return nil, err
+		}
+		result, err := openclaw.Inspect(ctx, openclawDeps)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
 
 	// Wire integration tools (scenarios, apps, sync, power, validation, engine switch cost).
 	// OpenQuestions is overwritten below where explorationMgr is available.

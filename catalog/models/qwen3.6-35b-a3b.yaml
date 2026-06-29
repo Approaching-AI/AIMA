@@ -60,6 +60,16 @@ variants:
       # can push ROCm compute/prompt-cache buffers over the allocation limit.
       parallel: 1
       cache_ram: 0
+      # Qwen3.6-A3B is a hybrid Gated-DeltaNet (recurrent) MoE. llama.cpp's
+      # recurrent memory can't be partially truncated, so when llama-server reuses
+      # a slot's cached prefix it calls llama_memory_seq_rm(seq, p0>0, -1), which
+      # fails -> GGML_ABORT ("failed to remove sequence ... p0=10") and the server
+      # crashes the moment a second prefix-overlapping request arrives (e.g. the
+      # deploy warmup's second identical "Hello"). cache_ram:0 only disables the
+      # RAM prompt cache, NOT the in-slot prefix reuse; cache_prompt:false does,
+      # forcing a full KV clear (seq_rm(0,-1), valid on recurrent) each turn.
+      # Verified on AMD Strix Halo (b9180 & b9196 HIP).
+      cache_prompt: false
     expected_performance:
       startup_time_s: 30
       cold_start_time_s: 60

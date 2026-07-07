@@ -10,7 +10,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+// hasInteractiveSession reports whether AIMA itself runs in an interactive
+// desktop session (Session >= 1). Windows Session 0 is reserved for services and
+// is non-interactive; SSH / headless invocations land there. schtasks /it can
+// only launch a process when the invoking user has such a session, so this gates
+// the schtasks path — the caller falls back to a direct start otherwise.
+func hasInteractiveSession() bool {
+	var sid uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &sid); err != nil {
+		return false
+	}
+	return sid != 0
+}
 
 // launchViaSchtasks launches a process via Windows Task Scheduler to ensure it
 // runs in the interactive desktop session (Session 1). This is required for GPU

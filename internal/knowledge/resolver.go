@@ -97,6 +97,10 @@ type ResolvedConfig struct {
 
 	// Performance reference (K4 — historical data or YAML estimate)
 	PerformanceRef *PerformanceReference
+
+	// Warnings collected during resolution (e.g. GPU-offload downgrade). Surfaced
+	// to the user via CheckFit's FitReport so resolve-time decisions are visible.
+	Warnings []string
 }
 
 // PerformanceReference attaches known performance data to a resolved config.
@@ -295,6 +299,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 			resolved.EstimatedVRAMMiB = variant.Hardware.VRAMMinMiB
 		}
 		resolved.ResourceEstimate = estimateResources(engine, variant, hw)
+		capGPUOffloadForVRAM(resolved, engine, variant, hw)
 	}
 
 	// Container memory guardrail. On unified-memory hosts (GB10, Apple M-series,
@@ -1596,6 +1601,47 @@ func (c *Catalog) UpsertSyntheticModel(ma ModelAsset) {
 	c.ModelAssets = append(c.ModelAssets, ma)
 }
 
+// capGPUOffloadForVRAM downgrades an engine's GPU-offload knob to CPU when a
+// discrete GPU cannot hold the model. llama.cpp's default n_gpu_layers=999
+// ("offload every layer") assumes the model fits VRAM; on a discrete GPU with
+// less VRAM than the model needs it forces an impossible allocation → CUDA OOM
+// at load, which surfaces to users as a deployment that never becomes ready.
+// Unified-memory hosts (APU/GB10/Apple) share system RAM with the GPU, so full
+// offload is correct there and left untouched. The knob is identified by the
+// engine-declared offload_config_key, so this stays engine-agnostic (INV-1/2):
+// no engine name or config key is hardcoded here.
+func capGPUOffloadForVRAM(resolved *ResolvedConfig, engine *EngineAsset, variant *ModelVariant, hw HardwareInfo) {
+	if resolved == nil || engine == nil || variant == nil {
+		return
+	}
+	key := engine.Amplifier.OffloadConfigKey
+	if key == "" || hw.UnifiedMemory || hw.GPUVRAMMiB <= 0 {
+		return
+	}
+	// Model memory footprint. RAMMinMiB is the catalog's footprint proxy, used
+	// precisely when vram_min_mib=0 (a GGUF variant declared to "fit any GPU"
+	// via CPU offload); fall back to any explicit VRAM estimate.
+	footprint := variant.Hardware.RAMMinMiB
+	if resolved.EstimatedVRAMMiB > footprint {
+		footprint = resolved.EstimatedVRAMMiB
+	}
+	if footprint <= 0 || footprint <= hw.GPUVRAMMiB {
+		return // fits, or footprint unknown — full GPU offload is correct
+	}
+	if resolved.Provenance[key] == "L1" {
+		return // user set the offload knob explicitly — respect it
+	}
+	if cur, ok := resolved.Config[key]; ok && toFloat64(cur) == 0 {
+		return // already CPU-only
+	}
+	resolved.Config[key] = 0
+	resolved.Provenance[key] = "L0-fit"
+	resolved.OffloadPath = true
+	resolved.Warnings = append(resolved.Warnings, fmt.Sprintf(
+		"model needs ~%d MiB but this GPU has %d MiB VRAM; disabling GPU offload and running on CPU (much slower). Use a smaller model or a larger-VRAM GPU for GPU acceleration.",
+		footprint, hw.GPUVRAMMiB))
+}
+
 // estimateResources computes cost(path, R) — the full resource consumption estimate.
 func estimateResources(engine *EngineAsset, variant *ModelVariant, hw HardwareInfo) *ResourceEstimate {
 	perf := variant.ParsedExpectedPerf()
@@ -1643,6 +1689,10 @@ var gmuKeys = []string{"gpu_memory_utilization", "mem_fraction_static"}
 // Zero-valued hw fields are skipped (graceful degradation when metrics unavailable).
 func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 	r := &FitReport{Fit: true, Adjustments: make(map[string]any)}
+
+	// Surface warnings collected during resolution (e.g. GPU-offload downgrade)
+	// even if a hard-fail check below returns early.
+	r.Warnings = append(r.Warnings, resolved.Warnings...)
 
 	// Unified memory guard: GPU allocation directly reduces available system memory.
 	// Enforce minimum OS reserve to prevent starvation / swap thrashing.

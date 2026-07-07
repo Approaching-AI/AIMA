@@ -216,19 +216,48 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	var procLogFile *os.File
 
 	if goruntime.GOOS == "windows" {
-		_ = procCtx // schtasks creates its own process context
-		// On Windows, launch via schtasks /it to ensure the process runs in the
-		// interactive desktop session (Session 1). GPU engines (Vulkan/DirectX)
-		// need display session access which is unavailable via SSH (Session 0).
-		logFile.Close() // batch file will manage log output
-		pid, err := r.launchViaSchtasks(req.Name, command, logPath, req.Env, req.WorkDir)
-		if err != nil {
-			cancel()
-			clearPlaceholder()
-			return fmt.Errorf("start %s via schtasks: %w", req.Name, err)
+		// schtasks /it runs the engine in the interactive desktop session
+		// (Session 1), which some GPU engines need for display access. But /it
+		// only launches anything when AIMA itself has an interactive session;
+		// over SSH / headless AIMA runs in Session 0, where /it reports success
+		// yet spawns nothing. So use schtasks only when interactive, and fall
+		// back to a direct detached start otherwise (or if schtasks yields no
+		// process — e.g. Windows Script Host disabled).
+		launched := false
+		if hasInteractiveSession() {
+			logFile.Close() // batch file manages the log output
+			if pid, serr := r.launchViaSchtasks(req.Name, command, logPath, req.Env, req.WorkDir); serr == nil {
+				procPID = pid
+				procLogFile = nil
+				launched = true
+			} else {
+				slog.Warn("schtasks launch failed; falling back to direct start", "name", req.Name, "error", serr)
+			}
+			if !launched {
+				// Reopen the log for the direct path (schtasks closed it).
+				var oerr error
+				if logFile, oerr = os.Create(logPath); oerr != nil {
+					cancel()
+					clearPlaceholder()
+					return fmt.Errorf("reopen log for direct start: %w", oerr)
+				}
+			}
+		} else {
+			slog.Info("no interactive desktop session; starting engine directly in current session", "name", req.Name)
 		}
-		procPID = pid
-		procLogFile = nil
+		if !launched {
+			startedCmd, serr := r.startDirect(procCtx, command, logFile, req.Env, req.WorkDir)
+			if serr != nil {
+				cancel()
+				logFile.Close()
+				clearPlaceholder()
+				return fmt.Errorf("start %s: %w", req.Name, serr)
+			}
+			cmd = startedCmd
+			procPID = startedCmd.Process.Pid
+			procGroupID = childProcessGroupID(procPID)
+			procLogFile = logFile
+		}
 	} else {
 		cmd = exec.CommandContext(procCtx, command[0], command[1:]...)
 		configureDetachedProcess(cmd)
@@ -326,6 +355,30 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	}
 
 	return nil
+}
+
+// startDirect launches the engine directly in AIMA's own session, redirecting
+// stdout/stderr to logFile. Used on Windows when there is no interactive session
+// (or schtasks fails). It mirrors the bat wrapper's behaviour (request env vars +
+// working directory) but as a real child process, so its PID and exit status are
+// known immediately instead of being discovered after the fact.
+func (r *NativeRuntime) startDirect(ctx context.Context, command []string, logFile *os.File, reqEnv map[string]string, workDir string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	configureDetachedProcess(cmd)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	env := os.Environ()
+	for k, v := range reqEnv {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
 }
 
 func (r *NativeRuntime) Delete(_ context.Context, name string) error {

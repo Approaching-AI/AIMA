@@ -142,6 +142,12 @@ func detectStorage() StorageInfo {
 	}
 }
 
+// DiskUsage returns free and total space (MiB) on the filesystem containing
+// path, or (0, 0) if it cannot be determined. Cross-platform via diskStats.
+func DiskUsage(path string) (freeMiB, totalMiB int64) {
+	return diskStats(path)
+}
+
 // collectMetricsWithRunner gathers real-time metrics using given CommandRunner.
 func collectMetricsWithRunner(ctx context.Context, runner CommandRunner) (*Metrics, error) {
 	m := &Metrics{}

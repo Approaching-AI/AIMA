@@ -27,7 +27,9 @@
 | `knowledge.save` | `knowledge.save` | 保存 Knowledge Note |
 | `knowledge.evaluate` | `knowledge.evaluate` | 校验知识、引擎切换成本、开放问题 |
 
-静态资产浏览已并入 `catalog.list(kind=profiles|engines|models|scenarios|summary|status|all)`；Pod YAML 生成已并入 `deploy.dry_run(output=pod_yaml)`。
+静态资产浏览已并入 `catalog.list(kind=profiles|engines|models|scenarios|summary|status|all)`；
+单个资产诊断使用 `catalog.effective` / `catalog.diff` / `catalog.validate_patch`；
+Pod YAML 生成已并入 `deploy.dry_run(output=pod_yaml)`。
 
 ---
 
@@ -40,7 +42,44 @@
 | 受众 | 人类、git、go:embed | Agent、MCP 工具 |
 | 优势 | 可读、可 diff、可版本管理 | 可查询、可 JOIN、可聚合 |
 | 内容 | 静态知识资产定义 | 静态知识 + 动态实验数据 |
-| 变更 | go:embed 需重编译; overlay 目录 (`~/.aima/catalog/`) 免编译热更新 | Agent 探索 → 直接写入 |
+| 变更 | factory go:embed 需重编译; `catalog/central` 与 `catalog/user` patch overlay 可随数据目录包下发 | Agent 探索 → 直接写入 |
+
+### Catalog Overlay 更新能力
+
+本次更新补充了面向预装和规模化下发场景的 catalog overlay 基础能力：
+
+- `catalog/central` 与 `catalog/user` 均使用 `*_patch` YAML，按 `factory -> central -> user` 顺序合并。
+- `aima catalog override <kind> <name> <yaml-file>` 继续写入 `catalog/user`，适合单机调试或现场临时覆盖。
+- `aima catalog validate-patch <yaml-file>` 可以在写入前验证单个 patch，并返回合并后的有效 YAML。
+- `aima catalog effective <kind> <name>` 可以查看某个资产在 factory、central、user 合并后的最终 YAML。
+- `aima catalog diff <kind> <name>` 可以查看 factory 到 effective 的差异，便于升级前后审查。
+- `aima catalog status` 可以查看 factory/overlay 状态、覆盖资产和 staleness warning。
+
+物理目录由 AIMA 数据目录决定。数据目录解析顺序为：
+
+1. `AIMA_DATA_DIR`
+2. `/etc/aima/data-dir`
+3. 默认用户目录 `~/.aima`
+
+如果需要通过全局默认配置包下发模型参数变更，建议写入 central 层，例如：
+
+```text
+<AIMA_DATA_DIR>/catalog/central/
+  models/<model-name>.patch.yaml
+  engines/<engine-name>.patch.yaml
+  scenarios/<scenario-name>.patch.yaml
+```
+
+上线前建议使用以下命令验证：
+
+```bash
+aima catalog validate-patch ./models/demo.patch.yaml
+aima catalog effective model_asset demo-model
+aima catalog diff model_asset demo-model
+aima catalog status
+```
+
+`catalog.validate-patch` 只验证输入文件，不写盘；`catalog.effective` 展示当前 factory、central、user 合并后的最终 YAML；`catalog.diff` 用于查看 factory 到 effective 的差异。对于规模化下发，应优先使用 `catalog/central`；`catalog/user` 仍保留给单机覆盖和最终用户本机选择。
 
 ### SQLite 表结构
 
@@ -307,7 +346,7 @@ verified:
 ConfigResolver 按优先级合并多层知识:
 
 ```
-L0: YAML catalog (go:embed + ~/.aima/catalog/ overlay 合并, staleness digest 检测)
+L0: YAML catalog (go:embed factory + catalog/central + catalog/user patch overlay 合并, staleness digest 检测)
  ↓ merge (高层 override 低层)
 L1: 用户 CLI --config / --engine / --slot     (人类显式指定)
  ↓ merge

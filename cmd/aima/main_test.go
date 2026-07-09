@@ -1276,6 +1276,48 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 }
 
+func TestClassifyDeploymentFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want deploymentErrorCode
+	}{
+		{name: "out of memory", msg: "RuntimeError: HIP out of memory while loading weights", want: deployErrorOutOfMemory},
+		{name: "model corrupted", msg: "safetensors_rust.SafetensorError: Error while deserializing header: incomplete metadata", want: deployErrorModelCorrupted},
+		{name: "model not found", msg: "FileNotFoundError: no such file or directory: /models/demo/config.json", want: deployErrorModelNotFound},
+		{name: "port occupied", msg: "bind: address already in use on 0.0.0.0:8000", want: deployErrorPortInUse},
+		{name: "permission", msg: "permission denied opening /dev/kfd", want: deployErrorPermissionDenied},
+		{name: "timeout", msg: "deployment started but not ready within 30s", want: deployErrorTimeout},
+		{name: "generic startup", msg: "process exited before readiness", want: deployErrorEngineStartFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyDeploymentFailure(tt.msg); got != tt.want {
+				t.Fatalf("classifyDeploymentFailure(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupFailedDeploymentReportsResult(t *testing.T) {
+	var deleted string
+	result := cleanupFailedDeployment(context.Background(), "demo", func(ctx context.Context, name string) error {
+		deleted = name
+		return nil
+	})
+	if deleted != "demo" {
+		t.Fatalf("deleted deployment = %q, want demo", deleted)
+	}
+	if !result.Attempted || !result.Succeeded || result.Message != "deleted failed deployment demo" {
+		t.Fatalf("cleanup result = %#v, want successful deletion", result)
+	}
+
+	skipped := cleanupFailedDeployment(context.Background(), "demo", nil)
+	if skipped.Attempted || skipped.Succeeded || !strings.Contains(skipped.Message, "unavailable") {
+		t.Fatalf("skipped cleanup result = %#v, want unavailable message", skipped)
+	}
+}
+
 func TestVariantQuantizationHint(t *testing.T) {
 	if got := variantQuantizationHint(&knowledge.ModelVariant{
 		DefaultConfig: map[string]any{"quantization": "gptq"},

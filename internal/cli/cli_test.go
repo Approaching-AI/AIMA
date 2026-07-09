@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -221,6 +222,53 @@ func TestKnowledgeSubcommands(t *testing.T) {
 		if !subs[name] {
 			t.Errorf("knowledge missing subcommand %q", name)
 		}
+	}
+}
+
+func TestCatalogEffectiveCmdPrintsYAML(t *testing.T) {
+	app := testApp(t)
+	app.ToolDeps.CatalogEffective = func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+		return json.RawMessage(`{"kind":"model_asset","name":"demo","yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "effective", "model_asset", "demo"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog effective failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "kind: model_asset") || !strings.Contains(buf.String(), "name: demo") {
+		t.Fatalf("unexpected catalog effective output: %s", buf.String())
+	}
+}
+
+func TestCatalogValidatePatchCmdReadsFile(t *testing.T) {
+	app := testApp(t)
+	var gotContent string
+	app.ToolDeps.CatalogValidatePatch = func(ctx context.Context, content string) (json.RawMessage, error) {
+		gotContent = content
+		return json.RawMessage(`{"valid":true,"effective_yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	patchPath := t.TempDir() + "/demo.patch.yaml"
+	if err := os.WriteFile(patchPath, []byte("kind: model_asset_patch\nmetadata:\n  name: demo\n"), 0o644); err != nil {
+		t.Fatalf("write patch: %v", err)
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "validate-patch", patchPath})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog validate-patch failed: %v", err)
+	}
+	if !strings.Contains(gotContent, "kind: model_asset_patch") {
+		t.Fatalf("validate-patch did not read file content: %q", gotContent)
+	}
+	if !strings.Contains(buf.String(), `"valid": true`) {
+		t.Fatalf("unexpected validate-patch output: %s", buf.String())
 	}
 }
 
@@ -505,7 +553,7 @@ func TestCatalogSubcommands(t *testing.T) {
 		t.Fatal("catalog command not found")
 	}
 
-	expected := []string{"status", "override"}
+	expected := []string{"status", "override", "validate", "effective", "diff", "validate-patch"}
 	subs := make(map[string]bool)
 	for _, c := range catalogCmd.Commands() {
 		subs[c.Name()] = true

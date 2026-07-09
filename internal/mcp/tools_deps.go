@@ -75,9 +75,12 @@ type ToolDeps struct {
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
 	// Catalog overlay
-	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
-	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
-	CatalogValidate func(ctx context.Context) (json.RawMessage, error)
+	CatalogOverride      func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
+	CatalogStatus        func(ctx context.Context) (json.RawMessage, error)
+	CatalogValidate      func(ctx context.Context) (json.RawMessage, error)
+	CatalogEffective     func(ctx context.Context, kind, name string) (json.RawMessage, error)
+	CatalogDiff          func(ctx context.Context, kind, name string) (json.RawMessage, error)
+	CatalogValidatePatch func(ctx context.Context, content string) (json.RawMessage, error)
 
 	// Deploy approval
 	DeployApprove func(ctx context.Context, id int64) (json.RawMessage, error)

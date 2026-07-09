@@ -413,6 +413,9 @@ func TestListToolsForProfile(t *testing.T) {
 		"patrol",
 		"deploy.list",
 		"knowledge.resolve",
+		"catalog.effective",
+		"catalog.diff",
+		"catalog.validate_patch",
 	}
 	for _, name := range toolNames {
 		name := name
@@ -469,7 +472,7 @@ func TestListToolsForProfile(t *testing.T) {
 		defs := s.ListToolsForProfile(ProfileOperator)
 		names := namesOf(defs)
 
-		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list"}
+		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list", "catalog.effective", "catalog.diff", "catalog.validate_patch"}
 		for _, name := range included {
 			if !names[name] {
 				t.Errorf("ProfileOperator should include %q", name)
@@ -513,7 +516,7 @@ func TestRegisterAllTools(t *testing.T) {
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.save", "knowledge.promote",
 		"knowledge.analytics", "knowledge.evaluate",
-		"catalog.list", "catalog.override", "catalog.validate",
+		"catalog.list", "catalog.override", "catalog.validate", "catalog.effective", "catalog.diff", "catalog.validate_patch",
 		"central.sync", "central.advise", "central.scenario",
 		"data.export", "data.import",
 		"patrol", "explore", "tuning", "explorer",
@@ -609,6 +612,69 @@ func TestCatalogListPartitions(t *testing.T) {
 	}
 	if !strings.Contains(tr.Content[0].Text, `"partitions"`) {
 		t.Fatalf("catalog.list all missing partitions payload: %s", tr.Content[0].Text)
+	}
+}
+
+func TestCatalogDiagnosticsTools(t *testing.T) {
+	s := NewServer()
+	deps := &ToolDeps{
+		CatalogEffective: func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+			if kind != "model_asset" || name != "demo" {
+				t.Fatalf("CatalogEffective(%q, %q), want model_asset/demo", kind, name)
+			}
+			return json.RawMessage(`{"yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+		},
+		CatalogDiff: func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+			if kind != "model_asset" || name != "demo" {
+				t.Fatalf("CatalogDiff(%q, %q), want model_asset/demo", kind, name)
+			}
+			return json.RawMessage(`{"changed":true,"diff":"--- factory\n+++ effective\n"}`), nil
+		},
+		CatalogValidatePatch: func(ctx context.Context, content string) (json.RawMessage, error) {
+			if !strings.Contains(content, "kind: model_asset_patch") {
+				t.Fatalf("CatalogValidatePatch content = %q", content)
+			}
+			return json.RawMessage(`{"valid":true}`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	cases := []struct {
+		id       int
+		tool     string
+		args     string
+		wantText string
+	}{
+		{id: 1, tool: "catalog.effective", args: `{"kind":"model_asset","name":"demo"}`, wantText: "kind: model_asset"},
+		{id: 2, tool: "catalog.diff", args: `{"kind":"model_asset","name":"demo"}`, wantText: "--- factory"},
+		{id: 3, tool: "catalog.validate_patch", args: `{"content":"kind: model_asset_patch\nmetadata:\n  name: demo\n"}`, wantText: `"valid":true`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, tc.id, tc.tool, tc.args)
+			resp, err := s.HandleMessage(context.Background(), []byte(msg))
+			if err != nil {
+				t.Fatalf("HandleMessage: %v", err)
+			}
+			var r jsonrpcResponse
+			if err := json.Unmarshal(resp, &r); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if r.Error != nil {
+				t.Fatalf("unexpected error: %+v", r.Error)
+			}
+			raw, _ := json.Marshal(r.Result)
+			var tr ToolResult
+			if err := json.Unmarshal(raw, &tr); err != nil {
+				t.Fatalf("unmarshal tool result: %v", err)
+			}
+			if tr.IsError {
+				t.Fatalf("%s returned error: %+v", tc.tool, tr)
+			}
+			if !strings.Contains(tr.Content[0].Text, tc.wantText) {
+				t.Fatalf("%s response missing %q: %s", tc.tool, tc.wantText, tr.Content[0].Text)
+			}
+		})
 	}
 }
 
@@ -864,6 +930,9 @@ func TestProfileMatches(t *testing.T) {
 
 		// ProfileOperator: exact matches
 		{ProfileOperator, "catalog.list", true},
+		{ProfileOperator, "catalog.effective", true},
+		{ProfileOperator, "catalog.diff", true},
+		{ProfileOperator, "catalog.validate_patch", true},
 		{ProfileOperator, "openclaw", true},
 		{ProfileOperator, "support", true},
 		{ProfileOperator, "knowledge.resolve", true},

@@ -182,8 +182,8 @@ catalog/                      # Knowledge assets (go:embed, compiled in)
   models/                     # Model Asset YAML
   partitions/                 # Partition Strategy YAML
   stack/                      # Stack Component YAML (K3S, HAMi — install config + airgap sources)
-# Runtime overlay: ~/.aima/catalog/{hardware,engines,models,partitions,stack}/*.yaml
-#   Same metadata.name overrides go:embed, new names append. No recompilation needed.
+# Runtime overlay: <AIMA_DATA_DIR>/catalog/{central,user}/{hardware,engines,models,partitions,stack,scenarios}/*.patch.yaml
+#   Files are *_patch YAML merged as factory -> central -> user. No recompilation needed.
 ```
 
 ## Key Commands

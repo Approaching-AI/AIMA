@@ -1357,7 +1357,17 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			}
 		}
 
-		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration) (json.RawMessage, error) {
+		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration, cleanupOnFailure bool) (json.RawMessage, error) {
+			cleanup := func() deploymentCleanupResult {
+				if !cleanupOnFailure {
+					return deploymentCleanupResult{}
+				}
+				result := cleanupFailedDeployment(ctx, deployName, deps.DeployDelete)
+				if result.Attempted {
+					notify("cleanup", result.Message)
+				}
+				return result
+			}
 			notify("waiting", deployName)
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
@@ -1376,10 +1386,8 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				case <-timer.C:
-					return json.Marshal(map[string]any{
-						"name": deployName, "status": "timeout",
-						"message": fmt.Sprintf("deployment started but not ready within %s", deployTimeout),
-					})
+					msg := fmt.Sprintf("deployment started but not ready within %s", deployTimeout)
+					return nil, newDeploymentRunError(deployErrorTimeout, msg, cleanup())
 				case <-ticker.C:
 					statusData, err := deps.DeployStatus(ctx, deployName)
 					if err != nil {
@@ -1420,7 +1428,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 							StartupMessage: status.StartupMessage,
 							ErrorLines:     status.ErrorLines,
 						}, deps.DeployStatus, deps.DeployLogs)
-						return nil, fmt.Errorf("deployment failed: %s", msg)
+						return nil, newDeploymentRunError(classifyDeploymentFailure(msg), "deployment failed: "+msg, cleanup())
 					}
 					phase := status.StartupPhase
 					if phase == "" {
@@ -1458,7 +1466,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			return nil, fmt.Errorf("parse resolve result: %w", err)
 		}
 		if !plan.FitReport.Fit {
-			return nil, fmt.Errorf("hardware not compatible: %s", plan.FitReport.Reason)
+			return nil, newDeploymentRunError(deployErrorHardwareIncompatible, "hardware not compatible: "+plan.FitReport.Reason, deploymentCleanupResult{})
 		}
 		notify("resolved", fmt.Sprintf("engine=%s runtime=%s", plan.Engine, plan.Runtime))
 		for _, warn := range plan.FitReport.Warns {
@@ -1501,7 +1509,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 							deployTimeout = time.Duration(t) * time.Second
 						}
 					}
-					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout)
+					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout, false)
 				}
 			}
 		}
@@ -1538,6 +1546,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		var deployResult struct {
 			Name    string `json:"name"`
 			Runtime string `json:"runtime"`
+			Reused  bool   `json:"reused"`
 		}
 		if err := json.Unmarshal(deployData, &deployResult); err != nil || deployResult.Name == "" {
 			return deployData, nil
@@ -1551,7 +1560,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				deployTimeout = time.Duration(t) * time.Second
 			}
 		}
-		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup, deployTimeout)
+		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup, deployTimeout, !deployResult.Reused)
 	}
 
 	deps = &mcp.ToolDeps{}

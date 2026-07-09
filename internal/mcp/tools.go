@@ -27,7 +27,7 @@ var profileIncludes = map[Profile][]string{
 	ProfileOperator: {
 		"hardware.", "model.", "engine.", "external.", "deploy.",
 		"system.", "fleet.", "scenario.",
-		"catalog.list",
+		"catalog.list", "catalog.effective", "catalog.diff", "catalog.validate_patch",
 		"benchmark.run", "benchmark.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.promote",
 		"agent.ask", "agent.status", "agent.rollback",

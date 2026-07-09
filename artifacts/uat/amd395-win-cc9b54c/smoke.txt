@@ -1,0 +1,597 @@
+== version ==
+aima v0.5-dev-amd-strix-halo-20260709
+  build:  2026-07-09T08:40:46Z
+  commit: cc9b54c
+  go:     go1.26.1
+== hal detect ==
+2026/07/09 16:41:23 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:23 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:23 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:23 INFO explorer started tier=1
+{
+  "gpu": {
+    "vendor": "amd",
+    "name": "AMD Radeon 8060S Graphics",
+    "arch": "RDNA3.5",
+    "vram_mib": 110456,
+    "compute_id": "gfx1151",
+    "driver_version": "32.0.31007.1017",
+    "sdk_version": "",
+    "unified_memory": true,
+    "count": 1
+  },
+  "cpu": {
+    "arch": "amd64",
+    "model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "cores": 16,
+    "threads": 32,
+    "freq_ghz": 3
+  },
+  "ram": {
+    "total_mib": 131072,
+    "available_mib": 125930,
+    "swap_total_mib": 116480
+  },
+  "storage": {
+    "data_dir_path": "C:\\Users\\sshuser\\aima-test-cc9b54c\\data",
+    "free_mib": 14753,
+    "total_mib": 153599,
+    "volumes": [
+      {
+        "mount_point": "C:\\",
+        "total_mib": 153599,
+        "free_mib": 14753
+      },
+      {
+        "mount_point": "D:\\",
+        "total_mib": 1555555,
+        "free_mib": 612573
+      },
+      {
+        "mount_point": "P:\\",
+        "total_mib": 196607,
+        "free_mib": 36508
+      }
+    ]
+  },
+  "os": {
+    "os": "windows",
+    "arch": "amd64"
+  }
+}
+== engine list ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+[]
+== model list ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+[]
+== deploy list ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+[]
+== catalog status ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+{
+  "factory_assets": 93,
+  "overlay_assets": 1,
+  "parse_warnings": null,
+  "service_context": {
+    "catalog_loaded_at": "2026-07-09T08:41:26Z",
+    "data_dir": "C:\\Users\\sshuser\\aima-test-cc9b54c\\data",
+    "home_dir": "C:\\Users\\sshuser",
+    "overlay_dir": "C:\\Users\\sshuser\\aima-test-cc9b54c\\data\\catalog",
+    "overlay_latest_mtime": "2026-07-09T16:38:34+08:00",
+    "user": "sshuser"
+  },
+  "shadowed": [
+    {
+      "name": "qwen3-8b",
+      "kind": "model_asset",
+      "stale": false
+    }
+  ]
+}
+== catalog validate-patch ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+{
+  "effective_yaml": "kind: model_asset\nmetadata:\n    aliases:\n        - Qwen3-8B-junhowie\n        - gptq-Qwen3-8B-junhowie\n        - gptq-Qwen3-8B\n    family: qwen\n    name: qwen3-8b\n    parameter_count: 8B\n    released_at: 2025-04\n    type: llm\nstorage:\n    default_path_pattern: '{{.DataDir}}/models/{{.Name}}'\n    formats:\n        - safetensors\n        - gguf\n    sources:\n        - format: safetensors\n          path: \"\"\n          repo: Qwen/Qwen3-8B\n          type: huggingface\n        - format: gguf\n          path: \"\"\n          repo: Qwen/Qwen3-8B-GGUF\n          type: huggingface\n        - format: safetensors\n          path: \"\"\n          repo: Qwen/Qwen3-8B\n          type: modelscope\n        - path: /opt/mt-ai/llm/models/gptq-Qwen3-8B\n          repo: \"\"\n          type: local_path\nui:\n    display_note: amd395 smoke central overlay\nvariants:\n    - default_config:\n        dtype: bfloat16\n        gpu_memory_utilization: 0.3\n        max_model_len: 8192\n      engine: vllm\n      expected_performance:\n        latency_first_token_ms:\n            - 20\n            - 60\n        tokens_per_second:\n            - 25\n            - 50\n      format: safetensors\n      hardware:\n        gpu_arch: Blackwell\n        unified_memory: true\n        vram_min_mib: 6144\n      name: qwen3-8b-blackwell-vllm-bf16\n    - default_config:\n        dtype: auto\n        gpu_memory_utilization: 0.8\n        max_model_len: 4096\n      engine: vllm\n      expected_performance:\n        latency_first_token_ms:\n            - 15\n            - 40\n        tokens_per_second:\n            - 30\n            - 60\n      format: safetensors\n      hardware:\n        gpu_arch: Ada\n        unified_memory: false\n        vram_min_mib: 16384\n      name: qwen3-8b-ada-vllm-fp16\n    - default_config:\n        dtype: float16\n        gpu_memory_utilization: 0.9\n        max_model_len: 8192\n      engine: vllm\n      expected_performance:\n        cold_start_time_s: 180\n        notes: vLLM 0.9.2 DCU, FP16, single BW150 64GB, untested estimate.\n        startup_time_s: 60\n        tokens_per_second:\n            - 20\n            - 50\n        vram_mib: 16000\n      format: safetensors\n      hardware:\n        gpu_arch: DCU\n        unified_memory: false\n        vram_min_mib: 6144\n      name: qwen3-8b-dcu-vllm-fp16\n    - default_config:\n        dtype: auto\n        enforce_eager: true\n        gpu_memory_utilization: 0.7\n        max_model_len: 8192\n        max_num_seqs: 1\n      engine: vllm\n      expected_performance:\n        latency_first_token_ms:\n            - 100\n            - 500\n        tokens_per_second:\n            - 5\n            - 20\n      format: safetensors\n      hardware:\n        gpu_arch: MUSA\n        unified_memory: true\n        vram_min_mib: 40960\n      name: qwen3-8b-musa-vllm-fp16\n    - default_config:\n        block_size: 32\n        dtype: float16\n        enforce_eager: true\n        gpu_memory_utilization: 0.5\n        max_model_len: 8192\n        max_num_seqs: 1\n        num_gpu_blocks_override: 256\n        port: 32102\n        quantization: gptq\n        swap_space: 0\n      engine: vllm-musa\n      expected_performance:\n        cold_start_time_s: 120\n        latency_first_token_ms:\n            - 500\n            - 550\n        notes: 'AIBook M1000 SoC 32GB LPDDR5X. GPTQ-Int4, vLLM-MUSA 0.9.2. Measured 2026-03-27: weights 16.4s, total cold start 117s. Decode 7.5 tok/s (steady state). TTFT 525ms. LLM+Embedding coexist at gmu=0.7 (26GB/32GB). Pre-loaded model at /opt/mt-ai/llm/models/gptq-Qwen3-8B.'\n        startup_time_s: 117\n        tokens_per_second:\n            - 7\n            - 8\n        vram_mib: 16384\n      format: safetensors\n      hardware:\n        gpu_arch: MUSA\n        unified_memory: true\n        vram_min_mib: 6144\n      name: qwen3-8b-musa-soc-vllm-gptq\n    - default_config:\n        ctx_size: 4096\n        n_gpu_layers: 999\n        quantization: int4\n      engine: llamacpp\n      expected_performance:\n        latency_first_token_ms:\n            - 30\n            - 150\n        tokens_per_second:\n            - 10\n            - 40\n      format: gguf\n      hardware:\n        gpu_arch: '*'\n        ram_min_mib: 6144\n        vram_min_mib: 0\n      name: qwen3-8b-universal-llamacpp-q4\n",
+  "kind": "model_asset",
+  "name": "qwen3-8b",
+  "valid": true
+}
+== catalog effective ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+kind: model_asset
+metadata:
+    aliases:
+        - Qwen3-8B-junhowie
+        - gptq-Qwen3-8B-junhowie
+        - gptq-Qwen3-8B
+    family: qwen
+    name: qwen3-8b
+    parameter_count: 8B
+    released_at: 2025-04
+    type: llm
+storage:
+    default_path_pattern: '{{.DataDir}}/models/{{.Name}}'
+    formats:
+        - safetensors
+        - gguf
+    sources:
+        - format: safetensors
+          path: ""
+          repo: Qwen/Qwen3-8B
+          type: huggingface
+        - format: gguf
+          path: ""
+          repo: Qwen/Qwen3-8B-GGUF
+          type: huggingface
+        - format: safetensors
+          path: ""
+          repo: Qwen/Qwen3-8B
+          type: modelscope
+        - path: /opt/mt-ai/llm/models/gptq-Qwen3-8B
+          repo: ""
+          type: local_path
+ui:
+    display_note: amd395 smoke central overlay
+variants:
+    - default_config:
+        dtype: bfloat16
+        gpu_memory_utilization: 0.3
+        max_model_len: 8192
+      engine: vllm
+      expected_performance:
+        latency_first_token_ms:
+            - 20
+            - 60
+        tokens_per_second:
+            - 25
+            - 50
+      format: safetensors
+      hardware:
+        gpu_arch: Blackwell
+        unified_memory: true
+        vram_min_mib: 6144
+      name: qwen3-8b-blackwell-vllm-bf16
+    - default_config:
+        dtype: auto
+        gpu_memory_utilization: 0.8
+        max_model_len: 4096
+      engine: vllm
+      expected_performance:
+        latency_first_token_ms:
+            - 15
+            - 40
+        tokens_per_second:
+            - 30
+            - 60
+      format: safetensors
+      hardware:
+        gpu_arch: Ada
+        unified_memory: false
+        vram_min_mib: 16384
+      name: qwen3-8b-ada-vllm-fp16
+    - default_config:
+        dtype: float16
+        gpu_memory_utilization: 0.9
+        max_model_len: 8192
+      engine: vllm
+      expected_performance:
+        cold_start_time_s: 180
+        notes: vLLM 0.9.2 DCU, FP16, single BW150 64GB, untested estimate.
+        startup_time_s: 60
+        tokens_per_second:
+            - 20
+            - 50
+        vram_mib: 16000
+      format: safetensors
+      hardware:
+        gpu_arch: DCU
+        unified_memory: false
+        vram_min_mib: 6144
+      name: qwen3-8b-dcu-vllm-fp16
+    - default_config:
+        dtype: auto
+        enforce_eager: true
+        gpu_memory_utilization: 0.7
+        max_model_len: 8192
+        max_num_seqs: 1
+      engine: vllm
+      expected_performance:
+        latency_first_token_ms:
+            - 100
+            - 500
+        tokens_per_second:
+            - 5
+            - 20
+      format: safetensors
+      hardware:
+        gpu_arch: MUSA
+        unified_memory: true
+        vram_min_mib: 40960
+      name: qwen3-8b-musa-vllm-fp16
+    - default_config:
+        block_size: 32
+        dtype: float16
+        enforce_eager: true
+        gpu_memory_utilization: 0.5
+        max_model_len: 8192
+        max_num_seqs: 1
+        num_gpu_blocks_override: 256
+        port: 32102
+        quantization: gptq
+        swap_space: 0
+      engine: vllm-musa
+      expected_performance:
+        cold_start_time_s: 120
+        latency_first_token_ms:
+            - 500
+            - 550
+        notes: 'AIBook M1000 SoC 32GB LPDDR5X. GPTQ-Int4, vLLM-MUSA 0.9.2. Measured 2026-03-27: weights 16.4s, total cold start 117s. Decode 7.5 tok/s (steady state). TTFT 525ms. LLM+Embedding coexist at gmu=0.7 (26GB/32GB). Pre-loaded model at /opt/mt-ai/llm/models/gptq-Qwen3-8B.'
+        startup_time_s: 117
+        tokens_per_second:
+            - 7
+            - 8
+        vram_mib: 16384
+      format: safetensors
+      hardware:
+        gpu_arch: MUSA
+        unified_memory: true
+        vram_min_mib: 6144
+      name: qwen3-8b-musa-soc-vllm-gptq
+    - default_config:
+        ctx_size: 4096
+        n_gpu_layers: 999
+        quantization: int4
+      engine: llamacpp
+      expected_performance:
+        latency_first_token_ms:
+            - 30
+            - 150
+        tokens_per_second:
+            - 10
+            - 40
+      format: gguf
+      hardware:
+        gpu_arch: '*'
+        ram_min_mib: 6144
+        vram_min_mib: 0
+      name: qwen3-8b-universal-llamacpp-q4
+== catalog diff ==
+2026/07/09 16:41:26 INFO overlay shadows factory asset (no _base_digest, staleness unknown) asset=qwen3-8b
+2026/07/09 16:41:26 INFO catalog patch layer merged layer=central dir=C:\Users\sshuser\aima-test-cc9b54c\data\catalog\central overlay_assets=1 new_assets=0
+2026/07/09 16:41:26 INFO runtime selected runtime=native docker_available=false k3s_available=false
+2026/07/09 16:41:26 INFO explorer started tier=1
+--- factory/model_asset/qwen3-8b
++++ effective/model_asset/qwen3-8b
+@@
+-kind: model_asset
+-metadata:
+-    aliases:
+-        - Qwen3-8B-junhowie
+-        - gptq-Qwen3-8B-junhowie
+-        - gptq-Qwen3-8B
+-    family: qwen
+-    name: qwen3-8b
+-    parameter_count: 8B
+-    released_at: 2025-04
+-    type: llm
+-storage:
+-    default_path_pattern: '{{.DataDir}}/models/{{.Name}}'
+-    formats:
+-        - safetensors
+-        - gguf
+-    sources:
+-        - format: safetensors
+-          path: ""
+-          repo: Qwen/Qwen3-8B
+-          type: huggingface
+-        - format: gguf
+-          path: ""
+-          repo: Qwen/Qwen3-8B-GGUF
+-          type: huggingface
+-        - format: safetensors
+-          path: ""
+-          repo: Qwen/Qwen3-8B
+-          type: modelscope
+-        - path: /opt/mt-ai/llm/models/gptq-Qwen3-8B
+-          repo: ""
+-          type: local_path
+-variants:
+-    - default_config:
+-        dtype: bfloat16
+-        gpu_memory_utilization: 0.3
+-        max_model_len: 8192
+-      engine: vllm
+-      expected_performance:
+-        latency_first_token_ms:
+-            - 20
+-            - 60
+-        tokens_per_second:
+-            - 25
+-            - 50
+-      format: safetensors
+-      hardware:
+-        gpu_arch: Blackwell
+-        unified_memory: true
+-        vram_min_mib: 6144
+-      name: qwen3-8b-blackwell-vllm-bf16
+-    - default_config:
+-        dtype: auto
+-        gpu_memory_utilization: 0.8
+-        max_model_len: 4096
+-      engine: vllm
+-      expected_performance:
+-        latency_first_token_ms:
+-            - 15
+-            - 40
+-        tokens_per_second:
+-            - 30
+-            - 60
+-      format: safetensors
+-      hardware:
+-        gpu_arch: Ada
+-        unified_memory: false
+-        vram_min_mib: 16384
+-      name: qwen3-8b-ada-vllm-fp16
+-    - default_config:
+-        dtype: float16
+-        gpu_memory_utilization: 0.9
+-        max_model_len: 8192
+-      engine: vllm
+-      expected_performance:
+-        cold_start_time_s: 180
+-        notes: vLLM 0.9.2 DCU, FP16, single BW150 64GB, untested estimate.
+-        startup_time_s: 60
+-        tokens_per_second:
+-            - 20
+-            - 50
+-        vram_mib: 16000
+-      format: safetensors
+-      hardware:
+-        gpu_arch: DCU
+-        unified_memory: false
+-        vram_min_mib: 6144
+-      name: qwen3-8b-dcu-vllm-fp16
+-    - default_config:
+-        dtype: auto
+-        enforce_eager: true
+-        gpu_memory_utilization: 0.7
+-        max_model_len: 8192
+-        max_num_seqs: 1
+-      engine: vllm
+-      expected_performance:
+-        latency_first_token_ms:
+-            - 100
+-            - 500
+-        tokens_per_second:
+-            - 5
+-            - 20
+-      format: safetensors
+-      hardware:
+-        gpu_arch: MUSA
+-        unified_memory: true
+-        vram_min_mib: 40960
+-      name: qwen3-8b-musa-vllm-fp16
+-    - default_config:
+-        block_size: 32
+-        dtype: float16
+-        enforce_eager: true
+-        gpu_memory_utilization: 0.5
+-        max_model_len: 8192
+-        max_num_seqs: 1
+-        num_gpu_blocks_override: 256
+-        port: 32102
+-        quantization: gptq
+-        swap_space: 0
+-      engine: vllm-musa
+-      expected_performance:
+-        cold_start_time_s: 120
+-        latency_first_token_ms:
+-            - 500
+-            - 550
+-        notes: 'AIBook M1000 SoC 32GB LPDDR5X. GPTQ-Int4, vLLM-MUSA 0.9.2. Measured 2026-03-27: weights 16.4s, total cold start 117s. Decode 7.5 tok/s (steady state). TTFT 525ms. LLM+Embedding coexist at gmu=0.7 (26GB/32GB). Pre-loaded model at /opt/mt-ai/llm/models/gptq-Qwen3-8B.'
+-        startup_time_s: 117
+-        tokens_per_second:
+-            - 7
+-            - 8
+-        vram_mib: 16384
+-      format: safetensors
+-      hardware:
+-        gpu_arch: MUSA
+-        unified_memory: true
+-        vram_min_mib: 6144
+-      name: qwen3-8b-musa-soc-vllm-gptq
+-    - default_config:
+-        ctx_size: 4096
+-        n_gpu_layers: 999
+-        quantization: int4
+-      engine: llamacpp
+-      expected_performance:
+-        latency_first_token_ms:
+-            - 30
+-            - 150
+-        tokens_per_second:
+-            - 10
+-            - 40
+-      format: gguf
+-      hardware:
+-        gpu_arch: '*'
+-        ram_min_mib: 6144
+-        vram_min_mib: 0
+-      name: qwen3-8b-universal-llamacpp-q4
++kind: model_asset
++metadata:
++    aliases:
++        - Qwen3-8B-junhowie
++        - gptq-Qwen3-8B-junhowie
++        - gptq-Qwen3-8B
++    family: qwen
++    name: qwen3-8b
++    parameter_count: 8B
++    released_at: 2025-04
++    type: llm
++storage:
++    default_path_pattern: '{{.DataDir}}/models/{{.Name}}'
++    formats:
++        - safetensors
++        - gguf
++    sources:
++        - format: safetensors
++          path: ""
++          repo: Qwen/Qwen3-8B
++          type: huggingface
++        - format: gguf
++          path: ""
++          repo: Qwen/Qwen3-8B-GGUF
++          type: huggingface
++        - format: safetensors
++          path: ""
++          repo: Qwen/Qwen3-8B
++          type: modelscope
++        - path: /opt/mt-ai/llm/models/gptq-Qwen3-8B
++          repo: ""
++          type: local_path
++ui:
++    display_note: amd395 smoke central overlay
++variants:
++    - default_config:
++        dtype: bfloat16
++        gpu_memory_utilization: 0.3
++        max_model_len: 8192
++      engine: vllm
++      expected_performance:
++        latency_first_token_ms:
++            - 20
++            - 60
++        tokens_per_second:
++            - 25
++            - 50
++      format: safetensors
++      hardware:
++        gpu_arch: Blackwell
++        unified_memory: true
++        vram_min_mib: 6144
++      name: qwen3-8b-blackwell-vllm-bf16
++    - default_config:
++        dtype: auto
++        gpu_memory_utilization: 0.8
++        max_model_len: 4096
++      engine: vllm
++      expected_performance:
++        latency_first_token_ms:
++            - 15
++            - 40
++        tokens_per_second:
++            - 30
++            - 60
++      format: safetensors
++      hardware:
++        gpu_arch: Ada
++        unified_memory: false
++        vram_min_mib: 16384
++      name: qwen3-8b-ada-vllm-fp16
++    - default_config:
++        dtype: float16
++        gpu_memory_utilization: 0.9
++        max_model_len: 8192
++      engine: vllm
++      expected_performance:
++        cold_start_time_s: 180
++        notes: vLLM 0.9.2 DCU, FP16, single BW150 64GB, untested estimate.
++        startup_time_s: 60
++        tokens_per_second:
++            - 20
++            - 50
++        vram_mib: 16000
++      format: safetensors
++      hardware:
++        gpu_arch: DCU
++        unified_memory: false
++        vram_min_mib: 6144
++      name: qwen3-8b-dcu-vllm-fp16
++    - default_config:
++        dtype: auto
++        enforce_eager: true
++        gpu_memory_utilization: 0.7
++        max_model_len: 8192
++        max_num_seqs: 1
++      engine: vllm
++      expected_performance:
++        latency_first_token_ms:
++            - 100
++            - 500
++        tokens_per_second:
++            - 5
++            - 20
++      format: safetensors
++      hardware:
++        gpu_arch: MUSA
++        unified_memory: true
++        vram_min_mib: 40960
++      name: qwen3-8b-musa-vllm-fp16
++    - default_config:
++        block_size: 32
++        dtype: float16
++        enforce_eager: true
++        gpu_memory_utilization: 0.5
++        max_model_len: 8192
++        max_num_seqs: 1
++        num_gpu_blocks_override: 256
++        port: 32102
++        quantization: gptq
++        swap_space: 0
++      engine: vllm-musa
++      expected_performance:
++        cold_start_time_s: 120
++        latency_first_token_ms:
++            - 500
++            - 550
++        notes: 'AIBook M1000 SoC 32GB LPDDR5X. GPTQ-Int4, vLLM-MUSA 0.9.2. Measured 2026-03-27: weights 16.4s, total cold start 117s. Decode 7.5 tok/s (steady state). TTFT 525ms. LLM+Embedding coexist at gmu=0.7 (26GB/32GB). Pre-loaded model at /opt/mt-ai/llm/models/gptq-Qwen3-8B.'
++        startup_time_s: 117
++        tokens_per_second:
++            - 7
++            - 8
++        vram_mib: 16384
++      format: safetensors
++      hardware:
++        gpu_arch: MUSA
++        unified_memory: true
++        vram_min_mib: 6144
++      name: qwen3-8b-musa-soc-vllm-gptq
++    - default_config:
++        ctx_size: 4096
++        n_gpu_layers: 999
++        quantization: int4
++      engine: llamacpp
++      expected_performance:
++        latency_first_token_ms:
++            - 30
++            - 150
++        tokens_per_second:
++            - 10
++            - 40
++      format: gguf
++      hardware:
++        gpu_arch: '*'
++        ram_min_mib: 6144
++        vram_min_mib: 0
++      name: qwen3-8b-universal-llamacpp-q4

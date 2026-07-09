@@ -64,6 +64,9 @@ aima knowledge sync                       # 与中心服务同步知识
 aima knowledge validate                   # 校验预测与实际性能
 aima catalog override <kind> <name> <yaml-file>  # 写入 user-owned catalog patch
 aima catalog validate                     # 校验目录资产
+aima catalog validate-patch <yaml-file>   # 只验证单个 patch，不写盘
+aima catalog effective <kind> <name>      # 查看 factory/central/user 合并后的有效 YAML
+aima catalog diff <kind> <name>           # 查看 factory 到 effective 的差异
 aima catalog status                       # 查看 factory/overlay 状态
 aima benchmark run --model <name>         # 在线基准测试（TTFT/TPOT/吞吐量）
 aima benchmark matrix --model <name>      # 组合矩阵测试

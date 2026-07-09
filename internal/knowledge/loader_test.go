@@ -1192,6 +1192,81 @@ func TestKindToDir(t *testing.T) {
 	}
 }
 
+func TestCatalogAssetYAMLAndValidateCatalogPatch(t *testing.T) {
+	base, err := LoadCatalog(fstest.MapFS{
+		"models/demo.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: demo-model
+  type: llm
+  family: demo
+  parameter_count: 1b
+storage:
+  formats: [safetensors]
+  default_path_pattern: models/demo-model
+  sources: []
+variants:
+  - name: default
+    engine: vllm
+    format: safetensors
+    hardware:
+      gpu_arch: Any
+      vram_min_mib: 1024
+    default_config:
+      max_model_len: 2048
+      gpu_memory_utilization: 0.8
+    expected_performance: {}
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	patch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants:
+  - name: default
+    default_config:
+      gpu_memory_utilization: 0.9
+`)
+
+	effective, err := ValidateCatalogPatch(base, patch, "models/demo-model.patch.yaml")
+	if err != nil {
+		t.Fatalf("ValidateCatalogPatch: %v", err)
+	}
+	if !strings.Contains(string(effective), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("effective patch YAML missing override:\n%s", string(effective))
+	}
+	if !strings.Contains(string(effective), "max_model_len: 2048") {
+		t.Fatalf("effective patch YAML lost base config:\n%s", string(effective))
+	}
+
+	overlay := &Catalog{ModelAssets: []ModelAsset{}}
+	if err := overlay.parseAsset(effective, "effective.yaml"); err != nil {
+		t.Fatalf("parse effective patch: %v", err)
+	}
+	merged, _ := MergeCatalog(base, overlay)
+	yamlData, found, err := CatalogAssetYAML(merged, "model_asset", "demo-model")
+	if err != nil {
+		t.Fatalf("CatalogAssetYAML: %v", err)
+	}
+	if !found {
+		t.Fatal("CatalogAssetYAML did not find demo-model")
+	}
+	if !strings.Contains(string(yamlData), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("catalog asset YAML missing effective value:\n%s", string(yamlData))
+	}
+
+	badPatch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants: wrong-type
+`)
+	if _, err := ValidateCatalogPatch(base, badPatch, "models/demo-model.bad.patch.yaml"); err == nil {
+		t.Fatal("ValidateCatalogPatch accepted invalid asset schema")
+	}
+}
+
 func TestBenchmarkProfileTiers(t *testing.T) {
 	fs := fstest.MapFS{
 		"benchmarks/profiles.yaml": &fstest.MapFile{Data: []byte(`kind: benchmark_profiles

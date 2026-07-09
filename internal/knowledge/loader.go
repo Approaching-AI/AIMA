@@ -1414,6 +1414,34 @@ func catalogPatchToAssetYAML(base *Catalog, data []byte, path string) ([]byte, e
 	return yaml.Marshal(merged)
 }
 
+// ValidateCatalogPatch verifies a single catalog patch against the provided
+// effective catalog and returns the asset YAML that would be produced.
+func ValidateCatalogPatch(base *Catalog, data []byte, path string) ([]byte, error) {
+	assetData, err := catalogPatchToAssetYAML(base, data, path)
+	if err != nil {
+		return nil, err
+	}
+	validationCat := &Catalog{EngineProfiles: make(map[string]*EngineProfile)}
+	if err := validationCat.parseAsset(assetData, path); err != nil {
+		return nil, err
+	}
+	return assetData, nil
+}
+
+// CatalogAssetYAML returns one effective catalog asset as YAML.
+func CatalogAssetYAML(cat *Catalog, kind, name string) ([]byte, bool, error) {
+	baseKind := strings.TrimSuffix(kind, "_patch")
+	asset, found, err := catalogAssetMap(cat, baseKind, name)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	data, err := yaml.Marshal(asset)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
 func patchMetadataName(m map[string]any) string {
 	meta, ok := m["metadata"].(map[string]any)
 	if !ok {

@@ -600,6 +600,84 @@ func buildKnowledgeDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(status)
 	}
 
+	deps.CatalogEffective = func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+		baseKind := strings.TrimSuffix(kind, "_patch")
+		if knowledge.KindToDir(baseKind) == "" {
+			return nil, fmt.Errorf("unknown kind %q", kind)
+		}
+		if err := validateOverlayAssetName(name); err != nil {
+			return nil, err
+		}
+		assetYAML, found, err := knowledge.CatalogAssetYAML(cat, baseKind, name)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("%s %q not found in effective catalog", baseKind, name)
+		}
+		return json.Marshal(map[string]any{
+			"kind": baseKind,
+			"name": name,
+			"yaml": string(assetYAML),
+		})
+	}
+
+	deps.CatalogDiff = func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+		baseKind := strings.TrimSuffix(kind, "_patch")
+		if knowledge.KindToDir(baseKind) == "" {
+			return nil, fmt.Errorf("unknown kind %q", kind)
+		}
+		if err := validateOverlayAssetName(name); err != nil {
+			return nil, err
+		}
+		factoryCat, err := knowledge.LoadCatalog(catalog.FS)
+		if err != nil {
+			return nil, fmt.Errorf("load factory catalog: %w", err)
+		}
+		factoryYAML, factoryFound, err := knowledge.CatalogAssetYAML(factoryCat, baseKind, name)
+		if err != nil {
+			return nil, err
+		}
+		effectiveYAML, effectiveFound, err := knowledge.CatalogAssetYAML(cat, baseKind, name)
+		if err != nil {
+			return nil, err
+		}
+		if !factoryFound && !effectiveFound {
+			return nil, fmt.Errorf("%s %q not found in factory or effective catalog", baseKind, name)
+		}
+		diff := unifiedCatalogYAMLDiff("factory/"+baseKind+"/"+name, "effective/"+baseKind+"/"+name, factoryYAML, effectiveYAML)
+		return json.Marshal(map[string]any{
+			"kind":            baseKind,
+			"name":            name,
+			"changed":         string(factoryYAML) != string(effectiveYAML),
+			"factory_found":   factoryFound,
+			"effective_found": effectiveFound,
+			"diff":            diff,
+		})
+	}
+
+	deps.CatalogValidatePatch = func(ctx context.Context, content string) (json.RawMessage, error) {
+		effectiveYAML, err := knowledge.ValidateCatalogPatch(cat, []byte(content), "input.patch.yaml")
+		if err != nil {
+			return nil, err
+		}
+		var probe struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal(effectiveYAML, &probe); err != nil {
+			return nil, fmt.Errorf("parse effective patch: %w", err)
+		}
+		return json.Marshal(map[string]any{
+			"valid":          true,
+			"kind":           probe.Kind,
+			"name":           probe.Metadata.Name,
+			"effective_yaml": string(effectiveYAML),
+		})
+	}
+
 	deps.CatalogValidate = func(ctx context.Context) (json.RawMessage, error) {
 		type issue struct {
 			Engine   string `json:"engine"`
@@ -925,6 +1003,39 @@ func normalizeUserCatalogPatch(kind, name, content string, factoryDigests map[st
 		return nil, "", fmt.Errorf("marshal patch: %w", err)
 	}
 	return out, patchKind, nil
+}
+
+func unifiedCatalogYAMLDiff(oldLabel, newLabel string, oldData, newData []byte) string {
+	if string(oldData) == string(newData) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("--- ")
+	b.WriteString(oldLabel)
+	b.WriteByte('\n')
+	b.WriteString("+++ ")
+	b.WriteString(newLabel)
+	b.WriteByte('\n')
+	b.WriteString("@@\n")
+	for _, line := range splitCatalogDiffLines(string(oldData)) {
+		b.WriteByte('-')
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	for _, line := range splitCatalogDiffLines(string(newData)) {
+		b.WriteByte('+')
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func splitCatalogDiffLines(s string) []string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 func parseImportedTimestamp(value string) (time.Time, error) {

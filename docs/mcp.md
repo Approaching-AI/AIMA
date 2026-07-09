@@ -68,6 +68,11 @@ Go Agent (直接调用)，保证行为一致。
   当 Runtime 对象已被删除但持久化意图仍为 `desired_state=running`、`recovery_state=quarantined` 时，AIMA 会返回一条合成的隔离状态，而不是让该部署从列表中消失。
 - 不要依赖 `deploy.list` 提供原始 `config` 或 label map。
   如果自动化流程需要精确运行配置或原始 labels，应调用 `deploy.status`。
+- `deploy.run` 在本次新建部署失败或等待超时时会尝试调用 `deploy.delete` 清理残留进程/容器；复用中的既有部署不会被自动删除。
+- `deploy.run` 失败错误会带稳定错误码前缀，便于 UI/日志分类。当前错误码包括：
+  `OUT_OF_MEMORY`, `MODEL_NOT_FOUND`, `MODEL_CORRUPTED`, `MODEL_FORMAT_INVALID`,
+  `PORT_IN_USE`, `PERMISSION_DENIED`, `DOWNLOAD_FAILED`, `HARDWARE_INCOMPATIBLE`,
+  `TIMEOUT`, `ENGINE_START_FAILED`, `UNKNOWN_ERROR`。
 
 #### Engine 生命周期契约
 
@@ -98,7 +103,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ### 协同与集成
 
-- Catalog (3): `catalog.list`, `catalog.override`, `catalog.validate`
+- Catalog (6): `catalog.list`, `catalog.effective`, `catalog.diff`, `catalog.validate_patch`, `catalog.override`, `catalog.validate`
 - Central (3): `central.sync`, `central.advise`, `central.scenario`
 - Data (2): `data.export`, `data.import`
 - Device (4): `device.register`, `device.status`, `device.renew`, `device.reset`

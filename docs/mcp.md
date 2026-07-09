@@ -42,7 +42,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ---
 
-## MCP 工具列表 (62 个)
+## MCP 工具列表 (65 个)
 
 所有工具统一由 `internal/mcp/tools.go` 的 `RegisterAllTools()` 注册，按领域拆分在 `internal/mcp/tools_*.go` 中实现。下列分组反映当前分支的完整工具前缀集合；具体参数与返回值以各工具的 `inputSchema` 和实现为准。
 
@@ -65,6 +65,11 @@ Go Agent (直接调用)，保证行为一致。
   返回单个部署的完整状态，包含上述 overview 字段，以及 `config`、`labels`、`restarts`、`exit_code`、启动时间戳等 detail 字段。
 - 不要依赖 `deploy.list` 提供原始 `config` 或 label map。
   如果自动化流程需要精确运行配置或原始 labels，应调用 `deploy.status`。
+- `deploy.run` 在本次新建部署失败或等待超时时会尝试调用 `deploy.delete` 清理残留进程/容器；复用中的既有部署不会被自动删除。
+- `deploy.run` 失败错误会带稳定错误码前缀，便于 UI/日志分类。当前错误码包括：
+  `OUT_OF_MEMORY`, `MODEL_NOT_FOUND`, `MODEL_CORRUPTED`, `MODEL_FORMAT_INVALID`,
+  `PORT_IN_USE`, `PERMISSION_DENIED`, `DOWNLOAD_FAILED`, `HARDWARE_INCOMPATIBLE`,
+  `TIMEOUT`, `ENGINE_START_FAILED`, `UNKNOWN_ERROR`。
 
 ### 知识与调优
 
@@ -76,7 +81,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ### 协同与集成
 
-- Catalog (3): `catalog.list`, `catalog.override`, `catalog.validate`
+- Catalog (6): `catalog.list`, `catalog.effective`, `catalog.diff`, `catalog.validate_patch`, `catalog.override`, `catalog.validate`
 - Central (3): `central.sync`, `central.advise`, `central.scenario`
 - Data (2): `data.export`, `data.import`
 - Device (4): `device.register`, `device.status`, `device.renew`, `device.reset`

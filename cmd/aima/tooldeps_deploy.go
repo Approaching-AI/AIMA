@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -232,6 +233,14 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, err
 			}
 			return json.Marshal(result)
+		}
+		if requiresNativeLlamaMemoryPreflight(activeRt.Name(), resolved.ModelFormat, resolved.Engine) {
+			// Reducing ctx_size only reduces KV cache; it cannot make oversized model
+			// weights or a multimodal projector fit in memory. This check runs after
+			// reusable deployments are returned so it cannot reject a healthy service.
+			if err := ensureLlamaMinimumMemoryFit(modelPath, resolved.Config, hwInfo); err != nil {
+				return nil, newDeploymentRunError(deployErrorOutOfMemory, err.Error(), deploymentCleanupResult{})
+			}
 		}
 		// Pre-flight: ensure image is available in containerd for K3S deployments.
 		// Auto-import from Docker or pre-pull from registries if needed.
@@ -870,6 +879,118 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 	}
 }
 
+const (
+	llamaComputeReserveMiB    = 1024
+	llamaMinimumContextTokens = 2048
+	llamaMemorySafetyFraction = 0.90
+	bytesPerMiB               = 1024 * 1024
+)
+
+type llamaMemoryFit struct {
+	Evaluated   bool
+	Fits        bool
+	UsableMiB   int
+	RequiredMiB int
+	BudgetMiB   int
+	KVAtMinMiB  int
+}
+
+var llamaGGUFShardRE = regexp.MustCompile(`(?i)^(.+)-(\d+)-of-(\d+)\.gguf$`)
+
+func requiresNativeLlamaMemoryPreflight(runtimeName, modelFormat, engineName string) bool {
+	return strings.EqualFold(strings.TrimSpace(runtimeName), "native") &&
+		strings.EqualFold(strings.TrimSpace(modelFormat), "gguf") &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(engineName)), "llamacpp")
+}
+
+// minimumLlamaMemoryFit reports whether model weights, llama.cpp compute
+// buffers, and the KV cache at the minimum useful context can fit in the safe
+// fraction of detected usable memory. Unknown memory or architecture leaves the
+// result unevaluated so deployments retain their existing graceful behavior.
+func minimumLlamaMemoryFit(kvPerTok int64, usableMiB, nonKVMiB int) llamaMemoryFit {
+	if kvPerTok <= 0 || usableMiB <= 0 || nonKVMiB < 0 {
+		return llamaMemoryFit{Fits: true}
+	}
+
+	budgetMiB := int(float64(usableMiB) * llamaMemorySafetyFraction)
+	kvAtMinMiB := int((int64(llamaMinimumContextTokens)*kvPerTok + bytesPerMiB - 1) / bytesPerMiB)
+	requiredMiB := nonKVMiB + llamaComputeReserveMiB + kvAtMinMiB
+	return llamaMemoryFit{
+		Evaluated:   true,
+		Fits:        requiredMiB <= budgetMiB,
+		UsableMiB:   usableMiB,
+		RequiredMiB: requiredMiB,
+		BudgetMiB:   budgetMiB,
+		KVAtMinMiB:  kvAtMinMiB,
+	}
+}
+
+// llamaModelWeightMiB sums all shards when modelPath points to the first shard
+// of a split GGUF. llama.cpp loads every matching shard, so checking the first
+// file alone would understate the memory needed to load the model.
+func llamaModelWeightMiB(modelPath string) int {
+	if modelPath == "" {
+		return 0
+	}
+	match := llamaGGUFShardRE.FindStringSubmatch(filepath.Base(modelPath))
+	if match == nil {
+		return fileSizeMiB(modelPath)
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(modelPath))
+	if err != nil {
+		return fileSizeMiB(modelPath)
+	}
+	var totalBytes int64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		part := llamaGGUFShardRE.FindStringSubmatch(entry.Name())
+		if part == nil || !strings.EqualFold(part[1], match[1]) || part[3] != match[3] {
+			continue
+		}
+		if info, err := entry.Info(); err == nil {
+			totalBytes += info.Size()
+		}
+	}
+	if totalBytes == 0 {
+		return fileSizeMiB(modelPath)
+	}
+	return int(totalBytes / bytesPerMiB)
+}
+
+func llamaNonKVMiB(modelPath string, config map[string]any) int {
+	nonKVMiB := llamaModelWeightMiB(modelPath)
+	if mm, _ := config["mmproj"].(string); mm != "" {
+		nonKVMiB += fileSizeMiB(mm)
+	}
+	return nonKVMiB
+}
+
+// ensureLlamaMinimumMemoryFit returns a user-actionable error before spawning
+// llama.cpp when the model cannot fit even at the minimum useful context.
+func ensureLlamaMinimumMemoryFit(modelPath string, config map[string]any, hw knowledge.HardwareInfo) error {
+	if modelPath == "" {
+		return nil
+	}
+	arch, ok := model.ReadKVArch(modelPath)
+	if !ok {
+		return nil
+	}
+
+	nonKVMiB := llamaNonKVMiB(modelPath, config)
+	fit := minimumLlamaMemoryFit(arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
+	if !fit.Evaluated || fit.Fits {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"model requires at least %d MiB (weights+projector %d MiB, compute reserve %d MiB, KV %d MiB at ctx_size %d), but the safe memory budget is %d MiB from %d MiB detected; use a smaller or more-quantized model, or free/increase available memory",
+		fit.RequiredMiB, nonKVMiB, llamaComputeReserveMiB, fit.KVAtMinMiB, llamaMinimumContextTokens, fit.BudgetMiB, fit.UsableMiB,
+	)
+}
+
 // fitContextToMemory shrinks config["ctx_size"] so the llama.cpp KV cache plus
 // model weights and the multimodal projector fit the detected memory, and caps it
 // at the model's trained context. It only ever lowers ctx_size — never raises it.
@@ -886,10 +1007,7 @@ func fitContextToMemory(modelPath string, config map[string]any, hw knowledge.Ha
 		return false, 0, 0, "" // can't estimate KV → leave ctx_size untouched
 	}
 
-	nonKVMiB := fileSizeMiB(modelPath)
-	if mm, _ := config["mmproj"].(string); mm != "" {
-		nonKVMiB += fileSizeMiB(mm)
-	}
+	nonKVMiB := llamaNonKVMiB(modelPath, config)
 
 	target, reasons := clampContextForMemory(reqCtx, arch.NCtxTrain, arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
 	if target >= reqCtx {
@@ -905,10 +1023,6 @@ func fitContextToMemory(modelPath string, config map[string]any, hw knowledge.Ha
 // is the f16 KV bytes per token. It floors at a minimally useful context. Pure
 // (no I/O) for testability.
 func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, nonKVMiB int) (int, []string) {
-	const (
-		computeReserveMiB = 1024 // llama.cpp compute buffers
-		minCtx            = 2048 // floor — keep a usable context even on tiny memory
-	)
 	target := reqCtx
 	var reasons []string
 
@@ -918,7 +1032,7 @@ func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, non
 	}
 
 	if usableMiB > 0 && kvPerTok > 0 {
-		kvBudgetMiB := int(float64(usableMiB)*0.90) - nonKVMiB - computeReserveMiB
+		kvBudgetMiB := int(float64(usableMiB)*llamaMemorySafetyFraction) - nonKVMiB - llamaComputeReserveMiB
 		if kvBudgetMiB < 0 {
 			kvBudgetMiB = 0
 		}
@@ -931,8 +1045,8 @@ func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, non
 		}
 	}
 
-	if target < minCtx {
-		target = minCtx
+	if target < llamaMinimumContextTokens {
+		target = llamaMinimumContextTokens
 	}
 	return target, reasons
 }

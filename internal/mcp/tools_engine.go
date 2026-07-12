@@ -108,8 +108,8 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 	// engine.import
 	s.RegisterTool(&Tool{
 		Name:        "engine.import",
-		Description: "Import an engine container image from a local OCI tar file and register it (airgap use case).",
-		InputSchema: schema(`"path":{"type":"string","description":"Absolute path to the OCI tar file, e.g. '/data/images/vllm-cuda.tar'"}`, "path"),
+		Description: "Import an engine container image or native runtime package from a local file and register it (airgap use case). Supports OCI tar files, native zip/tar.gz bundles, directories, and single binaries.",
+		InputSchema: schema(`"path":{"type":"string","description":"Absolute path to the engine package, e.g. '/data/images/vllm-cuda.tar' or '/data/runtime/llama-b9330-win-hip-radeon-x64.zip'"}`, "path"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ImportEngine == nil {
 				return ErrorResult("engine.import not implemented"), nil
@@ -126,7 +126,7 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 			if err := deps.ImportEngine(ctx, p.Path); err != nil {
 				return nil, fmt.Errorf("import engine from %s: %w", p.Path, err)
 			}
-			return TextResult(fmt.Sprintf("engine image imported from %s", p.Path)), nil
+			return TextResult(fmt.Sprintf("engine imported from %s", p.Path)), nil
 		},
 	})
 

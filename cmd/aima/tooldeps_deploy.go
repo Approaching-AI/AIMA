@@ -15,6 +15,7 @@ import (
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/model"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 
@@ -43,6 +44,9 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	dataDir := ac.dataDir
 
 	deps.DeployApply = func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		// A1: keep the user's original input before it's canonicalized below, so the
+		// result can surface the original↔canonical mapping (requested_model).
+		requestedModel := modelName
 		if noPull {
 			ctx = withDeployAutoPull(ctx, false)
 		}
@@ -68,6 +72,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		modelName = rd.ModelName
 		resolved := rd.Resolved
 		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
+		modelType := firstNonEmpty(resolved.ModelType, catalogModelType(cat, modelName))
 
 		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
 		if modelPathErr != nil {
@@ -98,6 +103,15 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					slog.Info("auto-wired multimodal projector for vision", "model", modelName, "mmproj", mm)
 				}
 			}
+
+			// Hardware-aware context sizing: a high catalog/user ctx_size can exceed
+			// what the detected memory holds — llama-server would OOM at load. Clamp
+			// ctx_size down to fit weights + projector + KV cache (and cap at the
+			// model's trained context), degrading gracefully instead of failing.
+			if clamped, oldCtx, newCtx, reason := fitContextToMemory(modelPath, resolved.Config, hwInfo); clamped {
+				slog.Warn("clamped context window to fit hardware memory",
+					"model", modelName, "ctx_size_requested", oldCtx, "ctx_size_applied", newCtx, "detail", reason)
+			}
 		}
 
 		req := &runtime.DeployRequest{
@@ -108,7 +122,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			PortSpecs:        append([]knowledge.StartupPort(nil), resolved.PortSpecs...),
 			InitCommands:     resolved.InitCommands,
 			ModelPath:        modelPath,
-			ModelType:        catalogModelType(cat, modelName),
+			ModelType:        modelType,
 			Config:           resolved.Config,
 			RuntimeClassName: resolved.RuntimeClassName,
 			CPUArch:          resolved.CPUArch,
@@ -131,7 +145,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {
 			req.Labels[proxy.LabelParameterCount] = parameterCount
 		}
-		if modelType := catalogModelType(cat, modelName); modelType != "" {
+		if modelType != "" {
 			req.Labels[proxy.LabelModelType] = modelType
 		}
 		if contextWindow := contextWindowFromResolvedConfig(resolved.Config); contextWindow > 0 {
@@ -178,7 +192,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				ModelName:           modelName,
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
-				ModelType:           catalogModelType(cat, modelName),
+				ModelType:           modelType,
 				Address:             existing.Address,
 				Ready:               existing.Ready,
 				ParameterCount:      firstNonEmpty(existing.Labels[proxy.LabelParameterCount], catalogModelParameterCount(cat, modelName)),
@@ -194,10 +208,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 			existingName := firstNonEmpty(existing.Name, deployName)
 			result := map[string]any{
-				"name":    existingName,
-				"model":   modelName,
-				"engine":  resolved.Engine,
-				"slot":    resolved.Slot,
+				"name":            existingName,
+				"model":           modelName,
+				"requested_model": requestedModel,
+				"engine":          resolved.Engine,
+				"slot":            resolved.Slot,
 				"status":  status,
 				"phase":   existing.Phase,
 				"runtime": runtimeName,
@@ -208,7 +223,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			if existing.Address != "" {
 				result["address"] = existing.Address
 			}
-			if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
+			if err := setActiveLLMModelConfigForType(ctx, db, modelName, modelType); err != nil {
 				return nil, err
 			}
 			return json.Marshal(result)
@@ -217,6 +232,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		// Auto-import from Docker or pre-pull from registries if needed.
 		// Note: containerd operations require root; skip gracefully if not root.
 		if activeRt.Name() == "k3s" && req.Image != "" {
+			engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
 			inContainerd := engine.ImageExistsInContainerd(ctx, req.Image, &execRunner{})
 			if !inContainerd {
 				inDocker := engine.ImageExistsInDocker(ctx, req.Image, &execRunner{})
@@ -232,16 +248,16 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 							slog.Warn("auto-import failed, K3S will try registries.yaml", "image", req.Image, "error", importErr)
 						}
 					}
-				} else if activeRt.Name() == "k3s" && len(resolved.EngineRegistries) > 0 {
+				} else if activeRt.Name() == "k3s" && len(engineRegistries) > 0 {
 					if !allowAutoPull {
 						return nil, fmt.Errorf("engine image %s not found in K3S containerd and auto-pull is disabled", req.Image)
 					}
-					slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(resolved.EngineRegistries))
+					slog.Info("pre-pulling engine image", "image", req.Image, "registries", len(engineRegistries))
 					imgName, imgTag := splitImageRef(req.Image)
 					if pullErr := engine.Pull(ctx, engine.PullOptions{
 						Image:          imgName,
 						Tag:            imgTag,
-						Registries:     resolved.EngineRegistries,
+						Registries:     engineRegistries,
 						Runner:         &execRunner{},
 						ExpectedDigest: resolved.EngineDigest,
 					}); pullErr != nil {
@@ -257,7 +273,8 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				fullRef += ":latest"
 			}
 			if !engine.ImageExistsInDocker(ctx, fullRef, &execRunner{}) {
-				if len(resolved.EngineRegistries) > 0 {
+				engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
+				if len(engineRegistries) > 0 {
 					if !allowAutoPull {
 						return nil, fmt.Errorf("engine image %s not found in Docker and auto-pull is disabled", req.Image)
 					}
@@ -266,13 +283,13 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					if pullErr := engine.Pull(ctx, engine.PullOptions{
 						Image:          imgName,
 						Tag:            imgTag,
-						Registries:     resolved.EngineRegistries,
+						Registries:     engineRegistries,
 						Runner:         &execRunner{},
 						ExpectedDigest: resolved.EngineDigest,
 					}); pullErr != nil {
 						return nil, fmt.Errorf("auto-pull engine image %s: %w", req.Image, pullErr)
 					}
-					if aliasErr := ensureDockerImageAlias(ctx, &execRunner{}, req.Image, resolved.EngineRegistries); aliasErr != nil {
+					if aliasErr := ensureDockerImageAlias(ctx, &execRunner{}, req.Image, engineRegistries); aliasErr != nil {
 						return nil, fmt.Errorf("normalize pulled docker image %s: %w", req.Image, aliasErr)
 					}
 				} else {
@@ -317,12 +334,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			ModelName:           modelName,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
-			ModelType:           catalogModelType(cat, modelName),
+			ModelType:           modelType,
 			Ready:               false,
 			ParameterCount:      catalogModelParameterCount(cat, modelName),
 			ContextWindowTokens: contextWindowFromResolvedConfig(resolved.Config),
 		})
-		if err := setActiveLLMModelConfigForType(ctx, db, modelName, catalogModelType(cat, modelName)); err != nil {
+		if err := setActiveLLMModelConfigForType(ctx, db, modelName, modelType); err != nil {
 			return nil, err
 		}
 		result := map[string]any{
@@ -333,7 +350,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			// sanitized deployName never matched → status was never found → the deploy
 			// looked stuck "not ready" even though the engine was serving fine.
 			"name":  req.Name,
-			"model": modelName, "engine": resolved.Engine,
+			"model": modelName, "requested_model": requestedModel, "engine": resolved.Engine,
 			"slot": resolved.Slot, "status": "deploying",
 			"runtime": activeRt.Name(),
 			"config":  resolved.Config,
@@ -373,6 +390,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 
 		result := map[string]any{
 			"model":                rd.ModelName,
+			"requested_model":      modelName,
 			"engine":               resolved.Engine,
 			"engine_image":         resolved.EngineImage,
 			"slot":                 resolved.Slot,
@@ -504,6 +522,18 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 		}
 		if len(matches) == 0 {
+			// A1: deploy canonicalizes the model name (e.g. the alias
+			// "Qwen2.5-VL-3B-Instruct-Q4_K_M" deploys as "qwen2.5-vl-3b-instruct"),
+			// but undeploy with the original alias would not match. Canonicalize the
+			// query and retry so alias-deploy → alias-undeploy works.
+			if canonical := canonicalModelAlt(cat, name); canonical != "" {
+				matches = findExactDeploymentNameMatches(ctx, canonical, nil, rt, nativeRt, dockerRt)
+				if len(matches) == 0 {
+					matches = findMatchingDeployments(ctx, canonical, nil, rt, nativeRt, dockerRt)
+				}
+			}
+		}
+		if len(matches) == 0 {
 			return fmt.Errorf("deployment %q not found", name)
 		}
 		if len(matches) > 1 {
@@ -568,6 +598,14 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
 		s, err := findDeploymentStatus(ctx, name, suppressRecentlyDeleted, rt, nativeRt, dockerRt)
 		if err != nil {
+			// A1: retry with the canonical name so `status <alias>` works too.
+			if canonical := canonicalModelAlt(cat, name); canonical != "" {
+				if s2, err2 := findDeploymentStatus(ctx, canonical, suppressRecentlyDeleted, rt, nativeRt, dockerRt); err2 == nil {
+					s, err = s2, nil
+				}
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 		populateDeploymentOverviewFields(s)
@@ -614,9 +652,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		if err != nil {
 			// Exact pod name failed -- search by model label across all runtimes.
+			// A1: also match the canonical name so `logs <alias>` works.
+			canonical := canonicalModelAlt(cat, name)
 			allDeps := listAllRuntimes(ctx, rt, nativeRt, dockerRt)
 			for _, d := range allDeps {
-				if deploymentMatchesQuery(d, name) {
+				if deploymentMatchesQuery(d, name) || (canonical != "" && deploymentMatchesQuery(d, canonical)) {
 					// Try each runtime for logs by actual deployment name.
 					for _, tryRt := range []runtime.Runtime{rt, nativeRt, dockerRt} {
 						if tryRt == nil {
@@ -662,7 +702,7 @@ func catalogModelParameterCount(cat *knowledge.Catalog, name string) string {
 		return ""
 	}
 	for _, model := range cat.ModelAssets {
-		if strings.EqualFold(model.Metadata.Name, name) {
+		if modelAssetNameMatches(model, name) {
 			return strings.TrimSpace(model.Metadata.ParameterCount)
 		}
 	}
@@ -674,7 +714,7 @@ func catalogModelType(cat *knowledge.Catalog, name string) string {
 		return ""
 	}
 	for i := range cat.ModelAssets {
-		if strings.EqualFold(cat.ModelAssets[i].Metadata.Name, name) {
+		if modelAssetNameMatches(cat.ModelAssets[i], name) {
 			return strings.TrimSpace(cat.ModelAssets[i].Metadata.Type)
 		}
 	}
@@ -684,6 +724,18 @@ func catalogModelType(cat *knowledge.Catalog, name string) string {
 	return ""
 }
 
+func modelAssetNameMatches(model knowledge.ModelAsset, name string) bool {
+	if strings.EqualFold(model.Metadata.Name, name) {
+		return true
+	}
+	for _, alias := range model.Metadata.Aliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -691,6 +743,37 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// canonicalModelAlt returns the canonical catalog model name for a query when it
+// differs from the input (e.g. an alias carrying a quant suffix / different case),
+// or "" otherwise. Deployments are stored under the canonical name, so name-taking
+// commands (undeploy/status/logs) use this to also accept the original deploy-time
+// alias the user typed.
+func canonicalModelAlt(cat *knowledge.Catalog, name string) string {
+	if cat == nil {
+		return ""
+	}
+	c := strings.TrimSpace(cat.ResolveCatalogModelName(name))
+	if c != "" && !strings.EqualFold(c, name) {
+		return c
+	}
+	return ""
+}
+
+// openclawSetDefaultFromEnv reads AIMA_OPENCLAW_SET_DEFAULT as a tri-state:
+// unset/unparseable → nil (default: AIMA sets the primary chat model); otherwise
+// the parsed bool (false = leave the user's primary model untouched).
+func openclawSetDefaultFromEnv() *bool {
+	v := strings.TrimSpace(os.Getenv("AIMA_OPENCLAW_SET_DEFAULT"))
+	if v == "" {
+		return nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+	return &b
 }
 
 func populateDeploymentOverviewFields(status *runtime.DeploymentStatus) {
@@ -774,6 +857,116 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 		ParameterCount:      firstNonEmpty(status.Labels[proxy.LabelParameterCount]),
 		ContextWindowTokens: contextWindowFromStatus(status),
 	}
+}
+
+// fitContextToMemory shrinks config["ctx_size"] so the llama.cpp KV cache plus
+// model weights and the multimodal projector fit the detected memory, and caps it
+// at the model's trained context. It only ever lowers ctx_size — never raises it.
+// Returns (clamped, requestedCtx, appliedCtx, reason). It is a no-op (clamped=false)
+// when ctx_size is unset, the GGUF architecture can't be read, or memory is unknown,
+// so unsupported models/hardware degrade gracefully instead of erroring.
+func fitContextToMemory(modelPath string, config map[string]any, hw knowledge.HardwareInfo) (bool, int, int, string) {
+	reqCtx := contextWindowFromResolvedConfig(config)
+	if reqCtx <= 0 || modelPath == "" || config == nil {
+		return false, 0, 0, ""
+	}
+	arch, ok := model.ReadKVArch(modelPath)
+	if !ok {
+		return false, 0, 0, "" // can't estimate KV → leave ctx_size untouched
+	}
+
+	nonKVMiB := fileSizeMiB(modelPath)
+	if mm, _ := config["mmproj"].(string); mm != "" {
+		nonKVMiB += fileSizeMiB(mm)
+	}
+
+	target, reasons := clampContextForMemory(reqCtx, arch.NCtxTrain, arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
+	if target >= reqCtx {
+		return false, reqCtx, reqCtx, ""
+	}
+	config["ctx_size"] = target
+	return true, reqCtx, target, strings.Join(reasons, "; ")
+}
+
+// clampContextForMemory computes the largest context window ≤ reqCtx that fits:
+// (a) the model's trained context (nCtxTrain, 0 = unknown/skip) and (b) the KV
+// budget left after weights+projector in usableMiB (0 = unknown/skip). kvPerTok
+// is the f16 KV bytes per token. It floors at a minimally useful context. Pure
+// (no I/O) for testability.
+func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, nonKVMiB int) (int, []string) {
+	const (
+		computeReserveMiB = 1024 // llama.cpp compute buffers
+		minCtx            = 2048 // floor — keep a usable context even on tiny memory
+	)
+	target := reqCtx
+	var reasons []string
+
+	if nCtxTrain > 0 && target > nCtxTrain {
+		target = nCtxTrain
+		reasons = append(reasons, fmt.Sprintf("capped at trained context %d", nCtxTrain))
+	}
+
+	if usableMiB > 0 && kvPerTok > 0 {
+		kvBudgetMiB := int(float64(usableMiB)*0.90) - nonKVMiB - computeReserveMiB
+		if kvBudgetMiB < 0 {
+			kvBudgetMiB = 0
+		}
+		maxCtx := int(int64(kvBudgetMiB) * 1024 * 1024 / kvPerTok)
+		maxCtx -= maxCtx % 256 // clean multiple
+		if maxCtx < target {
+			target = maxCtx
+			reasons = append(reasons, fmt.Sprintf("%d MiB usable, weights+projector %d MiB, KV %d B/token",
+				usableMiB, nonKVMiB, kvPerTok))
+		}
+	}
+
+	if target < minCtx {
+		target = minCtx
+	}
+	return target, reasons
+}
+
+// usableMemoryMiB returns the memory budget an all-layers-offloaded llama.cpp
+// model can use: GPU VRAM for discrete GPUs, or system RAM minus an OS reserve
+// for unified-memory / CPU hosts. Returns 0 when memory is unknown.
+func usableMemoryMiB(hw knowledge.HardwareInfo) int {
+	ramReserve := func(total int) int {
+		reserve := total / 4
+		if reserve < 2048 {
+			reserve = 2048
+		}
+		if reserve > 16384 {
+			reserve = 16384
+		}
+		return reserve
+	}
+	// An all-layers-offloaded llama.cpp model is bounded by GPU memory. For a
+	// unified-memory APU this is the carved iGPU pool (read via ROCm), which is the
+	// correct budget — NOT the OS-visible system RAM, which Win32 under-reports on
+	// such APUs (e.g. Strix Halo shows ~32 GB OS RAM but ~110 GB iGPU VRAM). Prefer
+	// GPU memory whenever it's known; fall back to system RAM only for CPU-only hosts.
+	if hw.GPUMemFreeMiB > 0 {
+		return hw.GPUMemFreeMiB
+	}
+	if hw.GPUVRAMMiB > 0 {
+		return hw.GPUVRAMMiB
+	}
+	if hw.RAMTotalMiB > 0 {
+		return hw.RAMTotalMiB - ramReserve(hw.RAMTotalMiB)
+	}
+	return 0
+}
+
+// fileSizeMiB returns the file's size in MiB, or 0 if it can't be stat'd.
+func fileSizeMiB(path string) int {
+	if path == "" {
+		return 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size() / (1024 * 1024))
 }
 
 func contextWindowFromResolvedConfig(config map[string]any) int {

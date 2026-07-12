@@ -142,8 +142,8 @@ type pullProgressRenderer struct {
 	mu         sync.Mutex
 	w          interface{ Write([]byte) (int, error) }
 	isTTY      bool
-	lastReport int   // last reported percentage (for non-TTY deduplication)
-	started    bool  // whether we've printed any progress line
+	lastReport int  // last reported percentage (for non-TTY deduplication)
+	started    bool // whether we've printed any progress line
 	lastUpdate time.Time
 }
 
@@ -254,7 +254,7 @@ func formatDuration(seconds float64) string {
 func newEngineImportCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "import <path>",
-		Short: "Import an engine image from a tar file",
+		Short: "Import an engine image or native runtime package",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -264,7 +264,7 @@ func newEngineImportCmd(app *App) *cobra.Command {
 				return fmt.Errorf("import engine from %s: %w", tarPath, err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Engine image imported from %s\n", tarPath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Engine imported from %s\n", tarPath)
 			return nil
 		},
 	}

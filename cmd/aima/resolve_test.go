@@ -546,7 +546,7 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 		}},
 	}
 
-	hw := knowledge.HardwareInfo{GPUArch: "Ada", Platform: "linux/amd64", RuntimeType: "native"}
+	hw := knowledge.HardwareInfo{GPUArch: "Ada", Platform: "linux/arm64", RuntimeType: "native"}
 	merged := resolveCatalogWithLocalEngineOverlay(ctx, cat, db, hw, t.TempDir())
 	if merged == nil {
 		t.Fatal("merged catalog is nil")
@@ -567,6 +567,9 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 	}
 	if got := resolved.Source.Binary; got != filepath.Base(binaryPath) {
 		t.Fatalf("resolved source binary = %q, want %q", got, filepath.Base(binaryPath))
+	}
+	if !resolved.Source.Supports("linux/arm64") {
+		t.Fatalf("resolved source does not support the locally discovered platform: %+v", resolved.Source.Platforms)
 	}
 	if strings.TrimSpace(resolved.EngineImage) != "" {
 		t.Fatalf("resolved engine image = %q, want empty for native overlay", resolved.EngineImage)

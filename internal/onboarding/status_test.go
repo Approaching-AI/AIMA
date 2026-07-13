@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/mcp"
 )
 
@@ -38,6 +39,23 @@ func TestBuildStatus_NoConfig(t *testing.T) {
 	}
 	if status.Hardware.GPU == nil {
 		t.Error("expected hardware.gpu to be non-nil empty slice")
+	}
+}
+
+func TestBuildHardwareIncludesNPU(t *testing.T) {
+	hardware := buildHardware(context.Background(), nil, &hal.HardwareInfo{
+		NPU: &hal.NPUInfo{
+			Vendor: "houmo",
+			Name:   "Houmo XH2A IPU",
+			Driver: "houmo,xh2a",
+			Count:  1,
+		},
+	})
+	if hardware.NPU == nil {
+		t.Fatal("expected NPU in onboarding hardware")
+	}
+	if hardware.NPU.Name != "Houmo XH2A IPU" || hardware.NPU.Driver != "houmo,xh2a" || hardware.NPU.Count != 1 {
+		t.Fatalf("unexpected NPU: %+v", hardware.NPU)
 	}
 }
 

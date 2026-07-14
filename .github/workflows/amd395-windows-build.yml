@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - amd395-win
-  workflow_dispatch:
 
 permissions:
   contents: read

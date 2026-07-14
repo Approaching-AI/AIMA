@@ -74,3 +74,14 @@ grep -F 'CGO_ENABLED=0' "$TMP_DIR/go-record.txt"
 grep -F "Version=$version" "$TMP_DIR/go-record.txt"
 grep -F "BuildTime=$build_time" "$TMP_DIR/go-record.txt"
 grep -F "GitCommit=$commit" "$TMP_DIR/go-record.txt"
+
+if PATH="$TMP_DIR/bin:$PATH" \
+  FAKE_GO_RECORD="$TMP_DIR/short-go-record.txt" \
+  GIT_COMMIT="0123456789ab" \
+  BUILD_TIME="$build_time" \
+  OUTPUT_DIR="$TMP_DIR/short-out" \
+  bash "$ROOT_DIR/scripts/package-amd395-windows.sh"
+then
+  echo "package script accepted a shortened commit instead of a full SHA" >&2
+  exit 1
+fi

@@ -85,7 +85,6 @@ gh pr create --base amd395-win --fill
 
 - Pull Request 的目标分支为 `amd395-win`
 - 代码 push 到 `amd395-win`
-- 在 Actions 页面人工点击 `Run workflow`
 
 流水线会：
 
@@ -95,6 +94,8 @@ gh pr create --base amd395-win --fill
 4. 交叉构建 Windows amd64 EXE。
 5. 验证 SHA-256 和构建元数据。
 6. 上传保留 30 天的 GitHub Actions artifact。
+
+第一阶段不提供 Actions 页面的人工 `Run workflow`。该入口要求 workflow 同时存在于仓库默认分支 `master`；当前通过 PR 更新或 push 到 `amd395-win` 即可触发构建。
 
 artifact 名称格式：
 

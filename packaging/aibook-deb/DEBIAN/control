@@ -1,5 +1,5 @@
 Package: aima-aibook
-Version: 0.4.0+aibook20260510.1
+Version: 0.4.0
 Section: utils
 Priority: optional
 Architecture: arm64

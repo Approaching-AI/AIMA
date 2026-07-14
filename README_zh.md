@@ -1,6 +1,6 @@
 # AIMA
 
-这是 AIMA 的 Mooer/AIBook 定制版。
+这是面向摩尔线程 AIBook 的 AIMA 应用版本。
 
 由 AI 管理的 AI 基础设施。目标是 Ollama 级的 TCO 跑出 vLLM 级的性能，做法是把 AI agent 放进推理回路里。
 
@@ -158,18 +158,20 @@ make aibook-deb
 
 `make aibook-deb` 会用仓库里的 `-ldflags "-s -w ..."` 构建 arm64 二进制，去掉调试信息后再打包。不要直接用普通 `go build` 打 AIBook 包，否则可能把调试信息带进 `.deb`，导致包体积明显变大。
 
+AIBook 登记的产品版本固定为 `v0.4.0`。Debian 包版本会追加打包日期以便区分构建，应用名、包名和进程名分别保持为 `AIMA`、`aima-aibook` 和 `aima`。该版本的 DEB 使用登记的橙色 AIMA 图标。
+
 ### 2. 生成 AIBook 的 `.deb`
 
 默认会在 `build/release/` 下生成一个类似下面名字的包：
 
 ```text
-aima-aibook_0.5-dev+aibookYYYYMMDD.1_arm64.deb
+aima-aibook_0.4.0+aibookYYYYMMDD.1_arm64.deb
 ```
 
 如果你确实需要手动指定版本号，先用 `make aibook-deb` 生成去掉调试信息的 `build/aima-linux-arm64`，再调用打包脚本：
 
 ```bash
-bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.5-dev+aibook20260512.1
+bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.4.0+aibookYYYYMMDD.1
 ```
 
 ### 3. 部署到 AIBook 机器

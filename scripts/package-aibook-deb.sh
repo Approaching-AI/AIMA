@@ -29,9 +29,9 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 if [ -z "$VERSION" ]; then
-  dev_series="$(tr -d '\n' < "$ROOT_DIR/internal/buildinfo/series.txt" 2>/dev/null || echo "v0.5")"
+  product_version="$(tr -d '\n' < "$ROOT_DIR/packaging/aibook-version.txt" 2>/dev/null || echo "v0.4.0")"
   build_date="$(date +%Y%m%d)"
-  VERSION="${dev_series#v}+aibook${build_date}.1"
+  VERSION="${product_version#v}+aibook${build_date}.1"
 fi
 
 case "$VERSION" in

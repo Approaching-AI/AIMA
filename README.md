@@ -1,6 +1,6 @@
 # AIMA
 
-This repository is the Mooer/AIBook customized edition of AIMA.
+This repository contains the AIMA application package for Moore Threads AIBook.
 
 AI Infrastructure, managed by AI.
 
@@ -158,18 +158,20 @@ make aibook-deb
 
 `make aibook-deb` builds the arm64 binary with the repository `-ldflags "-s -w ..."` settings, so debug information is stripped before packaging. Do not use a plain `go build` output for the AIBook package, because it can include debug sections and make the `.deb` much larger.
 
+The registered AIBook product version is `v0.4.0`. The Debian package version appends the build date so builds remain identifiable, while the application name, package name, and process name remain `AIMA`, `aima-aibook`, and `aima`. The package installs the orange AIMA icon registered for this edition.
+
 ### 2. Build the AIBook `.deb`
 
 The package will be written to `build/release/` with a name like:
 
 ```text
-aima-aibook_0.5-dev+aibookYYYYMMDD.1_arm64.deb
+aima-aibook_0.4.0+aibookYYYYMMDD.1_arm64.deb
 ```
 
 If you need to pin the version explicitly, first run `make aibook-deb` to produce the stripped `build/aima-linux-arm64`, then call the packaging script:
 
 ```bash
-bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.5-dev+aibook20260512.1
+bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.4.0+aibookYYYYMMDD.1
 ```
 
 ### 3. Deploy to the target AIBook

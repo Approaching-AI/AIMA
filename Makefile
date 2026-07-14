@@ -2,6 +2,7 @@ MODULE    := github.com/jguan/aima/internal/buildinfo
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDTIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 DEV_SERIES := $(shell tr -d '\n' < internal/buildinfo/series.txt 2>/dev/null || echo "v0.2")
+AIBOOK_VERSION := $(shell tr -d '\n' < packaging/aibook-version.txt 2>/dev/null || echo "v0.4.0")
 EXACT_TAG := $(shell git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
 
 # Only plain vX.Y.Z tags count as product releases. All non-tagged builds belong
@@ -14,6 +15,11 @@ fi)
 
 LDFLAGS := -s -w \
   -X '$(MODULE).Version=$(VERSION)' \
+  -X '$(MODULE).BuildTime=$(BUILDTIME)' \
+  -X '$(MODULE).GitCommit=$(COMMIT)'
+
+AIBOOK_LDFLAGS := -s -w \
+  -X '$(MODULE).Version=$(AIBOOK_VERSION)' \
   -X '$(MODULE).BuildTime=$(BUILDTIME)' \
   -X '$(MODULE).GitCommit=$(COMMIT)'
 
@@ -38,8 +44,8 @@ release-assets:
 
 ## aibook-deb: Build the Moore Threads AIBook arm64 deb package with systemd service and desktop launcher
 aibook-deb:
-	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(BUILDDIR)/aima-linux-arm64 ./cmd/aima
-	bash ./scripts/package-aibook-deb.sh "$(BUILDDIR)/aima-linux-arm64" "$(patsubst v%,%,$(VERSION))+aibook$(shell date +%Y%m%d).1" "$(BUILDDIR)/release"
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(AIBOOK_LDFLAGS)" -o $(BUILDDIR)/aima-linux-arm64 ./cmd/aima
+	bash ./scripts/package-aibook-deb.sh "$(BUILDDIR)/aima-linux-arm64" "$(patsubst v%,%,$(AIBOOK_VERSION))+aibook$(shell date +%Y%m%d).1" "$(BUILDDIR)/release"
 
 ## icon-assets: Regenerate favicon, desktop icons, and macOS icns from the square app icon SVG
 icon-assets:

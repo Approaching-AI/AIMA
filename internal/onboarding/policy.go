@@ -11,7 +11,8 @@ import (
 // Production wiring loads it from catalog/onboarding-policy.yaml; tests and
 // alternate embeddings can inject a policy through Deps.
 type FirstRunPolicy struct {
-	NativeGuardrail NativeFirstRunGuardrail `yaml:"native_guardrail" json:"native_guardrail"`
+	RecommendationAllowlists map[string][]string     `yaml:"recommendation_allowlists,omitempty" json:"recommendation_allowlists,omitempty"`
+	NativeGuardrail          NativeFirstRunGuardrail `yaml:"native_guardrail" json:"native_guardrail"`
 }
 
 type NativeFirstRunGuardrail struct {
@@ -62,6 +63,20 @@ func effectiveFirstRunPolicy(deps *Deps) FirstRunPolicy {
 }
 
 func (p FirstRunPolicy) validate() error {
+	for profile, models := range p.RecommendationAllowlists {
+		if strings.TrimSpace(profile) == "" {
+			return fmt.Errorf("first_run.recommendation_allowlists contains an empty hardware profile")
+		}
+		if len(models) == 0 {
+			return fmt.Errorf("first_run.recommendation_allowlists.%s must contain at least one model", profile)
+		}
+		for i, model := range models {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("first_run.recommendation_allowlists.%s[%d] must not be empty", profile, i)
+			}
+		}
+	}
+
 	guardrail := p.NativeGuardrail
 	if guardrail.Disabled {
 		return nil
@@ -95,4 +110,19 @@ func (p FirstRunPolicy) validate() error {
 		}
 	}
 	return nil
+}
+
+func (p FirstRunPolicy) allowsRecommendation(hardwareProfile, modelName string) bool {
+	for profile, models := range p.RecommendationAllowlists {
+		if !strings.EqualFold(strings.TrimSpace(profile), strings.TrimSpace(hardwareProfile)) {
+			continue
+		}
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(modelName)) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }

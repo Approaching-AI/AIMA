@@ -4,6 +4,12 @@ metadata:
   description: First-run recommendation guardrails for local/native onboarding.
 
 first_run:
+  recommendation_allowlists:
+    moore-threads-m1000-soc-arm64:
+      - qwen3-8b
+      - qwen3-emb-0.6b
+      - funasr-paraformer-onnx
+      - litetts-mnn
   native_guardrail:
     wildcard_gpu_arch: "*"
     skip_discrete_accelerators: true

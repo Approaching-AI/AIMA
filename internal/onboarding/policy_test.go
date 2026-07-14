@@ -6,6 +6,9 @@ func TestParseFirstRunPolicyYAMLAllowsBooleanOverrides(t *testing.T) {
 	policy, err := ParseFirstRunPolicyYAML([]byte(`
 kind: onboarding_policy
 first_run:
+  recommendation_allowlists:
+    moore-threads-m1000-soc-arm64:
+      - qwen3-8b
   native_guardrail:
     wildcard_gpu_arch: "*"
     skip_discrete_accelerators: false
@@ -25,6 +28,10 @@ first_run:
 	}
 	if policy.NativeGuardrail.MaxPenalty != 7 {
 		t.Fatalf("max_penalty = %d, want 7", policy.NativeGuardrail.MaxPenalty)
+	}
+	models := policy.RecommendationAllowlists["moore-threads-m1000-soc-arm64"]
+	if len(models) != 1 || models[0] != "qwen3-8b" {
+		t.Fatalf("recommendation allowlist = %#v, want [qwen3-8b]", models)
 	}
 }
 

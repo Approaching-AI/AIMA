@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	catalogfs "github.com/jguan/aima/catalog"
 	"github.com/jguan/aima/internal/knowledge"
 )
 
@@ -584,5 +585,146 @@ func TestRecommend_EmptyCatalog(t *testing.T) {
 	}
 	if len(result.Recommendations) != 0 {
 		t.Errorf("recommendations length = %d, want 0", len(result.Recommendations))
+	}
+}
+
+func TestIsOnboardingRecommendableModel(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelClass string
+		want       bool
+	}{
+		{name: "unspecified class", want: true},
+		{name: "dense model", modelClass: "dense", want: true},
+		{name: "component model", modelClass: "component", want: false},
+		{name: "normalized component model", modelClass: " Component ", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ma := &knowledge.ModelAsset{}
+			ma.Metadata.ModelClass = tt.modelClass
+			if got := isOnboardingRecommendableModel(ma, "", FirstRunPolicy{}); got != tt.want {
+				t.Fatalf("isOnboardingRecommendableModel(%q) = %v, want %v", tt.modelClass, got, tt.want)
+			}
+		})
+	}
+
+	if isOnboardingRecommendableModel(nil, "", FirstRunPolicy{}) {
+		t.Fatal("isOnboardingRecommendableModel(nil) = true, want false")
+	}
+
+	policy := FirstRunPolicy{RecommendationAllowlists: map[string][]string{
+		"moore-threads-m1000-soc-arm64": {"qwen3-8b"},
+	}}
+	ma := &knowledge.ModelAsset{}
+	ma.Metadata.Name = "qwen3-8b"
+	if !isOnboardingRecommendableModel(ma, "moore-threads-m1000-soc-arm64", policy) {
+		t.Fatal("allowlisted AIBook model was rejected")
+	}
+	ma.Metadata.Name = "qwen3-30b-a3b"
+	if isOnboardingRecommendableModel(ma, "moore-threads-m1000-soc-arm64", policy) {
+		t.Fatal("non-allowlisted AIBook model was accepted")
+	}
+	if !isOnboardingRecommendableModel(ma, "nvidia-rtx4090-x86", policy) {
+		t.Fatal("AIBook allowlist affected another hardware profile")
+	}
+}
+
+func TestRecommend_ExcludesComponentModels(t *testing.T) {
+	cat, err := knowledge.LoadCatalog(catalogfs.FS)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	var mooer knowledge.ModelAsset
+	found := false
+	for i := range cat.ModelAssets {
+		if cat.ModelAssets[i].Metadata.Name == "mooer-asr-1.5b" {
+			mooer = cat.ModelAssets[i]
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("mooer-asr-1.5b is missing from the catalog fixture")
+	}
+	cat.ModelAssets = []knowledge.ModelAsset{mooer}
+
+	deps := &Deps{
+		Cat: cat,
+		BuildHardwareInfo: func(context.Context) knowledge.HardwareInfo {
+			return knowledge.HardwareInfo{
+				GPUArch:       "MUSA",
+				GPUVRAMMiB:    31778,
+				GPUCount:      1,
+				UnifiedMemory: true,
+				CPUArch:       "arm64",
+				Platform:      "linux/arm64",
+				RuntimeType:   "native",
+			}
+		},
+	}
+
+	result, err := Recommend(context.Background(), deps, "zh")
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(result.Recommendations) != 0 {
+		t.Fatalf("component recommendations = %#v, want none", result.Recommendations)
+	}
+}
+
+func TestRecommend_AIBookReturnsOnlyValidatedModels(t *testing.T) {
+	cat, err := knowledge.LoadCatalog(catalogfs.FS)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	want := map[string]bool{
+		"qwen3-8b":               true,
+		"qwen3-emb-0.6b":         true,
+		"funasr-paraformer-onnx": true,
+		"litetts-mnn":            true,
+	}
+	deps := &Deps{
+		Cat: cat,
+		FirstRunPolicy: &FirstRunPolicy{RecommendationAllowlists: map[string][]string{
+			"moore-threads-m1000-soc-arm64": {
+				"qwen3-8b",
+				"qwen3-emb-0.6b",
+				"funasr-paraformer-onnx",
+				"litetts-mnn",
+			},
+		}},
+		BuildHardwareInfo: func(context.Context) knowledge.HardwareInfo {
+			return knowledge.HardwareInfo{
+				GPUArch:         "MUSA",
+				GPUVRAMMiB:      31778,
+				GPUCount:        1,
+				UnifiedMemory:   true,
+				CPUArch:         "arm64",
+				Platform:        "linux/arm64",
+				RuntimeType:     "native",
+				HardwareProfile: "moore-threads-m1000-soc-arm64",
+			}
+		},
+	}
+
+	result, err := Recommend(context.Background(), deps, "zh")
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(result.Recommendations) != len(want) {
+		t.Fatalf("recommendation count = %d, want %d: %#v", len(result.Recommendations), len(want), result.Recommendations)
+	}
+	for _, rec := range result.Recommendations {
+		if !want[rec.ModelName] {
+			t.Fatalf("unexpected AIBook recommendation %q", rec.ModelName)
+		}
+		delete(want, rec.ModelName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing AIBook recommendations: %#v", want)
 	}
 }

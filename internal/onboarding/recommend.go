@@ -49,6 +49,7 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	// Step 3: Build lookup maps for installed engines and local models
 	installedEngines, allEngines := buildInstalledEngineMap(ctx, db)
 	localModels := buildLocalModelMap(ctx, db)
+	firstRunPolicy := effectiveFirstRunPolicy(deps)
 
 	// Step 4a: First pass — compute the largest model (by parameter count, in
 	// billions) that actually fits this hardware. The number anchors the
@@ -60,6 +61,9 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	maxFitBillion := 0.0
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
+		if !isOnboardingRecommendableModel(ma, hwProfile, firstRunPolicy) {
+			continue
+		}
 		_, variant, _, err := cat.ResolveVariantForPull(ma.Metadata.Name, hwInfo)
 		if err != nil || variant == nil {
 			continue
@@ -81,9 +85,11 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	// Step 4b: Second pass — evaluate every model with the new spread-wide
 	// scoring formula (modality bonus, recency bonus, largest-fittable bonus).
 	var recs []ModelRecommendation
-	firstRunPolicy := effectiveFirstRunPolicy(deps)
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
+		if !isOnboardingRecommendableModel(ma, hwProfile, firstRunPolicy) {
+			continue
+		}
 
 		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, allEngines, localModels, locale, maxFitBillion, firstRunPolicy)
 		if !ok {
@@ -125,6 +131,19 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 		TotalModels:     len(cat.ModelAssets),
 		Recommendations: recs,
 	}, nil
+}
+
+// isOnboardingRecommendableModel mirrors the deployable-model filter in the
+// main UI. Component assets belong to an application's internal stack and must
+// not be offered as standalone first-run deployments.
+func isOnboardingRecommendableModel(ma *knowledge.ModelAsset, hwProfile string, policy FirstRunPolicy) bool {
+	if ma == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(ma.Metadata.ModelClass), "component") {
+		return false
+	}
+	return policy.allowsRecommendation(hwProfile, ma.Metadata.Name)
 }
 
 // evaluateModelAsset checks whether a single model asset is compatible with the

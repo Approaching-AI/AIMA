@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestLoadOnboardingFirstRunPolicyFromCatalog(t *testing.T) {
 	policy := loadOnboardingFirstRunPolicy()
@@ -19,5 +22,10 @@ func TestLoadOnboardingFirstRunPolicyFromCatalog(t *testing.T) {
 	}
 	if len(guardrail.ParameterCountPenalties) == 0 {
 		t.Fatal("parameter_count_penalties is empty")
+	}
+	wantModels := []string{"qwen3-8b", "qwen3-emb-0.6b", "funasr-paraformer-onnx", "litetts-mnn"}
+	gotModels := policy.RecommendationAllowlists["moore-threads-m1000-soc-arm64"]
+	if !reflect.DeepEqual(gotModels, wantModels) {
+		t.Fatalf("AIBook recommendation allowlist = %#v, want %#v", gotModels, wantModels)
 	}
 }

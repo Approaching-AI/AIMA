@@ -13,8 +13,8 @@ fi
 
 version="${series}-dev"
 git_commit="${GIT_COMMIT:-$(git rev-parse HEAD)}"
-if [[ ! "$git_commit" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
-  echo "GIT_COMMIT must be a 12-64 character hexadecimal commit: $git_commit" >&2
+if [[ ! "$git_commit" =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]]; then
+  echo "GIT_COMMIT must be a full 40 or 64 character hexadecimal commit: $git_commit" >&2
   exit 1
 fi
 

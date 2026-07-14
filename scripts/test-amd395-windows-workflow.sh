@@ -11,7 +11,6 @@ required_contract=(
   'name: AMD395 Windows Build'
   'pull_request:'
   'push:'
-  'workflow_dispatch:'
   '- amd395-win'
   'contents: read'
   'github.event.pull_request.head.sha || github.sha'

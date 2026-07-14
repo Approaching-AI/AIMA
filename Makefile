@@ -59,6 +59,7 @@ first-run-smoke:
 ## amd395-build-test: Verify AMD395 package and workflow contracts
 amd395-build-test:
 	bash ./scripts/test-package-amd395-windows.sh
+	go test ./internal/ci
 	bash ./scripts/test-amd395-windows-workflow.sh
 
 ## version-audit: Show product tags vs legacy product-like tags

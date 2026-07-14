@@ -41,9 +41,10 @@
 
 - Pull Request 的目标分支为 `amd395-win`
 - Push 到 `amd395-win`
-- 人工 `workflow_dispatch`
 
 工作流只需要 `contents: read` 权限，不使用仓库 secret。相同 ref 上的新运行会取消旧运行，避免为已经过时的提交继续消耗构建资源。
+
+第一阶段不配置 `workflow_dispatch`。GitHub 要求可人工触发的 workflow 文件存在于默认分支，而本工作流只交付到 `amd395-win`；如后续也将 dispatcher 合入默认分支，再单独增加人工触发入口。
 
 ## CI 流程
 

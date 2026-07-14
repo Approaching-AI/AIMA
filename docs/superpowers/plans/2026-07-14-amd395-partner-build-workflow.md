@@ -15,7 +15,8 @@
 - Create: `scripts/package-amd395-windows.sh` — Windows amd64 构建、命名、SHA-256 和 JSON 元数据的唯一实现。
 - Create: `scripts/test-package-amd395-windows.sh` — 使用假的 `go` 命令隔离测试打包脚本契约。
 - Create: `scripts/test-amd395-windows-workflow.sh` — 静态验证 workflow 的触发器、安全权限、构建和上传契约。
-- Create: `.github/workflows/amd395-windows-build.yml` — PR、分支 push 和人工触发的自动构建。
+- Create: `internal/ci/workflow_test.go` — 结构化解析 workflow YAML，精确验证触发分支、权限、checkout ref 和上传配置。
+- Create: `.github/workflows/amd395-windows-build.yml` — PR 和分支 push 的自动构建。
 - Modify: `Makefile` — 增加统一的本地/CI 契约测试入口。
 - Create: `docs/amd395-partner-build.md` — 合作方源码修改、artifact 下载、干净配置和真机验收操作手册。
 
@@ -118,12 +119,13 @@ git commit -m "build: add traceable AMD395 Windows package"
 
 **Files:**
 - Create: `scripts/test-amd395-windows-workflow.sh`
+- Create: `internal/ci/workflow_test.go`
 - Create: `.github/workflows/amd395-windows-build.yml`
 - Modify: `Makefile`
 
 - [ ] **Step 1: 写 workflow 失败测试**
 
-测试用固定字符串断言以下不可省略的契约：PR/push 只面向 `amd395-win`、支持人工触发、只读权限、PR 构建检出 head SHA、运行全量 Go 测试和打包契约测试、调用统一打包脚本、验证校验和、上传 artifact 30 天且缺文件时报错。
+测试用固定字符串断言以下不可省略的命令和 action。`internal/ci/workflow_test.go` 同时结构化解析 YAML，精确断言触发器只有 `pull_request`/`push`、两者 branches 都严格等于 `[amd395-win]`，并验证只读权限、checkout `with.ref` 与 `GIT_COMMIT` 使用同一个 PR head/push SHA 表达式。
 
 ```bash
 #!/usr/bin/env bash
@@ -135,7 +137,6 @@ for expected in \
   'name: AMD395 Windows Build' \
   'pull_request:' \
   'push:' \
-  'workflow_dispatch:' \
   '- amd395-win' \
   'contents: read' \
   'github.event.pull_request.head.sha || github.sha' \
@@ -165,6 +166,7 @@ Expected: FAIL at `test -f`。
 ## amd395-build-test: Verify AMD395 package and workflow contracts
 amd395-build-test:
 	bash ./scripts/test-package-amd395-windows.sh
+	go test ./internal/ci
 	bash ./scripts/test-amd395-windows-workflow.sh
 ```
 

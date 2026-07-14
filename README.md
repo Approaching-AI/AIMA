@@ -175,9 +175,10 @@ bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.5-dev+aibook20260512
 ### 3. Deploy to the target AIBook
 
 ```bash
-scp build/release/aima-aibook_0.5-dev+aibook20260512.1_arm64.deb aibook@192.168.109.142:/tmp/
+AIMA_DEB=$(ls -1t build/release/aima-aibook_*_arm64.deb | head -n 1)
+scp "$AIMA_DEB" aibook@192.168.109.142:/tmp/aima-aibook_arm64.deb
 ssh aibook@192.168.109.142
-sudo dpkg -i /tmp/aima-aibook_0.5-dev+aibook20260512.1_arm64.deb
+sudo dpkg -i /tmp/aima-aibook_arm64.deb
 ```
 
 ### 4. Verify the install
@@ -203,7 +204,7 @@ Expected results:
 The current AIBook package supports in-place upgrades:
 
 ```bash
-sudo dpkg -i new-aima-aibook_xxx_arm64.deb
+sudo dpkg -i ./aima-aibook_*_arm64.deb
 ```
 
 During upgrade it will:

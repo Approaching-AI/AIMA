@@ -175,9 +175,10 @@ bash scripts/package-aibook-deb.sh build/aima-linux-arm64 0.5-dev+aibook20260512
 ### 3. 部署到 AIBook 机器
 
 ```bash
-scp build/release/aima-aibook_0.5-dev+aibook20260512.1_arm64.deb aibook@192.168.109.142:/tmp/
+AIMA_DEB=$(ls -1t build/release/aima-aibook_*_arm64.deb | head -n 1)
+scp "$AIMA_DEB" aibook@192.168.109.142:/tmp/aima-aibook_arm64.deb
 ssh aibook@192.168.109.142
-sudo dpkg -i /tmp/aima-aibook_0.5-dev+aibook20260512.1_arm64.deb
+sudo dpkg -i /tmp/aima-aibook_arm64.deb
 ```
 
 ### 4. 安装后的校验
@@ -203,7 +204,7 @@ curl -s http://127.0.0.1:6188/ui/api/onboarding-manifest | jq '.default_locale'
 现在 AIBook 的 `.deb` 支持直接覆盖升级，不需要先卸载旧版：
 
 ```bash
-sudo dpkg -i 新版-aima-aibook_xxx_arm64.deb
+sudo dpkg -i ./aima-aibook_*_arm64.deb
 ```
 
 升级时会自动：

@@ -193,7 +193,7 @@ PY
 
 Run: `make amd395-build-test`
 
-Expected: 两个 shell 测试全部 exit 0。
+Expected: 打包 shell 测试、结构化 workflow Go 测试和 workflow shell 测试三项全部通过。
 
 - [ ] **Step 6: 提交 workflow 和测试入口**
 

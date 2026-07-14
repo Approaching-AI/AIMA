@@ -416,6 +416,27 @@ func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *t
 	}
 }
 
+func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-windows" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-windows engine not found in catalog")
+	}
+	const want = "prune_interval=1h:prune_after=168h:cache_size=0%:cache_size_bytes=0:cache_size_files=100000"
+	if got := engine.Startup.Env["AMD_COMGR_CACHE_POLICY"]; got != want {
+		t.Fatalf("AMD_COMGR_CACHE_POLICY = %q, want %q", got, want)
+	}
+}
+
 func TestScenarioNewFields(t *testing.T) {
 	cat, err := LoadCatalog(catalogFS())
 	if err != nil {

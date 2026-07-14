@@ -28,6 +28,14 @@ runtime:
   default: "native"
   platform_recommendations:
     windows/amd64: "native"
+startup:
+  env:
+    # Radeon 3679's amd_comgr_3.dll uses an ANSI disk-space API while pruning
+    # its compiler cache. A cache path containing characters outside the active
+    # Windows code page can therefore abort the process with
+    # "LLVM ERROR: Can't get available size". Keep the cache, but prune it only
+    # by age and file count so COMGR never calls the affected disk-space path.
+    AMD_COMGR_CACHE_POLICY: "prune_interval=1h:prune_after=168h:cache_size=0%:cache_size_bytes=0:cache_size_files=100000"
 source:
   binary: "llama-server"
   # Native binary only — official llama.cpp Windows ROCm/HIP release. Self-contained

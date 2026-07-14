@@ -2,7 +2,7 @@ MODULE    := github.com/jguan/aima/internal/buildinfo
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDTIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 DEV_SERIES := $(shell tr -d '\n' < internal/buildinfo/series.txt 2>/dev/null || echo "v0.2")
-AIBOOK_VERSION := $(shell tr -d '\n' < packaging/aibook-version.txt 2>/dev/null || echo "v0.4.0")
+AIBOOK_VERSION := $(shell tr -d '\n' < packaging/aibook-version.txt 2>/dev/null || echo "v0.4.1")
 EXACT_TAG := $(shell git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
 
 # Only plain vX.Y.Z tags count as product releases. All non-tagged builds belong

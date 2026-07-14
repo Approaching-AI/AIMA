@@ -29,7 +29,7 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 if [ -z "$VERSION" ]; then
-  product_version="$(tr -d '\n' < "$ROOT_DIR/packaging/aibook-version.txt" 2>/dev/null || echo "v0.4.0")"
+  product_version="$(tr -d '\n' < "$ROOT_DIR/packaging/aibook-version.txt" 2>/dev/null || echo "v0.4.1")"
   build_date="$(date +%Y%m%d)"
   VERSION="${product_version#v}+aibook${build_date}.1"
 fi

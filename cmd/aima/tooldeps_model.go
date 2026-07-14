@@ -139,6 +139,43 @@ func firstCatalogFormat(ma *knowledge.ModelAsset) string {
 	return ""
 }
 
+func isDeployableModelRecord(m *state.Model) bool {
+	if m == nil || strings.TrimSpace(m.Name) == "" {
+		return false
+	}
+	modelType := strings.ToLower(strings.TrimSpace(m.Type))
+	format := strings.ToLower(strings.TrimSpace(m.Format))
+	modelClass := strings.ToLower(strings.TrimSpace(m.ModelClass))
+
+	if modelType == "llm" || modelType == "embedding" {
+		return true
+	}
+	if (modelType == "asr" || modelType == "tts") && modelClass == "pipeline" {
+		return true
+	}
+	if format == "gguf" {
+		return true
+	}
+	if format == "safetensors" && (modelClass == "dense" || modelClass == "moe" || modelClass == "hybrid") {
+		return true
+	}
+	return (format == "onnx" || format == "mnn") && modelClass == "pipeline"
+}
+
+func listDeployableModelRecords(ctx context.Context, db *state.DB) ([]*state.Model, error) {
+	models, err := db.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	deployable := make([]*state.Model, 0, len(models))
+	for _, m := range models {
+		if isDeployableModelRecord(m) {
+			deployable = append(deployable, m)
+		}
+	}
+	return deployable, nil
+}
+
 // buildModelDeps wires model.scan, model.list, model.pull, model.import,
 // model.info, and model.remove tools.
 func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
@@ -178,7 +215,11 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 		}
 		_ = registerCatalogLocalModels(ctx, cat, db)
-		return json.Marshal(models)
+		deployable, err := listDeployableModelRecords(ctx, db)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(deployable)
 	}
 
 	deps.ListModels = func(ctx context.Context) (json.RawMessage, error) {

@@ -97,6 +97,7 @@ config:
       config_files: ["configuration.json"]
       weight_exts: [".onnx"]
       format: "onnx"
+      model_class_hint: "component"
       skip_min_size: true
       task_mappings:
         "speech-recognition": "asr"

@@ -19,7 +19,7 @@ LDFLAGS := -s -w \
 
 BUILDDIR := build
 
-.PHONY: build all clean first-run-smoke version-audit bundle-tag release-assets publish-release-assets icon-assets windows-syso
+.PHONY: build all clean first-run-smoke amd395-build-test version-audit bundle-tag release-assets publish-release-assets icon-assets windows-syso
 
 ## build: Build for the current platform
 build:
@@ -55,6 +55,11 @@ clean:
 ## first-run-smoke: Verify the clean first-run path without live deployment
 first-run-smoke:
 	bash ./scripts/first-run-smoke.sh
+
+## amd395-build-test: Verify AMD395 package and workflow contracts
+amd395-build-test:
+	bash ./scripts/test-package-amd395-windows.sh
+	bash ./scripts/test-amd395-windows-workflow.sh
 
 ## version-audit: Show product tags vs legacy product-like tags
 version-audit:

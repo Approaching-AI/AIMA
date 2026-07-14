@@ -143,7 +143,7 @@ for expected in \
   'make amd395-build-test' \
   'bash ./scripts/package-amd395-windows.sh' \
   'sha256sum -c checksums.txt' \
-  'uses: actions/upload-artifact@v4' \
+  'uses: actions/upload-artifact@v7' \
   'retention-days: 30' \
   'if-no-files-found: error'
 do
@@ -170,7 +170,7 @@ amd395-build-test:
 
 - [ ] **Step 4: 实现 GitHub Actions workflow**
 
-工作流使用 `actions/checkout@v4`、`actions/setup-go@v5` 和 `actions/upload-artifact@v4`。checkout 的 `ref` 必须是 `${{ github.event.pull_request.head.sha || github.sha }}`，确保 artifact 内元数据和实际构建源码一致。打包步骤把同一个 SHA 传入 `GIT_COMMIT`，输出目录固定为 `dist/amd395-windows`。验证步骤运行：
+工作流使用 `actions/checkout@v6`、`actions/setup-go@v6` 和 `actions/upload-artifact@v7`。checkout 的 `ref` 必须是 `${{ github.event.pull_request.head.sha || github.sha }}`，确保 artifact 内元数据和实际构建源码一致。打包步骤把同一个 SHA 传入 `GIT_COMMIT`，输出目录固定为 `dist/amd395-windows`。验证步骤运行：
 
 ```bash
 cd dist/amd395-windows

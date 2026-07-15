@@ -437,6 +437,56 @@ func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
 	}
 }
 
+func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-linux" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-linux engine not found in catalog")
+	}
+	if engine.Metadata.Version != "b9330" {
+		t.Fatalf("version = %q, want b9330", engine.Metadata.Version)
+	}
+	if engine.Source == nil || !engine.Source.Supports("linux/amd64") {
+		t.Fatal("llamacpp-hip-linux does not support linux/amd64")
+	}
+	if engine.Source.Supports("windows/amd64") {
+		t.Fatal("llamacpp-hip-linux unexpectedly supports windows/amd64")
+	}
+	wantURL := "https://github.com/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-ubuntu-rocm-7.2-x64.tar.gz"
+	if got := engine.Source.Download["linux/amd64"]; got != wantURL {
+		t.Fatalf("download URL = %q, want %q", got, wantURL)
+	}
+
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch:         "RDNA3.5",
+		GPUVRAMMiB:      65536,
+		GPUCount:        1,
+		UnifiedMemory:   true,
+		CPUArch:         "amd64",
+		CPUCores:        16,
+		RAMTotalMiB:     65536,
+		HardwareProfile: "amd-radeon-8060s-x86",
+		Platform:        "linux/amd64",
+		RuntimeType:     "native",
+	}, "qwen3.6-35b-a3b", "llamacpp", map[string]any{})
+	if err != nil {
+		t.Fatalf("resolve AMD395 Linux config: %v", err)
+	}
+	if resolved.EngineAssetName != "llamacpp-hip-linux" {
+		t.Fatalf("engine asset = %q, want llamacpp-hip-linux", resolved.EngineAssetName)
+	}
+}
+
 func TestScenarioNewFields(t *testing.T) {
 	cat, err := LoadCatalog(catalogFS())
 	if err != nil {

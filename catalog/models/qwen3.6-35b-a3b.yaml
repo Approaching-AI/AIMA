@@ -66,8 +66,9 @@ variants:
       # (common.cpp "failed to remove sequence ... p0=10", e.g. the deploy warmup's
       # 2nd identical request) -> deploy fails. Upstream fixed it by b9330; verified
       # same-machine A/B (Strix Halo HIP): b9196 CRASHES, b9330 SURVIVES, identical
-      # command. AIMA auto-downloads b9330 (engine llamacpp-hip-windows); if you pin
-      # AIMA_ENGINE_DIR to your own build, it MUST be b9330+. No --no-cache-prompt
+      # command. AIMA auto-downloads b9330 (llamacpp-hip-windows on Windows or
+      # llamacpp-hip-linux on Linux); if you pin AIMA_ENGINE_DIR to your own
+      # build, it MUST be b9330+. No --no-cache-prompt
       # workaround is needed on b9330 (keeps prompt cache = full speed).
     expected_performance:
       startup_time_s: 30

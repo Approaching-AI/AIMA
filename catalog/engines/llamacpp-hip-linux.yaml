@@ -1,0 +1,38 @@
+kind: engine_asset
+_profile: llamacpp
+metadata:
+  name: llamacpp-hip-linux
+  type: llamacpp
+  version: "b9330"
+  supported_model_types: [llm, vlm, embedding]
+hardware:
+  # AMD Ryzen AI Max+ 395 "Strix Halo" Radeon 8060S iGPU (gfx1151).
+  # The native resolver skips this asset on non-Linux hosts, so Linux selects
+  # the ROCm build while Windows continues to select llamacpp-hip-windows.
+  gpu_arch: RDNA3.5
+  vram_min_mib: 0
+amplifier:
+  features:
+    - rocm_hip_offload
+  performance_gain: "AMD ROCm/HIP GPU offload on Strix Halo (RDNA3.5), all layers on the iGPU"
+time_constraints:
+  cold_start_s: [5, 30]
+  model_switch_s: [5, 30]
+power_constraints:
+  typical_draw_watts: [20, 90]
+runtime:
+  default: "native"
+  platform_recommendations:
+    linux/amd64: "native"
+source:
+  binary: "llama-server"
+  # Official llama.cpp ROCm 7.2 package. The target AMD395 Linux image ships
+  # ROCm 7.2.x, so no local engine build or AIMA_ENGINE_DIR is required.
+  platforms: [linux/amd64]
+  url_template: "https://github.com/ggml-org/llama.cpp/releases/download/{version}/llama-{version}-bin-{platform_file}"
+  platform_files:
+    linux/amd64: "ubuntu-rocm-7.2-x64.tar.gz"
+  mirror_templates:
+    - "https://ghfast.top/{url}"
+    - "https://cf.ghproxy.cc/{url}"
+    - "https://gh-proxy.com/{url}"

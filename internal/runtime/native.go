@@ -545,8 +545,9 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	}
 
 	persisted := r.metaToStatus(meta)
+	ignorePersistedFailure := persisted.Phase == "failed" && status.Phase != "failed" && !exited
 	switch {
-	case persisted.Phase == "failed" && status.Phase != "failed" && !(isStalePortReuseFailure(persisted.Message) && !exited):
+	case persisted.Phase == "failed" && status.Phase != "failed" && exited:
 		return persisted
 	}
 
@@ -563,14 +564,10 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	if status.ErrorLines == "" {
 		status.ErrorLines = persisted.ErrorLines
 	}
-	if status.Message == "" && !(status.Phase != "failed" && isStalePortReuseFailure(persisted.Message)) {
+	if status.Message == "" && !ignorePersistedFailure {
 		status.Message = persisted.Message
 	}
 	return status
-}
-
-func isStalePortReuseFailure(msg string) bool {
-	return msg == "deployment metadata is stale; port is in use by another process"
 }
 
 func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (string, error) {

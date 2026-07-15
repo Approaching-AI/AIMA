@@ -783,6 +783,7 @@ func TestStatusPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 		logPath:   logPath,
 		labels:    map[string]string{"aima.dev/engine": "vllm"},
 		startTime: time.Now(),
+		exited:    true,
 	}
 
 	meta := &deploymentMeta{
@@ -811,6 +812,42 @@ func TestStatusPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 	}
 }
 
+func TestStatusDoesNotOverrideLiveStartingProcessWithPersistedFailure(t *testing.T) {
+	rt := newTestRuntime(t)
+	logPath := filepath.Join(t.TempDir(), "slow-start.log")
+	if err := os.WriteFile(logPath, []byte("INFO still loading\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	proc := &nativeProcess{
+		name:      "slow-start",
+		port:      freeTCPPort(t),
+		startTime: time.Now(),
+		logPath:   logPath,
+	}
+	rt.processes[proc.name] = proc
+	if err := rt.saveMeta(&deploymentMeta{
+		Name:      proc.name,
+		PID:       999999,
+		Port:      proc.port,
+		Command:   []string{"llama-server", "--port", strconv.Itoa(proc.port)},
+		StartTime: proc.startTime,
+		LogPath:   logPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := rt.Status(context.Background(), proc.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "starting" {
+		t.Fatalf("phase = %q, want starting", status.Phase)
+	}
+	if status.Message == "process exited before readiness" {
+		t.Fatalf("live startup inherited false persisted failure: %#v", status)
+	}
+}
+
 func TestListPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 	rt := newTestRuntime(t)
 
@@ -825,6 +862,7 @@ func TestListPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 		logPath:   logPath,
 		labels:    map[string]string{"aima.dev/engine": "vllm"},
 		startTime: time.Now(),
+		exited:    true,
 	}
 
 	meta := &deploymentMeta{

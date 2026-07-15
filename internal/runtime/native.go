@@ -790,14 +790,14 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 // before model weights are loaded, so TCP alive does NOT mean ready to serve.
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
-	processMatches := meta.PID <= 0 || processMatchesMeta(meta)
+	processState := processMetaMatching
+	if meta.PID > 0 {
+		processState = processStateForMeta(meta)
+	}
 
-	phase := "running"
+	phase := metaPhaseForProcessState(processState, alive, meta.StartTime, meta.HealthCheckTimeout)
 	ready := false
-	if !processMatches {
-		phase = "failed"
-		ready = false
-	} else if alive {
+	if phase != "failed" && alive {
 		// Port is alive (TCP), but check HTTP health to confirm engine is truly ready.
 		// Look up engine asset for the health check path.
 		engineName := ""
@@ -814,18 +814,6 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		}
 		if !ready {
 			phase = "starting"
-		}
-	} else {
-		timeout := meta.HealthCheckTimeout
-		if timeout == 0 {
-			timeout = 60
-		}
-		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
-			phase = "starting"
-		} else {
-			// Port dead past health check timeout: process crashed or never started.
-			// Intentional stops go through Delete() which removes metadata entirely.
-			phase = "failed"
 		}
 	}
 
@@ -851,11 +839,22 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if !ds.Ready && ds.Phase != "failed" && ds.Phase != "stopped" {
 		r.ensureNativeStartingStatus(ds, meta.StartTime, alive, meta.Labels)
 	}
-	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 && !processMatches {
-		if alive {
+	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 {
+		switch processState {
+		case processMetaStale:
 			ds.Message = "deployment metadata is stale; port is in use by another process"
-		} else {
-			ds.Message = "process exited before readiness"
+		case processMetaExited:
+			if alive {
+				ds.Message = "deployment metadata is stale; port is in use by another process"
+			} else {
+				ds.Message = "process exited before readiness"
+			}
+		default:
+			timeout := meta.HealthCheckTimeout
+			if timeout <= 0 {
+				timeout = 60
+			}
+			ds.Message = fmt.Sprintf("deployment started but not ready within %ds", timeout)
 		}
 	}
 

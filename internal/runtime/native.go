@@ -826,10 +826,13 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 
 // metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness
 // and HTTP health endpoint (not just TCP). vLLM and other engines bind the port early,
-// before model weights are loaded, so TCP alive does NOT mean ready to serve.
+	// before model weights are loaded, so TCP alive does NOT mean ready to serve.
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
-	processMatches := meta.PID <= 0 || processMatchesMeta(meta)
+	processState := processMetaMatching
+	if meta.PID > 0 {
+		processState = processStateForMeta(meta)
+	}
 	healthCheckPath := meta.HealthCheckPath
 	if healthCheckPath == "" {
 		engineName := ""
@@ -844,15 +847,13 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if timeout <= 0 {
 		timeout = 60
 	}
-	healthTimedOut := processMatches && healthCheckPath != "" && !meta.StartTime.IsZero() &&
+	processActive := processState == processMetaMatching || processState == processMetaStarting
+	healthTimedOut := processActive && healthCheckPath != "" && !meta.StartTime.IsZero() &&
 		time.Since(meta.StartTime) >= time.Duration(timeout)*time.Second
 
-	phase := "running"
+	phase := metaPhaseForProcessState(processState, alive, meta.StartTime, meta.HealthCheckTimeout)
 	ready := false
-	if !processMatches {
-		phase = "failed"
-		ready = false
-	} else if alive {
+	if phase != "failed" && alive {
 		// Port is alive (TCP), but check HTTP health to confirm engine is truly ready.
 		if healthCheckPath != "" {
 			ready = httpHealthy(meta.Port, healthCheckPath)
@@ -866,14 +867,6 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 			} else {
 				phase = "starting"
 			}
-		}
-	} else {
-		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
-			phase = "starting"
-		} else {
-			// Port dead past health check timeout: process crashed or never started.
-			// Intentional stops go through Delete() which removes metadata entirely.
-			phase = "failed"
 		}
 	}
 
@@ -899,11 +892,22 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if !ds.Ready && ds.Phase != "failed" && ds.Phase != "stopped" {
 		r.ensureNativeStartingStatus(ds, meta.StartTime, alive, meta.Labels)
 	}
-	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 && !processMatches {
-		if alive {
+	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 {
+		switch processState {
+		case processMetaStale:
 			ds.Message = "deployment metadata is stale; port is in use by another process"
-		} else {
-			ds.Message = "process exited before readiness"
+		case processMetaExited:
+			if alive {
+				ds.Message = "deployment metadata is stale; port is in use by another process"
+			} else {
+				ds.Message = "process exited before readiness"
+			}
+		default:
+			timeout := meta.HealthCheckTimeout
+			if timeout <= 0 {
+				timeout = 60
+			}
+			ds.Message = fmt.Sprintf("deployment started but not ready within %ds", timeout)
 		}
 	}
 	if healthTimedOut && !ds.Ready {

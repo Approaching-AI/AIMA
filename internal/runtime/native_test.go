@@ -551,6 +551,56 @@ func TestMetaToStatusMarksMissingProcessFailed(t *testing.T) {
 	}
 }
 
+func TestClassifyWindowsProcessMetaState(t *testing.T) {
+	tests := []struct {
+		name        string
+		recordedPID int
+		listenerPID int
+		pidAlive    bool
+		want        processMetaState
+	}{
+		{name: "alive before port bind", recordedPID: 101, pidAlive: true, want: processMetaStarting},
+		{name: "owns listener", recordedPID: 101, listenerPID: 101, pidAlive: true, want: processMetaMatching},
+		{name: "different listener", recordedPID: 101, listenerPID: 202, pidAlive: true, want: processMetaStale},
+		{name: "exited before port bind", recordedPID: 101, pidAlive: false, want: processMetaExited},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyWindowsProcessMetaState(tt.recordedPID, tt.listenerPID, tt.pidAlive); got != tt.want {
+				t.Fatalf("state = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMetaPhaseForProcessState(t *testing.T) {
+	started := time.Now()
+	tests := []struct {
+		name      string
+		state     processMetaState
+		portBound bool
+		startedAt time.Time
+		timeoutS  int
+		want      string
+	}{
+		{name: "alive before port bind", state: processMetaStarting, startedAt: started, timeoutS: 60, want: "starting"},
+		{name: "matching before port bind", state: processMetaMatching, startedAt: started, timeoutS: 60, want: "starting"},
+		{name: "listener bound", state: processMetaMatching, portBound: true, startedAt: started, timeoutS: 60, want: "running"},
+		{name: "different listener", state: processMetaStale, portBound: true, startedAt: started, timeoutS: 60, want: "failed"},
+		{name: "process exited", state: processMetaExited, startedAt: started, timeoutS: 60, want: "failed"},
+		{name: "startup timeout", state: processMetaStarting, startedAt: started.Add(-61 * time.Second), timeoutS: 60, want: "failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := metaPhaseForProcessState(tt.state, tt.portBound, tt.startedAt, tt.timeoutS); got != tt.want {
+				t.Fatalf("phase = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMetaToStatusMarksStalePortReuseFailed(t *testing.T) {
 	rt := newTestRuntime(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

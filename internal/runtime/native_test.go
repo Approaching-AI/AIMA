@@ -574,6 +574,29 @@ func TestClassifyWindowsProcessMetaState(t *testing.T) {
 	}
 }
 
+func TestSelectNewProcessPID(t *testing.T) {
+	tests := []struct {
+		name    string
+		before  []int
+		current []int
+		want    int
+	}{
+		{name: "one new process", before: []int{10, 20}, current: []int{10, 20, 30}, want: 30},
+		{name: "reject pre-existing", before: []int{10}, current: []int{10}, want: 0},
+		{name: "reject ambiguity", before: []int{10}, current: []int{10, 20, 30}, want: 0},
+		{name: "ignore invalid PIDs", current: []int{0, -1, 30}, want: 30},
+		{name: "deduplicate current snapshot", before: []int{10}, current: []int{10, 20, 20}, want: 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectNewProcessPID(tt.before, tt.current); got != tt.want {
+				t.Fatalf("pid = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMetaPhaseForProcessState(t *testing.T) {
 	started := time.Now()
 	tests := []struct {

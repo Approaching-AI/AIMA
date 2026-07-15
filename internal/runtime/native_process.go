@@ -38,6 +38,30 @@ func classifyWindowsProcessMetaState(recordedPID, listenerPID int, recordedAlive
 	}
 }
 
+func selectNewProcessPID(before, current []int) int {
+	seen := make(map[int]struct{}, len(before))
+	for _, pid := range before {
+		seen[pid] = struct{}{}
+	}
+	candidates := make(map[int]struct{})
+	for _, pid := range current {
+		if pid <= 0 {
+			continue
+		}
+		if _, exists := seen[pid]; exists {
+			continue
+		}
+		candidates[pid] = struct{}{}
+	}
+	if len(candidates) != 1 {
+		return 0
+	}
+	for pid := range candidates {
+		return pid
+	}
+	return 0
+}
+
 func metaPhaseForProcessState(state processMetaState, portBound bool, startedAt time.Time, timeoutS int) string {
 	if state == processMetaStale || state == processMetaExited {
 		return "failed"

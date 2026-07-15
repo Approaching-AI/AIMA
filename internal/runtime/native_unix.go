@@ -23,12 +23,6 @@ func findProcessPIDByPort(port int) int {
 	return 0
 }
 
-// findProcessPIDByName is not implemented on non-Windows platforms.
-// Process name lookup uses Windows tasklist; on Unix, the caller uses /proc or ps instead.
-func findProcessPIDByName(imageName string) int {
-	return 0
-}
-
 // pidAlive checks if a process with the given PID exists.
 // On non-Windows platforms, conservatively returns true
 // (schtasks-based launching is Windows-only, so this path is not exercised).

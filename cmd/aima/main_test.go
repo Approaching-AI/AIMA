@@ -778,6 +778,12 @@ func TestSummarizeDeploymentFailure(t *testing.T) {
 			want: "process exited before readiness",
 		},
 		{
+			name:       "ignore normal HIP library path",
+			message:    "process exited before readiness",
+			errorLines: `HIP Library Path: C:\Windows\SYSTEM32\amdhip64_7.dll`,
+			want:       "process exited before readiness",
+		},
+		{
 			name:       "fallback to unknown",
 			errorLines: "\n\n",
 			want:       "unknown startup failure",

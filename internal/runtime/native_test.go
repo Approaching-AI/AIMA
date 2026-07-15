@@ -299,6 +299,35 @@ func TestNativeLogsReadTail(t *testing.T) {
 	}
 }
 
+func TestLogsFallsBackToDeterministicPathAfterMetadataRemoval(t *testing.T) {
+	rt := newTestRuntime(t)
+	if err := os.MkdirAll(rt.logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rt.logDir, "failed-model.log"), []byte("engine root cause\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := rt.Logs(context.Background(), "failed-model", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "engine root cause" {
+		t.Fatalf("logs = %q", got)
+	}
+}
+
+func TestLogsFallbackRejectsPathTraversal(t *testing.T) {
+	rt := newTestRuntime(t)
+	for _, name := range []string{"", ".", "..", "../secret", `..\secret`} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := rt.Logs(context.Background(), name, 20); err == nil {
+				t.Fatalf("unsafe name %q was accepted", name)
+			}
+		})
+	}
+}
+
 func TestEffectiveHealthTimeout(t *testing.T) {
 	tests := []struct {
 		name string

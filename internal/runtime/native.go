@@ -582,9 +582,22 @@ func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (str
 	// Try persisted metadata for log path
 	meta, err := r.loadMeta(name)
 	if err != nil {
+		if fallback := nativeFallbackLogPath(r.logDir, name); fallback != "" {
+			if logs, fallbackErr := readTail(fallback, tailLines); fallbackErr == nil {
+				return logs, nil
+			}
+		}
 		return "", fmt.Errorf("deployment %q not found", name)
 	}
 	return readTail(meta.LogPath, tailLines)
+}
+
+func nativeFallbackLogPath(logDir, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return ""
+	}
+	return filepath.Join(logDir, name+".log")
 }
 
 func (r *NativeRuntime) watchProcess(proc *nativeProcess) {

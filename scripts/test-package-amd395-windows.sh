@@ -71,6 +71,7 @@ PY
 grep -F 'GOOS=windows' "$TMP_DIR/go-record.txt"
 grep -F 'GOARCH=amd64' "$TMP_DIR/go-record.txt"
 grep -F 'CGO_ENABLED=0' "$TMP_DIR/go-record.txt"
+grep -F -- '-buildvcs=false' "$TMP_DIR/go-record.txt"
 grep -F "Version=$version" "$TMP_DIR/go-record.txt"
 grep -F "BuildTime=$build_time" "$TMP_DIR/go-record.txt"
 grep -F "GitCommit=$commit" "$TMP_DIR/go-record.txt"

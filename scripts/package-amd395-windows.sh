@@ -33,6 +33,7 @@ ldflags="-s -w -X ${module}.Version=${version} -X ${module}.BuildTime=${build_ti
 mkdir -p "$output_dir"
 
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+  -buildvcs=false \
   -ldflags "$ldflags" \
   -o "$output_dir/$filename" \
   ./cmd/aima

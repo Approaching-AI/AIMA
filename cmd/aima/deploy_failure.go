@@ -325,6 +325,8 @@ func isLowSignalErrorLine(line string) bool {
 		return true
 	case strings.HasPrefix(lower, "error in cpuinfo:"):
 		return true
+	case strings.HasPrefix(lower, "hip library path:"):
+		return true
 	default:
 		return false
 	}

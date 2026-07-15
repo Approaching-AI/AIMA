@@ -852,7 +852,11 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 {
 		switch processState {
 		case processMetaStale:
-			ds.Message = "deployment metadata is stale; port is in use by another process"
+			if alive {
+				ds.Message = "deployment metadata is stale; port is in use by another process"
+			} else {
+				ds.Message = "deployment metadata is stale; process identity does not match"
+			}
 		case processMetaExited:
 			if alive {
 				ds.Message = "deployment metadata is stale; port is in use by another process"

@@ -651,6 +651,24 @@ func TestMetaPhaseForProcessState(t *testing.T) {
 	}
 }
 
+func TestMetaToStatusDoesNotReportPortReuseWhenPortIsUnbound(t *testing.T) {
+	rt := newTestRuntime(t)
+	status := rt.metaToStatus(&deploymentMeta{
+		Name:      "stale-process-identity",
+		PID:       os.Getpid(),
+		Port:      freeTCPPort(t),
+		Command:   []string{"definitely-not-the-current-test-process"},
+		StartTime: time.Now(),
+	})
+
+	if status.Phase != "failed" {
+		t.Fatalf("phase = %q, want failed", status.Phase)
+	}
+	if status.Message != "deployment metadata is stale; process identity does not match" {
+		t.Fatalf("message = %q, want process identity mismatch", status.Message)
+	}
+}
+
 func TestMetaToStatusMarksStalePortReuseFailed(t *testing.T) {
 	rt := newTestRuntime(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

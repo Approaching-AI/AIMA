@@ -297,7 +297,7 @@ func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	}
 }
 
-func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
+func TestWindowsHIPLlamaStartupPolicy(t *testing.T) {
 	cat, err := LoadCatalog(catalogFS())
 	if err != nil {
 		t.Fatalf("LoadCatalog(real FS): %v", err)
@@ -312,6 +312,12 @@ func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
 	}
 	if engine == nil {
 		t.Fatal("llamacpp-hip-windows engine not found in catalog")
+	}
+	if got := engine.Startup.HealthCheck.Path; got != "/health" {
+		t.Fatalf("health_check.path = %q, want inherited /health", got)
+	}
+	if got := engine.Startup.HealthCheck.TimeoutS; got != 180 {
+		t.Fatalf("health_check.timeout_s = %d, want 180", got)
 	}
 
 	const want = "prune_interval=1h:prune_after=168h:cache_size=0%:cache_size_bytes=0:cache_size_files=100000"

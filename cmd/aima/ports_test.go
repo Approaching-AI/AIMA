@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"strconv"
 	"testing"
@@ -35,6 +36,33 @@ func TestAllocateDeploymentPortsAutoRebindsBusyPort(t *testing.T) {
 	}
 	if req.Labels["aima.dev/port"] == "" {
 		t.Fatal("expected primary port label to be populated")
+	}
+}
+
+func TestAllocateDeploymentPortsPreservesPersistedJSONNumber(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	req := &runtime.DeployRequest{
+		Config: map[string]any{"port": json.Number(strconv.Itoa(port))},
+	}
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, nil, nil)
+	if err != nil {
+		t.Fatalf("allocateDeploymentPorts: %v", err)
+	}
+	defer release()
+
+	if got := req.Config["port"]; got != port {
+		t.Fatalf("config.port = %v, want %d", got, port)
+	}
+	if got := req.Labels["aima.dev/port"]; got != strconv.Itoa(port) {
+		t.Fatalf("aima.dev/port = %q, want %d", got, port)
 	}
 }
 

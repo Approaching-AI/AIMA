@@ -89,6 +89,9 @@ func newServeCmd(app *App) *cobra.Command {
 			if err := registerStaticBackends(app.Proxy, staticBackends); err != nil {
 				return err
 			}
+			if app.ServeBackground != nil {
+				go app.ServeBackground(ctx)
+			}
 
 			// Start backend sync loop (reconcile proxy routes with deployments)
 			if app.ToolDeps != nil && app.ToolDeps.DeployList != nil {

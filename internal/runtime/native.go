@@ -36,22 +36,23 @@ type deploymentMeta struct {
 
 // nativeProcess tracks a running inference engine process started in THIS CLI session.
 type nativeProcess struct {
-	name           string
-	cmd            *exec.Cmd // nil when launched via schtasks on Windows
-	pid            int       // Process ID; set even when cmd is nil
-	processGroupID int
-	cancel         context.CancelFunc
-	done           chan struct{}
-	logFile        *os.File
-	logPath        string
-	port           int
-	labels         map[string]string
-	startTime      time.Time
-	startupTimeout time.Duration
-	ready          bool
-	exited         bool
-	exitSuccess    bool // true if process exited with code 0
-	mu             sync.Mutex
+	name            string
+	cmd             *exec.Cmd // nil when launched via schtasks on Windows
+	pid             int       // Process ID; set even when cmd is nil
+	processGroupID  int
+	cancel          context.CancelFunc
+	done            chan struct{}
+	logFile         *os.File
+	logPath         string
+	port            int
+	healthCheckPath string
+	labels          map[string]string
+	startTime       time.Time
+	startupTimeout  time.Duration
+	ready           bool
+	exited          bool
+	exitSuccess     bool // true if process exited with code 0
+	mu              sync.Mutex
 }
 
 // BinaryResolveFunc resolves a native engine binary, downloading if needed.
@@ -296,19 +297,24 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	}
 
 	now := time.Now()
+	healthCheckPath := ""
+	if req.HealthCheck != nil {
+		healthCheckPath = req.HealthCheck.Path
+	}
 	proc := &nativeProcess{
-		name:           req.Name,
-		cmd:            cmd,
-		pid:            procPID,
-		processGroupID: procGroupID,
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		logFile:        procLogFile,
-		logPath:        logPath,
-		port:           primaryPort,
-		labels:         req.Labels,
-		startTime:      now,
-		startupTimeout: effectiveHealthTimeout(req.HealthCheck),
+		name:            req.Name,
+		cmd:             cmd,
+		pid:             procPID,
+		processGroupID:  procGroupID,
+		cancel:          cancel,
+		done:            make(chan struct{}),
+		logFile:         procLogFile,
+		logPath:         logPath,
+		port:            primaryPort,
+		healthCheckPath: healthCheckPath,
+		labels:          req.Labels,
+		startTime:       now,
+		startupTimeout:  effectiveHealthTimeout(req.HealthCheck),
 	}
 
 	r.mu.Lock()
@@ -524,15 +530,19 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 		return status
 	}
 
-	persisted := r.metaToStatus(meta)
 	proc.mu.Lock()
 	exited := proc.exited
 	proc.mu.Unlock()
-	ignorePersistedFailure := persisted.Phase == "failed" && status.Phase != "failed" && !exited
+	if !exited {
+		if len(status.Config) == 0 && len(meta.Config) > 0 {
+			status.Config = cloneConfigForStatus(meta.Config)
+		}
+		return status
+	}
+
+	persisted := r.metaToStatus(meta)
 	switch {
 	case persisted.Phase == "failed" && status.Phase != "failed" && exited:
-		return persisted
-	case persisted.Ready && !status.Ready:
 		return persisted
 	}
 
@@ -549,7 +559,7 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	if status.ErrorLines == "" {
 		status.ErrorLines = persisted.ErrorLines
 	}
-	if status.Message == "" && !ignorePersistedFailure {
+	if status.Message == "" {
 		status.Message = persisted.Message
 	}
 	return status
@@ -659,7 +669,7 @@ func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
 	}
 }
 
-func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthCheckConfig, warmup *WarmupConfig) {
+func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthCheckConfig, warmup *WarmupConfig) error {
 	timeout := effectiveHealthTimeout(hc)
 	deadline := time.Now().Add(timeout)
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", proc.port, hc.Path)
@@ -681,7 +691,7 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 		proc.mu.Unlock()
 		if exited {
 			slog.Warn("health check aborted: process already exited", "name", proc.name)
-			return
+			return fmt.Errorf("health check aborted: process exited")
 		}
 
 		resp, err := hcClient.Get(url)
@@ -696,16 +706,21 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 					continue
 				}
 				proc.mu.Lock()
+				if proc.exited {
+					proc.mu.Unlock()
+					return fmt.Errorf("health check aborted: process exited")
+				}
 				proc.ready = true
 				proc.mu.Unlock()
 				slog.Info("native deployment ready", "name", proc.name)
-				return
+				return nil
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
 
 	slog.Warn("health check timeout", "name", proc.name, "url", url)
+	return nil
 }
 
 // warmup sends a dummy inference request to force model weight loading and CUDA kernel compilation.
@@ -754,9 +769,23 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	ready := proc.ready
 	exited := proc.exited
 	exitSuccess := proc.exitSuccess
+	healthCheckPath := proc.healthCheckPath
+	port := proc.port
 	proc.mu.Unlock()
+	healthRegressed := false
+	if !exited && ready && healthCheckPath != "" {
+		ready = httpHealthy(port, healthCheckPath)
+		healthRegressed = !ready
+	}
 
-	portBound := proc.port > 0 && portAlive(proc.port)
+	portBound := port > 0 && portAlive(port)
+	proc.mu.Lock()
+	if proc.exited {
+		exited = true
+		exitSuccess = proc.exitSuccess
+		ready = false
+	}
+	proc.mu.Unlock()
 
 	phase := "running"
 	if exited {
@@ -766,6 +795,8 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 			phase = "failed"
 		}
 		ready = false
+	} else if healthRegressed {
+		phase = "failed"
 	} else if !ready {
 		phase = "starting"
 	}
@@ -774,9 +805,12 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 		Name:    proc.name,
 		Phase:   phase,
 		Ready:   ready,
-		Address: fmt.Sprintf("127.0.0.1:%d", proc.port),
+		Address: fmt.Sprintf("127.0.0.1:%d", port),
 		Labels:  proc.labels,
 		Runtime: "native",
+	}
+	if healthRegressed {
+		ds.Message = "health check failed after deployment became ready"
 	}
 	setDeploymentStartFromTime(ds, proc.startTime)
 

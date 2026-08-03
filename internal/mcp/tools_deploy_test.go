@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/recovery"
 )
 
 func TestDeployRunPassesConfigOverrides(t *testing.T) {
@@ -197,23 +198,25 @@ func TestDeployDefaultsStoresDeviceLocalSettings(t *testing.T) {
 	}
 }
 
-func TestDeployApplyPassesNoPull(t *testing.T) {
+func TestDeployApplyPassesRecoveryPolicy(t *testing.T) {
 	s := NewServer()
 
 	var (
-		gotModel  string
-		gotEngine string
-		gotSlot   string
-		gotConfig map[string]any
-		gotNoPull bool
+		gotModel          string
+		gotEngine         string
+		gotSlot           string
+		gotConfig         map[string]any
+		gotNoPull         bool
+		gotRecoveryPolicy recovery.PolicyPatch
 	)
 	registerDeployTools(s, &ToolDeps{
-		DeployApply: func(ctx context.Context, engineType, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engineType, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			gotModel = model
 			gotEngine = engineType
 			gotSlot = slot
 			gotConfig = configOverrides
 			gotNoPull = noPull
+			gotRecoveryPolicy = recoveryPolicy
 			return json.RawMessage(`{"status":"deploying","name":"demo"}`), nil
 		},
 	})
@@ -223,7 +226,8 @@ func TestDeployApplyPassesNoPull(t *testing.T) {
 		"engine":"vllm",
 		"slot":"slot-1",
 		"config":{"gpu_memory_utilization":0.9},
-		"no_pull":true
+		"no_pull":true,
+		"recovery_policy":{"max_attempts":5,"backoff_s":[1,3,9]}
 	}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
@@ -243,7 +247,52 @@ func TestDeployApplyPassesNoPull(t *testing.T) {
 	if gotConfig["gpu_memory_utilization"] != 0.9 {
 		t.Fatalf("gpu_memory_utilization = %#v, want 0.9", gotConfig["gpu_memory_utilization"])
 	}
+	if gotRecoveryPolicy.MaxAttempts == nil || *gotRecoveryPolicy.MaxAttempts != 5 {
+		t.Fatalf("max_attempts = %#v, want 5", gotRecoveryPolicy.MaxAttempts)
+	}
+	if len(gotRecoveryPolicy.BackoffS) != 3 || gotRecoveryPolicy.BackoffS[0] != 1 || gotRecoveryPolicy.BackoffS[1] != 3 || gotRecoveryPolicy.BackoffS[2] != 9 {
+		t.Fatalf("backoff_s = %v, want [1 3 9]", gotRecoveryPolicy.BackoffS)
+	}
 	if len(result.Content) == 0 || result.IsError {
 		t.Fatalf("unexpected result = %+v", result)
+	}
+
+	var applySchema string
+	for _, def := range s.ListTools() {
+		if def.Name == "deploy.apply" {
+			applySchema = string(def.InputSchema)
+			break
+		}
+	}
+	if !strings.Contains(applySchema, `"recovery_policy"`) {
+		t.Fatalf("deploy.apply schema missing recovery_policy: %s", applySchema)
+	}
+	if strings.Contains(applySchema, `"source"`) {
+		t.Fatalf("deploy.apply schema exposes trusted source marker: %s", applySchema)
+	}
+}
+
+func TestDeployApplyRejectsInvalidRecoveryPolicyBeforeBusinessLogic(t *testing.T) {
+	s := NewServer()
+	called := false
+	registerDeployTools(s, &ToolDeps{
+		DeployApply: func(context.Context, string, string, string, map[string]any, bool, recovery.PolicyPatch) (json.RawMessage, error) {
+			called = true
+			return json.RawMessage(`{"status":"deploying"}`), nil
+		},
+	})
+
+	result, err := s.ExecuteTool(context.Background(), "deploy.apply", json.RawMessage(`{
+		"model":"qwen3-4b",
+		"recovery_policy":{"max_attempts":0}
+	}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if !result.IsError || len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "max_attempts") {
+		t.Fatalf("invalid recovery policy result = %+v", result)
+	}
+	if called {
+		t.Fatal("DeployApply called for invalid public recovery policy")
 	}
 }

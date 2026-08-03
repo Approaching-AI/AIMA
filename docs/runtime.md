@@ -304,6 +304,55 @@ deploy.list:
 
 ---
 
+## 部署自动恢复
+
+部署自动恢复是 `aima serve` 的后台能力。只有 `aima serve` 进程存活时，恢复 Controller 才会检查持久化部署意图；单独运行 `aima mcp` 或一次性 CLI 命令不会启动该 Controller。
+
+### 默认策略
+
+未被 Catalog Engine Asset 或 `deploy.apply.recovery_policy` 覆盖时，每个部署使用以下完整默认值：
+
+| 字段 | 默认值 | 含义 |
+|------|--------|------|
+| `enabled` | `true` | 启用恢复观察 |
+| `check_interval_s` | `5` | 每个部署的独立检查周期 |
+| `consecutive_failures` | `3` | Native 连续失败达到该值后尝试恢复 |
+| `max_attempts` | `3` | 600 秒窗口内最多提交的恢复尝试数 |
+| `window_s` | `600` | 尝试计数窗口 |
+| `backoff_s` | `[2, 10, 30]` | 各次恢复失败后的退避序列，超出长度后重复最后一项 |
+| `stable_reset_s` | `600` | 持续健康达到该时间后清空恢复计数 |
+
+策略优先级为：内置默认值 → 已选 Engine Asset 的 `startup.recovery` → 本次 `deploy.apply` 的字段级覆盖。策略仍然是通用 Catalog 能力，不绑定合作伙伴、设备型号、模型、Engine 类型或 GPU 厂商。
+
+### 操作语义
+
+- 外部结束 Native 推理进程不改变 AIMA 中的 `desired_state=running`。`aima serve` 观察到连续失败后，会按上述预算执行 Native `Delete -> Deploy` 恢复。
+- 显式执行 `deploy.delete` 或 `aima undeploy` 会先持久化 `desired_state=stopped`，再删除 Runtime 对象。Controller 不会重新创建显式删除的部署；即使 Runtime 对象原本已不存在，停止意图也会生效。
+- `recovery_state=quarantined` 表示恢复预算已经耗尽，AIMA 已停止该部署的自动恢复。隔离状态仍保留 `desired_state=running` 及最后的脱敏原因，但不会继续循环重试。
+- 解除隔离必须由操作员重新执行显式 `deploy.apply`（CLI 对应重新执行 `aima deploy <model>`）。显式 apply 会重新解析配置并重置恢复计数；不要通过直接启动外部进程绕过意图状态。
+
+### Runtime 责任边界
+
+| Runtime | AIMA 恢复行为 |
+|---------|---------------|
+| Native | AIMA 观察进程与健康探针；正常 `starting` 且未 stalled 时保持不动。失败并达到阈值后，在提交恢复状态且锁内复查后执行删除和重新部署。 |
+| Docker | 容器自身 restart policy 和健康探针负责重启。AIMA 只观察 restart count；达到预算后先持久化隔离，再删除容器，不另建第二套重启循环。 |
+| K3S | Kubernetes 控制器和探针负责 Pod 重启。AIMA 只观察 restart count；达到预算后先持久化隔离，再删除工作负载，不替代 Kubernetes reconciliation。 |
+
+Runtime 观察固定使用部署意图中记录的 Runtime。状态查询基础设施失败不会被当作“部署缺失”，也不会静默切换到另一个 Runtime 触发恢复。
+
+### 并发边界
+
+显式 apply/delete 与后台恢复共享进程内的部署操作锁，并在 Runtime 副作用前校验持久化 revision，因此同一 `aima serve` 进程内的显式操作优先于旧恢复任务。该锁不是跨进程分布式锁：多个独立 AIMA 进程共享并写入同一 SQLite 数据库时，Runtime 副作用不受这一保证保护。部署场景应保持单写进程，跨进程协调不在当前支持范围内。
+
+### 恢复审计
+
+Recovery Controller 将恢复生命周期事件写入现有 SQLite `audit_log`，不新增合作伙伴或 Runtime 专用表。事件使用 `agent_type=reconciler`，工具名形如 `deployment.recovery.recovery_attempt`，记录部署名、Runtime、固定 Engine Asset/版本、revision、尝试次数、结果、下一次退避时间和脱敏原因。当前事件包括恢复尝试、恢复已提交、恢复失败、退避重试、平台重启观察、恢复健康、隔离和隔离执行结果。
+
+审计载荷不包含展开后的部署配置、Token、API Key 或其他凭据。审计写入失败只产生告警，不阻断已经提交的恢复状态或 Runtime 副作用；因此 `deployment_intents` 仍是恢复控制的权威状态，`audit_log` 用于追溯操作来源和结果。
+
+---
+
 ## 相关文件
 
 - `internal/runtime/runtime.go` - Runtime 接口定义
@@ -315,4 +364,4 @@ deploy.list:
 
 ---
 
-*最后更新：2026-03-04 (Native PID 安全验证, Deploy TOCTOU 修复, 跨 Runtime Fallback, readTail 大文件优化)*
+*最后更新：2026-08-02（部署自动恢复策略、Runtime 责任和进程内并发边界）*

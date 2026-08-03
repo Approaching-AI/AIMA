@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/recovery"
 )
 
 // ToolDeps collects all dependencies that tool handlers need.
@@ -23,21 +24,29 @@ type ToolDeps struct {
 	RemoveModel  func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines   func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
-	ListEngines   func(ctx context.Context) (json.RawMessage, error)
-	GetEngineInfo func(ctx context.Context, name string) (json.RawMessage, error)
-	PullEngine    func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
-	ImportEngine  func(ctx context.Context, path string) error
-	RemoveEngine  func(ctx context.Context, name string, deleteFiles bool) error
+	ScanEngines    func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
+	ListEngines    func(ctx context.Context) (json.RawMessage, error)
+	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
+	EnsureEngine   func(ctx context.Context, name, version string, apply bool) (json.RawMessage, error)
+	RollbackEngine func(ctx context.Context, name string, confirm bool) (json.RawMessage, error)
+	PullEngine     func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
+	ImportEngine   func(ctx context.Context, path string) error
+	RemoveEngine   func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Deployment (runtime package)
-	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error)
+	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error)
 	DeployDryRun func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployRun    func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool, onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(downloaded, total int64)) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
 	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
+
+	// Recovery controller adapters are process-internal and are not exposed in
+	// any MCP schema. Their implementations share deploy.apply/delete locking.
+	RecoveryObserve recovery.ObserveFunc
+	RecoveryApply   recovery.ApplyFunc
+	RecoveryDelete  recovery.DeleteFunc
 
 	// External service discovery
 	ScanExternalServices  func(ctx context.Context) (json.RawMessage, error)

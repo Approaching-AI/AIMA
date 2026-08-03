@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -472,6 +473,23 @@ func TestDockerInspectToStatus(t *testing.T) {
 				t.Errorf("runtime = %q, want %q", ds.Runtime, "docker")
 			}
 		})
+	}
+}
+
+func TestDockerInspectToStatusIncludesRestartCount(t *testing.T) {
+	var di dockerInspect
+	if err := json.Unmarshal([]byte(`{
+		"Name": "/test-vllm",
+		"RestartCount": 4,
+		"State": {"Status": "running", "Running": true},
+		"Config": {"Labels": {}}
+	}`), &di); err != nil {
+		t.Fatalf("unmarshal docker inspect: %v", err)
+	}
+
+	got := (&DockerRuntime{}).inspectToStatus(di)
+	if got.Restarts != 4 {
+		t.Fatalf("Restarts = %d, want 4", got.Restarts)
 	}
 }
 

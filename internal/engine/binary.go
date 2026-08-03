@@ -86,7 +86,8 @@ func (m *BinaryManager) Ensure(ctx context.Context, source *BinarySource, onProg
 		return "", false, fmt.Errorf("preinstalled engine binary not found (probe paths: %v)", source.ProbePaths)
 	}
 
-	if installed, err := m.installFromLocalBundles(ctx, source, onProgress); installed {
+	expectedSHA256 := source.SHA256[platform]
+	if installed, err := m.installFromLocalBundles(ctx, source, expectedSHA256, onProgress); installed {
 		if path, ok := m.findExisting(source); ok {
 			return path, true, nil
 		}
@@ -101,7 +102,6 @@ func (m *BinaryManager) Ensure(ctx context.Context, source *BinarySource, onProg
 		return "", false, fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	expectedSHA256 := source.SHA256[platform]
 	if err := m.download(ctx, url, mirrorURLs, m.distDir, name, expectedSHA256, onProgress); err != nil {
 		return "", true, fmt.Errorf("download %s: %w", name, err)
 	}
@@ -129,7 +129,8 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onPr
 		return fmt.Errorf("engine is preinstalled on this host; no downloadable artifact is configured")
 	}
 
-	if installed, err := m.installFromLocalBundles(ctx, source, onProgress); installed {
+	expectedSHA256 := source.SHA256[platform]
+	if installed, err := m.installFromLocalBundles(ctx, source, expectedSHA256, onProgress); installed {
 		return nil
 	} else if err != nil {
 		slog.Warn("local engine bundle install failed, falling back to download", "binary", source.Binary, "error", err)
@@ -141,7 +142,6 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onPr
 		return fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	expectedSHA256 := source.SHA256[platform]
 	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary, expectedSHA256, onProgress)
 }
 
@@ -200,7 +200,7 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 	return nil
 }
 
-func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *BinarySource, onProgress func(ProgressEvent)) (bool, error) {
+func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *BinarySource, expectedSHA256 string, onProgress func(ProgressEvent)) (bool, error) {
 	if source == nil || len(source.LocalBundles) == 0 {
 		return false, nil
 	}
@@ -212,6 +212,11 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 		}
 		if err := ctx.Err(); err != nil {
 			return false, err
+		}
+		if err := verifyLocalBundleSHA256(candidate, expectedSHA256); err != nil {
+			lastErr = err
+			slog.Warn("local engine bundle verification failed", "path", candidate, "error", err)
+			continue
 		}
 		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", m.distDir)
 		if err := m.ImportBundle(ctx, candidate, source.Binary, onProgress); err != nil {
@@ -225,6 +230,49 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 		return false, fmt.Errorf("all local engine bundles failed: %w", lastErr)
 	}
 	return false, nil
+}
+
+func verifyLocalBundleSHA256(bundlePath, expectedSHA256 string) error {
+	expectedSHA256 = normalizeSHA256(expectedSHA256)
+	if expectedSHA256 == "" {
+		return nil
+	}
+	info, err := os.Stat(bundlePath)
+	if err != nil {
+		return fmt.Errorf("stat local engine bundle %s: %w", bundlePath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("verify local engine bundle %s: sha256 applies only to files", bundlePath)
+	}
+	actualSHA256, err := fileSHA256(bundlePath)
+	if err != nil {
+		return fmt.Errorf("verify local engine bundle %s: %w", bundlePath, err)
+	}
+	if !strings.EqualFold(actualSHA256, expectedSHA256) {
+		return fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", bundlePath, expectedSHA256, actualSHA256)
+	}
+	return nil
+}
+
+func fileSHA256(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func normalizeSHA256(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "sha256:") {
+		return strings.TrimSpace(value[len("sha256:"):])
+	}
+	return value
 }
 
 func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(ProgressEvent)) error {
@@ -350,19 +398,15 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 	var lastErr error
 	for _, u := range urls {
 		slog.Info("downloading engine binary", "url", u, "dest", destDir)
-		actualSHA256, err := downloadAndExtract(ctx, u, destDir, binaryName, onProgress)
+		actualSHA256, err := downloadAndExtract(ctx, u, destDir, binaryName, expectedSHA256, onProgress)
 		if err != nil {
 			slog.Warn("download failed, trying next source", "url", u, "error", err)
 			lastErr = err
 			continue
 		}
 
-		if expectedSHA256 != "" {
-			if actualSHA256 != expectedSHA256 {
-				slog.Warn("sha256 mismatch", "expected", expectedSHA256, "actual", actualSHA256, "url", u)
-			} else {
-				slog.Info("sha256 verified", "sha256", actualSHA256)
-			}
+		if normalizeSHA256(expectedSHA256) != "" {
+			slog.Info("sha256 verified", "sha256", actualSHA256)
 		}
 
 		finalizeNativeDist(destDir, binaryName)
@@ -473,9 +517,10 @@ func uniqueNonEmpty(in []string) []string {
 	return out
 }
 
-// downloadAndExtract downloads url to a temp file then extracts or renames it.
+// downloadAndExtract downloads url to a temp file, verifies it, then extracts
+// or renames it. No destination file is created before strict verification.
 // Returns the SHA256 hex digest of the downloaded content.
-func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, onProgress func(ProgressEvent)) (string, error) {
+func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) (string, error) {
 	tmpFile, err := os.CreateTemp(destDir, ".download-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
@@ -520,13 +565,19 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, on
 	if err != nil {
 		return "", fmt.Errorf("write: %w", err)
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("close downloaded file: %w", err)
+	}
 
 	actualSHA256 := fmt.Sprintf("%x", h.Sum(nil))
 	slog.Info("download complete", "bytes", written, "sha256", actualSHA256[:16])
+	expectedSHA256 = normalizeSHA256(expectedSHA256)
+	if expectedSHA256 != "" && !strings.EqualFold(actualSHA256, expectedSHA256) {
+		return actualSHA256, fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", url, expectedSHA256, actualSHA256)
+	}
 
 	// Detect format from URL and extract
-	urlLower := strings.ToLower(url)
+	urlLower := strings.ToLower(downloadFileName(url))
 	switch {
 	case strings.HasSuffix(urlLower, ".tar.gz") || strings.HasSuffix(urlLower, ".tgz"):
 		if onProgress != nil {

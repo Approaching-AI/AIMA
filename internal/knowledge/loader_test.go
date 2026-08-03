@@ -611,6 +611,128 @@ startup:
 	}
 }
 
+func TestEngineStartupRecoveryParsesAndMerges(t *testing.T) {
+	fs := fstest.MapFS{
+		"engines/profiles/recovery.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: recovery-profile
+startup:
+  recovery:
+    enabled: true
+    check_interval_s: 7
+    consecutive_failures: 4
+    max_attempts: 3
+    window_s: 900
+    backoff_s: [2, 10, 30]
+    stable_reset_s: 1200
+`)},
+		"engines/recovery-engine.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: recovery-profile
+metadata:
+  name: recovery-engine
+  type: generic
+hardware:
+  gpu_arch: "*"
+  vram_min_mib: 0
+startup:
+  recovery:
+    max_attempts: 5
+`)},
+	}
+
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.EngineAssets) != 1 {
+		t.Fatalf("EngineAssets count = %d, want 1", len(cat.EngineAssets))
+	}
+	recovery := cat.EngineAssets[0].Startup.Recovery
+	if recovery.Enabled == nil || !*recovery.Enabled {
+		t.Fatalf("recovery.enabled = %v, want true", recovery.Enabled)
+	}
+	if recovery.CheckIntervalS == nil || *recovery.CheckIntervalS != 7 {
+		t.Fatalf("recovery.check_interval_s = %v, want 7", recovery.CheckIntervalS)
+	}
+	if recovery.ConsecutiveFailures == nil || *recovery.ConsecutiveFailures != 4 {
+		t.Fatalf("recovery.consecutive_failures = %v, want 4", recovery.ConsecutiveFailures)
+	}
+	if recovery.MaxAttempts == nil || *recovery.MaxAttempts != 5 {
+		t.Fatalf("recovery.max_attempts = %v, want 5", recovery.MaxAttempts)
+	}
+	if recovery.WindowS == nil || *recovery.WindowS != 900 {
+		t.Fatalf("recovery.window_s = %v, want 900", recovery.WindowS)
+	}
+	if got := recovery.BackoffS; len(got) != 3 || got[0] != 2 || got[1] != 10 || got[2] != 30 {
+		t.Fatalf("recovery.backoff_s = %v, want [2 10 30]", got)
+	}
+	if recovery.StableResetS == nil || *recovery.StableResetS != 1200 {
+		t.Fatalf("recovery.stable_reset_s = %v, want 1200", recovery.StableResetS)
+	}
+}
+
+func TestCloneEngineAssetCopiesRecoveryBackoff(t *testing.T) {
+	src := EngineAsset{Startup: EngineStartup{Recovery: RecoveryPolicy{BackoffS: []int{2, 10, 30}}}}
+	clone := cloneEngineAsset(src)
+	clone.Startup.Recovery.BackoffS[0] = 99
+	if src.Startup.Recovery.BackoffS[0] != 2 {
+		t.Fatalf("recovery backoff aliases source: %v", src.Startup.Recovery.BackoffS)
+	}
+}
+
+func TestEngineCompatibleVersionsParseMergeAndClone(t *testing.T) {
+	fs := fstest.MapFS{
+		"engines/profiles/engine-a.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: engine-a
+  version_default: "1.2.3"
+  compatible_versions: ["1.2.2", "1.2.x"]
+`)},
+		"engines/inherited.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-inherited
+  type: engine-a
+hardware:
+  gpu_arch: "*"
+`)},
+		"engines/override.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-override
+  type: engine-a
+  compatible_versions: ["1.1.9"]
+hardware:
+  gpu_arch: "*"
+`)},
+	}
+
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	byName := make(map[string]*EngineAsset)
+	for i := range cat.EngineAssets {
+		byName[cat.EngineAssets[i].Metadata.Name] = &cat.EngineAssets[i]
+	}
+	if got := byName["engine-a-inherited"].Metadata.CompatibleVersions; len(got) != 2 || got[0] != "1.2.2" || got[1] != "1.2.x" {
+		t.Fatalf("inherited compatible_versions = %v", got)
+	}
+	if got := byName["engine-a-override"].Metadata.CompatibleVersions; len(got) != 1 || got[0] != "1.1.9" {
+		t.Fatalf("override compatible_versions = %v", got)
+	}
+
+	byName["engine-a-inherited"].Metadata.CompatibleVersions[0] = "mutated"
+	if got := cat.EngineProfiles["engine-a"].Metadata.CompatibleVersions[0]; got != "1.2.2" {
+		t.Fatalf("finalized asset aliases profile compatible_versions: %q", got)
+	}
+	for _, raw := range cat.RawEngineAssets {
+		if raw.Metadata.Name == "engine-a-inherited" && len(raw.Metadata.CompatibleVersions) != 0 {
+			t.Fatalf("finalized asset mutated raw compatible_versions: %v", raw.Metadata.CompatibleVersions)
+		}
+	}
+}
+
 func TestMergeCatalogOverlayProfileRebuildsEngineAssets(t *testing.T) {
 	baseFS := fstest.MapFS{
 		"engines/profiles/vllm.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile

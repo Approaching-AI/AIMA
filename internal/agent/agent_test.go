@@ -693,6 +693,88 @@ func TestPatrolCrashAlertTriggersHealAttempt(t *testing.T) {
 	}
 }
 
+func TestPatrolQuarantineAlertDeduplicatesAndNeverHeals(t *testing.T) {
+	deployListCalls := 0
+	tools := &mockTools{execute: func(_ context.Context, name string, _ json.RawMessage) (*ToolResult, error) {
+		switch name {
+		case "device.metrics":
+			return &ToolResult{Content: `{"gpu":null}`}, nil
+		case "deploy.list":
+			deployListCalls++
+			reason := "CUDA OOM; 3 attempts exhausted"
+			if deployListCalls > 1 {
+				reason = "same quarantine, newer observation"
+			}
+			return &ToolResult{Content: fmt.Sprintf(`[{"name":"qwen","phase":"failed","recovery_state":"quarantined","quarantine_reason":%q}]`, reason)}, nil
+		default:
+			return nil, fmt.Errorf("unexpected healer tool call: %s", name)
+		}
+	}}
+	persistCalls := 0
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	p := NewPatrol(DefaultPatrolConfig(), tools, func(context.Context, string, string, string, string) error {
+		persistCalls++
+		return nil
+	}, WithHealer(NewHealer(tools)), WithEventBus(bus))
+
+	first := p.RunOnce(context.Background())
+	second := p.RunOnce(context.Background())
+	if len(first) != 1 || len(second) != 0 {
+		t.Fatalf("new alerts across runs = %d/%d, want 1/0", len(first), len(second))
+	}
+	active := p.ActiveAlerts()
+	if len(active) != 1 || active[0].Type != "deploy_crash" || active[0].Severity != "critical" {
+		t.Fatalf("active alerts = %+v, want one unresolved critical deploy_crash", active)
+	}
+	if !strings.Contains(active[0].Message, "3 attempts exhausted") {
+		t.Fatalf("quarantine alert message = %q, want original reason", active[0].Message)
+	}
+	if persistCalls != 1 {
+		t.Fatalf("persist calls = %d, want one for the unresolved quarantine", persistCalls)
+	}
+	actions := p.RecentActions(10)
+	if len(actions) != 1 || actions[0].Type != "notify" {
+		t.Fatalf("actions = %+v, want one notify and no heal", actions)
+	}
+	for _, call := range tools.calls {
+		if call != "device.metrics" && call != "deploy.list" {
+			t.Fatalf("quarantined deployment invoked healer tool %q", call)
+		}
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("quarantined deployment emitted automated event %+v", event)
+	default:
+	}
+}
+
+func TestPatrolQuarantineNotifiesWhenSelfHealDisabled(t *testing.T) {
+	tools := &mockTools{
+		tools: []ToolDefinition{},
+		results: map[string]*ToolResult{
+			"device.metrics": {Content: `{"gpu":null}`},
+			"deploy.list":    {Content: `[{"name":"quarantined","recovery_state":"quarantined"}]`},
+		},
+	}
+	config := DefaultPatrolConfig()
+	config.SelfHealEnabled = false
+	p := NewPatrol(config, tools, nil, WithHealer(NewHealer(tools)))
+
+	p.RunOnce(context.Background())
+
+	actions := p.RecentActions(10)
+	if len(actions) != 1 || actions[0].Type != "notify" || !actions[0].Success {
+		t.Fatalf("actions = %+v, want one successful quarantine notification", actions)
+	}
+	for _, call := range tools.calls {
+		if call != "device.metrics" && call != "deploy.list" {
+			t.Fatalf("quarantined deployment invoked healer tool %q", call)
+		}
+	}
+}
+
 func TestPatrolWithoutHealerRecordsNotify(t *testing.T) {
 	tools := &mockTools{
 		tools: []ToolDefinition{},

@@ -500,6 +500,7 @@ func cloneCatalog(cat *knowledge.Catalog) *knowledge.Catalog {
 
 func cloneEngineAsset(asset knowledge.EngineAsset) knowledge.EngineAsset {
 	clone := asset
+	clone.Metadata.CompatibleVersions = append([]string(nil), asset.Metadata.CompatibleVersions...)
 	if asset.Source != nil {
 		clone.Source = cloneEngineSource(asset.Source)
 	}

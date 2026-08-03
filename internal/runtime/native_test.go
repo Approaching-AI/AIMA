@@ -6,12 +6,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -985,12 +987,6 @@ func TestListDoesNotHoldRuntimeLockDuringPersistedStatusChecks(t *testing.T) {
 
 	port := ln.Addr().(*net.TCPAddr).Port
 	name := "slow-list"
-	rt.processes[name] = &nativeProcess{
-		name:      name,
-		port:      port,
-		labels:    map[string]string{"aima.dev/engine": "llamacpp"},
-		startTime: time.Now(),
-	}
 
 	if err := rt.saveMeta(&deploymentMeta{
 		Name:               name,
@@ -1108,6 +1104,186 @@ func TestProcToStatusMarksNonReadyProcessAsStarting(t *testing.T) {
 	}
 	if status.StartupMessage == "" {
 		t.Fatal("startup_message should not be empty during startup")
+	}
+}
+
+func TestNativeStatusRechecksHealthAfterReady(t *testing.T) {
+	var healthCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&healthCalls, 1) == 1 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	if !httpHealthy(port, "/health") {
+		t.Fatal("initial health check should succeed")
+	}
+
+	rt := newTestRuntime(t)
+	proc := &nativeProcess{
+		name:            "health-regressed",
+		port:            port,
+		healthCheckPath: "/health",
+		ready:           true,
+		startTime:       time.Now(),
+	}
+	rt.processes[proc.name] = proc
+
+	status, err := rt.Status(context.Background(), "health-regressed")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Ready {
+		t.Fatal("ready should be false after the health endpoint becomes unavailable")
+	}
+}
+
+func TestNativeStatusUsesLiveHealthObservationOverPersistedMetadata(t *testing.T) {
+	var healthCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch atomic.AddInt32(&healthCalls, 1) {
+		case 1, 3:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	if !httpHealthy(port, "/health") {
+		t.Fatal("initial health check should succeed")
+	}
+
+	rt := newTestRuntime(t)
+	proc := &nativeProcess{
+		name:            "live-health-observation",
+		port:            port,
+		healthCheckPath: "/health",
+		ready:           true,
+		startTime:       time.Now(),
+	}
+	rt.processes[proc.name] = proc
+	if err := rt.saveMeta(&deploymentMeta{
+		Name:            proc.name,
+		Port:            port,
+		StartTime:       proc.startTime,
+		HealthCheckPath: "/health",
+	}); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+
+	status, err := rt.Status(context.Background(), proc.name)
+	if err != nil {
+		t.Fatalf("first Status: %v", err)
+	}
+	if status.Ready {
+		t.Fatal("first live 503 health observation must be visible")
+	}
+	if status.Phase != "failed" {
+		t.Fatalf("first live 503 phase = %q, want failed", status.Phase)
+	}
+	if !strings.Contains(status.Message, "health check failed") {
+		t.Fatalf("first live 503 message = %q", status.Message)
+	}
+	if got := atomic.LoadInt32(&healthCalls); got != 2 {
+		t.Fatalf("health requests after first Status = %d, want 2", got)
+	}
+
+	status, err = rt.Status(context.Background(), proc.name)
+	if err != nil {
+		t.Fatalf("second Status: %v", err)
+	}
+	if !status.Ready {
+		t.Fatal("later live 200 health observation must restore ready")
+	}
+	if got := atomic.LoadInt32(&healthCalls); got != 3 {
+		t.Fatalf("health requests after second Status = %d, want 3", got)
+	}
+}
+
+func TestProcToStatusReportsExitDuringHealthProbe(t *testing.T) {
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(probeStarted)
+		<-releaseProbe
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	proc := &nativeProcess{
+		name:            "exits-during-status-probe",
+		port:            server.Listener.Addr().(*net.TCPAddr).Port,
+		healthCheckPath: "/health",
+		ready:           true,
+		startTime:       time.Now(),
+	}
+	rt := newTestRuntime(t)
+	statusResult := make(chan *DeploymentStatus, 1)
+	go func() {
+		statusResult <- rt.procToStatus(proc)
+	}()
+
+	<-probeStarted
+	proc.mu.Lock()
+	proc.exited = true
+	proc.exitSuccess = false
+	proc.ready = false
+	proc.mu.Unlock()
+	close(releaseProbe)
+
+	status := <-statusResult
+	if status.Ready {
+		t.Fatal("exited process must not report ready")
+	}
+	if status.Phase != "failed" {
+		t.Fatalf("phase = %q, want failed", status.Phase)
+	}
+}
+
+func TestHealthCheckAndWarmupReturnsExitFailureDuringReadinessCommit(t *testing.T) {
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(probeStarted)
+		<-releaseProbe
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	proc := &nativeProcess{
+		name:      "exits-during-readiness-commit",
+		port:      server.Listener.Addr().(*net.TCPAddr).Port,
+		startTime: time.Now(),
+	}
+	results := make(chan error, 1)
+	rt := newTestRuntime(t)
+	go func() {
+		results <- rt.healthCheckAndWarmup(proc, &HealthCheckConfig{Path: "/health", TimeoutS: 1}, nil)
+	}()
+
+	<-probeStarted
+	proc.mu.Lock()
+	proc.exited = true
+	proc.exitSuccess = false
+	proc.ready = false
+	proc.mu.Unlock()
+	close(releaseProbe)
+
+	err := <-results
+	if err == nil || !strings.Contains(err.Error(), "exited") {
+		t.Fatalf("healthCheckAndWarmup error = %v, want exit-related failure", err)
+	}
+	proc.mu.Lock()
+	ready := proc.ready
+	proc.mu.Unlock()
+	if ready {
+		t.Fatal("readiness commit must not mark an exited process ready")
 	}
 }
 

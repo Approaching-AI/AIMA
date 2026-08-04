@@ -285,8 +285,22 @@ type WarmupConfig struct {
 }
 
 type EngineAPI struct {
-	Protocol string `yaml:"protocol"  json:"protocol"`
-	BasePath string `yaml:"base_path" json:"base_path"`
+	Protocol       string                `yaml:"protocol"                  json:"protocol"`
+	BasePath       string                `yaml:"base_path"                 json:"base_path"`
+	RequestAdapter *EngineRequestAdapter `yaml:"request_adapter,omitempty" json:"request_adapter,omitempty"`
+}
+
+type EngineRequestAdapter struct {
+	Kind             string `yaml:"kind,omitempty"               json:"kind,omitempty"`
+	Path             string `yaml:"path,omitempty"               json:"path,omitempty"`
+	ContextConfigKey string `yaml:"context_config_key,omitempty" json:"context_config_key,omitempty"`
+	ProbeSubcommand  string `yaml:"probe_subcommand,omitempty"   json:"probe_subcommand,omitempty"`
+	DisableThinking  bool   `yaml:"disable_thinking,omitempty"   json:"disable_thinking,omitempty"`
+	PaddingRole      string `yaml:"padding_role,omitempty"       json:"padding_role,omitempty"`
+	PaddingPrefix    string `yaml:"padding_prefix,omitempty"     json:"padding_prefix,omitempty"`
+	PaddingUnit      string `yaml:"padding_unit,omitempty"       json:"padding_unit,omitempty"`
+	UpstreamModel    string `yaml:"upstream_model,omitempty"     json:"upstream_model,omitempty"`
+	MaxAttempts      int    `yaml:"max_attempts,omitempty"       json:"max_attempts,omitempty"`
 }
 
 type EngineAmplifier struct {
@@ -749,6 +763,9 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	for _, warning := range finalizeEngineAssets(cat) {
 		slog.Warn(warning)
 	}
+	if err := validateEngineRequestAdapters(cat.EngineAssets); err != nil {
+		return nil, err
+	}
 
 	return cat, nil
 }
@@ -773,6 +790,9 @@ func mergeEngineProfile(ea *EngineAsset, p *EngineProfile) {
 	}
 	if ea.API.BasePath == "" {
 		ea.API.BasePath = p.API.BasePath
+	}
+	if ea.API.RequestAdapter == nil {
+		ea.API.RequestAdapter = cloneEngineRequestAdapter(p.API.RequestAdapter)
 	}
 
 	// Amplifier
@@ -950,6 +970,7 @@ func finalizeEngineAssets(cat *Catalog) []string {
 
 func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst := src
+	dst.API.RequestAdapter = cloneEngineRequestAdapter(src.API.RequestAdapter)
 
 	dst.Metadata.SupportedFormats = append([]string(nil), src.Metadata.SupportedFormats...)
 	dst.Image.Platforms = append([]string(nil), src.Image.Platforms...)
@@ -997,6 +1018,56 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	}
 
 	return dst
+}
+
+func cloneEngineRequestAdapter(src *EngineRequestAdapter) *EngineRequestAdapter {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	return &dst
+}
+
+func validateEngineRequestAdapters(assets []EngineAsset) error {
+	for index := range assets {
+		engine := &assets[index]
+		adapter := engine.API.RequestAdapter
+		if adapter == nil {
+			continue
+		}
+		name := strings.TrimSpace(engine.Metadata.Name)
+		if adapter.Kind != "exact_context" {
+			return fmt.Errorf("engine %s: unknown request adapter kind %q", name, adapter.Kind)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(adapter.Path), "/") {
+			return fmt.Errorf("engine %s request adapter: path must be absolute", name)
+		}
+		if strings.TrimSpace(adapter.ContextConfigKey) == "" {
+			return fmt.Errorf("engine %s request adapter: context_config_key is required", name)
+		}
+		if strings.TrimSpace(adapter.ProbeSubcommand) == "" {
+			return fmt.Errorf("engine %s request adapter: probe_subcommand is required", name)
+		}
+		if adapter.PaddingRole != "system" {
+			return fmt.Errorf("engine %s request adapter: padding_role must be system", name)
+		}
+		if strings.TrimSpace(adapter.PaddingPrefix) == "" {
+			return fmt.Errorf("engine %s request adapter: padding_prefix is required", name)
+		}
+		if adapter.PaddingUnit == "" {
+			return fmt.Errorf("engine %s request adapter: padding_unit is required", name)
+		}
+		if strings.TrimSpace(adapter.UpstreamModel) == "" {
+			return fmt.Errorf("engine %s request adapter: upstream_model is required", name)
+		}
+		if adapter.MaxAttempts == 0 {
+			adapter.MaxAttempts = 8
+		}
+		if adapter.MaxAttempts < 1 || adapter.MaxAttempts > 32 {
+			return fmt.Errorf("engine %s request adapter: max_attempts must be between 1 and 32", name)
+		}
+	}
+	return nil
 }
 
 func cloneStringMap[T ~string](src map[string]T) map[string]T {

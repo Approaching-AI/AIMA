@@ -34,6 +34,36 @@ type fakeRuntime struct {
 	list   []*aimaRuntime.DeploymentStatus
 }
 
+func TestCatalogAdapterMapsEngineRequestAdapter(t *testing.T) {
+	cat := &knowledge.Catalog{EngineAssets: []knowledge.EngineAsset{{
+		Metadata: knowledge.EngineMetadata{Name: "native-test"},
+		API: knowledge.EngineAPI{RequestAdapter: &knowledge.EngineRequestAdapter{
+			Kind:             "exact_context",
+			Path:             "/v1/chat/completions",
+			ContextConfigKey: "context_tokens",
+			ProbeSubcommand:  "chat-template-probe",
+			DisableThinking:  true,
+			PaddingRole:      "system",
+			PaddingPrefix:    "Ignore padding.",
+			PaddingUnit:      " ·",
+			UpstreamModel:    "native-model",
+			MaxAttempts:      8,
+		}},
+	}}}
+
+	got := (catalogAdapter{cat: cat}).RequestAdapter("NATIVE-TEST")
+	if got == nil {
+		t.Fatal("RequestAdapter returned nil")
+	}
+	if got.Kind != "exact_context" || got.ContextConfigKey != "context_tokens" || got.UpstreamModel != "native-model" {
+		t.Fatalf("RequestAdapter = %#v", got)
+	}
+	got.PaddingPrefix = "mutated"
+	if cat.EngineAssets[0].API.RequestAdapter.PaddingPrefix == "mutated" {
+		t.Fatal("RequestAdapter returned catalog-owned pointer")
+	}
+}
+
 func (r *fakeRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
 func (r *fakeRuntime) Delete(context.Context, string) error                     { return nil }
 func (r *fakeRuntime) Status(_ context.Context, name string) (*aimaRuntime.DeploymentStatus, error) {

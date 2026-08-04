@@ -27,6 +27,19 @@ type RequestPatch struct {
 	Body           map[string]any
 }
 
+type RequestAdapter struct {
+	Kind             string
+	Path             string
+	ContextConfigKey string
+	ProbeSubcommand  string
+	DisableThinking  bool
+	PaddingRole      string
+	PaddingPrefix    string
+	PaddingUnit      string
+	UpstreamModel    string
+	MaxAttempts      int
+}
+
 type Adapter struct {
 	Path             string
 	Kind             string
@@ -38,4 +51,5 @@ type Adapter struct {
 type CatalogReader interface {
 	Adapters(name string) []Adapter
 	RequestPatches(name string) []RequestPatch
+	RequestAdapter(engineName string) *RequestAdapter
 }

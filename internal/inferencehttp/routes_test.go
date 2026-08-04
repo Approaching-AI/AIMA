@@ -32,14 +32,16 @@ type staticCatalog struct {
 	adapters map[string][]Adapter
 }
 
-func (s staticCatalog) RequestPatches(string) []RequestPatch { return nil }
+func (s staticCatalog) RequestPatches(string) []RequestPatch  { return nil }
+func (s staticCatalog) RequestAdapter(string) *RequestAdapter { return nil }
 func (s staticCatalog) Adapters(name string) []Adapter {
 	return append([]Adapter(nil), s.adapters[name]...)
 }
 
 type mockCatalog struct{}
 
-func (m *mockCatalog) Adapters(string) []Adapter { return nil }
+func (m *mockCatalog) Adapters(string) []Adapter             { return nil }
+func (m *mockCatalog) RequestAdapter(string) *RequestAdapter { return nil }
 
 func (m *mockCatalog) RequestPatches(name string) []RequestPatch {
 	if name != "qwen3.5-9b" {

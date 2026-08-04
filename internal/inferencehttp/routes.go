@@ -388,14 +388,7 @@ func RequestBodyRewriter(cat CatalogReader) func(path, contentType, model, engin
 		if !isJSONContentType(contentType) {
 			return body
 		}
-		for _, patch := range cat.RequestPatches(model) {
-			if !matchesRequestPatch(patch, path, engineType) {
-				continue
-			}
-			body = mergeRequestPatchBody(body, patch.Body)
-		}
-		body = stripOrphanedToolChoice(body)
-		return body
+		return applyStaticRequestRewrites(cat, path, model, engineType, body)
 	}
 }
 

@@ -1524,6 +1524,60 @@ api:
 	}
 }
 
+func TestLoadCatalogPatchesLenientSkipsInvalidProfileRequestAdapter(t *testing.T) {
+	base := &Catalog{
+		EngineProfiles: map[string]*EngineProfile{
+			"native": {Kind: "engine_profile", Metadata: ProfileMeta{Name: "native"}},
+		},
+		RawEngineAssets: []EngineAsset{{
+			Kind: "engine_asset", Profile: "native", Metadata: EngineMetadata{Name: "native-demo"},
+		}},
+	}
+	patchFS := fstest.MapFS{
+		"engines/profiles/native.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile_patch
+metadata:
+  name: native
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineProfiles) != 0 {
+		t.Fatalf("invalid profile adapter patch was loaded: %#v", overlay.EngineProfiles)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want profile adapter validation warning", warnings)
+	}
+}
+
+func TestMergeCatalogRejectsInvalidEffectiveRequestAdapterWithoutMutation(t *testing.T) {
+	base := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind: "engine_asset", Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	overlay := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+		API:      EngineAPI{RequestAdapter: &EngineRequestAdapter{Kind: "unknown_adapter"}},
+	}}}
+
+	merged, warnings := MergeCatalog(base, overlay)
+	if merged != base {
+		t.Fatal("MergeCatalog returned a different base pointer")
+	}
+	if got := rawEngineAssets(base)[0].API.RequestAdapter; got != nil {
+		t.Fatalf("invalid overlay mutated effective catalog: %#v", got)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want effective adapter validation warning", warnings)
+	}
+}
+
 func TestBenchmarkProfileTiers(t *testing.T) {
 	fs := fstest.MapFS{
 		"benchmarks/profiles.yaml": &fstest.MapFile{Data: []byte(`kind: benchmark_profiles

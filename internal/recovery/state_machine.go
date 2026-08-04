@@ -89,12 +89,16 @@ func Evaluate(intent Intent, observation Observation, now time.Time) Decision {
 	if next.AttemptCount >= next.Policy.MaxAttempts {
 		return quarantineDecision(next, now)
 	}
-	if !containerRuntime && next.RecoveryState == StateWaiting && next.NextAttemptAt.IsZero() {
+	// Existing Docker/K3S objects remain owned by their runtime restart policy.
+	// A confirmed missing object cannot be recreated by that policy, so it uses
+	// the same bounded AIMA apply path as Native recovery.
+	recoverWithApply := !containerRuntime || !observation.Exists
+	if recoverWithApply && next.RecoveryState == StateWaiting && next.NextAttemptAt.IsZero() {
 		next.NextAttemptAt = now.Add(recoveryBackoff(next.Policy, next.AttemptCount))
 		return Decision{Intent: next, Action: ActionNone}
 	}
 
-	if containerRuntime {
+	if containerRuntime && observation.Exists {
 		if restartDelta > 0 || next.ConsecutiveFailureCount >= next.Policy.ConsecutiveFailures {
 			next.RecoveryState = StateWaiting
 		}

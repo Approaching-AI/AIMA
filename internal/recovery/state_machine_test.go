@@ -181,6 +181,34 @@ func TestEvaluateNativeHealthTimeoutTriggersRecovery(t *testing.T) {
 	}
 }
 
+func TestEvaluateMissingContainerSchedulesAndRunsRecovery(t *testing.T) {
+	now := time.Unix(9_200, 0)
+	policy := DefaultPolicy()
+	policy.ConsecutiveFailures = 1
+	policy.BackoffS = []int{5}
+	intent := Intent{
+		Name:          "missing-container",
+		Runtime:       "docker",
+		DesiredState:  DesiredRunning,
+		RecoveryState: StateHealthy,
+		Policy:        policy,
+	}
+
+	scheduled := Evaluate(intent, Observation{Exists: false}, now)
+	if scheduled.Action != ActionNone || scheduled.Intent.RecoveryState != StateWaiting {
+		t.Fatalf("missing container decision = %+v, want waiting before recreate", scheduled)
+	}
+	wantAttemptAt := now.Add(5 * time.Second)
+	if !scheduled.Intent.NextAttemptAt.Equal(wantAttemptAt) {
+		t.Fatalf("next attempt = %s, want %s", scheduled.Intent.NextAttemptAt, wantAttemptAt)
+	}
+
+	due := Evaluate(scheduled.Intent, Observation{Exists: false}, wantAttemptAt)
+	if due.Action != ActionRecover || due.Intent.RecoveryState != StateRecovering || due.Intent.AttemptCount != 1 {
+		t.Fatalf("due missing container decision = %+v, want recovering attempt 1", due)
+	}
+}
+
 func TestEvaluateUsesExactBoundariesForWaitingAndStableReset(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	p := DefaultPolicy()

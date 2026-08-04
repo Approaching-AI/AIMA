@@ -175,6 +175,43 @@ func TestControllerRecoversDueNativeIntentWithCommittedClaim(t *testing.T) {
 	}
 }
 
+func TestControllerRecreatesDueMissingContainer(t *testing.T) {
+	now := time.Unix(10_250, 0).UTC()
+	intent := controllerTestIntent("missing-container", "docker", now)
+	store := &controllerTestStore{intents: []*Intent{intent}}
+	applyCalls := 0
+	controller := NewController(
+		store,
+		func(context.Context, Intent) (Observation, error) { return Observation{Exists: false}, nil },
+		func(_ context.Context, got Intent) error {
+			applyCalls++
+			store.mu.Lock()
+			store.events = append(store.events, "apply")
+			store.mu.Unlock()
+			if got.Runtime != "docker" || got.RecoveryState != StateRecovering || got.AttemptCount != 1 {
+				t.Fatalf("apply intent = %+v", got)
+			}
+			return nil
+		},
+		nil,
+	)
+	controller.now = func() time.Time { return now }
+
+	if err := controller.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if applyCalls != 1 {
+		t.Fatalf("apply calls = %d, want 1", applyCalls)
+	}
+	commits, expected, events, _ := store.snapshot()
+	if len(commits) != 1 || commits[0].RecoveryState != StateRecovering || expected[0] != intent.Revision {
+		t.Fatalf("commits = %+v expected revisions = %v", commits, expected)
+	}
+	if !reflect.DeepEqual(events, []string{"cas", "apply"}) {
+		t.Fatalf("store events = %v, want committed claim before apply", events)
+	}
+}
+
 func TestControllerAuditFailureDoesNotBlockRecovery(t *testing.T) {
 	now := time.Unix(10_500, 0).UTC()
 	intent := controllerTestIntent("audit-failure", "native", now)

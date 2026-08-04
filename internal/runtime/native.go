@@ -29,6 +29,7 @@ type deploymentMeta struct {
 	Labels             map[string]string `json:"labels"`
 	LogPath            string            `json:"log_path"`
 	Command            []string          `json:"command"`
+	ModelPath          string            `json:"model_path,omitempty"`
 	StartTime          time.Time         `json:"start_time"`
 	HealthCheckPath    string            `json:"health_check_path,omitempty"`
 	HealthCheckTimeout int               `json:"health_check_timeout_s,omitempty"`
@@ -326,6 +327,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		Labels:         req.Labels,
 		LogPath:        logPath,
 		Command:        command,
+		ModelPath:      req.ModelPath,
 		StartTime:      now,
 	}
 	if req.HealthCheck != nil {
@@ -552,6 +554,8 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	if status.Message == "" && !ignorePersistedFailure {
 		status.Message = persisted.Message
 	}
+	status.AdapterCommand = append([]string(nil), persisted.AdapterCommand...)
+	status.AdapterModelPath = persisted.AdapterModelPath
 	return status
 }
 
@@ -828,13 +832,15 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	}
 
 	ds := &DeploymentStatus{
-		Name:    meta.Name,
-		Phase:   phase,
-		Ready:   ready,
-		Address: fmt.Sprintf("127.0.0.1:%d", meta.Port),
-		Config:  cloneConfigForStatus(meta.Config),
-		Labels:  meta.Labels,
-		Runtime: "native",
+		Name:             meta.Name,
+		Phase:            phase,
+		Ready:            ready,
+		Address:          fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Config:           cloneConfigForStatus(meta.Config),
+		Labels:           meta.Labels,
+		Runtime:          "native",
+		AdapterCommand:   append([]string(nil), meta.Command...),
+		AdapterModelPath: meta.ModelPath,
 	}
 	setDeploymentStartFromTime(ds, meta.StartTime)
 

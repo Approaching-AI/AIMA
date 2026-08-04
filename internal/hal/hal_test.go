@@ -1305,6 +1305,44 @@ func TestDetectWithRunner_AMDUnifiedMemory(t *testing.T) {
 	}
 }
 
+func TestDetectWithRunner_AMDStrixHaloUsesGTTWhenRocmSMIReports512MiB(t *testing.T) {
+	mocks := platformMockOutputs()
+	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
+		err: fmt.Errorf("nvidia-smi failed"),
+	}
+	mocks["rocm-smi --json --showproductname --showmeminfo vram --showtemp --showpower"] = mockResult{
+		output: []byte(`{"card0":{"Card Series":"AMD Radeon Graphics","Card Model":"0x1586","VRAM Total Memory (B)":"536870912","GFX Version":"gfx1151"}}`),
+	}
+	mocks["lspci -nn -D"] = mockResult{
+		output: []byte("0000:c5:00.0 Display controller [0380]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:1586] (rev c1)\n"),
+	}
+	mocks["cat /sys/class/drm/card1/device/vendor"] = mockResult{output: []byte("0x1002\n")}
+	mocks["cat /sys/class/drm/card1/device/device"] = mockResult{output: []byte("0x1586\n")}
+	mocks["cat /sys/class/drm/card1/device/uevent"] = mockResult{
+		output: []byte("DRIVER=amdgpu\nPCI_CLASS=38000\nPCI_ID=1002:1586\nPCI_SLOT_NAME=0000:c5:00.0\n"),
+	}
+	mocks["cat /sys/class/drm/card1/device/mem_info_vram_total"] = mockResult{output: []byte("536870912\n")}
+	mocks["cat /sys/class/drm/card1/device/mem_info_gtt_total"] = mockResult{output: []byte("103079215104\n")}
+	runner := newMockRunner(mocks)
+
+	hw, err := detectWithRunner(context.Background(), runner)
+	if err != nil {
+		t.Fatalf("detectWithRunner: %v", err)
+	}
+	if hw.GPU == nil {
+		t.Fatal("expected AMD GPU")
+	}
+	if !hw.GPU.UnifiedMemory {
+		t.Fatal("UnifiedMemory = false, want true for Strix Halo GTT pool")
+	}
+	if hw.GPU.VRAMMiB != 98304 {
+		t.Fatalf("VRAMMiB = %d, want 98304 MiB GTT pool", hw.GPU.VRAMMiB)
+	}
+	if hw.GPU.Name != "AMD Radeon 8060S Graphics" || hw.GPU.Arch != "RDNA3.5" || hw.GPU.ComputeID != "gfx1151" {
+		t.Fatalf("GPU identity = %#v", hw.GPU)
+	}
+}
+
 func TestDetectWithRunner_AMDDiscreteNotUnified(t *testing.T) {
 	mocks := platformMockOutputs()
 	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{

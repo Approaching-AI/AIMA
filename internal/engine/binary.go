@@ -775,10 +775,7 @@ func uniqueNonEmpty(in []string) []string {
 // or renames it. No destination file is created before strict verification.
 // Returns the SHA256 hex digest of the downloaded content.
 func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) (string, error) {
-	tempParent := destDir
-	if strings.TrimSpace(expectedSHA256) != "" {
-		tempParent = filepath.Dir(destDir)
-	}
+	tempParent := filepath.Dir(destDir)
 	tmpFile, err := os.CreateTemp(tempParent, ".download-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
@@ -839,6 +836,15 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 		return actualSHA256, fmt.Errorf("create extraction staging directory: %w", err)
 	}
 	defer os.RemoveAll(stageDir)
+	if strings.TrimSpace(expectedSHA256) == "" {
+		if _, statErr := os.Stat(destDir); statErr == nil {
+			if err := copyDirContents(destDir, stageDir); err != nil {
+				return actualSHA256, fmt.Errorf("stage current engine distribution: %w", err)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return actualSHA256, statErr
+		}
+	}
 
 	// Detect format from URL and extract
 	urlLower := strings.ToLower(downloadFileName(url))
@@ -867,6 +873,9 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 		if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
 			return actualSHA256, fmt.Errorf("create binary directory: %w", err)
 		}
+		if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+			return actualSHA256, fmt.Errorf("replace staged binary: %w", err)
+		}
 		err = os.Rename(tmpPath, binPath)
 	}
 	if err != nil {
@@ -882,51 +891,11 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 		}
 		return actualSHA256, nil
 	}
-	if err := mergeStagedDir(stageDir, destDir); err != nil {
-		return actualSHA256, fmt.Errorf("install staged engine bundle: %w", err)
+	finalizeNativeDist(stageDir, binaryName)
+	if err := promoteVersionedBundle(stageDir, destDir); err != nil {
+		return actualSHA256, fmt.Errorf("promote staged engine distribution: %w", err)
 	}
 	return actualSHA256, nil
-}
-
-func mergeStagedDir(srcDir, destDir string) error {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(srcDir, entry.Name())
-		destPath := filepath.Join(destDir, entry.Name())
-		info, err := os.Lstat(srcPath)
-		if err != nil {
-			return err
-		}
-		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			if err := mergeStagedDir(srcPath, destPath); err != nil {
-				return err
-			}
-			if err := os.Remove(srcPath); err != nil {
-				return err
-			}
-			continue
-		}
-		if existing, err := os.Lstat(destPath); err == nil {
-			if existing.IsDir() {
-				return fmt.Errorf("cannot replace directory %s with file", destPath)
-			}
-			if err := os.Remove(destPath); err != nil {
-				return err
-			}
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		if err := os.Rename(srcPath, destPath); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // extractZip extracts a zip archive to destDir, stripping a common top-level directory.

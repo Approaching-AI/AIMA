@@ -1,11 +1,14 @@
 package engine
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/jguan/aima/internal/knowledge"
+	"github.com/klauspost/compress/zstd"
 )
 
 // mockRunner implements CommandRunner for tests
@@ -374,6 +378,202 @@ func TestBinaryManagerEnsureInstallsLocalZipBundle(t *testing.T) {
 	}
 	if data, err := os.ReadFile(want); err != nil || string(data) != "bin" {
 		t.Fatalf("installed binary = %q, %v; want bin", data, err)
+	}
+}
+
+type testTarEntry struct {
+	name     string
+	body     string
+	mode     int64
+	typeflag byte
+	linkname string
+}
+
+func writeTarZst(t *testing.T, archivePath string, entries []testTarEntry) {
+	t.Helper()
+
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create tar.zst: %v", err)
+	}
+	encoder, err := zstd.NewWriter(file)
+	if err != nil {
+		file.Close()
+		t.Fatalf("create zstd writer: %v", err)
+	}
+	tw := tar.NewWriter(encoder)
+	for _, entry := range entries {
+		typeflag := entry.typeflag
+		if typeflag == 0 {
+			typeflag = tar.TypeReg
+		}
+		mode := entry.mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		header := &tar.Header{
+			Name:     entry.name,
+			Mode:     mode,
+			Typeflag: typeflag,
+			Linkname: entry.linkname,
+		}
+		if typeflag == tar.TypeReg || typeflag == tar.TypeRegA {
+			header.Size = int64(len(entry.body))
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatalf("write tar header %q: %v", entry.name, err)
+		}
+		if header.Size > 0 {
+			if _, err := io.Copy(tw, strings.NewReader(entry.body)); err != nil {
+				t.Fatalf("write tar body %q: %v", entry.name, err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := encoder.Close(); err != nil {
+		t.Fatalf("close zstd writer: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close tar.zst: %v", err)
+	}
+}
+
+func TestBinaryManagerEnsureInstallsLocalTarZstBundle(t *testing.T) {
+	t.Parallel()
+
+	distDir := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "aima-engine.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{
+		name: "aima-engine-native/bin/aima-engine",
+		body: "portable-bin",
+		mode: 0o755,
+	}})
+
+	mgr := NewBinaryManager(distDir)
+	source := &BinarySource{
+		Binary:       "bin/aima-engine",
+		Platforms:    []string{goruntime.GOOS + "/" + goruntime.GOARCH},
+		LocalBundles: []string{archivePath},
+	}
+
+	got, installed, err := mgr.Ensure(context.Background(), source, nil)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if !installed {
+		t.Fatal("Ensure should report local tar.zst installation")
+	}
+	want := filepath.Join(distDir, "bin", "aima-engine")
+	if got != want {
+		t.Fatalf("Ensure path = %q, want %q", got, want)
+	}
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+	if goruntime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("installed mode = %o, want executable", info.Mode().Perm())
+	}
+}
+
+func TestExtractTarZstStripsCommonPrefixAndPreservesMode(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "runtime.tzst")
+	writeTarZst(t, archivePath, []testTarEntry{
+		{name: "runtime/bin/aima-engine", body: "bin", mode: 0o755},
+		{name: "runtime/lib/libengine.so.1", body: "so", mode: 0o644},
+	})
+	destDir := t.TempDir()
+
+	if err := extractTarZst(archivePath, destDir); err != nil {
+		t.Fatalf("extractTarZst: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "runtime")); !os.IsNotExist(err) {
+		t.Fatalf("common prefix was not stripped: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(destDir, "bin", "aima-engine"))
+	if err != nil {
+		t.Fatalf("stat executable: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("executable mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestExtractTarZstCreatesSafeRelativeSymlink(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "runtime.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{
+		{name: "runtime/lib/aima-engine-real", body: "bin", mode: 0o755},
+		{name: "runtime/bin/aima-engine", typeflag: tar.TypeSymlink, linkname: "../lib/aima-engine-real", mode: 0o777},
+	})
+	destDir := t.TempDir()
+
+	if err := extractTarZst(archivePath, destDir); err != nil {
+		t.Fatalf("extractTarZst: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(destDir, "bin", "aima-engine"))
+	if err != nil {
+		t.Fatalf("read installed symlink: %v", err)
+	}
+	if target != "../lib/aima-engine-real" {
+		t.Fatalf("symlink target = %q", target)
+	}
+}
+
+func TestExtractTarZstRejectsTraversal(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "traversal.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{name: "../escaped", body: "bad"}})
+	destDir := filepath.Join(root, "dest")
+
+	err := extractTarZst(archivePath, destDir)
+	if err == nil || !strings.Contains(err.Error(), "path traversal") {
+		t.Fatalf("extractTarZst error = %v, want path traversal rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "escaped")); !os.IsNotExist(statErr) {
+		t.Fatalf("archive wrote outside destination: %v", statErr)
+	}
+}
+
+func TestExtractTarZstRejectsEscapingSymlink(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "symlink.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{
+		name:     "runtime/bin/aima-engine",
+		mode:     0o777,
+		typeflag: tar.TypeSymlink,
+		linkname: "../../../outside",
+	}})
+	destDir := t.TempDir()
+
+	err := extractTarZst(archivePath, destDir)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("extractTarZst error = %v, want escaping symlink rejection", err)
+	}
+}
+
+func TestExtractTarZstRejectsCorruption(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "corrupt.tar.zst")
+	if err := os.WriteFile(archivePath, bytes.Repeat([]byte{0xff}, 64), 0o644); err != nil {
+		t.Fatalf("write corrupt archive: %v", err)
+	}
+
+	if err := extractTarZst(archivePath, t.TempDir()); err == nil {
+		t.Fatal("extractTarZst accepted corrupt archive")
 	}
 }
 

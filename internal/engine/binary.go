@@ -17,6 +17,8 @@ import (
 	goruntime "runtime"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // BinaryManager downloads and caches native engine binaries.
@@ -290,6 +292,11 @@ func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
 		}
 		return extractTarGz(bundlePath, destDir)
+	case strings.HasSuffix(lower, ".tar.zst") || strings.HasSuffix(lower, ".tzst"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
+		}
+		return extractTarZst(bundlePath, destDir)
 	case strings.HasSuffix(lower, ".zip"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
@@ -599,6 +606,11 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
 		return actualSHA256, extractTarGz(tmpPath, destDir)
+	case strings.HasSuffix(urlLower, ".tar.zst") || strings.HasSuffix(urlLower, ".tzst"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
+		}
+		return actualSHA256, extractTarZst(tmpPath, destDir)
 	case strings.HasSuffix(urlLower, ".zip"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
@@ -681,133 +693,262 @@ func zipCommonPrefix(files []*zip.File) string {
 	return prefix
 }
 
+type tarStreamOpener func() (io.ReadCloser, error)
+
+type archiveReadCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (r *archiveReadCloser) Close() error {
+	if r == nil || r.close == nil {
+		return nil
+	}
+	return r.close()
+}
+
 // extractTarGz extracts a .tar.gz archive to destDir, stripping a common top-level directory.
 func extractTarGz(archivePath, destDir string) error {
-	// Two passes: first detect common prefix, then extract.
-	prefix, err := tarGzCommonPrefix(archivePath)
+	return extractTarArchive(destDir, func() (io.ReadCloser, error) {
+		file, err := os.Open(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("open tar.gz: %w", err)
+		}
+		reader, err := gzip.NewReader(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		return &archiveReadCloser{
+			Reader: reader,
+			close: func() error {
+				readerErr := reader.Close()
+				fileErr := file.Close()
+				if readerErr != nil {
+					return readerErr
+				}
+				return fileErr
+			},
+		}, nil
+	})
+}
+
+// extractTarZst extracts a .tar.zst/.tzst archive without requiring a system
+// zstd binary or CGO.
+func extractTarZst(archivePath, destDir string) error {
+	return extractTarArchive(destDir, func() (io.ReadCloser, error) {
+		file, err := os.Open(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("open tar.zst: %w", err)
+		}
+		reader, err := zstd.NewReader(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("zstd reader: %w", err)
+		}
+		return &archiveReadCloser{
+			Reader: reader,
+			close: func() error {
+				reader.Close()
+				return file.Close()
+			},
+		}, nil
+	})
+}
+
+func extractTarArchive(destDir string, open tarStreamOpener) error {
+	prefix, err := tarCommonPrefix(open)
 	if err != nil {
 		return fmt.Errorf("detect archive prefix: %w", err)
 	}
-
-	f, err := os.Open(archivePath)
+	reader, err := open()
 	if err != nil {
-		return fmt.Errorf("open tar.gz: %w", err)
+		return err
 	}
-	defer f.Close()
+	defer reader.Close()
 
-	gz, err := gzip.NewReader(f)
+	destRoot, err := filepath.Abs(destDir)
 	if err != nil {
-		return fmt.Errorf("gzip reader: %w", err)
+		return fmt.Errorf("resolve destination: %w", err)
 	}
-	defer gz.Close()
+	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+		return fmt.Errorf("create destination: %w", err)
+	}
 
-	tr := tar.NewReader(gz)
+	tarReader := tar.NewReader(reader)
 	for {
-		hdr, err := tr.Next()
+		header, err := tarReader.Next()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
-
-		name := normalizeTarPath(hdr.Name)
+		name, err := cleanTarEntryName(header.Name)
+		if err != nil {
+			return err
+		}
 		name = strings.TrimPrefix(name, prefix)
 		if name == "" {
 			continue
 		}
-
-		// Prevent path traversal
-		cleaned := filepath.Clean(filepath.FromSlash(name))
-		if strings.HasPrefix(cleaned, "..") {
-			continue
+		name, err = cleanTarEntryName(name)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(destRoot, filepath.FromSlash(name))
+		if !pathWithin(destRoot, destPath) {
+			return fmt.Errorf("tar path traversal rejected: %q", header.Name)
+		}
+		if err := rejectSymlinkParents(destRoot, filepath.Dir(destPath)); err != nil {
+			return fmt.Errorf("extract %q: %w", header.Name, err)
 		}
 
-		destPath := filepath.Join(destDir, cleaned)
-
-		switch hdr.Typeflag {
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(destPath, header.FileInfo().Mode().Perm()); err != nil {
+				return fmt.Errorf("create directory %s: %w", destPath, err)
+			}
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 				return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
 			}
-			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("replace file %s: %w", destPath, err)
+			}
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, header.FileInfo().Mode().Perm())
 			if err != nil {
 				return fmt.Errorf("create file %s: %w", destPath, err)
 			}
-			_, err = io.Copy(out, tr)
-			out.Close()
-			if err != nil {
-				return fmt.Errorf("extract file %s: %w", cleaned, err)
+			_, copyErr := io.Copy(out, tarReader)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return fmt.Errorf("extract file %s: %w", name, copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close file %s: %w", name, closeErr)
 			}
 		case tar.TypeSymlink:
-			// Validate symlink target: must resolve within destDir
-			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(destPath), hdr.Linkname))
-			if !strings.HasPrefix(resolvedTarget, filepath.Clean(destDir)+string(filepath.Separator)) &&
-				resolvedTarget != filepath.Clean(destDir) {
-				slog.Warn("skipping symlink with target outside destDir", "link", destPath, "target", hdr.Linkname)
-				continue
+			linkTarget, err := safeSymlinkTarget(destRoot, destPath, header.Linkname)
+			if err != nil {
+				return fmt.Errorf("extract symlink %q: %w", header.Name, err)
 			}
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 				return fmt.Errorf("create directory for symlink %s: %w", destPath, err)
 			}
-			os.Remove(destPath) // remove stale symlink or file if present
-			if err := os.Symlink(hdr.Linkname, destPath); err != nil {
-				slog.Warn("create symlink", "link", destPath, "target", hdr.Linkname, "error", err)
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("replace symlink %s: %w", destPath, err)
 			}
+			if err := os.Symlink(linkTarget, destPath); err != nil {
+				return fmt.Errorf("create symlink %s: %w", destPath, err)
+			}
+		case tar.TypeXHeader, tar.TypeXGlobalHeader:
+			continue
+		default:
+			return fmt.Errorf("unsupported tar entry %q (type %d)", header.Name, header.Typeflag)
+		}
+	}
+}
+
+func tarCommonPrefix(open tarStreamOpener) (string, error) {
+	reader, err := open()
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+
+	tarReader := tar.NewReader(reader)
+	prefix := ""
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return prefix, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("read tar header: %w", err)
+		}
+		name, err := cleanTarEntryName(header.Name)
+		if err != nil {
+			return "", err
+		}
+		if name == "" {
+			continue
+		}
+		index := strings.IndexByte(name, '/')
+		if index < 0 {
+			if header.Typeflag != tar.TypeDir {
+				return "", nil
+			}
+			continue
+		}
+		candidate := name[:index+1]
+		if prefix == "" {
+			prefix = candidate
+		} else if candidate != prefix {
+			return "", nil
+		}
+	}
+}
+
+func cleanTarEntryName(name string) (string, error) {
+	name = normalizeTarPath(name)
+	if name == "" || name == "." {
+		return "", nil
+	}
+	if strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	cleaned := path.Clean(name)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	hostPath := filepath.FromSlash(cleaned)
+	if filepath.IsAbs(hostPath) || filepath.VolumeName(hostPath) != "" {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	return filepath.ToSlash(hostPath), nil
+}
+
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func rejectSymlinkParents(root, parent string) error {
+	rel, err := filepath.Rel(root, parent)
+	if err != nil || rel == "." {
+		return err
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("parent path %s is a symlink", current)
 		}
 	}
 	return nil
 }
 
-// tarGzCommonPrefix reads archive headers to find a shared top-level directory prefix.
-// It handles archives with or without explicit directory entries, and with leading "./".
-func tarGzCommonPrefix(archivePath string) (string, error) {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return "", fmt.Errorf("open archive %s: %w", archivePath, err)
+func safeSymlinkTarget(root, linkPath, target string) (string, error) {
+	if strings.TrimSpace(target) == "" || strings.HasPrefix(target, "/") {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return "", fmt.Errorf("gzip reader for %s: %w", archivePath, err)
+	hostTarget := filepath.FromSlash(target)
+	if filepath.IsAbs(hostTarget) || filepath.VolumeName(hostTarget) != "" {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	prefix := ""
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("read tar header in %s: %w", archivePath, err)
-		}
-
-		name := normalizeTarPath(hdr.Name)
-		if name == "" {
-			continue // skip "." or empty entries
-		}
-
-		idx := strings.Index(name, "/")
-		if idx < 0 {
-			// Entry is at root level (bare filename or bare dirname with no slash)
-			if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
-				return "", nil // regular file at root: no prefix to strip
-			}
-			continue // root-level directory entry: skip, look at file entries
-		}
-
-		// Entry is inside a subdirectory
-		candidate := name[:idx+1] // e.g. "llama-b8149/"
-		if prefix == "" {
-			prefix = candidate
-		} else if candidate != prefix {
-			return "", nil // multiple top-level dirs: no common prefix
-		}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), hostTarget))
+	if !pathWithin(root, resolved) {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	return prefix, nil
+	return hostTarget, nil
 }
 
 // normalizeTarPath strips leading "./" sequences and trailing "/" from a tar entry name.

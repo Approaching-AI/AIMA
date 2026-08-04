@@ -11,9 +11,10 @@ import (
 )
 
 type AdapterContext struct {
-	Command   []string
-	ModelPath string
-	Config    map[string]any
+	Command    []string
+	ModelPath  string
+	Config     map[string]any
+	InstanceID string
 }
 
 type AdapterContextResolver func(ctx context.Context, deploymentName string) (AdapterContext, error)
@@ -93,21 +94,28 @@ type exactContextState struct {
 }
 
 type exactContextStates struct {
-	mu     sync.Mutex
-	states map[string]*exactContextState
+	mu      sync.Mutex
+	states  map[string]*exactContextState
+	current map[string]string
 }
 
-func (s *exactContextStates) state(key string) *exactContextState {
+func (s *exactContextStates) state(key, instanceID string) *exactContextState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.states == nil {
 		s.states = make(map[string]*exactContextState)
+		s.current = make(map[string]string)
 	}
-	if state := s.states[key]; state != nil {
+	stateKey := key + "\x00" + instanceID
+	if previous := s.current[key]; previous != "" && previous != stateKey {
+		delete(s.states, previous)
+	}
+	s.current[key] = stateKey
+	if state := s.states[stateKey]; state != nil {
 		return state
 	}
 	state := &exactContextState{}
-	s.states[key] = state
+	s.states[stateKey] = state
 	return state
 }
 
@@ -172,7 +180,7 @@ func RequestBodyPreparer(cat CatalogReader, resolve AdapterContextResolver, run 
 		if stateKey == "" {
 			stateKey = strings.ToLower(strings.TrimSpace(engineType)) + "\x00" + strings.ToLower(strings.TrimSpace(model))
 		}
-		state := states.state(stateKey)
+		state := states.state(stateKey, runtimeContext.InstanceID)
 		state.mu.Lock()
 		leaseTransferred := false
 		defer func() {

@@ -1361,7 +1361,7 @@ func LoadCatalogPatchesLenient(fsys fs.FS, base *Catalog) (*Catalog, []string) {
 			warnings = append(warnings, fmt.Sprintf("read %s: %v", path, err))
 			return nil
 		}
-		assetData, err := catalogPatchToAssetYAML(base, data, path)
+		assetData, err := ValidateCatalogPatch(base, data, path)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("patch %s: %v", path, err))
 			return nil
@@ -1422,8 +1422,16 @@ func ValidateCatalogPatch(base *Catalog, data []byte, path string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	validationCat := &Catalog{EngineProfiles: make(map[string]*EngineProfile)}
+	var profiles map[string]*EngineProfile
+	if base != nil {
+		profiles = base.EngineProfiles
+	}
+	validationCat := &Catalog{EngineProfiles: mergeEngineProfiles(nil, profiles)}
 	if err := validationCat.parseAsset(assetData, path); err != nil {
+		return nil, err
+	}
+	finalizeEngineAssets(validationCat)
+	if err := validateEngineRequestAdapters(validationCat.EngineAssets); err != nil {
 		return nil, err
 	}
 	return assetData, nil
@@ -1657,7 +1665,11 @@ func MergeCatalog(base, overlay *Catalog) (*Catalog, []string) {
 	base.StackComponents = mergeSlice(base.StackComponents, overlay.StackComponents, func(v StackComponent) string { return v.Metadata.Name })
 	base.DeploymentScenarios = mergeSlice(base.DeploymentScenarios, overlay.DeploymentScenarios, func(v DeploymentScenario) string { return v.Metadata.Name })
 	base.EngineProfiles = mergeEngineProfiles(base.EngineProfiles, overlay.EngineProfiles)
-	return base, finalizeEngineAssets(base)
+	warnings := finalizeEngineAssets(base)
+	if err := validateEngineRequestAdapters(base.EngineAssets); err != nil {
+		warnings = append(warnings, err.Error())
+	}
+	return base, warnings
 }
 
 func rawEngineAssets(cat *Catalog) []EngineAsset {

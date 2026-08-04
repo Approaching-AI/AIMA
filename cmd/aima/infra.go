@@ -315,11 +315,7 @@ func buildNativeRuntime(dataDir string, engineAssets []knowledge.EngineAsset) ru
 		runtime.WithEngineDirs(engineDirs),
 		runtime.WithBinaryResolver(func(ctx context.Context, src *engine.BinarySource) (string, error) {
 			if !deployAutoPullAllowed(ctx) {
-				name := "engine binary"
-				if src != nil && strings.TrimSpace(src.Binary) != "" {
-					name = src.Binary
-				}
-				return "", fmt.Errorf("%s not found locally and auto-pull is disabled", name)
+				return bm.ResolveInstalled(src)
 			}
 			return bm.Resolve(ctx, src)
 		}),

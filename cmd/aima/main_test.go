@@ -69,11 +69,12 @@ func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
 		name: "native",
 		status: map[string]*aimaRuntime.DeploymentStatus{
 			"deployment-native": {
-				Name:             "deployment-native",
-				Runtime:          "native",
-				Config:           map[string]any{"context_tokens": 8192},
-				AdapterCommand:   []string{"/opt/aima/bin/aima-engine", "serve"},
-				AdapterModelPath: "/models/qwen",
+				Name:              "deployment-native",
+				Runtime:           "native",
+				Config:            map[string]any{"context_tokens": 8192},
+				AdapterCommand:    []string{"/opt/aima/bin/aima-engine", "serve"},
+				AdapterModelPath:  "/models/qwen",
+				AdapterInstanceID: "15147:1785835112742496328",
 			},
 		},
 	}
@@ -83,7 +84,7 @@ func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(got.Command) != 2 || got.Command[0] != "/opt/aima/bin/aima-engine" || got.ModelPath != "/models/qwen" {
+	if len(got.Command) != 2 || got.Command[0] != "/opt/aima/bin/aima-engine" || got.ModelPath != "/models/qwen" || got.InstanceID != "15147:1785835112742496328" {
 		t.Fatalf("adapter context = %#v", got)
 	}
 	got.Command[0] = "mutated"

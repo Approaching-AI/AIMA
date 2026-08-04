@@ -337,6 +337,31 @@ func TestExactContextDoesNotCommitStateOnFailedExchange(t *testing.T) {
 	}
 }
 
+func TestExactContextDropsCommittedStateWhenDeploymentInstanceChanges(t *testing.T) {
+	probe := &fakeTemplateProbe{}
+	instanceID := "instance-a"
+	resolver := func(context.Context, string) (AdapterContext, error) {
+		ctx, err := testAdapterResolver(context.Background(), "")
+		ctx.InstanceID = instanceID
+		return ctx, err
+	}
+	preparer := RequestBodyPreparer(exactContextCatalog{adapter: testExactContextAdapter()}, resolver, probe.run)
+	first := prepareExact(t, preparer, requestBody(t, []map[string]any{{"role": "user", "content": "hello"}}, nil))
+	first.Finish(true)
+
+	instanceID = "instance-b"
+	second := prepareExact(t, preparer, requestBody(t, []map[string]any{
+		{"role": "user", "content": "hello"},
+		{"role": "assistant", "content": "hi"},
+		{"role": "user", "content": "again"},
+	}, nil))
+	defer second.Finish(false)
+	messages := decodedRequest(t, second.Body)["messages"].([]any)
+	if got := strings.Count(messages[0].(map[string]any)["content"].(string), " ·"); got != 2 {
+		t.Fatalf("replacement deployment reused stale padding; markers = %d, want cold 2", got)
+	}
+}
+
 func TestExactContextRejectsMalformedJSON(t *testing.T) {
 	preparer := RequestBodyPreparer(exactContextCatalog{adapter: testExactContextAdapter()}, testAdapterResolver, (&fakeTemplateProbe{}).run)
 	_, err := preparer(context.Background(), "/v1/chat/completions", "application/json", "qwen3.6-35b-a3b", "", "native-test", "deployment-1", []byte("{"))

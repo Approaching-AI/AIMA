@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,6 +67,22 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 	return path, err
 }
 
+// ResolveInstalled resolves only a locally installed, provenance-verified
+// binary. It never downloads and is used to implement --no-pull safely.
+func (m *BinaryManager) ResolveInstalled(source *BinarySource) (string, error) {
+	if source == nil {
+		return "", fmt.Errorf("no binary source configured")
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	if !source.Supports(platform) {
+		return "", fmt.Errorf("platform %s not supported (available: %v)", platform, source.Platforms)
+	}
+	if path, ok := m.findExisting(source); ok {
+		return path, nil
+	}
+	return "", fmt.Errorf("binary %s is not installed with verified provenance", source.Binary)
+}
+
 // Ensure makes a native engine binary available for the current platform.
 // It reuses an existing binary from distDir / probe paths / PATH when possible,
 // and downloads it only when missing.
@@ -109,7 +126,7 @@ func (m *BinaryManager) Ensure(ctx context.Context, source *BinarySource, onProg
 	}
 
 	expectedSHA256 := source.SHA256[platform]
-	if err := m.download(ctx, url, mirrorURLs, m.distDir, name, expectedSHA256, onProgress); err != nil {
+	if err := m.download(ctx, url, mirrorURLs, m.installDir(source), name, expectedSHA256, onProgress); err != nil {
 		return "", true, fmt.Errorf("download %s: %w", name, err)
 	}
 
@@ -154,11 +171,20 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onPr
 	}
 
 	expectedSHA256 := source.SHA256[platform]
-	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary, expectedSHA256, onProgress)
+	return m.download(ctx, url, mirrorURLs, m.installDir(source), source.Binary, expectedSHA256, onProgress)
 }
 
 func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
 	if source == nil {
+		return "", false
+	}
+
+	expectedSHA256 := source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]
+	if strings.TrimSpace(expectedSHA256) != "" {
+		installDir := m.installDir(source)
+		if path, ok := findBinaryInDir(installDir, source.Binary); ok && verifyBundleProvenance(installDir, path, expectedSHA256) == nil {
+			return path, true
+		}
 		return "", false
 	}
 
@@ -186,6 +212,18 @@ func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
 	return "", false
 }
 
+func (m *BinaryManager) installDir(source *BinarySource) string {
+	if source == nil {
+		return m.distDir
+	}
+	expected := strings.ToLower(strings.TrimSpace(source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]))
+	if expected == "" {
+		return m.distDir
+	}
+	key := sha256.Sum256([]byte(filepath.ToSlash(source.Binary)))
+	return filepath.Join(m.distDir, ".aima", "bundles", fmt.Sprintf("%x", key[:8]), expected)
+}
+
 // ImportBundle installs a native engine archive, directory, or single binary into
 // the manager's dist directory. It is used by air-gapped deployments and by
 // `aima engine import` for native runtimes.
@@ -202,10 +240,23 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 	if onProgress != nil {
 		onProgress(ProgressEvent{Phase: "importing", Message: "installing local engine bundle"})
 	}
-	if err := installLocalBundle(bundlePath, m.distDir, binaryName, onProgress); err != nil {
+	stageDir, err := os.MkdirTemp(filepath.Dir(m.distDir), ".aima-import-stage-*")
+	if err != nil {
+		return fmt.Errorf("create import staging directory: %w", err)
+	}
+	defer os.RemoveAll(stageDir)
+	if err := installLocalBundle(bundlePath, stageDir, binaryName, onProgress); err != nil {
 		return err
 	}
-	finalizeNativeDist(m.distDir, binaryName)
+	finalizeNativeDist(stageDir, binaryName)
+	if binaryName != "" {
+		if _, ok := findBinaryInDir(stageDir, binaryName); !ok {
+			return fmt.Errorf("binary %s not found after staging local bundle", binaryName)
+		}
+	}
+	if err := mergeStagedDir(stageDir, m.distDir); err != nil {
+		return fmt.Errorf("promote imported engine bundle: %w", err)
+	}
 	if onProgress != nil {
 		onProgress(ProgressEvent{Phase: "complete", Message: "engine binary ready"})
 	}
@@ -247,10 +298,17 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 				continue
 			}
 		}
-		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", m.distDir)
-		if err := m.ImportBundle(ctx, candidate, source.Binary, onProgress); err != nil {
-			lastErr = err
-			slog.Warn("local engine bundle failed", "path", candidate, "error", err)
+		installDir := m.installDir(source)
+		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", installDir)
+		var installErr error
+		if expectedSHA256 != "" {
+			installErr = installVersionedBundle(candidate, installDir, source.Binary, expectedSHA256, onProgress)
+		} else {
+			installErr = m.ImportBundle(ctx, candidate, source.Binary, onProgress)
+		}
+		if installErr != nil {
+			lastErr = installErr
+			slog.Warn("local engine bundle failed", "path", candidate, "error", installErr)
 			continue
 		}
 		return true, nil
@@ -259,6 +317,112 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 		return false, fmt.Errorf("all local engine bundles failed: %w", lastErr)
 	}
 	return false, nil
+}
+
+type bundleProvenance struct {
+	SourceSHA256 string `json:"source_sha256"`
+	BinaryPath   string `json:"binary_path"`
+	BinarySHA256 string `json:"binary_sha256"`
+}
+
+const bundleProvenanceFile = ".aima-provenance.json"
+
+func findBinaryInDir(dir, binaryName string) (string, bool) {
+	for _, candidate := range binaryCandidates(binaryName) {
+		path := filepath.Join(dir, candidate)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func writeBundleProvenance(dir, binaryName, sourceSHA256 string) error {
+	binaryPath, ok := findBinaryInDir(dir, binaryName)
+	if !ok {
+		return fmt.Errorf("binary %s not found in staged bundle", binaryName)
+	}
+	binarySHA256, err := fileSHA256(binaryPath)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(dir, binaryPath)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(bundleProvenance{
+		SourceSHA256: strings.ToLower(strings.TrimSpace(sourceSHA256)),
+		BinaryPath:   filepath.ToSlash(rel),
+		BinarySHA256: binarySHA256,
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, bundleProvenanceFile), data, 0o644)
+}
+
+func verifyBundleProvenance(dir, binaryPath, expectedSourceSHA256 string) error {
+	data, err := os.ReadFile(filepath.Join(dir, bundleProvenanceFile))
+	if err != nil {
+		return err
+	}
+	var provenance bundleProvenance
+	if err := json.Unmarshal(data, &provenance); err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(provenance.SourceSHA256), strings.TrimSpace(expectedSourceSHA256)) {
+		return fmt.Errorf("source sha256 provenance mismatch")
+	}
+	rel, err := filepath.Rel(dir, binaryPath)
+	if err != nil || filepath.ToSlash(rel) != provenance.BinaryPath {
+		return fmt.Errorf("binary provenance path mismatch")
+	}
+	actual, err := fileSHA256(binaryPath)
+	if err != nil {
+		return err
+	}
+	return verifySHA256(provenance.BinarySHA256, actual, binaryPath)
+}
+
+func installVersionedBundle(bundlePath, installDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) error {
+	if err := os.MkdirAll(filepath.Dir(installDir), 0o755); err != nil {
+		return err
+	}
+	stageDir, err := os.MkdirTemp(filepath.Dir(installDir), ".stage-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageDir)
+	if err := installLocalBundle(bundlePath, stageDir, binaryName, onProgress); err != nil {
+		return err
+	}
+	finalizeNativeDist(stageDir, binaryName)
+	if err := writeBundleProvenance(stageDir, binaryName, expectedSHA256); err != nil {
+		return err
+	}
+	return promoteVersionedBundle(stageDir, installDir)
+}
+
+func promoteVersionedBundle(stageDir, installDir string) error {
+	backupDir := ""
+	if _, err := os.Stat(installDir); err == nil {
+		backupDir = installDir + fmt.Sprintf(".backup-%d", time.Now().UnixNano())
+		if err := os.Rename(installDir, backupDir); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(stageDir, installDir); err != nil {
+		if backupDir != "" {
+			_ = os.Rename(backupDir, installDir)
+		}
+		return err
+	}
+	if backupDir != "" {
+		_ = os.RemoveAll(backupDir)
+	}
+	return nil
 }
 
 func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(ProgressEvent)) error {
@@ -376,7 +540,11 @@ func copyDirContents(srcDir, dstDir string) error {
 
 // download tries mirror URLs first, then primary. Extracts zip/tar.gz archives.
 func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []string, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) error {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	downloadDir := destDir
+	if strings.TrimSpace(expectedSHA256) != "" {
+		downloadDir = filepath.Dir(destDir)
+	}
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
 		return fmt.Errorf("create dist dir: %w", err)
 	}
 
@@ -511,7 +679,11 @@ func uniqueNonEmpty(in []string) []string {
 // downloadAndExtract downloads url to a temp file then extracts or renames it.
 // Returns the SHA256 hex digest of the downloaded content.
 func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) (string, error) {
-	tmpFile, err := os.CreateTemp(destDir, ".download-*")
+	tempParent := destDir
+	if strings.TrimSpace(expectedSHA256) != "" {
+		tempParent = filepath.Dir(destDir)
+	}
+	tmpFile, err := os.CreateTemp(tempParent, ".download-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
 	}
@@ -600,6 +772,16 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 	}
 	if err != nil {
 		return actualSHA256, err
+	}
+	if strings.TrimSpace(expectedSHA256) != "" {
+		finalizeNativeDist(stageDir, binaryName)
+		if err := writeBundleProvenance(stageDir, binaryName, expectedSHA256); err != nil {
+			return actualSHA256, err
+		}
+		if err := promoteVersionedBundle(stageDir, destDir); err != nil {
+			return actualSHA256, fmt.Errorf("promote versioned engine bundle: %w", err)
+		}
+		return actualSHA256, nil
 	}
 	if err := mergeStagedDir(stageDir, destDir); err != nil {
 		return actualSHA256, fmt.Errorf("install staged engine bundle: %w", err)

@@ -198,6 +198,10 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
 		if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
 			command[0] = resolved
+		} else if binarySourcePinned(req.BinarySource) {
+			logFile.Close()
+			clearPlaceholder()
+			return fmt.Errorf("resolve pinned engine binary: %w", err)
 		} else {
 			slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
 		}
@@ -554,6 +558,7 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	}
 	status.AdapterCommand = append([]string(nil), persisted.AdapterCommand...)
 	status.AdapterModelPath = persisted.AdapterModelPath
+	status.AdapterInstanceID = persisted.AdapterInstanceID
 	return status
 }
 
@@ -830,15 +835,16 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	}
 
 	ds := &DeploymentStatus{
-		Name:             meta.Name,
-		Phase:            phase,
-		Ready:            ready,
-		Address:          fmt.Sprintf("127.0.0.1:%d", meta.Port),
-		Config:           cloneConfigForStatus(meta.Config),
-		Labels:           meta.Labels,
-		Runtime:          "native",
-		AdapterCommand:   append([]string(nil), meta.Command...),
-		AdapterModelPath: meta.ModelPath,
+		Name:              meta.Name,
+		Phase:             phase,
+		Ready:             ready,
+		Address:           fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Config:            cloneConfigForStatus(meta.Config),
+		Labels:            meta.Labels,
+		Runtime:           "native",
+		AdapterCommand:    append([]string(nil), meta.Command...),
+		AdapterModelPath:  meta.ModelPath,
+		AdapterInstanceID: fmt.Sprintf("%d:%d", meta.PID, meta.StartTime.UnixNano()),
 	}
 	setDeploymentStartFromTime(ds, meta.StartTime)
 
@@ -942,6 +948,9 @@ func (r *NativeRuntime) loadAllMeta() []*deploymentMeta {
 // (for example bin/aima-engine) while the startup command intentionally uses a
 // portable bare name. Both forms must remain launchable with --no-pull.
 func (r *NativeRuntime) findLocalBinary(commandName string, source *engine.BinarySource) string {
+	if binarySourcePinned(source) {
+		return ""
+	}
 	if resolved := r.findInDist(commandName); resolved != "" {
 		return resolved
 	}
@@ -956,6 +965,14 @@ func (r *NativeRuntime) findLocalBinary(commandName string, source *engine.Binar
 		}
 	}
 	return r.findInEngineDirs(commandName)
+}
+
+func binarySourcePinned(source *engine.BinarySource) bool {
+	if source == nil {
+		return false
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	return strings.TrimSpace(source.SHA256[platform]) != ""
 }
 
 // findInDist checks for a binary in the dist directory.

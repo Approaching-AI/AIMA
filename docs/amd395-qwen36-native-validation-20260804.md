@@ -42,7 +42,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 The Linux build was a static x86-64 ELF with SHA-256:
 
 ```text
-c06b7b4bd70afc5ba29eae0660e6889864d14a28bb770d4c512c900eb177cff4
+dd6aacb6a84e8388bf696571f1c33b344358830dfaba028a09a50fae7f8fb16a
 ```
 
 ## Target-host results
@@ -79,6 +79,12 @@ reported `cold-decode-fallback` for these independent cache misses and served
 all of them with HTTP 200. Repeating an identical 16-token request produced an
 exact cache hit, reducing measured TTFT from about 498 ms to 3.6 ms while
 returning the same `CACHE_OK` content.
+
+The upgrade path was also exercised against a live deployment created before
+engine-source labels existed. The final AIMA binary refused to reuse that
+legacy process, replaced it with the pinned v1.4.1 bundle, and persisted
+`aima.dev/engine-source-sha256=f7556253...f650d1b`. A fresh proxy then returned
+exactly `UPGRADE_OK` from a 19-token unpadded request.
 
 ## Upstream resolution
 

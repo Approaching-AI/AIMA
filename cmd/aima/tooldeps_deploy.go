@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +111,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, fmt.Errorf("resolve recovery policy: %w", err)
 			}
 		}
+		engineSourceDigest := engineSourceSHA256(resolved.Source)
 		upstreamModel := resolvedServedModelName(
 			modelName,
 			resolved.Config,
@@ -156,6 +158,20 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 		}
 
+		deploymentLabels := map[string]string{
+			// Label carries the resolved asset metadata.name so the
+			// runtime's findEngineAsset lookup (keyed on metadata.name)
+			// can gate health_check + warmup. Fall through to the type
+			// alias when the resolver has no asset binding.
+			"aima.dev/engine":         firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
+			"aima.dev/model":          modelName,
+			"aima.dev/slot":           resolved.Slot,
+			proxy.LabelServedModel:    upstreamModel,
+			proxy.LabelRequestedModel: strings.TrimSpace(requestedModel),
+		}
+		if engineSourceDigest != "" {
+			deploymentLabels[proxy.LabelEngineSourceSHA256] = engineSourceDigest
+		}
 		req := &runtime.DeployRequest{
 			Name:             modelName,
 			Engine:           resolved.Engine,
@@ -173,17 +189,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			Container:        resolved.Container,
 			GPUResourceName:  resolved.GPUResourceName,
 			ExtraVolumes:     resolved.ExtraVolumes,
-			Labels: map[string]string{
-				// Label carries the resolved asset metadata.name so the
-				// runtime's findEngineAsset lookup (keyed on metadata.name)
-				// can gate health_check + warmup. Fall through to the type
-				// alias when the resolver has no asset binding.
-				"aima.dev/engine":         firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
-				"aima.dev/model":          modelName,
-				"aima.dev/slot":           resolved.Slot,
-				proxy.LabelServedModel:    upstreamModel,
-				proxy.LabelRequestedModel: strings.TrimSpace(requestedModel),
-			},
+			Labels:           deploymentLabels,
 		}
 		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {
 			req.Labels[proxy.LabelParameterCount] = parameterCount
@@ -235,6 +241,8 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		operationNames := deploymentApplyLockNames(cat, modelName, canonicalName, deployName, deploymentIntentName(req, activeRt.Name()), pinnedIntent)
 		var existing *runtime.DeploymentStatus
 		var unlockDeployment func()
+		var suppressRecentlyDeleted func(*runtime.DeploymentStatus) bool
+		var searchRuntimes []runtime.Runtime
 		for {
 			unlockDeployment = deploymentLocks.lock(operationNames...)
 			intents, intentErr := listDeploymentIntents(ctx, db)
@@ -242,12 +250,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				unlockDeployment()
 				return nil, intentErr
 			}
-			suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
-			searchRuntimes := []runtime.Runtime{activeRt, rt, nativeRt, dockerRt, k3sRt}
+			suppressRecentlyDeleted = loadDeletedDeploymentSuppressor(ctx, db)
+			searchRuntimes = []runtime.Runtime{activeRt, rt, nativeRt, dockerRt, k3sRt}
 			if pinnedIntent != nil {
 				searchRuntimes = []runtime.Runtime{activeRt}
 			}
-			existing, err = findReusableDeployment(ctx, deployName, modelName, engineType, slot, configOverrides, suppressRecentlyDeleted, searchRuntimes...)
+			existing, err = findReusableDeployment(ctx, deployName, modelName, engineType, slot, configOverrides, engineSourceDigest, suppressRecentlyDeleted, searchRuntimes...)
 			if err != nil {
 				unlockDeployment()
 				return nil, err
@@ -355,6 +363,16 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, err
 			}
 			return json.Marshal(result)
+		}
+		if err := reconcileMismatchedEngineSourceDeployment(
+			ctx,
+			modelName,
+			firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
+			engineSourceDigest,
+			suppressRecentlyDeleted,
+			searchRuntimes...,
+		); err != nil {
+			return nil, err
 		}
 		if requiresNativeLlamaMemoryPreflight(activeRt.Name(), resolved.ModelFormat, resolved.Engine) {
 			// Reducing ctx_size only reduces KV cache; it cannot make oversized model
@@ -587,6 +605,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			"model":                rd.ModelName,
 			"engine":               resolved.Engine,
 			"engine_image":         resolved.EngineImage,
+			"engine_source_sha256": engineSourceSHA256(resolved.Source),
 			"slot":                 resolved.Slot,
 			"runtime":              runtimeName,
 			"config":               resolved.Config,
@@ -2160,6 +2179,15 @@ func catalogEngineUpstreamModel(cat *knowledge.Catalog, engineAssetName string) 
 		}
 	}
 	return ""
+}
+
+func engineSourceSHA256(source *knowledge.EngineSource) string {
+	if source == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(
+		source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH],
+	))
 }
 
 func resolvedServedModelName(modelName string, config map[string]any, fallbacks ...string) string {

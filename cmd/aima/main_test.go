@@ -30,9 +30,10 @@ import (
 )
 
 type fakeRuntime struct {
-	name   string
-	status map[string]*aimaRuntime.DeploymentStatus
-	list   []*aimaRuntime.DeploymentStatus
+	name    string
+	status  map[string]*aimaRuntime.DeploymentStatus
+	list    []*aimaRuntime.DeploymentStatus
+	deleted []string
 }
 
 func TestCatalogAdapterMapsEngineRequestAdapter(t *testing.T) {
@@ -95,7 +96,10 @@ func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
 }
 
 func (r *fakeRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
-func (r *fakeRuntime) Delete(context.Context, string) error                     { return nil }
+func (r *fakeRuntime) Delete(_ context.Context, name string) error {
+	r.deleted = append(r.deleted, name)
+	return nil
+}
 func (r *fakeRuntime) Status(_ context.Context, name string) (*aimaRuntime.DeploymentStatus, error) {
 	if s, ok := r.status[name]; ok {
 		return s, nil
@@ -986,17 +990,64 @@ func TestDeploymentMatchesQuery(t *testing.T) {
 
 func TestShouldReuseExistingDeployment(t *testing.T) {
 	existing := &aimaRuntime.DeploymentStatus{Name: "qwen3-tts-0-6b-qwen-tts-fastapi-cuda-blackwell", Phase: "running", Ready: true}
-	if !shouldReuseExistingDeployment(existing, "", "", nil) {
+	if !shouldReuseExistingDeployment(existing, "", "", nil, "") {
 		t.Fatal("expected plain deploy query to reuse existing deployment")
 	}
-	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}) {
+	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}, "") {
 		t.Fatal("expected config override to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil) {
+	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil, "") {
 		t.Fatal("expected explicit engine selection to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "", "slot-a", nil) {
+	if shouldReuseExistingDeployment(existing, "", "slot-a", nil, "") {
 		t.Fatal("expected explicit slot selection to force runtime reconciliation")
+	}
+}
+
+func TestShouldReuseExistingDeploymentRequiresMatchingPinnedEngineSource(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	existing := &aimaRuntime.DeploymentStatus{
+		Name:   "qwen3.6-35b-a3b",
+		Phase:  "running",
+		Ready:  true,
+		Labels: map[string]string{},
+	}
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected legacy deployment without a source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = "old-digest"
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with a different source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = expected
+	if !shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with the same source digest to be reused")
+	}
+}
+
+func TestReconcileMismatchedEngineSourceDeploymentDeletesLegacyProcess(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	rt := &fakeRuntime{name: "native", list: []*aimaRuntime.DeploymentStatus{{
+		Name:  "qwen3.6-35b-a3b",
+		Phase: "running",
+		Ready: true,
+		Labels: map[string]string{
+			"aima.dev/model":  "qwen3.6-35b-a3b",
+			"aima.dev/engine": "aima-amd395-qwen36-native",
+		},
+	}}}
+	if err := reconcileMismatchedEngineSourceDeployment(
+		context.Background(),
+		"qwen3.6-35b-a3b",
+		"aima-amd395-qwen36-native",
+		expected,
+		nil,
+		rt,
+	); err != nil {
+		t.Fatalf("reconcileMismatchedEngineSourceDeployment: %v", err)
+	}
+	if len(rt.deleted) != 1 || rt.deleted[0] != "qwen3.6-35b-a3b" {
+		t.Fatalf("deleted = %v, want legacy deployment", rt.deleted)
 	}
 }
 

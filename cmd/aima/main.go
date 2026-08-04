@@ -1579,10 +1579,11 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			return nil, fmt.Errorf("resolve: %w", err)
 		}
 		var plan struct {
-			Engine    string         `json:"engine"`
-			Runtime   string         `json:"runtime"`
-			Config    map[string]any `json:"config"`
-			FitReport struct {
+			Engine             string         `json:"engine"`
+			EngineSourceSHA256 string         `json:"engine_source_sha256"`
+			Runtime            string         `json:"runtime"`
+			Config             map[string]any `json:"config"`
+			FitReport          struct {
 				Fit    bool     `json:"fit"`
 				Reason string   `json:"reason"`
 				Warns  []string `json:"warnings"`
@@ -1601,14 +1602,16 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		deployName := knowledge.SanitizePodName(model + "-" + plan.Engine)
 		if statusData, statusErr := deps.DeployStatus(ctx, deployName); statusErr == nil {
 			var status struct {
-				Phase   string `json:"phase"`
-				Ready   bool   `json:"ready"`
-				Address string `json:"address"`
-				Runtime string `json:"runtime"`
+				Phase   string            `json:"phase"`
+				Ready   bool              `json:"ready"`
+				Address string            `json:"address"`
+				Runtime string            `json:"runtime"`
+				Labels  map[string]string `json:"labels"`
 			}
 			if err := json.Unmarshal(statusData, &status); err == nil {
+				sourceMatches := deploymentEngineSourceMatches(&runtime.DeploymentStatus{Labels: status.Labels}, plan.EngineSourceSHA256)
 				switch {
-				case status.Ready:
+				case status.Ready && sourceMatches:
 					notify("reusing", deployName)
 					notify("ready", status.Address)
 					runtimeName := plan.Runtime
@@ -1621,7 +1624,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 						"runtime": runtimeName, "address": status.Address, "status": "ready",
 						"config": plan.Config,
 					})
-				case status.Phase == "running" || status.Phase == "starting":
+				case (status.Phase == "running" || status.Phase == "starting") && sourceMatches:
 					notify("reusing", deployName)
 					runtimeName := plan.Runtime
 					if status.Runtime != "" {
@@ -1637,6 +1640,8 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 						}
 					}
 					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout, false)
+				case !sourceMatches:
+					notify("reconciling", "engine source changed; replacing existing deployment")
 				}
 			}
 		}

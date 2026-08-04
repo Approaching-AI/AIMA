@@ -44,6 +44,11 @@ const LabelServedModel = "aima.dev/served-model"
 // canonical catalog model route.
 const LabelRequestedModel = "aima.dev/requested-model"
 
+// LabelEngineSourceSHA256 binds a deployment to the pinned native engine
+// artifact that created it. Deploy reconciliation uses it to prevent an older
+// live process from being reused after a catalog engine upgrade.
+const LabelEngineSourceSHA256 = "aima.dev/engine-source-sha256"
+
 // LabelParameterCount stores the model parameter count used for agent ranking.
 const LabelParameterCount = "aima.dev/parameter_count"
 

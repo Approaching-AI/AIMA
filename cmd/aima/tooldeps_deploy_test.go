@@ -244,6 +244,16 @@ func seedRecoveryIntent(t *testing.T, ctx context.Context, db *state.DB, name, r
 	return *stored
 }
 
+func TestEngineSourceSHA256UsesCurrentPlatform(t *testing.T) {
+	want := "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	source := &knowledge.EngineSource{SHA256: map[string]string{
+		goruntime.GOOS + "/" + goruntime.GOARCH: want,
+	}}
+	if got := engineSourceSHA256(source); got != want {
+		t.Fatalf("engineSourceSHA256 = %q, want %q", got, want)
+	}
+}
+
 func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
 	tests := []struct {
 		value any

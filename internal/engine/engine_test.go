@@ -5,9 +5,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -553,6 +556,128 @@ func TestExtractTarZstRejectsCorruption(t *testing.T) {
 
 	if err := extractTarZst(archivePath, t.TempDir()); err == nil {
 		t.Fatal("extractTarZst accepted corrupt archive")
+	}
+}
+
+func mustFileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func TestBinaryManagerDownloadRejectsSHA256Mismatch(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "engine.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{
+		name: "runtime/bin/aima-engine",
+		body: "untrusted",
+		mode: 0o755,
+	}})
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	distDir := t.TempDir()
+	mgr := NewBinaryManager(distDir)
+	source := &BinarySource{
+		Binary:    "bin/aima-engine",
+		Platforms: []string{platform},
+		Download:  map[string]string{platform: server.URL + "/engine.tar.zst"},
+		SHA256:    map[string]string{platform: strings.Repeat("0", 64)},
+	}
+
+	err = mgr.Download(context.Background(), source, nil)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("Download error = %v, want sha256 mismatch", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(distDir, "bin", "aima-engine")); !os.IsNotExist(statErr) {
+		t.Fatalf("mismatched archive was installed: %v", statErr)
+	}
+}
+
+func TestBinaryManagerDownloadFallsBackAfterSHA256Mismatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "good.tar.zst")
+	badPath := filepath.Join(dir, "bad.tar.zst")
+	writeTarZst(t, goodPath, []testTarEntry{{name: "runtime/bin/aima-engine", body: "good", mode: 0o755}})
+	writeTarZst(t, badPath, []testTarEntry{{name: "runtime/bin/aima-engine", body: "bad", mode: 0o755}})
+	goodArchive, err := os.ReadFile(goodPath)
+	if err != nil {
+		t.Fatalf("read good archive: %v", err)
+	}
+	badArchive, err := os.ReadFile(badPath)
+	if err != nil {
+		t.Fatalf("read bad archive: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "bad") {
+			_, _ = w.Write(badArchive)
+			return
+		}
+		_, _ = w.Write(goodArchive)
+	}))
+	defer server.Close()
+
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	distDir := t.TempDir()
+	mgr := NewBinaryManager(distDir)
+	source := &BinarySource{
+		Binary:    "bin/aima-engine",
+		Platforms: []string{platform},
+		Download:  map[string]string{platform: server.URL + "/good.tar.zst"},
+		Mirror:    map[string][]string{platform: {server.URL + "/bad.tar.zst"}},
+		SHA256:    map[string]string{platform: mustFileSHA256(t, goodPath)},
+	}
+
+	if err := mgr.Download(context.Background(), source, nil); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(distDir, "bin", "aima-engine"))
+	if err != nil {
+		t.Fatalf("read installed binary: %v", err)
+	}
+	if string(installed) != "good" {
+		t.Fatalf("installed binary = %q, want matching fallback", installed)
+	}
+}
+
+func TestBinaryManagerLocalBundleRejectsSHA256Mismatch(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "local.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{
+		name: "runtime/bin/aima-engine",
+		body: "local",
+		mode: 0o755,
+	}})
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	distDir := t.TempDir()
+	mgr := NewBinaryManager(distDir)
+	source := &BinarySource{
+		Binary:       "bin/aima-engine",
+		Platforms:    []string{platform},
+		LocalBundles: []string{archivePath},
+		SHA256:       map[string]string{platform: strings.Repeat("f", 64)},
+	}
+
+	_, _, err := mgr.Ensure(context.Background(), source, nil)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("Ensure error = %v, want sha256 mismatch", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(distDir, "bin", "aima-engine")); !os.IsNotExist(statErr) {
+		t.Fatalf("mismatched local bundle was installed: %v", statErr)
 	}
 }
 

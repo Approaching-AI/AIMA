@@ -88,18 +88,23 @@ func (m *BinaryManager) Ensure(ctx context.Context, source *BinarySource, onProg
 		return "", false, fmt.Errorf("preinstalled engine binary not found (probe paths: %v)", source.ProbePaths)
 	}
 
+	var localErr error
 	if installed, err := m.installFromLocalBundles(ctx, source, onProgress); installed {
 		if path, ok := m.findExisting(source); ok {
 			return path, true, nil
 		}
 		return "", true, fmt.Errorf("binary %s not found in %s after installing local bundle", name, m.distDir)
 	} else if err != nil {
+		localErr = err
 		slog.Warn("local engine bundle install failed, falling back to download", "binary", name, "error", err)
 	}
 
 	url := source.Download[platform]
 	mirrorURLs := source.Mirror[platform]
 	if url == "" && len(mirrorURLs) == 0 {
+		if localErr != nil {
+			return "", false, localErr
+		}
 		return "", false, fmt.Errorf("no download URL for platform %s", platform)
 	}
 
@@ -131,15 +136,20 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onPr
 		return fmt.Errorf("engine is preinstalled on this host; no downloadable artifact is configured")
 	}
 
+	var localErr error
 	if installed, err := m.installFromLocalBundles(ctx, source, onProgress); installed {
 		return nil
 	} else if err != nil {
+		localErr = err
 		slog.Warn("local engine bundle install failed, falling back to download", "binary", source.Binary, "error", err)
 	}
 
 	url := source.Download[platform]
 	mirrorURLs := source.Mirror[platform]
 	if url == "" && len(mirrorURLs) == 0 {
+		if localErr != nil {
+			return localErr
+		}
 		return fmt.Errorf("no download URL for platform %s", platform)
 	}
 
@@ -207,6 +217,8 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 		return false, nil
 	}
 	var lastErr error
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	expectedSHA256 := strings.TrimSpace(source.SHA256[platform])
 	for _, candidate := range source.LocalBundles {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
@@ -214,6 +226,26 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 		}
 		if err := ctx.Err(); err != nil {
 			return false, err
+		}
+		if expectedSHA256 != "" {
+			info, err := os.Stat(candidate)
+			if err != nil {
+				lastErr = fmt.Errorf("stat local engine bundle %s: %w", candidate, err)
+				continue
+			}
+			if info.IsDir() {
+				lastErr = fmt.Errorf("cannot verify archive sha256 for local engine directory %s", candidate)
+				continue
+			}
+			actual, err := fileSHA256(candidate)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if err := verifySHA256(expectedSHA256, actual, candidate); err != nil {
+				lastErr = err
+				continue
+			}
 		}
 		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", m.distDir)
 		if err := m.ImportBundle(ctx, candidate, source.Binary, onProgress); err != nil {
@@ -357,7 +389,7 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 	var lastErr error
 	for _, u := range urls {
 		slog.Info("downloading engine binary", "url", u, "dest", destDir)
-		actualSHA256, err := downloadAndExtract(ctx, u, destDir, binaryName, onProgress)
+		actualSHA256, err := downloadAndExtract(ctx, u, destDir, binaryName, expectedSHA256, onProgress)
 		if err != nil {
 			slog.Warn("download failed, trying next source", "url", u, "error", err)
 			lastErr = err
@@ -365,11 +397,7 @@ func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []s
 		}
 
 		if expectedSHA256 != "" {
-			if actualSHA256 != expectedSHA256 {
-				slog.Warn("sha256 mismatch", "expected", expectedSHA256, "actual", actualSHA256, "url", u)
-			} else {
-				slog.Info("sha256 verified", "sha256", actualSHA256)
-			}
+			slog.Info("sha256 verified", "sha256", actualSHA256)
 		}
 
 		finalizeNativeDist(destDir, binaryName)
@@ -482,7 +510,7 @@ func uniqueNonEmpty(in []string) []string {
 
 // downloadAndExtract downloads url to a temp file then extracts or renames it.
 // Returns the SHA256 hex digest of the downloaded content.
-func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, onProgress func(ProgressEvent)) (string, error) {
+func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) (string, error) {
 	tmpFile, err := os.CreateTemp(destDir, ".download-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
@@ -531,6 +559,15 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, on
 
 	actualSHA256 := fmt.Sprintf("%x", h.Sum(nil))
 	slog.Info("download complete", "bytes", written, "sha256", actualSHA256[:16])
+	if err := verifySHA256(expectedSHA256, actualSHA256, url); err != nil {
+		return actualSHA256, err
+	}
+
+	stageDir, err := os.MkdirTemp(filepath.Dir(destDir), ".aima-engine-stage-*")
+	if err != nil {
+		return actualSHA256, fmt.Errorf("create extraction staging directory: %w", err)
+	}
+	defer os.RemoveAll(stageDir)
 
 	// Detect format from URL and extract
 	urlLower := strings.ToLower(url)
@@ -539,25 +576,100 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName string, on
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
-		return actualSHA256, extractTarGz(tmpPath, destDir)
+		err = extractTarGz(tmpPath, stageDir)
 	case strings.HasSuffix(urlLower, ".tar.zst") || strings.HasSuffix(urlLower, ".tzst"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
-		return actualSHA256, extractTarZst(tmpPath, destDir)
+		err = extractTarZst(tmpPath, stageDir)
 	case strings.HasSuffix(urlLower, ".zip"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
-		return actualSHA256, extractZip(tmpPath, destDir)
+		err = extractZip(tmpPath, stageDir)
 	default:
-		// Plain binary — rename directly
-		binPath := filepath.Join(destDir, binaryName)
+		// Plain binary — move it into the staging tree.
+		binPath := filepath.Join(stageDir, binaryName)
 		if goruntime.GOOS == "windows" && !strings.HasSuffix(binPath, ".exe") {
 			binPath += ".exe"
 		}
-		return actualSHA256, os.Rename(tmpPath, binPath)
+		if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+			return actualSHA256, fmt.Errorf("create binary directory: %w", err)
+		}
+		err = os.Rename(tmpPath, binPath)
 	}
+	if err != nil {
+		return actualSHA256, err
+	}
+	if err := mergeStagedDir(stageDir, destDir); err != nil {
+		return actualSHA256, fmt.Errorf("install staged engine bundle: %w", err)
+	}
+	return actualSHA256, nil
+}
+
+func fileSHA256(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("open %s for sha256: %w", filePath, err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash %s: %w", filePath, err)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func verifySHA256(expected, actual, source string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	if !strings.EqualFold(expected, strings.TrimSpace(actual)) {
+		return fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", source, expected, actual)
+	}
+	return nil
+}
+
+func mergeStagedDir(srcDir, destDir string) error {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(srcDir, entry.Name())
+		destPath := filepath.Join(destDir, entry.Name())
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			if err := mergeStagedDir(srcPath, destPath); err != nil {
+				return err
+			}
+			if err := os.Remove(srcPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if existing, err := os.Lstat(destPath); err == nil {
+			if existing.IsDir() {
+				return fmt.Errorf("cannot replace directory %s with file", destPath)
+			}
+			if err := os.Remove(destPath); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(srcPath, destPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // extractZip extracts a zip archive to destDir, stripping a common top-level directory.

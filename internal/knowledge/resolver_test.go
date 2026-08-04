@@ -1200,6 +1200,46 @@ func TestRealCatalogSGLangKTUsesAppImageExtractAndRunFallback(t *testing.T) {
 	}
 }
 
+func TestResolveAMD395Qwen36NativeBF16(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		GPUCount:      1,
+		UnifiedMemory: true,
+		CPUArch:       "amd64",
+		RAMTotalMiB:   126000,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	resolved, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "aima-amd395-qwen36-native" || resolved.EngineAssetName != "aima-amd395-qwen36-native" {
+		t.Fatalf("engine = %q asset = %q", resolved.Engine, resolved.EngineAssetName)
+	}
+	if resolved.ModelFormat != "safetensors" || resolved.RuntimeRecommendation != "native" {
+		t.Fatalf("format/runtime = %q/%q", resolved.ModelFormat, resolved.RuntimeRecommendation)
+	}
+	if resolved.Config["context_tokens"] != 8192 || resolved.Config["cache_capacity"] != 9216 {
+		t.Fatalf("config = %#v", resolved.Config)
+	}
+	if resolved.Source == nil || resolved.Source.Binary != "bin/aima-engine" {
+		t.Fatalf("source = %#v", resolved.Source)
+	}
+	if len(resolved.Command) < 2 || resolved.Command[0] != "aima-engine" || resolved.Command[1] != "serve" {
+		t.Fatalf("command = %q", resolved.Command)
+	}
+	if resolved.Warmup != nil {
+		t.Fatalf("warmup = %#v, want nil", resolved.Warmup)
+	}
+}
+
 func TestResolveUnifiedMemoryFilter(t *testing.T) {
 	unified := true
 	discrete := false

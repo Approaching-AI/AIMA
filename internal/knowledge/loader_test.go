@@ -474,6 +474,43 @@ func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
 	}
 }
 
+func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	engine := cat.FindEngineByName("aima-amd395-qwen36-native", HardwareInfo{
+		GPUArch:  "RDNA3.5",
+		Platform: "linux/amd64",
+	})
+	if engine == nil {
+		t.Fatal("aima-amd395-qwen36-native engine not found")
+	}
+	if engine.Metadata.Version != "v1.4.0" || engine.Runtime.Default != "native" {
+		t.Fatalf("engine version/runtime = %q/%q", engine.Metadata.Version, engine.Runtime.Default)
+	}
+	if engine.Source == nil || engine.Source.Binary != "bin/aima-engine" {
+		t.Fatalf("engine source = %#v", engine.Source)
+	}
+	const wantArchive = "aima-engine-native-portable-a15b2774e3ab.tar.zst"
+	if got := engine.Source.Download["linux/amd64"]; !strings.HasSuffix(got, "/"+wantArchive) {
+		t.Fatalf("download URL = %q, want %s", got, wantArchive)
+	}
+	const wantSHA = "749a2acb8b8d49b3979e1dbb9785ce3a305bb24129175747fef6330579d2f0f2"
+	if got := engine.Source.SHA256["linux/amd64"]; got != wantSHA {
+		t.Fatalf("sha256 = %q, want %q", got, wantSHA)
+	}
+	if len(engine.Source.Mirror["linux/amd64"]) == 0 {
+		t.Fatal("expected expanded mirror URLs")
+	}
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.Warmup.Enabled {
+		t.Fatalf("health/warmup = %#v/%#v", engine.Startup.HealthCheck, engine.Startup.Warmup)
+	}
+	if engine.API.RequestAdapter == nil || engine.API.RequestAdapter.Kind != "exact_context" || engine.API.RequestAdapter.UpstreamModel != "aima-amd395-qwen36-35b" {
+		t.Fatalf("request adapter = %#v", engine.API.RequestAdapter)
+	}
+}
+
 func TestScenarioNewFields(t *testing.T) {
 	cat, err := LoadCatalog(catalogFS())
 	if err != nil {

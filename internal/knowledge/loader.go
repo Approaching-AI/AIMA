@@ -321,6 +321,7 @@ type WarmupConfig struct {
 type EngineAPI struct {
 	Protocol       string                `yaml:"protocol"                  json:"protocol"`
 	BasePath       string                `yaml:"base_path"                 json:"base_path"`
+	UpstreamModel  string                `yaml:"upstream_model,omitempty"  json:"upstream_model,omitempty"`
 	RequestAdapter *EngineRequestAdapter `yaml:"request_adapter,omitempty" json:"request_adapter,omitempty"`
 }
 
@@ -827,6 +828,9 @@ func mergeEngineProfile(ea *EngineAsset, p *EngineProfile) {
 	}
 	if ea.API.BasePath == "" {
 		ea.API.BasePath = p.API.BasePath
+	}
+	if ea.API.UpstreamModel == "" {
+		ea.API.UpstreamModel = p.API.UpstreamModel
 	}
 	if ea.API.RequestAdapter == nil {
 		ea.API.RequestAdapter = cloneEngineRequestAdapter(p.API.RequestAdapter)

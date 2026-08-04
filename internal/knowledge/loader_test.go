@@ -604,17 +604,17 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if engine == nil {
 		t.Fatal("aima-amd395-qwen36-native engine not found")
 	}
-	if engine.Metadata.Version != "v1.4.0" || engine.Runtime.Default != "native" {
+	if engine.Metadata.Version != "v1.4.1" || engine.Runtime.Default != "native" {
 		t.Fatalf("engine version/runtime = %q/%q", engine.Metadata.Version, engine.Runtime.Default)
 	}
 	if engine.Source == nil || engine.Source.Binary != "bin/aima-engine" {
 		t.Fatalf("engine source = %#v", engine.Source)
 	}
-	const wantArchive = "aima-engine-native-portable-a15b2774e3ab.tar.zst"
+	const wantArchive = "aima-engine-native-portable-b98b7bc698ae.tar.zst"
 	if got := engine.Source.Download["linux/amd64"]; !strings.HasSuffix(got, "/"+wantArchive) {
 		t.Fatalf("download URL = %q, want %s", got, wantArchive)
 	}
-	const wantSHA = "749a2acb8b8d49b3979e1dbb9785ce3a305bb24129175747fef6330579d2f0f2"
+	const wantSHA = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
 	if got := engine.Source.SHA256["linux/amd64"]; got != wantSHA {
 		t.Fatalf("sha256 = %q, want %q", got, wantSHA)
 	}
@@ -624,8 +624,11 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.Warmup.Enabled {
 		t.Fatalf("health/warmup = %#v/%#v", engine.Startup.HealthCheck, engine.Startup.Warmup)
 	}
-	if engine.API.RequestAdapter == nil || engine.API.RequestAdapter.Kind != "exact_context" || engine.API.RequestAdapter.UpstreamModel != "aima-amd395-qwen36-35b" {
-		t.Fatalf("request adapter = %#v", engine.API.RequestAdapter)
+	if engine.API.UpstreamModel != "aima-amd395-qwen36-35b" {
+		t.Fatalf("upstream model = %q", engine.API.UpstreamModel)
+	}
+	if engine.API.RequestAdapter != nil {
+		t.Fatalf("v1.4.1 should not require a request adapter: %#v", engine.API.RequestAdapter)
 	}
 }
 

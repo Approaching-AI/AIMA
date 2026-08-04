@@ -110,7 +110,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, fmt.Errorf("resolve recovery policy: %w", err)
 			}
 		}
-		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
+		upstreamModel := resolvedServedModelName(
+			modelName,
+			resolved.Config,
+			catalogEngineUpstreamModel(cat, resolved.EngineAssetName),
+		)
 
 		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
 		if modelPathErr != nil {
@@ -2146,10 +2150,27 @@ func firstPositiveInt(values ...int) int {
 	return 0
 }
 
-func resolvedServedModelName(modelName string, config map[string]any) string {
+func catalogEngineUpstreamModel(cat *knowledge.Catalog, engineAssetName string) string {
+	if cat == nil {
+		return ""
+	}
+	for _, engine := range cat.EngineAssets {
+		if strings.EqualFold(strings.TrimSpace(engine.Metadata.Name), strings.TrimSpace(engineAssetName)) {
+			return strings.TrimSpace(engine.API.UpstreamModel)
+		}
+	}
+	return ""
+}
+
+func resolvedServedModelName(modelName string, config map[string]any, fallbacks ...string) string {
 	if config != nil {
 		if raw, ok := config["served_model_name"].(string); ok {
 			return normalizeServedModelName(modelName, raw)
+		}
+	}
+	for _, fallback := range fallbacks {
+		if normalized := normalizeServedModelName("", fallback); normalized != "" {
+			return normalized
 		}
 	}
 	return modelName

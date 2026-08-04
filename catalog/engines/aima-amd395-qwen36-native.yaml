@@ -2,7 +2,7 @@ kind: engine_asset
 metadata:
   name: aima-amd395-qwen36-native
   type: aima-amd395-qwen36-native
-  version: v1.4.0
+  version: v1.4.1
   supported_formats: [safetensors]
   supported_model_types: [llm]
 hardware:
@@ -15,14 +15,14 @@ runtime:
 source:
   binary: bin/aima-engine
   platforms: [linux/amd64]
-  # The release-producing fork currently owns the published v1.4.0 artifact.
+  # The release-producing fork currently owns the published v1.4.1 artifact.
   # Approaching-AI's fork remains the source/issue target but has no matching
   # release asset as of 2026-08-04.
   url_template: "https://github.com/skyguan92/AIMA-AMD395-Qwen36-35B-Linux-Engine/releases/download/{version}/{platform_file}"
   platform_files:
-    linux/amd64: aima-engine-native-portable-a15b2774e3ab.tar.zst
+    linux/amd64: aima-engine-native-portable-b98b7bc698ae.tar.zst
   sha256:
-    linux/amd64: 749a2acb8b8d49b3979e1dbb9785ce3a305bb24129175747fef6330579d2f0f2
+    linux/amd64: f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b
   mirror_templates:
     - "https://ghfast.top/{url}"
     - "https://cf.ghproxy.cc/{url}"
@@ -48,17 +48,7 @@ startup:
 api:
   protocol: openai
   base_path: /v1
-  request_adapter:
-    kind: exact_context
-    path: /v1/chat/completions
-    context_config_key: context_tokens
-    probe_subcommand: chat-template-probe
-    disable_thinking: true
-    padding_role: system
-    padding_prefix: "Ignore the following transport padding markers."
-    padding_unit: " ·"
-    upstream_model: aima-amd395-qwen36-35b
-    max_attempts: 8
+  upstream_model: aima-amd395-qwen36-35b
 amplifier:
   features:
     - gfx1151_native_aot

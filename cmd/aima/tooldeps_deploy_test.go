@@ -270,6 +270,33 @@ func TestResolvedServedModelNameExpandsModelTemplate(t *testing.T) {
 	}
 }
 
+func TestCatalogEngineUpstreamModel(t *testing.T) {
+	cat := &knowledge.Catalog{EngineAssets: []knowledge.EngineAsset{
+		{
+			Metadata: knowledge.EngineMetadata{Name: "native-test"},
+			API:      knowledge.EngineAPI{UpstreamModel: "native-model"},
+		},
+	}}
+	if got := catalogEngineUpstreamModel(cat, "NATIVE-TEST"); got != "native-model" {
+		t.Fatalf("catalogEngineUpstreamModel = %q, want native-model", got)
+	}
+}
+
+func TestResolvedServedModelNameUsesCatalogFallback(t *testing.T) {
+	if got := resolvedServedModelName("public-model", nil, "native-model"); got != "native-model" {
+		t.Fatalf("resolvedServedModelName = %q, want native-model", got)
+	}
+}
+
+func TestResolvedServedModelNameConfigOverridesCatalogFallback(t *testing.T) {
+	got := resolvedServedModelName("public-model", map[string]any{
+		"served_model_name": "configured-model",
+	}, "native-model")
+	if got != "configured-model" {
+		t.Fatalf("resolvedServedModelName = %q, want configured-model", got)
+	}
+}
+
 func TestDeploymentUpstreamModelIgnoresUnresolvedTemplateLabel(t *testing.T) {
 	got := deploymentUpstreamModel(&runtime.DeploymentStatus{
 		Labels: map[string]string{

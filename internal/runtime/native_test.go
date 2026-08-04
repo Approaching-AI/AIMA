@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -1515,6 +1516,72 @@ func TestDeployAppendsCustomPortFlags(t *testing.T) {
 	}
 	if strings.Contains(argStr, "--port 32103") {
 		t.Fatalf("command = %q, should not contain synthesized --port flag", argStr)
+	}
+}
+
+func TestNativeDeployRestoresPrivateAdapterContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command metadata assertion uses a POSIX shell script")
+	}
+
+	rt := newTestRuntime(t)
+	script := filepath.Join(t.TempDir(), "native-adapter-engine.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	modelPath := filepath.Join(t.TempDir(), "model")
+	if err := os.MkdirAll(modelPath, 0o755); err != nil {
+		t.Fatalf("create model dir: %v", err)
+	}
+
+	if err := rt.Deploy(context.Background(), &DeployRequest{
+		Name:      "native-adapter-context",
+		Engine:    "native-test",
+		Command:   []string{script, "serve", "--model-dir", "{{.ModelPath}}"},
+		ModelPath: modelPath,
+		Port:      freeTCPPort(t),
+		Config:    map[string]any{"context_tokens": 8192},
+	}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Delete(context.Background(), "native-adapter-context") })
+
+	assertContext := func(t *testing.T, status *DeploymentStatus) {
+		t.Helper()
+		if len(status.AdapterCommand) == 0 || status.AdapterCommand[0] != script {
+			t.Fatalf("AdapterCommand = %q, want resolved executable %q", status.AdapterCommand, script)
+		}
+		if status.AdapterModelPath != modelPath {
+			t.Fatalf("AdapterModelPath = %q, want %q", status.AdapterModelPath, modelPath)
+		}
+		encoded, err := json.Marshal(status)
+		if err != nil {
+			t.Fatalf("marshal status: %v", err)
+		}
+		if bytes.Contains(encoded, []byte(script)) || bytes.Contains(encoded, []byte(modelPath)) || bytes.Contains(encoded, []byte("AdapterCommand")) {
+			t.Fatalf("private adapter context leaked in status JSON: %s", encoded)
+		}
+	}
+
+	status, err := rt.Status(context.Background(), "native-adapter-context")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	assertContext(t, status)
+
+	fresh := NewNativeRuntime(rt.logDir, rt.distDir, rt.deployDir)
+	restored, err := fresh.Status(context.Background(), "native-adapter-context")
+	if err != nil {
+		t.Fatalf("fresh Status: %v", err)
+	}
+	assertContext(t, restored)
+
+	meta, err := fresh.loadMeta("native-adapter-context")
+	if err != nil {
+		t.Fatalf("loadMeta: %v", err)
+	}
+	if meta.ModelPath != modelPath {
+		t.Fatalf("persisted ModelPath = %q, want %q", meta.ModelPath, modelPath)
 	}
 }
 

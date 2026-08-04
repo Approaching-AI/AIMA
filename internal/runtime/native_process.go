@@ -134,10 +134,74 @@ func commandPrefixMatches(actual, expected []string) bool {
 	}
 	offset, ok := commandStartOffset(actual, expected[0], len(expected))
 	if !ok {
-		return false
+		return portableELFLoaderCommandMatches(actual, expected)
 	}
 	for i := 1; i < len(expected); i++ {
 		if actual[offset+i] != expected[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// portableELFLoaderCommandMatches recognizes the launcher shape emitted by
+// self-contained Linux engine bundles. Their tiny bin/* entrypoint execs the
+// bundled dynamic loader with --argv0 set to the original entrypoint, so the
+// persisted PID is correct but /proc/<pid>/cmdline starts with ld-linux.
+// Restrict acceptance to the same dist/{bin,lib,libexec} tree to preserve the
+// PID-reuse guard.
+func portableELFLoaderCommandMatches(actual, expected []string) bool {
+	if len(actual) == 0 || len(expected) == 0 || !filepath.IsAbs(expected[0]) {
+		return false
+	}
+	loaderName := strings.ToLower(filepath.Base(actual[0]))
+	if !strings.HasPrefix(loaderName, "ld-linux") {
+		return false
+	}
+
+	root := filepath.Dir(filepath.Dir(expected[0]))
+	libDir := filepath.Join(root, "lib")
+	if filepath.Clean(filepath.Dir(actual[0])) != libDir {
+		return false
+	}
+
+	argv0Index := -1
+	libraryPath := ""
+	for i := 1; i < len(actual); {
+		switch actual[i] {
+		case "--inhibit-cache":
+			i++
+		case "--library-path":
+			if i+1 >= len(actual) {
+				return false
+			}
+			libraryPath = actual[i+1]
+			i += 2
+		case "--argv0":
+			argv0Index = i
+			i = len(actual)
+		default:
+			return false
+		}
+	}
+	if argv0Index < 0 || argv0Index+2 >= len(actual) || filepath.Clean(libraryPath) != libDir {
+		return false
+	}
+	if !sameCommandElement(actual[argv0Index+1], expected[0]) {
+		return false
+	}
+	realBinary := actual[argv0Index+2]
+	if filepath.Dir(realBinary) != filepath.Join(root, "libexec") {
+		return false
+	}
+
+	actualArgs := actual[argv0Index+3:]
+	expectedArgs := expected[1:]
+	if len(actualArgs) < len(expectedArgs) {
+		return false
+	}
+	for i := range expectedArgs {
+		if actualArgs[i] != expectedArgs[i] {
 			return false
 		}
 	}

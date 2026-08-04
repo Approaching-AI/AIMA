@@ -2084,7 +2084,16 @@ func contextWindowFromResolvedConfig(config map[string]any) int {
 	if len(config) == 0 {
 		return 0
 	}
-	switch value := config["ctx_size"].(type) {
+	for _, key := range []string{"ctx_size", "max_model_len", "context_tokens"} {
+		if value := positiveContextWindow(config[key]); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func positiveContextWindow(raw any) int {
+	switch value := raw.(type) {
 	case int:
 		if value > 0 {
 			return value

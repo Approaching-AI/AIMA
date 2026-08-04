@@ -1,0 +1,73 @@
+kind: engine_asset
+metadata:
+  name: aima-amd395-qwen36-native
+  type: aima-amd395-qwen36-native
+  version: v1.4.0
+  supported_formats: [safetensors]
+  supported_model_types: [llm]
+hardware:
+  gpu_arch: RDNA3.5
+  vram_min_mib: 65536
+runtime:
+  default: native
+  platform_recommendations:
+    linux/amd64: native
+source:
+  binary: bin/aima-engine
+  platforms: [linux/amd64]
+  # The release-producing fork currently owns the published v1.4.0 artifact.
+  # Approaching-AI's fork remains the source/issue target but has no matching
+  # release asset as of 2026-08-04.
+  url_template: "https://github.com/skyguan92/AIMA-AMD395-Qwen36-35B-Linux-Engine/releases/download/{version}/{platform_file}"
+  platform_files:
+    linux/amd64: aima-engine-native-portable-a15b2774e3ab.tar.zst
+  sha256:
+    linux/amd64: 749a2acb8b8d49b3979e1dbb9785ce3a305bb24129175747fef6330579d2f0f2
+  mirror_templates:
+    - "https://ghfast.top/{url}"
+    - "https://cf.ghproxy.cc/{url}"
+    - "https://gh-proxy.com/{url}"
+patterns:
+  - "^aima-engine-native$"
+  - "^aima-engine$"
+startup:
+  command: [aima-engine, serve, --model-dir, "{{.ModelPath}}", --host, 127.0.0.1]
+  ports:
+    - name: http
+      flag: --port
+      config_key: port
+      primary: true
+  default_args:
+    context_tokens: 8192
+    cache_capacity: 9216
+  health_check:
+    path: /health
+    timeout_s: 900
+  warmup:
+    enabled: false
+api:
+  protocol: openai
+  base_path: /v1
+  request_adapter:
+    kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    disable_thinking: true
+    padding_role: system
+    padding_prefix: "Ignore the following transport padding markers."
+    padding_unit: " ·"
+    upstream_model: aima-amd395-qwen36-35b
+    max_attempts: 8
+amplifier:
+  features:
+    - gfx1151_native_aot
+    - resident_bf16_weights
+    - exact_prefix_cache
+  performance_gain: "Qwen3.6-35B-A3B BF16 native AOT path for AMD Ryzen AI Max+ 395"
+  performance_multiplier: 3.0
+time_constraints:
+  cold_start_s: [60, 900]
+  model_switch_s: [60, 900]
+power_constraints:
+  typical_draw_watts: [35, 120]

@@ -40,6 +40,26 @@ variants:
       max_context_tokens: 131072
       notes: "Schema-constrained BF16 profile for PlanABC; speculative decoding is intentionally disabled."
 
+  # --- AMD Ryzen AI Max+ 395 native BF16 AOT engine (Linux/gfx1151) ---
+  # The engine currently admits one qualified static cold shape. AIMA's
+  # catalog-declared exact_context adapter pads ordinary short chat requests
+  # with the bundled native tokenizer probe and proves prefix reuse by token ID.
+  - name: qwen3.6-35b-a3b-amd395-native-bf16
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 65536
+      ram_min_mib: 65536
+      unified_memory: true
+    engine: aima-amd395-qwen36-native
+    format: safetensors
+    default_config:
+      context_tokens: 8192
+      cache_capacity: 9216
+    expected_performance:
+      startup_time_s: 600
+      cold_start_time_s: 900
+      vram_mib: 65536
+      notes: "Native BF16 portable engine v1.4.0 for AMD395 Linux. Exact-context request adaptation is handled by AIMA through the engine's chat-template-probe."
   # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
   # Qwen3.6-35B-A3B MoE, UD-Q4_K_M ~21GB, all layers offloaded. Native context 262144.
   - name: qwen3.6-35b-a3b-universal-llamacpp-q4

@@ -244,6 +244,23 @@ func seedRecoveryIntent(t *testing.T, ctx context.Context, db *state.DB, name, r
 	return *stored
 }
 
+func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
+	tests := []struct {
+		value any
+		want  int
+	}{
+		{value: 8192, want: 8192},
+		{value: float64(16384), want: 16384},
+		{value: json.Number("32768"), want: 32768},
+		{value: "65536", want: 65536},
+	}
+	for _, test := range tests {
+		if got := contextWindowFromResolvedConfig(map[string]any{"context_tokens": test.value}); got != test.want {
+			t.Errorf("contextWindowFromResolvedConfig(%T(%v)) = %d, want %d", test.value, test.value, got, test.want)
+		}
+	}
+}
+
 func TestResolvedServedModelNameExpandsModelTemplate(t *testing.T) {
 	got := resolvedServedModelName("GLM-4.1V-9B-Thinking-FP4", map[string]any{
 		"served_model_name": "{{.ModelName}}",

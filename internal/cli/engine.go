@@ -20,11 +20,59 @@ func newEngineCmd(app *App) *cobra.Command {
 		newEngineScanCmd(app),
 		newEngineListCmd(app),
 		newEngineInfoCmd(app),
+		newEngineEnsureCmd(app),
+		newEngineRollbackCmd(app),
 		newEnginePullCmd(app),
 		newEngineImportCmd(app),
 		newEngineRemoveCmd(app),
 	)
 
+	return cmd
+}
+
+func newEngineEnsureCmd(app *App) *cobra.Command {
+	var version string
+	var apply bool
+	cmd := &cobra.Command{
+		Use:   "ensure <name>",
+		Short: "Plan or apply a verified Engine version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.EnsureEngine == nil {
+				return fmt.Errorf("engine.ensure not implemented")
+			}
+			data, err := app.ToolDeps.EnsureEngine(cmd.Context(), args[0], version, apply)
+			if err != nil {
+				return fmt.Errorf("ensure engine %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&version, "version", "", "Catalog Engine version to ensure")
+	cmd.Flags().BoolVar(&apply, "apply", false, "Apply the plan (default is plan-only)")
+	return cmd
+}
+
+func newEngineRollbackCmd(app *App) *cobra.Command {
+	var confirm bool
+	cmd := &cobra.Command{
+		Use:   "rollback <name>",
+		Short: "Activate the previous verified Engine version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.RollbackEngine == nil {
+				return fmt.Errorf("engine.rollback not implemented")
+			}
+			data, err := app.ToolDeps.RollbackEngine(cmd.Context(), args[0], confirm)
+			if err != nil {
+				return fmt.Errorf("roll back engine %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&confirm, "confirm", false, "Confirm activation of the previous verified version")
 	return cmd
 }
 

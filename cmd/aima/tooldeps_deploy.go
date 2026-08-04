@@ -88,10 +88,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		canonicalName := rd.ModelName
 		modelName = canonicalName
 		resolved := rd.Resolved
-		engineAsset, err := resolvedEngineAsset(cat, resolved.EngineAssetName)
-		if err != nil {
-			return nil, err
-		}
+		engineAsset := rd.EngineAsset
 		resolvedRecoveryPolicy := recovery.Policy{}
 		if pinnedIntent != nil {
 			if pinnedIntent.EngineAsset != resolved.EngineAssetName {

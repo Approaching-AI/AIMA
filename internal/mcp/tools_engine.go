@@ -78,6 +78,68 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 		},
 	})
 
+	// engine.ensure
+	s.RegisterTool(&Tool{
+		Name:        "engine.ensure",
+		Description: "Plan or apply a verified Engine version ensure operation. Defaults to plan-only; set apply=true to install or activate. Existing running deployments are not restarted or rebound.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"Catalog Engine Asset name to ensure."},`+
+				`"version":{"type":"string","description":"Optional Catalog version. Defaults to the selected asset version."},`+
+				`"apply":{"type":"boolean","description":"Apply the plan. Defaults to false for a side-effect-free plan."}`,
+			"name"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.EnsureEngine == nil {
+				return ErrorResult("engine.ensure not implemented"), nil
+			}
+			var p struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+				Apply   bool   `json:"apply"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			data, err := deps.EnsureEngine(ctx, p.Name, p.Version, p.Apply)
+			if err != nil {
+				return nil, fmt.Errorf("ensure engine %s: %w", p.Name, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
+	// engine.rollback
+	s.RegisterTool(&Tool{
+		Name:        "engine.rollback",
+		Description: "Roll back an Engine Asset to its verified, available previous version. confirm=true is required for mutation. Existing running deployments are not restarted or rebound.",
+		InputSchema: schema(
+			`"name":{"type":"string","description":"Catalog Engine Asset name to roll back."},`+
+				`"confirm":{"type":"boolean","description":"Must be true to activate the previous verified version."}`,
+			"name", "confirm"),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.RollbackEngine == nil {
+				return ErrorResult("engine.rollback not implemented"), nil
+			}
+			var p struct {
+				Name    string `json:"name"`
+				Confirm bool   `json:"confirm"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+			}
+			if p.Name == "" {
+				return ErrorResult("name is required"), nil
+			}
+			data, err := deps.RollbackEngine(ctx, p.Name, p.Confirm)
+			if err != nil {
+				return nil, fmt.Errorf("roll back engine %s: %w", p.Name, err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
+
 	// engine.pull
 	s.RegisterTool(&Tool{
 		Name:        "engine.pull",
@@ -108,8 +170,8 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 	// engine.import
 	s.RegisterTool(&Tool{
 		Name:        "engine.import",
-		Description: "Import an engine container image from a local OCI tar file and register it (airgap use case).",
-		InputSchema: schema(`"path":{"type":"string","description":"Absolute path to the OCI tar file, e.g. '/data/images/vllm-cuda.tar'"}`, "path"),
+		Description: "Import an engine from a local package for air-gapped use. Supports OCI image tar files and Catalog-resolvable versioned Native zip/tar.gz bundles or directories. Native imports are staged and registered inactive; use engine.ensure with apply=true to activate.",
+		InputSchema: schema(`"path":{"type":"string","description":"Absolute path to the engine package, e.g. '/data/images/vllm-cuda.tar' or '/data/runtime/llama-b9330-win-hip-radeon-x64.zip'"}`, "path"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ImportEngine == nil {
 				return ErrorResult("engine.import not implemented"), nil

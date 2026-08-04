@@ -2,11 +2,16 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -20,6 +25,23 @@ type mockRunner struct {
 type mockResponse struct {
 	output []byte
 	err    error
+}
+
+func testAssetDescriptors(patterns map[string][]string) []AssetDescriptor {
+	types := make([]string, 0, len(patterns))
+	for engineType := range patterns {
+		types = append(types, engineType)
+	}
+	sort.Strings(types)
+	assets := make([]AssetDescriptor, 0, len(types))
+	for _, engineType := range types {
+		assets = append(assets, AssetDescriptor{
+			AssetName: engineType,
+			Type:      engineType,
+			Patterns:  append([]string(nil), patterns[engineType]...),
+		})
+	}
+	return assets
 }
 
 func (m *mockRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -98,8 +120,8 @@ func TestScanWithCrictl(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: engineAssets,
-		Runner:        runner,
+		Assets: testAssetDescriptors(engineAssets),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -162,8 +184,8 @@ func TestScanK3sCrictlFallback(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{"vllm-nightly": {"vllm/vllm-openai:qwen3_5"}},
-		Runner:        runner,
+		Assets: testAssetDescriptors(map[string][]string{"vllm-nightly": {"vllm/vllm-openai:qwen3_5"}}),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -206,10 +228,10 @@ func TestScanTagAwarePatternPriority(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{
+		Assets: testAssetDescriptors(map[string][]string{
 			"vllm":         {"vllm/vllm-openai"},
 			"vllm-nightly": {"vllm/vllm-openai:qwen3_5"},
-		},
+		}),
 		Runner: runner,
 	})
 	if err != nil {
@@ -302,29 +324,29 @@ func TestBinaryManagerEnsureUsesProbePathsForPreinstalledEngine(t *testing.T) {
 func TestPatternMatchExactAnchors(t *testing.T) {
 	// ^pattern$ should match exactly
 	patterns := []patternEntry{
-		{pattern: "^vllm-nightly$", engineType: "vllm-nightly"},
+		{pattern: "^vllm-nightly$", descriptor: AssetDescriptor{Type: "vllm-nightly"}},
 	}
 
-	if got := patternMatch("vllm-nightly", patterns); got != "vllm-nightly" {
-		t.Errorf("^vllm-nightly$ should match 'vllm-nightly', got %q", got)
+	if got, ok := patternMatch("vllm-nightly", patterns); !ok || got.Type != "vllm-nightly" {
+		t.Errorf("^vllm-nightly$ should match 'vllm-nightly', got %+v (matched=%v)", got, ok)
 	}
-	if got := patternMatch("vllm-nightly-extra", patterns); got != "" {
-		t.Errorf("^vllm-nightly$ should NOT match 'vllm-nightly-extra', got %q", got)
+	if got, ok := patternMatch("vllm-nightly-extra", patterns); ok {
+		t.Errorf("^vllm-nightly$ should NOT match 'vllm-nightly-extra', got %+v", got)
 	}
-	if got := patternMatch("pre-vllm-nightly", patterns); got != "" {
-		t.Errorf("^vllm-nightly$ should NOT match 'pre-vllm-nightly', got %q", got)
+	if got, ok := patternMatch("pre-vllm-nightly", patterns); ok {
+		t.Errorf("^vllm-nightly$ should NOT match 'pre-vllm-nightly', got %+v", got)
 	}
 }
 
 func TestPatternMatchDeterministicPriority(t *testing.T) {
 	patterns := []patternEntry{
-		{pattern: "vllm", engineType: "contains"},
-		{pattern: "^vllm$", engineType: "exact"},
-		{pattern: "^vllm-nightly$", engineType: "nightly"},
+		{pattern: "vllm", descriptor: AssetDescriptor{Type: "contains"}},
+		{pattern: "^vllm$", descriptor: AssetDescriptor{Type: "exact"}},
+		{pattern: "^vllm-nightly$", descriptor: AssetDescriptor{Type: "nightly"}},
 	}
 	for i := 0; i < 100; i++ {
-		if got := patternMatch("vllm", patterns); got != "exact" {
-			t.Fatalf("iteration %d: expected exact, got %q", i, got)
+		if got, ok := patternMatch("vllm", patterns); !ok || got.Type != "exact" {
+			t.Fatalf("iteration %d: expected exact, got %+v (matched=%v)", i, got, ok)
 		}
 	}
 }
@@ -351,8 +373,8 @@ func TestScanFallbackToDocker(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: engineAssets,
-		Runner:        runner,
+		Assets: testAssetDescriptors(engineAssets),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -379,8 +401,8 @@ func TestScanBothFail(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:        runner,
+		Assets: testAssetDescriptors(map[string][]string{"vllm": {"vllm/vllm-openai"}}),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -409,8 +431,8 @@ func TestScanNoMatchingImages(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:        runner,
+		Assets: testAssetDescriptors(map[string][]string{"vllm": {"vllm/vllm-openai"}}),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -439,8 +461,8 @@ func TestScanEmptyAssetPatterns(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{},
-		Runner:        runner,
+		Assets: nil,
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -546,6 +568,71 @@ func TestPullContextCancellation(t *testing.T) {
 	}
 }
 
+func TestPullFailsOnDigestMismatch(t *testing.T) {
+	var events []ProgressEvent
+	runner := &mockRunner{
+		responses: map[string]mockResponse{
+			"crictl pull docker.io/vllm/vllm-openai:latest": {
+				output: []byte("pulled"),
+			},
+			"docker inspect --format {{json .RepoDigests}} docker.io/vllm/vllm-openai:latest": {
+				output: []byte(`["docker.io/vllm/vllm-openai@sha256:actual"]`),
+			},
+			"crictl inspecti docker.io/vllm/vllm-openai:latest": {
+				output: []byte(`{"status":{"repoDigests":["docker.io/vllm/vllm-openai@sha256:actual"]}}`),
+			},
+		},
+	}
+
+	err := Pull(context.Background(), PullOptions{
+		Image:          "vllm/vllm-openai",
+		Tag:            "latest",
+		Registries:     []string{"docker.io"},
+		Runner:         runner,
+		ExpectedDigest: "sha256:expected",
+		OnProgress:     func(event ProgressEvent) { events = append(events, event) },
+	})
+	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("expected digest mismatch error, got %v", err)
+	}
+	for _, event := range events {
+		if event.Phase == "complete" {
+			t.Fatal("digest failure must not emit complete progress")
+		}
+	}
+}
+
+func TestBinaryDownloadFailsOnSHA256Mismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("engine-bytes"))
+	}))
+	defer server.Close()
+
+	distDir := t.TempDir()
+	mgr := NewBinaryManager(distDir)
+	var events []ProgressEvent
+	wrong := fmt.Sprintf("%x", sha256.Sum256([]byte("different-bytes")))
+	source := &BinarySource{
+		Binary:    "engine",
+		Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH},
+		Download:  map[string]string{goruntime.GOOS + "/" + goruntime.GOARCH: server.URL + "/engine"},
+		SHA256:    map[string]string{goruntime.GOOS + "/" + goruntime.GOARCH: wrong},
+	}
+
+	err := mgr.Download(context.Background(), source, func(event ProgressEvent) { events = append(events, event) })
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected sha256 mismatch error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(distDir, "engine")); !os.IsNotExist(err) {
+		t.Fatalf("mismatched binary must not be ready, stat error = %v", err)
+	}
+	for _, event := range events {
+		if event.Phase == "complete" {
+			t.Fatal("checksum failure must not emit complete progress")
+		}
+	}
+}
+
 // --- Import tests ---
 
 func TestImportWithCtr(t *testing.T) {
@@ -643,8 +730,8 @@ func TestScanContextCancellation(t *testing.T) {
 	}
 
 	_, err := ScanUnified(ctx, ScanOptions{
-		AssetPatterns: map[string][]string{"vllm": {"vllm/vllm-openai"}},
-		Runner:        runner,
+		Assets: testAssetDescriptors(map[string][]string{"vllm": {"vllm/vllm-openai"}}),
+		Runner: runner,
 	})
 	if err == nil {
 		t.Error("expected error from cancelled context")
@@ -675,8 +762,8 @@ func TestScanImageWithRegistry(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: engineAssets,
-		Runner:        runner,
+		Assets: testAssetDescriptors(engineAssets),
+		Runner: runner,
 	})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -721,10 +808,10 @@ func TestScanCustomFastAPIContainers(t *testing.T) {
 	}
 
 	results, err := ScanUnified(context.Background(), ScanOptions{
-		AssetPatterns: map[string][]string{
+		Assets: testAssetDescriptors(map[string][]string{
 			"qwen-tts-fastapi": {"^qwen-tts-fastapi$", "qwen3-tts", "qwen-tts", "tts-fastapi"},
 			"glm-asr-fastapi":  {"^glm-asr-fastapi$", "glm-asr", "asr-nano"},
-		},
+		}),
 		Runner: runner,
 	})
 	if err != nil {
@@ -762,11 +849,16 @@ func TestScanPreinstalledProbeUsesDiscoveredBinaryPath(t *testing.T) {
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		Runner:   runner,
 		Platform: "linux/arm64",
-		PreinstalledProbes: map[string]*knowledge.EngineSourceProbe{
-			"fake-engine": {
-				Paths:          []string{binPath},
-				VersionCommand: []string{"./fake-engine", "--version"},
-				VersionPattern: `FakeEngine ([\d.]+)`,
+		Assets: []AssetDescriptor{
+			{
+				AssetName:      "fake-engine",
+				Type:           "fake-engine",
+				CatalogVersion: "1.2.3",
+				Probe: &knowledge.EngineSourceProbe{
+					Paths:          []string{binPath},
+					VersionCommand: []string{"./fake-engine", "--version"},
+					VersionPattern: `FakeEngine ([\d.]+)`,
+				},
 			},
 		},
 	})
@@ -784,6 +876,218 @@ func TestScanPreinstalledProbeUsesDiscoveredBinaryPath(t *testing.T) {
 	}
 	if got := results[0].VersionMatch; got != "exact" {
 		t.Errorf("VersionMatch = %q, want exact", got)
+	}
+}
+
+func TestCompareDetectedVersion(t *testing.T) {
+	compatible := []string{"1.2.2", "1.2.x"}
+	for _, tc := range []struct {
+		name       string
+		detected   string
+		catalog    string
+		compatible []string
+		want       string
+	}{
+		{name: "exact", detected: "1.2.3", catalog: "1.2.3", want: "exact"},
+		{name: "declared exact compatibility", detected: "1.2.2", catalog: "1.2.3", compatible: compatible, want: "compatible"},
+		{name: "declared wildcard compatibility", detected: "1.2.9", catalog: "1.2.3", compatible: compatible, want: "compatible"},
+		{name: "mismatch", detected: "2.0.0", catalog: "1.2.3", compatible: compatible, want: "mismatch"},
+		{name: "missing detection", detected: "", catalog: "1.2.3", compatible: compatible, want: "unknown"},
+		{name: "fallback unknown", detected: "unknown", catalog: "1.2.3", compatible: compatible, want: "unknown"},
+		{name: "missing catalog", detected: "1.2.3", catalog: "", compatible: compatible, want: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := compareDetectedVersion(tc.detected, tc.catalog, tc.compatible); got != tc.want {
+				t.Fatalf("compareDetectedVersion(%q, %q, %v) = %q, want %q", tc.detected, tc.catalog, tc.compatible, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestScanExplicitProbeOriginAndVersionEvidence(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "engine-a")
+	if err := os.WriteFile(binPath, []byte("engine-a-content"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &mockRunner{responses: map[string]mockResponse{
+		binPath + " --version": {output: []byte("Engine A 2.0.0")},
+	}}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		Runner:   runner,
+		Platform: "linux-amd64",
+		Assets: []AssetDescriptor{{
+			AssetName:      "engine-a-linux",
+			Type:           "engine-a",
+			CatalogVersion: "1.2.3",
+			Probe: &knowledge.EngineSourceProbe{
+				Paths:          []string{binPath},
+				VersionCommand: []string{"./engine-a", "--version"},
+				VersionPattern: `Engine A ([\d.]+)`,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	got := results[0]
+	if got.AssetName != "engine-a-linux" || got.Type != "engine-a" || got.Origin != "preinstalled" {
+		t.Fatalf("identity evidence = %+v", got)
+	}
+	if got.CatalogVersion != "1.2.3" || got.DetectedVersion != "2.0.0" || got.VersionMatch != "mismatch" {
+		t.Fatalf("version evidence = %+v", got)
+	}
+	if !strings.HasPrefix(got.ContentDigest, "sha256:") {
+		t.Fatalf("content digest = %q", got.ContentDigest)
+	}
+}
+
+func TestScanNativeOriginEvidence(t *testing.T) {
+	t.Setenv("PATH", "")
+	distDir := t.TempDir()
+	externalDir := t.TempDir()
+	managedPath := filepath.Join(distDir, "managed-engine")
+	externalPath := filepath.Join(externalDir, "external-engine")
+	if err := os.WriteFile(managedPath, []byte("managed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(externalPath, []byte("external"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:   distDir,
+		ExtraDirs: []string{externalDir},
+		Platform:  "linux-amd64",
+		BinaryAssets: map[string]string{
+			"managed-engine":  "engine-managed",
+			"external-engine": "engine-external",
+		},
+		Assets: []AssetDescriptor{
+			{AssetName: "engine-managed", Type: "engine-a", CatalogVersion: "1.0.0"},
+			{AssetName: "engine-external", Type: "engine-b", CatalogVersion: "2.0.0"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two binaries", results)
+	}
+	byAsset := make(map[string]*EngineImage)
+	for _, result := range results {
+		byAsset[result.AssetName] = result
+	}
+	if got := byAsset["engine-managed"]; got == nil || got.Origin != "managed" || got.BinaryPath != managedPath {
+		t.Fatalf("managed evidence = %+v", got)
+	}
+	if got := byAsset["engine-external"]; got == nil || got.Origin != "preinstalled" || got.BinaryPath != externalPath {
+		t.Fatalf("external evidence = %+v", got)
+	}
+}
+
+func TestScanManagedVersionedOriginEvidence(t *testing.T) {
+	t.Setenv("PATH", "")
+	distDir := t.TempDir()
+	for _, version := range []string{"1.0.0", "2.0.0"} {
+		dir := filepath.Join(distDir, "engine-a", version)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "engine-server"), []byte(version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:      distDir,
+		Platform:     "linux-amd64",
+		BinaryAssets: map[string]string{"engine-server": "engine-a"},
+		Assets: []AssetDescriptor{{
+			AssetName:          "engine-a",
+			Type:               "engine-type",
+			CatalogVersion:     "2.0.0",
+			CompatibleVersions: []string{"1.0.0"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].ID == results[1].ID {
+		t.Fatalf("versioned results = %+v", results)
+	}
+	byVersion := make(map[string]*EngineImage)
+	for _, result := range results {
+		byVersion[result.DetectedVersion] = result
+		if result.Origin != "managed" || result.AssetName != "engine-a" {
+			t.Fatalf("managed version evidence = %+v", result)
+		}
+	}
+	if byVersion["1.0.0"] == nil || byVersion["1.0.0"].VersionMatch != "compatible" {
+		t.Fatalf("v1 evidence = %+v", byVersion["1.0.0"])
+	}
+	if byVersion["2.0.0"] == nil || byVersion["2.0.0"].VersionMatch != "exact" {
+		t.Fatalf("v2 evidence = %+v", byVersion["2.0.0"])
+	}
+}
+
+func TestScanPATHBinaryOriginEvidence(t *testing.T) {
+	distDir := t.TempDir()
+	pathDir := t.TempDir()
+	binPath := filepath.Join(pathDir, "path-engine")
+	if err := os.WriteFile(binPath, []byte("path"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:      distDir,
+		Platform:     "linux-amd64",
+		BinaryAssets: map[string]string{"path-engine": "engine-path"},
+		Assets:       []AssetDescriptor{{AssetName: "engine-path", Type: "engine-a", CatalogVersion: "1.0.0"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Origin != "preinstalled" || results[0].AssetName != "engine-path" {
+		t.Fatalf("PATH evidence = %+v", results)
+	}
+}
+
+func TestScanContainerOriginEvidence(t *testing.T) {
+	images := crictlImageList{Images: []crictlImage{{
+		ID:       "sha256:abc123",
+		RepoTags: []string{"example/engine-a:v1"},
+		Size:     "42",
+	}}}
+	imageJSON, _ := json.Marshal(images)
+	runner := &mockRunner{responses: map[string]mockResponse{
+		"crictl images -o json": {output: imageJSON},
+	}}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		Runner:   runner,
+		Platform: "linux-amd64",
+		Assets: []AssetDescriptor{{
+			AssetName:      "engine-a-container",
+			Type:           "engine-a",
+			CatalogVersion: "1.0.0",
+			Patterns:       []string{"^example/engine-a$"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %+v", results)
+	}
+	got := results[0]
+	if got.Origin != "preinstalled" || got.AssetName != "engine-a-container" || got.CatalogVersion != "1.0.0" || got.ContentDigest != "sha256:abc123" {
+		t.Fatalf("container evidence = %+v", got)
 	}
 }
 

@@ -50,17 +50,23 @@ var confirmableTools = map[string]confirmableTool{
 		DryRunTool: "scenario.apply",
 		DryRunArgs: addDryRunFlag,
 	},
+	"engine.ensure": {
+		Reason:     "installs or activates an Engine version",
+		DryRunTool: "engine.ensure",
+		DryRunArgs: forceEngineEnsurePlanOnly,
+	},
 }
 
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
-	"model.remove":   "destructive operation",
-	"engine.remove":  "destructive operation",
-	"deploy.delete":  "destructive operation",
-	"shell.exec":     "arbitrary command execution",
-	"agent.ask":      "recursive agent invocation",
-	"agent.rollback": "state rollback mutation",
+	"model.remove":    "destructive operation",
+	"engine.remove":   "destructive operation",
+	"engine.rollback": "state rollback mutation",
+	"deploy.delete":   "destructive operation",
+	"shell.exec":      "arbitrary command execution",
+	"agent.ask":       "recursive agent invocation",
+	"agent.rollback":  "state rollback mutation",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -212,6 +218,24 @@ func addDryRunFlag(arguments json.RawMessage) json.RawMessage {
 	out, err := json.Marshal(raw)
 	if err != nil {
 		return arguments
+	}
+	return out
+}
+
+func forceEngineEnsurePlanOnly(arguments json.RawMessage) json.RawMessage {
+	raw := make(map[string]json.RawMessage)
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &raw); err != nil {
+			return json.RawMessage(`{"apply":false}`)
+		}
+	}
+	if raw == nil {
+		raw = make(map[string]json.RawMessage)
+	}
+	raw["apply"] = json.RawMessage("false")
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return json.RawMessage(`{"apply":false}`)
 	}
 	return out
 }

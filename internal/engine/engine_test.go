@@ -789,6 +789,49 @@ func TestBinaryManagerImportBundleRollsBackPromotionConflict(t *testing.T) {
 	}
 }
 
+func TestBinaryManagerUnpinnedDownloadRollsBackPromotionConflict(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "conflict.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{
+		{name: "runtime/a-new-file", body: "new", mode: 0o644},
+		{name: "runtime/z-conflict", body: "file-over-directory", mode: 0o644},
+	})
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+
+	distDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(distDir, "z-conflict"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "z-conflict", "keep"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	source := &BinarySource{
+		Binary:    "a-new-file",
+		Platforms: []string{platform},
+		Download:  map[string]string{platform: server.URL + "/conflict.tar.zst"},
+	}
+
+	err = NewBinaryManager(distDir).Download(context.Background(), source, nil)
+	if err == nil {
+		t.Fatal("Download accepted a file-over-directory conflict")
+	}
+	if _, statErr := os.Stat(filepath.Join(distDir, "a-new-file")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed download left an earlier file installed: %v", statErr)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(distDir, "z-conflict", "keep")); readErr != nil || string(data) != "keep" {
+		t.Fatalf("original dist changed: keep=%q err=%v", data, readErr)
+	}
+}
+
 func TestBuildDownloadSourceListUsesEnterpriseMirrors(t *testing.T) {
 	t.Setenv("AIMA_ENGINE_MIRROR_BASE", "https://repo.local/aima")
 	t.Setenv("AIMA_ENGINE_MIRROR_TEMPLATE", "https://proxy.local/{filename},https://encoded.local/{escaped_url}")

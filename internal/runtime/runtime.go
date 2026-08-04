@@ -86,11 +86,12 @@ type DeploymentStatus struct {
 	Stalled         bool   `json:"stalled,omitempty"`          // progress stalled
 	LastProgressAt  int64  `json:"last_progress_at,omitempty"` // unix seconds
 
-	// AdapterCommand and AdapterModelPath are native-runtime details used by
+	// AdapterCommand, AdapterModelPath, and AdapterInstanceID are native-runtime details used by
 	// in-process request adapters. They must never be exposed by public status
 	// APIs, logs, or persisted proxy payloads.
-	AdapterCommand   []string `json:"-"`
-	AdapterModelPath string   `json:"-"`
+	AdapterCommand    []string `json:"-"`
+	AdapterModelPath  string   `json:"-"`
+	AdapterInstanceID string   `json:"-"`
 }
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.

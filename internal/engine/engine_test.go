@@ -662,7 +662,11 @@ func TestBinaryManagerDownloadFallsBackAfterSHA256Mismatch(t *testing.T) {
 	if err := mgr.Download(context.Background(), source, nil); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
-	installed, err := os.ReadFile(filepath.Join(distDir, "bin", "aima-engine"))
+	installedPath, err := mgr.ResolveInstalled(source)
+	if err != nil {
+		t.Fatalf("resolve verified install: %v", err)
+	}
+	installed, err := os.ReadFile(installedPath)
 	if err != nil {
 		t.Fatalf("read installed binary: %v", err)
 	}
@@ -696,6 +700,78 @@ func TestBinaryManagerLocalBundleRejectsSHA256Mismatch(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(distDir, "bin", "aima-engine")); !os.IsNotExist(statErr) {
 		t.Fatalf("mismatched local bundle was installed: %v", statErr)
+	}
+}
+
+func TestBinaryManagerEnsureRejectsUnverifiedPinnedDistBinary(t *testing.T) {
+	t.Parallel()
+
+	distDir := t.TempDir()
+	legacyPath := filepath.Join(distDir, "bin", "aima-engine")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("stale"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	source := &BinarySource{
+		Binary:    "bin/aima-engine",
+		Platforms: []string{platform},
+		SHA256:    map[string]string{platform: strings.Repeat("a", 64)},
+	}
+
+	if _, _, err := NewBinaryManager(distDir).Ensure(context.Background(), source, nil); err == nil {
+		t.Fatal("Ensure reused an unverified legacy binary for a pinned source")
+	}
+}
+
+func TestBinaryManagerEnsureReusesVerifiedPinnedBundle(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "engine.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{{
+		name: "runtime/bin/aima-engine", body: "verified", mode: 0o755,
+	}})
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	source := &BinarySource{
+		Binary:       "bin/aima-engine",
+		Platforms:    []string{platform},
+		LocalBundles: []string{archivePath},
+		SHA256:       map[string]string{platform: mustFileSHA256(t, archivePath)},
+	}
+	mgr := NewBinaryManager(t.TempDir())
+	firstPath, installed, err := mgr.Ensure(context.Background(), source, nil)
+	if err != nil || !installed {
+		t.Fatalf("first Ensure = (%q, %v, %v), want installed", firstPath, installed, err)
+	}
+	if err := os.Remove(archivePath); err != nil {
+		t.Fatal(err)
+	}
+	secondPath, installed, err := mgr.Ensure(context.Background(), source, nil)
+	if err != nil {
+		t.Fatalf("second Ensure: %v", err)
+	}
+	if installed || secondPath != firstPath {
+		t.Fatalf("second Ensure = (%q, %v), want verified reuse of %q", secondPath, installed, firstPath)
+	}
+}
+
+func TestBinaryManagerImportBundleDoesNotPartiallyInstallInvalidArchive(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "invalid.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{
+		{name: "runtime/bin/aima-engine", body: "partial", mode: 0o755},
+		{name: "runtime/bad-hardlink", typeflag: tar.TypeLink, linkname: "bin/aima-engine"},
+	})
+	distDir := t.TempDir()
+	mgr := NewBinaryManager(distDir)
+	if err := mgr.ImportBundle(context.Background(), archivePath, "bin/aima-engine", nil); err == nil {
+		t.Fatal("ImportBundle accepted an unsupported hardlink")
+	}
+	if _, err := os.Stat(filepath.Join(distDir, "bin", "aima-engine")); !os.IsNotExist(err) {
+		t.Fatalf("failed import left a partial executable: %v", err)
 	}
 }
 

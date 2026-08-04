@@ -1566,6 +1566,7 @@ func TestNativeDeployRestoresPrivateAdapterContext(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = rt.Delete(context.Background(), "native-adapter-context") })
 
+	instanceID := ""
 	assertContext := func(t *testing.T, status *DeploymentStatus) {
 		t.Helper()
 		if len(status.AdapterCommand) == 0 || status.AdapterCommand[0] != script {
@@ -1574,11 +1575,19 @@ func TestNativeDeployRestoresPrivateAdapterContext(t *testing.T) {
 		if status.AdapterModelPath != modelPath {
 			t.Fatalf("AdapterModelPath = %q, want %q", status.AdapterModelPath, modelPath)
 		}
+		if status.AdapterInstanceID == "" {
+			t.Fatal("AdapterInstanceID is empty")
+		}
+		if instanceID == "" {
+			instanceID = status.AdapterInstanceID
+		} else if status.AdapterInstanceID != instanceID {
+			t.Fatalf("AdapterInstanceID = %q, want persisted %q", status.AdapterInstanceID, instanceID)
+		}
 		encoded, err := json.Marshal(status)
 		if err != nil {
 			t.Fatalf("marshal status: %v", err)
 		}
-		if bytes.Contains(encoded, []byte(script)) || bytes.Contains(encoded, []byte(modelPath)) || bytes.Contains(encoded, []byte("AdapterCommand")) {
+		if bytes.Contains(encoded, []byte(script)) || bytes.Contains(encoded, []byte(modelPath)) || bytes.Contains(encoded, []byte("AdapterCommand")) || bytes.Contains(encoded, []byte("AdapterInstanceID")) {
 			t.Fatalf("private adapter context leaked in status JSON: %s", encoded)
 		}
 	}
@@ -1647,5 +1656,25 @@ func TestFindLocalBinaryUsesNestedSourcePath(t *testing.T) {
 	source := &engine.BinarySource{Binary: "bin/aima-engine"}
 	if got := r.findLocalBinary("aima-engine", source); got != want {
 		t.Fatalf("findLocalBinary = %q, want %q", got, want)
+	}
+}
+
+func TestFindLocalBinaryDoesNotBypassPinnedSourceProvenance(t *testing.T) {
+	distDir := t.TempDir()
+	legacy := filepath.Join(distDir, "bin", "aima-engine")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("unverified"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	source := &engine.BinarySource{
+		Binary: "bin/aima-engine",
+		SHA256: map[string]string{platform: strings.Repeat("a", 64)},
+	}
+
+	if got := (&NativeRuntime{distDir: distDir}).findLocalBinary("aima-engine", source); got != "" {
+		t.Fatalf("findLocalBinary trusted unverified pinned candidate %q", got)
 	}
 }

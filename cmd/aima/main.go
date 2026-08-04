@@ -1010,9 +1010,10 @@ func nativeRequestAdapterContextResolver(rt runtime.Runtime) inferencehttp.Adapt
 			return inferencehttp.AdapterContext{}, fmt.Errorf("deployment %q is not a native runtime deployment", deploymentName)
 		}
 		return inferencehttp.AdapterContext{
-			Command:   append([]string(nil), status.AdapterCommand...),
-			ModelPath: status.AdapterModelPath,
-			Config:    cloneStringAnyMap(status.Config),
+			Command:    append([]string(nil), status.AdapterCommand...),
+			ModelPath:  status.AdapterModelPath,
+			Config:     cloneStringAnyMap(status.Config),
+			InstanceID: status.AdapterInstanceID,
 		}, nil
 	}
 }

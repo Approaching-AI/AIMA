@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -1476,6 +1477,50 @@ variants: wrong-type
 `)
 	if _, err := ValidateCatalogPatch(base, badPatch, "models/demo-model.bad.patch.yaml"); err == nil {
 		t.Fatal("ValidateCatalogPatch accepted invalid asset schema")
+	}
+}
+
+func TestValidateCatalogPatchRejectsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patch := []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)
+
+	if _, err := ValidateCatalogPatch(base, patch, "engines/native-demo.patch.yaml"); err == nil || !strings.Contains(err.Error(), "unknown request adapter kind") {
+		t.Fatalf("ValidateCatalogPatch error = %v, want unknown adapter rejection", err)
+	}
+}
+
+func TestLoadCatalogPatchesLenientSkipsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patchFS := fstest.MapFS{
+		"engines/native-demo.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineAssets) != 0 {
+		t.Fatalf("invalid adapter patch was loaded: %#v", overlay.EngineAssets)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want adapter validation warning", warnings)
 	}
 }
 

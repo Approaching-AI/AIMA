@@ -196,6 +196,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		} else if existing != nil {
 			proxyServer.RegisterBackend(modelName, &proxy.Backend{
 				ModelName:           modelName,
+				DeploymentName:      firstNonEmpty(existing.Name, deployName),
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
 				ModelType:           modelType,
@@ -219,12 +220,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				"requested_model": requestedModel,
 				"engine":          resolved.Engine,
 				"slot":            resolved.Slot,
-				"status":  status,
-				"phase":   existing.Phase,
-				"runtime": runtimeName,
-				"config":  resolved.Config,
-				"reused":  true,
-				"message": fmt.Sprintf("deployment %s already exists; returning current deployment", existingName),
+				"status":          status,
+				"phase":           existing.Phase,
+				"runtime":         runtimeName,
+				"config":          resolved.Config,
+				"reused":          true,
+				"message":         fmt.Sprintf("deployment %s already exists; returning current deployment", existingName),
 			}
 			if existing.Address != "" {
 				result["address"] = existing.Address
@@ -352,6 +353,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		proxyServer.RegisterBackend(modelName, &proxy.Backend{
 			ModelName:           modelName,
+			DeploymentName:      req.Name,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
 			ModelType:           modelType,

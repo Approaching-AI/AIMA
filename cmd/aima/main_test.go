@@ -64,6 +64,34 @@ func TestCatalogAdapterMapsEngineRequestAdapter(t *testing.T) {
 	}
 }
 
+func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
+	rt := &fakeRuntime{
+		name: "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{
+			"deployment-native": {
+				Name:             "deployment-native",
+				Runtime:          "native",
+				Config:           map[string]any{"context_tokens": 8192},
+				AdapterCommand:   []string{"/opt/aima/bin/aima-engine", "serve"},
+				AdapterModelPath: "/models/qwen",
+			},
+		},
+	}
+
+	resolver := nativeRequestAdapterContextResolver(rt)
+	got, err := resolver(context.Background(), "deployment-native")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Command) != 2 || got.Command[0] != "/opt/aima/bin/aima-engine" || got.ModelPath != "/models/qwen" {
+		t.Fatalf("adapter context = %#v", got)
+	}
+	got.Command[0] = "mutated"
+	if rt.status["deployment-native"].AdapterCommand[0] == "mutated" {
+		t.Fatal("resolver returned runtime-owned command slice")
+	}
+}
+
 func (r *fakeRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
 func (r *fakeRuntime) Delete(context.Context, string) error                     { return nil }
 func (r *fakeRuntime) Status(_ context.Context, name string) (*aimaRuntime.DeploymentStatus, error) {

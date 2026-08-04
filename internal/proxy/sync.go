@@ -53,6 +53,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		if d.Ready && d.Address != "" {
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				DeploymentName:      d.Name,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineTypeFromDeployment(d),
 				ModelType:           modelTypeFromDeployment(d),
@@ -81,6 +82,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 			}
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				DeploymentName:      d.Name,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineType,
 				ModelType:           modelType,
@@ -94,6 +96,7 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		} else {
 			s.RegisterBackend(model, &Backend{
 				ModelName:           model,
+				DeploymentName:      d.Name,
 				UpstreamModel:       upstreamModel,
 				EngineType:          engineTypeFromDeployment(d),
 				ModelType:           modelTypeFromDeployment(d),

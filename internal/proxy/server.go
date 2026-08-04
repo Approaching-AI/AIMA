@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -37,6 +38,7 @@ const LabelModelType = "aima.dev/model_type"
 // Backend represents a running inference engine.
 type Backend struct {
 	ModelName           string            `json:"model_name"`
+	DeploymentName      string            `json:"-"`
 	UpstreamModel       string            `json:"upstream_model,omitempty"`
 	EngineType          string            `json:"engine_type"`
 	ModelType           string            `json:"model_type,omitempty"`
@@ -95,9 +97,26 @@ type Server struct {
 	server          *http.Server
 	extraRoutes     func(*http.ServeMux)
 	requestRewriter func(path, contentType, model, engineType string, body []byte) []byte
+	requestPreparer RequestPreparer
 	onReady         func(addr string)
 	transport       http.RoundTripper
 }
+
+type PreparedRequest struct {
+	Body   []byte
+	Finish func(success bool)
+}
+
+type RequestPreparer func(
+	ctx context.Context,
+	path string,
+	contentType string,
+	model string,
+	upstreamModel string,
+	engineType string,
+	deploymentName string,
+	body []byte,
+) (PreparedRequest, error)
 
 // Option configures Server.
 type Option func(*Server)
@@ -116,6 +135,10 @@ func WithExtraRoutes(fn func(*http.ServeMux)) Option {
 
 func WithRequestRewriter(fn func(path, contentType, model, engineType string, body []byte) []byte) Option {
 	return func(s *Server) { s.requestRewriter = fn }
+}
+
+func WithRequestPreparer(fn RequestPreparer) Option {
+	return func(s *Server) { s.requestPreparer = fn }
 }
 
 func WithTransport(transport http.RoundTripper) Option {
@@ -156,6 +179,14 @@ func (s *Server) SetRequestRewriter(fn func(path, contentType, model, engineType
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requestRewriter = fn
+}
+
+// SetRequestPreparer installs an error-aware request hook whose Finish callback
+// remains active until the complete upstream response (including SSE) ends.
+func (s *Server) SetRequestPreparer(fn RequestPreparer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestPreparer = fn
 }
 
 // SetOnReady registers a callback invoked once the server is listening.
@@ -476,14 +507,40 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	requestRewriter := s.requestRewriter
+	requestPreparer := s.requestPreparer
 	transport := s.transport
 	s.mu.RUnlock()
-	if requestRewriter != nil {
+	finish := func(bool) {}
+	preparationSucceeded := false
+	if requestPreparer != nil {
+		prepared, prepareErr := requestPreparer(
+			r.Context(),
+			r.URL.Path,
+			r.Header.Get("Content-Type"),
+			model,
+			backendUpstreamModel(backend),
+			backend.EngineType,
+			backend.DeploymentName,
+			body,
+		)
+		if prepareErr != nil {
+			status, errorType := requestPreparationErrorFields(prepareErr)
+			WriteJSONError(w, status, errorType, prepareErr.Error())
+			return
+		}
+		body = prepared.Body
+		if prepared.Finish != nil {
+			finish = prepared.Finish
+		}
+	} else if requestRewriter != nil {
 		body = requestRewriter(r.URL.Path, r.Header.Get("Content-Type"), model, backend.EngineType, body)
-	}
-	if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
+		if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
+			body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
+		}
+	} else if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
 		body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
 	}
+	defer func() { finish(preparationSucceeded) }()
 
 	// Determine the target path: basePath + suffix from original request
 	// e.g., request to /v1/chat/completions with basePath=/v1 → forward to /v1/chat/completions
@@ -509,6 +566,7 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		},
 		FlushInterval: -1, // flush immediately for SSE
 		ModifyResponse: func(resp *http.Response) error {
+			preparationSucceeded = resp.StatusCode >= 200 && resp.StatusCode < 400
 			resp.Header.Set("X-Aima-Model", backend.ModelName)
 			resp.Header.Set("X-Aima-Engine", backend.EngineType)
 			return nil
@@ -529,6 +587,27 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		"backend", backend.Address,
 		"latency", time.Since(start),
 	)
+}
+
+type requestPreparationError interface {
+	error
+	HTTPStatus() int
+	ErrorType() string
+}
+
+func requestPreparationErrorFields(err error) (int, string) {
+	status := http.StatusBadGateway
+	errorType := "backend_adapter_error"
+	var typed requestPreparationError
+	if errors.As(err, &typed) {
+		if value := typed.HTTPStatus(); value >= 400 && value <= 599 {
+			status = value
+		}
+		if value := strings.TrimSpace(typed.ErrorType()); value != "" {
+			errorType = value
+		}
+	}
+	return status, errorType
 }
 
 func extractModelFromRequest(contentType string, body []byte) (string, error) {

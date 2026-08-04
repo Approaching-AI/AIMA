@@ -398,7 +398,7 @@ func TestEngineRollbackActivatesVerifiedPrevious(t *testing.T) {
 	inv := &fakeEngineLifecycleInventory{engines: []*state.Engine{previous, current}}
 	service := newTestEngineLifecycleService(t, inv, testNativeLifecycleAsset("2.0.0", "windows/amd64"))
 
-	result, err := service.Rollback(context.Background(), "engine-a", true)
+	result, err := service.Rollback(context.Background(), "engine-a", "native", true)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -410,6 +410,43 @@ func TestEngineRollbackActivatesVerifiedPrevious(t *testing.T) {
 	}
 	if len(inv.events) != 1 || inv.events[0] != "rollback" {
 		t.Fatalf("events = %#v, want only SQLite rollback", inv.events)
+	}
+}
+
+func TestEngineRollbackSelectsRuntimeGroup(t *testing.T) {
+	nativePrevious := &state.Engine{
+		ID: "native-v1", AssetName: "engine-a", Platform: "windows-amd64", RuntimeType: "native",
+		Available: true, LifecycleStatus: "verified", VerificationStatus: "verified",
+	}
+	nativeCurrent := &state.Engine{
+		ID: "native-v2", AssetName: "engine-a", Platform: "windows-amd64", RuntimeType: "native",
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
+		PreviousEngineID: nativePrevious.ID,
+	}
+	containerPrevious := &state.Engine{
+		ID: "container-v1", AssetName: "engine-a", Platform: "windows-amd64", RuntimeType: "container",
+		Available: true, LifecycleStatus: "verified", VerificationStatus: "verified",
+	}
+	containerCurrent := &state.Engine{
+		ID: "container-v2", AssetName: "engine-a", Platform: "windows-amd64", RuntimeType: "container",
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
+		PreviousEngineID: containerPrevious.ID,
+	}
+	inv := &fakeEngineLifecycleInventory{engines: []*state.Engine{
+		nativePrevious, nativeCurrent, containerPrevious, containerCurrent,
+	}}
+	service := newTestEngineLifecycleService(t, inv, testNativeLifecycleAsset("2.0.0", "windows/amd64"))
+
+	result, err := service.Rollback(context.Background(), "engine-a", "native", true)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.RuntimeType != "native" || result.ActiveEngineID != nativePrevious.ID {
+		t.Fatalf("result = %+v", result)
+	}
+	if nativeCurrent.Active || !nativePrevious.Active || !containerCurrent.Active || containerPrevious.Active {
+		t.Fatalf("runtime-scoped rollback changed wrong group: native=%+v/%+v container=%+v/%+v",
+			nativePrevious, nativeCurrent, containerPrevious, containerCurrent)
 	}
 }
 
@@ -426,7 +463,7 @@ func TestEngineRollbackDoesNotRestartDeployments(t *testing.T) {
 	inv := &fakeEngineLifecycleInventory{engines: []*state.Engine{previous, current}}
 	service := newTestEngineLifecycleService(t, inv, testNativeLifecycleAsset("2.0.0", "windows/amd64"))
 
-	if _, err := service.Rollback(context.Background(), "engine-a", true); err != nil {
+	if _, err := service.Rollback(context.Background(), "engine-a", "native", true); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 	if len(inv.events) != 1 || inv.events[0] != "rollback" {
@@ -443,7 +480,7 @@ func TestEngineRollbackRequiresConfirm(t *testing.T) {
 	inv := &fakeEngineLifecycleInventory{engines: []*state.Engine{current}}
 	service := newTestEngineLifecycleService(t, inv, testNativeLifecycleAsset("2.0.0", "windows/amd64"))
 
-	result, err := service.Rollback(context.Background(), "engine-a", false)
+	result, err := service.Rollback(context.Background(), "engine-a", "native", false)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -477,7 +514,7 @@ func TestEngineRollbackRejectsUnavailableOrUnverifiedPrevious(t *testing.T) {
 			inv := &fakeEngineLifecycleInventory{engines: []*state.Engine{previous, current}}
 			service := newTestEngineLifecycleService(t, inv, testNativeLifecycleAsset("2.0.0", "windows/amd64"))
 
-			if _, err := service.Rollback(context.Background(), "engine-a", true); err == nil {
+			if _, err := service.Rollback(context.Background(), "engine-a", "native", true); err == nil {
 				t.Fatal("expected rollback rejection")
 			}
 			if !current.Active || previous.Active || len(inv.events) != 0 {
@@ -512,7 +549,7 @@ func TestEngineRollbackPersistsAtomicActivation(t *testing.T) {
 	}
 	service := &engineLifecycleService{inventory: db, inventoryPlatform: "windows-amd64"}
 
-	result, err := service.Rollback(ctx, "engine-a", true)
+	result, err := service.Rollback(ctx, "engine-a", "native", true)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}

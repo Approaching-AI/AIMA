@@ -116,15 +116,17 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 		Description: "Roll back an Engine Asset to its verified, available previous version. confirm=true is required for mutation. Existing running deployments are not restarted or rebound.",
 		InputSchema: schema(
 			`"name":{"type":"string","description":"Catalog Engine Asset name to roll back."},`+
+				`"runtime_type":{"type":"string","enum":["container","native"],"description":"Runtime group whose active version should be rolled back."},`+
 				`"confirm":{"type":"boolean","description":"Must be true to activate the previous verified version."}`,
-			"name", "confirm"),
+			"name", "runtime_type", "confirm"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.RollbackEngine == nil {
 				return ErrorResult("engine.rollback not implemented"), nil
 			}
 			var p struct {
-				Name    string `json:"name"`
-				Confirm bool   `json:"confirm"`
+				Name        string `json:"name"`
+				RuntimeType string `json:"runtime_type"`
+				Confirm     bool   `json:"confirm"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
@@ -132,7 +134,10 @@ func registerEngineTools(s *Server, deps *ToolDeps) {
 			if p.Name == "" {
 				return ErrorResult("name is required"), nil
 			}
-			data, err := deps.RollbackEngine(ctx, p.Name, p.Confirm)
+			if p.RuntimeType != "container" && p.RuntimeType != "native" {
+				return ErrorResult("runtime_type must be container or native"), nil
+			}
+			data, err := deps.RollbackEngine(ctx, p.Name, p.RuntimeType, p.Confirm)
 			if err != nil {
 				return nil, fmt.Errorf("roll back engine %s: %w", p.Name, err)
 			}

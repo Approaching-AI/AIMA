@@ -502,19 +502,29 @@ func TestScanEngineOriginEvidenceMapping(t *testing.T) {
 	}
 }
 
-func TestStateEngineFromScanMarksVersionMatchedPreinstalledNativeVerified(t *testing.T) {
+func TestStateEngineFromScanRequiresTrustedDigestForPreinstalledNative(t *testing.T) {
 	for _, versionMatch := range []string{"exact", "compatible"} {
 		t.Run(versionMatch, func(t *testing.T) {
 			got := stateEngineFromScan(&engine.EngineImage{
 				ID: "native-" + versionMatch, Type: "engine-a", AssetName: "engine-a-native",
 				RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
 				Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: versionMatch,
-				ContentDigest: "sha256:abc123",
+				ContentDigest: "sha256:abc123", ContentVerified: true,
 			})
 			if got.Active || got.LifecycleStatus != "verified" || got.VerificationStatus != "verified" {
 				t.Fatalf("state Engine = %+v", got)
 			}
 		})
+	}
+
+	untrusted := stateEngineFromScan(&engine.EngineImage{
+		ID: "native-self-hash", Type: "engine-a", AssetName: "engine-a-native",
+		RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+		Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: "exact",
+		ContentDigest: "sha256:self-computed",
+	})
+	if untrusted.LifecycleStatus != "" || untrusted.VerificationStatus != "" {
+		t.Fatalf("self-computed digest was trusted: %+v", untrusted)
 	}
 
 	got := stateEngineFromScan(&engine.EngineImage{

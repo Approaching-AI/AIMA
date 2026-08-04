@@ -72,7 +72,7 @@ Go Agent (直接调用)，保证行为一致。
 #### Engine 生命周期契约
 
 - `engine.ensure` 必填 `name`，可选 `version`、`apply`。`apply` 默认 `false`，返回无副作用计划；只有 `apply=true` 才安装或激活。
-- `engine.rollback` 必填 `name` 和 `confirm`。`confirm=false` 返回结构化拒绝且不修改库存；`confirm=true` 只允许切换到 verified、available、匹配当前 asset/platform/runtime 的前一版本。
+- `engine.rollback` 必填 `name`、`runtime_type`（`container` 或 `native`）和 `confirm`。`confirm=false` 返回结构化拒绝且不修改库存；`confirm=true` 只允许切换到 verified、available、匹配当前 asset/platform/runtime 的前一版本。
 - 两个工具都只改变版本库存，不调用 deploy/Runtime，不重启或重新绑定已运行部署。
 - `engine.import` 的 Native 路径要求版本化本地包，先暂存、校验、原子提升并登记为 inactive `imported/verified`；激活必须另行调用 `engine.ensure`。
 - `engine.remove(delete_files=true)` 不会删除 preinstalled/legacy、受引用版本、越出 `AIMA_DATA_DIR` 的路径或容器镜像层。

@@ -42,6 +42,7 @@ type engineEnsureResult struct {
 
 type engineRollbackResult struct {
 	AssetName         string `json:"asset_name"`
+	RuntimeType       string `json:"runtime_type"`
 	Confirmed         bool   `json:"confirmed"`
 	Applied           bool   `json:"applied"`
 	Refused           bool   `json:"refused,omitempty"`
@@ -148,8 +149,10 @@ func (s *engineLifecycleService) Ensure(ctx context.Context, req engine.EnsureRe
 	}
 }
 
-func (s *engineLifecycleService) Rollback(ctx context.Context, name string, confirm bool) (engineRollbackResult, error) {
-	result := engineRollbackResult{AssetName: strings.TrimSpace(name), Confirmed: confirm}
+func (s *engineLifecycleService) Rollback(ctx context.Context, name, runtimeType string, confirm bool) (engineRollbackResult, error) {
+	result := engineRollbackResult{
+		AssetName: strings.TrimSpace(name), RuntimeType: strings.ToLower(strings.TrimSpace(runtimeType)), Confirmed: confirm,
+	}
 	if s == nil || s.inventory == nil {
 		return result, fmt.Errorf("engine lifecycle service is not configured")
 	}
@@ -158,6 +161,9 @@ func (s *engineLifecycleService) Rollback(ctx context.Context, name string, conf
 	}
 	if result.AssetName == "" {
 		return result, fmt.Errorf("engine asset name is required")
+	}
+	if result.RuntimeType != "container" && result.RuntimeType != "native" {
+		return result, fmt.Errorf("engine runtime type must be container or native")
 	}
 	if !confirm {
 		result.Refused = true
@@ -171,19 +177,19 @@ func (s *engineLifecycleService) Rollback(ctx context.Context, name string, conf
 	}
 	var current *state.Engine
 	for _, entry := range entries {
-		if entry == nil || !entry.Active || entry.AssetName != result.AssetName {
+		if entry == nil || !entry.Active || entry.AssetName != result.AssetName || entry.RuntimeType != result.RuntimeType {
 			continue
 		}
 		if s.inventoryPlatform != "" && entry.Platform != s.inventoryPlatform {
 			continue
 		}
 		if current != nil {
-			return result, fmt.Errorf("engine asset %s has multiple active runtime versions on platform %s", result.AssetName, s.inventoryPlatform)
+			return result, fmt.Errorf("engine asset %s has multiple active %s versions on platform %s", result.AssetName, result.RuntimeType, s.inventoryPlatform)
 		}
 		current = entry
 	}
 	if current == nil {
-		return result, fmt.Errorf("engine asset %s has no active version on platform %s", result.AssetName, s.inventoryPlatform)
+		return result, fmt.Errorf("engine asset %s has no active %s version on platform %s", result.AssetName, result.RuntimeType, s.inventoryPlatform)
 	}
 	if current.PreviousEngineID == "" {
 		return result, fmt.Errorf("active engine %s has no previous version", current.ID)

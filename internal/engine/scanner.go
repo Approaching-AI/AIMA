@@ -34,6 +34,7 @@ type EngineImage struct {
 	Origin          string `json:"origin,omitempty"`
 	CatalogVersion  string `json:"catalog_version,omitempty"`
 	ContentDigest   string `json:"content_digest,omitempty"`
+	ContentVerified bool   `json:"content_verified,omitempty"`
 	DockerOnly      bool   `json:"docker_only,omitempty"`      // true if image is in Docker but not K3S containerd
 	DetectedVersion string `json:"detected_version,omitempty"` // version found by probing
 	VersionMatch    string `json:"version_match,omitempty"`    // "exact", "compatible", "unknown", "mismatch"
@@ -47,6 +48,7 @@ type AssetDescriptor struct {
 	CompatibleVersions []string
 	Patterns           []string
 	Probe              *knowledge.EngineSourceProbe
+	ExpectedSHA256     string
 }
 
 // CommandRunner abstracts shell command execution for testability.
@@ -318,6 +320,7 @@ func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets 
 }
 
 func newNativeEngineImage(id, path string, size int64, platform, origin string, descriptor AssetDescriptor, detectedVersion string) *EngineImage {
+	contentDigest := fileContentDigest(path)
 	return &EngineImage{
 		ID:              id,
 		Type:            descriptor.Type,
@@ -329,7 +332,8 @@ func newNativeEngineImage(id, path string, size int64, platform, origin string, 
 		Available:       true,
 		Origin:          origin,
 		CatalogVersion:  descriptor.CatalogVersion,
-		ContentDigest:   fileContentDigest(path),
+		ContentDigest:   contentDigest,
+		ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
 		DetectedVersion: detectedVersion,
 		VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
 	}
@@ -397,6 +401,7 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 		if identity == "" {
 			identity = descriptor.Type
 		}
+		contentDigest := fileContentDigest(binaryPath)
 		found = append(found, &EngineImage{
 			ID:              binaryHash("preinstalled-" + identity),
 			Type:            descriptor.Type,
@@ -408,7 +413,8 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 			Available:       true,
 			Origin:          "preinstalled",
 			CatalogVersion:  descriptor.CatalogVersion,
-			ContentDigest:   fileContentDigest(binaryPath),
+			ContentDigest:   contentDigest,
+			ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
 			DetectedVersion: detectedVersion,
 			VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
 		})
@@ -518,6 +524,7 @@ type imageInfo struct {
 	id     string
 	repo   string // image name without tag
 	tag    string
+	digest string // registry/OCI manifest digest, never a runtime image/config ID
 	size   int64
 	source string // "containerd" or "docker"
 }
@@ -571,9 +578,10 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 
 	var result struct {
 		Images []struct {
-			ID       string   `json:"id"`
-			RepoTags []string `json:"repoTags"`
-			Size     string   `json:"size"`
+			ID          string   `json:"id"`
+			RepoTags    []string `json:"repoTags"`
+			RepoDigests []string `json:"repoDigests"`
+			Size        string   `json:"size"`
 		} `json:"images"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
@@ -589,6 +597,7 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 				id:     img.ID,
 				repo:   repo,
 				tag:    tagStr,
+				digest: repoContentDigest(repo, img.RepoDigests),
 				size:   size,
 				source: "containerd",
 			})
@@ -599,7 +608,7 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 }
 
 func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
-	output, err := runner.Run(ctx, "docker", "images", "--format", "{{json .}}", "--no-trunc")
+	output, err := runner.Run(ctx, "docker", "images", "--digests", "--format", "{{json .}}", "--no-trunc")
 	if err != nil {
 		return nil, err
 	}
@@ -613,6 +622,7 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			Repository string `json:"Repository"`
 			Tag        string `json:"Tag"`
 			ID         string `json:"ID"`
+			Digest     string `json:"Digest"`
 			Size       string `json:"Size"`
 		}
 		if err := json.Unmarshal([]byte(line), &img); err != nil {
@@ -622,6 +632,7 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			id:     img.ID,
 			repo:   img.Repository,
 			tag:    img.Tag,
+			digest: normalizedContentDigest(img.Digest),
 			size:   0, // Docker format doesn't reliably include size
 			source: "docker",
 		})
@@ -686,7 +697,7 @@ func matchImages(images []imageInfo, assets []AssetDescriptor) []*EngineImage {
 			Available:      true,
 			Origin:         "preinstalled",
 			CatalogVersion: descriptor.CatalogVersion,
-			ContentDigest:  imageContentDigest(img.id),
+			ContentDigest:  img.digest,
 			DockerOnly:     img.source == "docker",
 			VersionMatch:   "unknown",
 		})
@@ -763,12 +774,35 @@ func patternMatch(search string, patterns []patternEntry) (AssetDescriptor, bool
 	return AssetDescriptor{}, false
 }
 
-func imageContentDigest(id string) string {
-	id = strings.TrimSpace(id)
-	if strings.HasPrefix(strings.ToLower(id), "sha256:") {
-		return id
+func repoContentDigest(repo string, repoDigests []string) string {
+	for _, value := range repoDigests {
+		name, digest, ok := strings.Cut(strings.TrimSpace(value), "@")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(repo)) {
+			continue
+		}
+		if normalized := normalizedContentDigest(digest); normalized != "" {
+			return normalized
+		}
 	}
 	return ""
+}
+
+func normalizedContentDigest(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "sha256:") && len(value) > len("sha256:") {
+		return value
+	}
+	return ""
+}
+
+func digestMatches(actual, expected string) bool {
+	actual = normalizedContentDigest(actual)
+	expected = strings.TrimSpace(expected)
+	if expected != "" && !strings.Contains(expected, ":") {
+		expected = "sha256:" + expected
+	}
+	expected = normalizedContentDigest(expected)
+	return actual != "" && expected != "" && strings.EqualFold(actual, expected)
 }
 
 func patternScore(pattern string) int {

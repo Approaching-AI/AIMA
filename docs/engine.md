@@ -29,7 +29,7 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 | `aima engine info <name>` | 查看引擎详情（目录知识 + 本地可用性） |
 | `aima engine list` | 列出所有已注册引擎 |
 | `aima engine ensure <name> [--version <version>] [--apply]` | 规划或应用版本复用、安装和激活；默认只输出计划 |
-| `aima engine rollback <name> --confirm` | 激活 verified、available 的前一版本 |
+| `aima engine rollback <name> --runtime <container-or-native> --confirm` | 激活指定运行时组中 verified、available 的前一版本 |
 | `aima engine pull [name]` | 拉取引擎镜像（容器运行时） |
 | `aima engine import <path>` | 从本地 OCI 包或版本化 Native 包离线导入 |
 | `aima engine remove <id> [--delete-files]` | 删除无引用库存；物理删除受所有权和路径保护 |
@@ -42,7 +42,7 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 | `engine.info` | `engine.info` | 查询引擎详情（目录知识 + 本地状态） |
 | `engine.list` | `engine.list` | 列出所有引擎 |
 | `engine.ensure` | `engine.ensure` | 默认 plan-only；`apply=true` 才改变库存或激活版本 |
-| `engine.rollback` | `engine.rollback` | `confirm=true` 后回滚到 verified、available 前一版本 |
+| `engine.rollback` | `engine.rollback` | 指定 `runtime_type` 且 `confirm=true` 后回滚到该运行时组的 verified、available 前一版本 |
 | `engine.pull` | `engine.pull` | 拉取引擎镜像 |
 | `engine.import` | `engine.import` | 离线导入容器或 Native 引擎 |
 | `engine.remove` | `engine.remove` | 删除无引用库存，可选受保护物理删除 |
@@ -455,7 +455,7 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 ./aima engine ensure engine-a --version 2.0.0 --apply
 
 # 回滚只切换库存指针，不重启现有部署
-./aima engine rollback engine-a --confirm
+./aima engine rollback engine-a --runtime native --confirm
 ```
 
 ---

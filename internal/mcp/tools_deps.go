@@ -28,7 +28,7 @@ type ToolDeps struct {
 	ListEngines    func(ctx context.Context) (json.RawMessage, error)
 	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
 	EnsureEngine   func(ctx context.Context, name, version string, apply bool) (json.RawMessage, error)
-	RollbackEngine func(ctx context.Context, name string, confirm bool) (json.RawMessage, error)
+	RollbackEngine func(ctx context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error)
 	PullEngine     func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
 	ImportEngine   func(ctx context.Context, path string) error
 	RemoveEngine   func(ctx context.Context, name string, deleteFiles bool) error

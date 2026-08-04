@@ -208,17 +208,17 @@ func TestEngineEnsureCmd(t *testing.T) {
 func TestEngineRollbackCmd(t *testing.T) {
 	app := testApp(t)
 	calls := 0
-	app.ToolDeps.RollbackEngine = func(_ context.Context, name string, confirm bool) (json.RawMessage, error) {
+	app.ToolDeps.RollbackEngine = func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
 		calls++
-		if name != "engine-a" || !confirm {
-			t.Fatalf("RollbackEngine(%q, %v)", name, confirm)
+		if name != "engine-a" || runtimeType != "native" || !confirm {
+			t.Fatalf("RollbackEngine(%q, %q, %v)", name, runtimeType, confirm)
 		}
 		return json.RawMessage(`{"asset_name":"engine-a","applied":true,"active_engine_id":"engine-v1"}`), nil
 	}
 	root := NewRootCmd(app)
 	var buf bytes.Buffer
 	root.SetOut(&buf)
-	root.SetArgs([]string{"engine", "rollback", "engine-a", "--confirm"})
+	root.SetArgs([]string{"engine", "rollback", "engine-a", "--runtime", "native", "--confirm"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("engine rollback failed: %v", err)

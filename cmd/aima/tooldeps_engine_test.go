@@ -314,7 +314,7 @@ func TestEngineOfflineLifecycleIntegration(t *testing.T) {
 	if !activated.Applied || activated.ActiveEngineID != imported.ID || activated.PreviousEngineID != preinstalled.ID {
 		t.Fatalf("activation result = %+v", activated)
 	}
-	rolledBack, err := service.Rollback(ctx, "engine-a", true)
+	rolledBack, err := service.Rollback(ctx, "engine-a", "native", true)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -355,5 +355,18 @@ func writeNativeEngineBundle(t *testing.T, path, asset, version, binary string, 
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLooksLikeNativeEngineBundleLeavesCompressedTarAmbiguous(t *testing.T) {
+	for _, path := range []string{"engine.tar.gz", "engine.tgz"} {
+		if looksLikeNativeEngineBundle(path) {
+			t.Fatalf("%s was classified as Native before container import", path)
+		}
+	}
+	for _, path := range []string{"engine.zip", "engine.exe", "engine.appimage"} {
+		if !looksLikeNativeEngineBundle(path) {
+			t.Fatalf("%s was not classified as an unambiguous Native bundle", path)
+		}
 	}
 }

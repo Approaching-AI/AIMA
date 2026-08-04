@@ -1126,7 +1126,7 @@ func stateEngineFromScan(img *engine.EngineImage) *state.Engine {
 		ContentDigest:  img.ContentDigest,
 		Location:       location,
 	}
-	if img.RuntimeType == "native" && img.Origin == "preinstalled" && img.ContentDigest != "" &&
+	if img.RuntimeType == "native" && img.Origin == "preinstalled" && img.ContentVerified &&
 		(img.VersionMatch == "exact" || img.VersionMatch == "compatible") {
 		entry.LifecycleStatus = "verified"
 		entry.VerificationStatus = "verified"
@@ -1174,7 +1174,8 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				CompatibleVersions: append([]string(nil), ea.Metadata.CompatibleVersions...),
 				Patterns:           append([]string(nil), ea.Patterns...),
 			}
-			if ea.Source != nil && ea.Source.Probe != nil {
+			if ea.Source != nil {
+				descriptor.ExpectedSHA256 = ea.Source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]
 				descriptor.Probe = ea.Source.Probe
 			}
 			assetDescriptors = append(assetDescriptors, descriptor)

@@ -46,7 +46,7 @@ aima engine info <name>                   # 查看引擎详情
 aima engine list                          # 列出可用引擎
 aima engine ensure <name>                 # 输出无副作用的版本计划
 aima engine ensure <name> --version <v> --apply  # 校验、安装或激活指定版本
-aima engine rollback <name> --confirm     # 回滚到 verified、available 前一版本
+aima engine rollback <name> --runtime <container|native> --confirm  # 回滚指定运行时组
 aima engine pull [engine]                 # 拉取引擎镜像
 aima engine import <path>                 # 离线导入 OCI 或版本化 Native 包
 aima engine remove <engine-id>            # 删除无引用库存记录
@@ -133,7 +133,7 @@ aima version                              # 查看版本信息
 - `aima engine ensure` 默认只输出计划；没有 `--apply` 时不下载、不写数据库、不切换 active。
 - 网络安装要求 Catalog 中存在严格 SHA256/OCI digest。校验失败保持旧 active 不变。
 - `aima engine import` 对 Native 包要求实际版本目录，导入后只登记为 inactive；使用 `ensure --apply` 才激活。
-- `aima engine rollback` 必须显式传 `--confirm`，且前一版本必须 verified、available。
+- `aima engine rollback` 必须显式传 `--runtime container|native` 和 `--confirm`，且该运行时组的前一版本必须 verified、available。
 - 激活和回滚不会重启当前部署。部署继续使用持久化 intent 中固定的 Engine Asset/版本，直到操作者显式重新部署。
 - `engine remove --delete-files` 只允许无引用的 `managed`/`imported` Native 资产，且规范路径必须严格位于 `AIMA_DATA_DIR`。preinstalled、legacy、容器镜像层和外部路径不会被物理删除。
 

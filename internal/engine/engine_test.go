@@ -363,8 +363,8 @@ func TestScanFallbackToDocker(t *testing.T) {
 
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl images -o json":                        {err: fmt.Errorf("crictl not found")},
-			"docker images --format {{json .}} --no-trunc": {output: []byte(dockerOutput)},
+			"crictl images -o json":                                  {err: fmt.Errorf("crictl not found")},
+			"docker images --digests --format {{json .}} --no-trunc": {output: []byte(dockerOutput)},
 		},
 	}
 
@@ -395,8 +395,8 @@ func TestScanBothFail(t *testing.T) {
 	// it returns an empty list without error (native scan still runs).
 	runner := &mockRunner{
 		responses: map[string]mockResponse{
-			"crictl images -o json":                        {err: fmt.Errorf("crictl not found")},
-			"docker images --format {{json .}} --no-trunc": {err: fmt.Errorf("docker not found")},
+			"crictl images -o json":                                  {err: fmt.Errorf("crictl not found")},
+			"docker images --digests --format {{json .}} --no-trunc": {err: fmt.Errorf("docker not found")},
 		},
 	}
 
@@ -907,9 +907,11 @@ func TestCompareDetectedVersion(t *testing.T) {
 func TestScanExplicitProbeOriginAndVersionEvidence(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "engine-a")
-	if err := os.WriteFile(binPath, []byte("engine-a-content"), 0o755); err != nil {
+	content := []byte("engine-a-content")
+	if err := os.WriteFile(binPath, content, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	trustedDigest := fmt.Sprintf("%x", sha256.Sum256(content))
 	runner := &mockRunner{responses: map[string]mockResponse{
 		binPath + " --version": {output: []byte("Engine A 2.0.0")},
 	}}
@@ -921,6 +923,7 @@ func TestScanExplicitProbeOriginAndVersionEvidence(t *testing.T) {
 			AssetName:      "engine-a-linux",
 			Type:           "engine-a",
 			CatalogVersion: "1.2.3",
+			ExpectedSHA256: trustedDigest,
 			Probe: &knowledge.EngineSourceProbe{
 				Paths:          []string{binPath},
 				VersionCommand: []string{"./engine-a", "--version"},
@@ -943,6 +946,9 @@ func TestScanExplicitProbeOriginAndVersionEvidence(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.ContentDigest, "sha256:") {
 		t.Fatalf("content digest = %q", got.ContentDigest)
+	}
+	if !got.ContentVerified {
+		t.Fatalf("Catalog-matched content was not verified: %+v", got)
 	}
 }
 
@@ -1056,13 +1062,17 @@ func TestScanPATHBinaryOriginEvidence(t *testing.T) {
 	if len(results) != 1 || results[0].Origin != "preinstalled" || results[0].AssetName != "engine-path" {
 		t.Fatalf("PATH evidence = %+v", results)
 	}
+	if results[0].ContentVerified {
+		t.Fatalf("binary without Catalog SHA256 was trusted: %+v", results[0])
+	}
 }
 
 func TestScanContainerOriginEvidence(t *testing.T) {
 	images := crictlImageList{Images: []crictlImage{{
-		ID:       "sha256:abc123",
-		RepoTags: []string{"example/engine-a:v1"},
-		Size:     "42",
+		ID:          "sha256:runtime-image-id",
+		RepoTags:    []string{"example/engine-a:v1"},
+		RepoDigests: []string{"example/engine-a@sha256:manifest123"},
+		Size:        "42",
 	}}}
 	imageJSON, _ := json.Marshal(images)
 	runner := &mockRunner{responses: map[string]mockResponse{
@@ -1086,8 +1096,31 @@ func TestScanContainerOriginEvidence(t *testing.T) {
 		t.Fatalf("results = %+v", results)
 	}
 	got := results[0]
-	if got.Origin != "preinstalled" || got.AssetName != "engine-a-container" || got.CatalogVersion != "1.0.0" || got.ContentDigest != "sha256:abc123" {
+	if got.Origin != "preinstalled" || got.AssetName != "engine-a-container" || got.CatalogVersion != "1.0.0" || got.ContentDigest != "sha256:manifest123" {
 		t.Fatalf("container evidence = %+v", got)
+	}
+}
+
+func TestScanContainerDoesNotTreatRuntimeImageIDAsContentDigest(t *testing.T) {
+	images := crictlImageList{Images: []crictlImage{{
+		ID: "sha256:runtime-image-id", RepoTags: []string{"example/engine-a:v1"}, Size: "42",
+	}}}
+	imageJSON, _ := json.Marshal(images)
+	runner := &mockRunner{responses: map[string]mockResponse{
+		"crictl images -o json": {output: imageJSON},
+	}}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		Runner: runner,
+		Assets: []AssetDescriptor{{
+			AssetName: "engine-a", Type: "engine-a", Patterns: []string{"^example/engine-a$"},
+		}},
+	})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("ScanUnified = %+v, %v", results, err)
+	}
+	if results[0].ContentDigest != "" {
+		t.Fatalf("runtime image ID was trusted as content digest: %+v", results[0])
 	}
 }
 

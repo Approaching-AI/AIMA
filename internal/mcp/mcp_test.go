@@ -573,10 +573,10 @@ func TestEngineRollbackToolContract(t *testing.T) {
 	calls := 0
 	mutations := 0
 	deps := &ToolDeps{
-		RollbackEngine: func(_ context.Context, name string, confirm bool) (json.RawMessage, error) {
+		RollbackEngine: func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
 			calls++
-			if name != "engine-a" {
-				t.Fatalf("name = %q", name)
+			if name != "engine-a" || runtimeType != "native" {
+				t.Fatalf("name = %q runtime_type = %q", name, runtimeType)
 			}
 			if confirm {
 				mutations++
@@ -586,7 +586,7 @@ func TestEngineRollbackToolContract(t *testing.T) {
 	}
 	registerEngineTools(s, deps)
 
-	result, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","confirm":false}`))
+	result, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","runtime_type":"native","confirm":false}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestEngineRollbackToolContract(t *testing.T) {
 		t.Fatalf("calls=%d mutations=%d, want one refusal and no mutation", calls, mutations)
 	}
 
-	missing, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"confirm":true}`))
+	missing, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"runtime_type":"native","confirm":true}`))
 	if err != nil {
 		t.Fatalf("missing-name ExecuteTool: %v", err)
 	}

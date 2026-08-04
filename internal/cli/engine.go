@@ -55,7 +55,10 @@ func newEngineEnsureCmd(app *App) *cobra.Command {
 }
 
 func newEngineRollbackCmd(app *App) *cobra.Command {
-	var confirm bool
+	var (
+		confirm     bool
+		runtimeType string
+	)
 	cmd := &cobra.Command{
 		Use:   "rollback <name>",
 		Short: "Activate the previous verified Engine version",
@@ -64,7 +67,10 @@ func newEngineRollbackCmd(app *App) *cobra.Command {
 			if app.ToolDeps.RollbackEngine == nil {
 				return fmt.Errorf("engine.rollback not implemented")
 			}
-			data, err := app.ToolDeps.RollbackEngine(cmd.Context(), args[0], confirm)
+			if runtimeType != "container" && runtimeType != "native" {
+				return fmt.Errorf("runtime must be container or native")
+			}
+			data, err := app.ToolDeps.RollbackEngine(cmd.Context(), args[0], runtimeType, confirm)
 			if err != nil {
 				return fmt.Errorf("roll back engine %s: %w", args[0], err)
 			}
@@ -72,7 +78,9 @@ func newEngineRollbackCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&runtimeType, "runtime", "", "Runtime group to roll back: container or native")
 	cmd.Flags().BoolVar(&confirm, "confirm", false, "Confirm activation of the previous verified version")
+	_ = cmd.MarkFlagRequired("runtime")
 	return cmd
 }
 

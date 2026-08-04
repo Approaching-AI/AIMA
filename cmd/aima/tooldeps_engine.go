@@ -49,8 +49,8 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		return data, ensureErr
 	}
-	deps.RollbackEngine = func(ctx context.Context, name string, confirm bool) (json.RawMessage, error) {
-		result, rollbackErr := lifecycleService.Rollback(ctx, name, confirm)
+	deps.RollbackEngine = func(ctx context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
+		result, rollbackErr := lifecycleService.Rollback(ctx, name, runtimeType, confirm)
 		data, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("encode engine rollback result: %w", marshalErr)
@@ -488,8 +488,6 @@ func looksLikeNativeEngineBundle(path string) bool {
 	lower := strings.ToLower(path)
 	switch {
 	case strings.HasSuffix(lower, ".zip"),
-		strings.HasSuffix(lower, ".tgz"),
-		strings.HasSuffix(lower, ".tar.gz"),
 		strings.HasSuffix(lower, ".exe"),
 		strings.HasSuffix(lower, ".appimage"):
 		return true

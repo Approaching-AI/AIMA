@@ -53,24 +53,29 @@ type DeployRequest struct {
 
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
-	Name            string            `json:"name"`
-	Model           string            `json:"model,omitempty"`
-	Engine          string            `json:"engine,omitempty"`
-	Image           string            `json:"image,omitempty"`
-	Slot            string            `json:"slot,omitempty"`
-	Phase           string            `json:"phase"` // running / starting / stopped / failed
-	Ready           bool              `json:"ready"`
-	Address         string            `json:"address"` // host:port
-	Config          map[string]any    `json:"config,omitempty"`
-	Labels          map[string]string `json:"labels"`
-	StartTime       string            `json:"start_time"`
-	StartedAtUnix   int64             `json:"started_at_unix,omitempty"`
-	Message         string            `json:"message,omitempty"`
-	Runtime         string            `json:"runtime"` // "k3s", "docker", or "native"
-	Restarts        int               `json:"restarts,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	GPUMemoryMiB    int               `json:"gpu_memory_mib,omitempty"`
-	GPUMemorySource string            `json:"gpu_memory_source,omitempty"`
+	Name             string            `json:"name"`
+	Model            string            `json:"model,omitempty"`
+	Engine           string            `json:"engine,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	Slot             string            `json:"slot,omitempty"`
+	Phase            string            `json:"phase"` // running / starting / stopped / failed
+	Ready            bool              `json:"ready"`
+	Address          string            `json:"address"` // host:port
+	Config           map[string]any    `json:"config,omitempty"`
+	Labels           map[string]string `json:"labels"`
+	StartTime        string            `json:"start_time"`
+	StartedAtUnix    int64             `json:"started_at_unix,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	Runtime          string            `json:"runtime"` // "k3s", "docker", or "native"
+	Restarts         int               `json:"restarts,omitempty"`
+	ExitCode         *int              `json:"exit_code,omitempty"`
+	GPUMemoryMiB     int               `json:"gpu_memory_mib,omitempty"`
+	GPUMemorySource  string            `json:"gpu_memory_source,omitempty"`
+	DesiredState     string            `json:"desired_state,omitempty"`
+	RecoveryState    string            `json:"recovery_state,omitempty"`
+	RecoveryAttempts int               `json:"recovery_attempts,omitempty"`
+	NextRecoveryAt   string            `json:"next_recovery_at,omitempty"`
+	QuarantineReason string            `json:"quarantine_reason,omitempty"`
 
 	StartupPhase    string `json:"startup_phase,omitempty"`    // scheduling/pulling_image/initializing/loading_weights/cuda_graphs/ready
 	StartupProgress int    `json:"startup_progress,omitempty"` // 0-100

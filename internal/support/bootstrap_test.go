@@ -285,7 +285,6 @@ func TestStartRegistrationWorker_SucceedsFirstTry(t *testing.T) {
 }
 
 func TestStartRegistrationWorker_RetriesThenSucceeds(t *testing.T) {
-	t.Parallel()
 	var attempts int
 	fx := newBootstrapFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -324,7 +323,6 @@ func TestStartRegistrationWorker_RetriesThenSucceeds(t *testing.T) {
 }
 
 func TestStartRegistrationWorker_StopsOnPromptError(t *testing.T) {
-	t.Parallel()
 	var attempts int
 	fx := newBootstrapFixture(t, func(w http.ResponseWriter, _ *http.Request) {
 		attempts++
@@ -356,7 +354,6 @@ func TestStartRegistrationWorker_StopsOnPromptError(t *testing.T) {
 }
 
 func TestStartRegistrationWorker_StopsOnBrowserConfirmation(t *testing.T) {
-	t.Parallel()
 	var attempts int
 	fx := newBootstrapFixture(t, func(w http.ResponseWriter, _ *http.Request) {
 		attempts++
@@ -401,7 +398,6 @@ func TestStartRegistrationWorker_StopsOnBrowserConfirmation(t *testing.T) {
 }
 
 func TestStartRegistrationWorker_ExitsOnContextCancel(t *testing.T) {
-	t.Parallel()
 	fx := newBootstrapFixture(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"detail":"server-down"}`, http.StatusInternalServerError)
 	})

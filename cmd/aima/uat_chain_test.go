@@ -19,6 +19,7 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/recovery"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 )
 
@@ -334,7 +335,7 @@ func TestDeployApplyReusesExistingSameModelDeploymentByLabel(t *testing.T) {
 		},
 	)
 
-	data, err := deps.DeployApply(ctx, "", modelName, "", nil, true)
+	data, err := deps.DeployApply(ctx, "", modelName, "", nil, true, recovery.PolicyPatch{})
 	if err != nil {
 		t.Fatalf("DeployApply: %v", err)
 	}

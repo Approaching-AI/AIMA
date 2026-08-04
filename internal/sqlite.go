@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -8,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jguan/aima/internal/recovery"
 
 	_ "modernc.org/sqlite"
 )
@@ -454,6 +458,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v19: selected imported model subset for external OpenAI services
 	if err := d.migrateV19(ctx); err != nil {
 		return fmt.Errorf("migrate v19: %w", err)
+	}
+	// v20: durable desired state and recovery state for deployments
+	if err := d.migrateV20(ctx); err != nil {
+		return fmt.Errorf("migrate v20: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1402,6 +1410,314 @@ func (d *DB) migrateV19(ctx context.Context) error {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
+}
+
+func (d *DB) migrateV20(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 20 {
+		return nil
+	}
+
+	ddl := `
+CREATE TABLE IF NOT EXISTS deployment_intents (
+    name TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    engine_asset TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    config_json TEXT NOT NULL,
+    desired_state TEXT NOT NULL,
+    recovery_state TEXT NOT NULL,
+    recovery_policy_json TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    consecutive_failure_count INTEGER NOT NULL,
+    observed_restart_count INTEGER NOT NULL,
+    window_started_at TEXT,
+    next_attempt_at TEXT,
+    healthy_since TEXT,
+    last_exit_code INTEGER,
+    last_error TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_intents_desired_recovery
+    ON deployment_intents(desired_state, recovery_state);
+CREATE INDEX IF NOT EXISTS idx_deployment_intents_next_attempt_at
+    ON deployment_intents(next_attempt_at);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate v20 schema: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 20"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) UpsertDeploymentIntent(ctx context.Context, intent *recovery.Intent) error {
+	if intent == nil {
+		return fmt.Errorf("deployment intent is nil")
+	}
+	configJSON, policyJSON, err := marshalDeploymentIntentJSON(intent)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	createdAt := intent.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := intent.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	if _, err := d.db.ExecContext(ctx, `
+INSERT INTO deployment_intents (
+    name, model, engine_asset, engine_version, slot, runtime, revision,
+    config_json, desired_state, recovery_state, recovery_policy_json,
+    attempt_count, consecutive_failure_count, observed_restart_count,
+    window_started_at, next_attempt_at, healthy_since, last_exit_code, last_error,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+    model = excluded.model,
+    engine_asset = excluded.engine_asset,
+    engine_version = excluded.engine_version,
+    slot = excluded.slot,
+    runtime = excluded.runtime,
+    revision = excluded.revision,
+    config_json = excluded.config_json,
+    desired_state = excluded.desired_state,
+    recovery_state = excluded.recovery_state,
+    recovery_policy_json = excluded.recovery_policy_json,
+    attempt_count = excluded.attempt_count,
+    consecutive_failure_count = excluded.consecutive_failure_count,
+    observed_restart_count = excluded.observed_restart_count,
+    window_started_at = excluded.window_started_at,
+    next_attempt_at = excluded.next_attempt_at,
+    healthy_since = excluded.healthy_since,
+    last_exit_code = excluded.last_exit_code,
+    last_error = excluded.last_error,
+    updated_at = excluded.updated_at`,
+		intent.Name, intent.Model, intent.EngineAsset, intent.EngineVersion, intent.Slot, intent.Runtime, intent.Revision,
+		configJSON, intent.DesiredState, intent.RecoveryState, policyJSON,
+		intent.AttemptCount, intent.ConsecutiveFailureCount, intent.ObservedRestartCount,
+		deploymentIntentTime(intent.WindowStartedAt), deploymentIntentTime(intent.NextAttemptAt), deploymentIntentTime(intent.HealthySince), intent.LastExitCode, recovery.SanitizeText(intent.LastError),
+		deploymentIntentTime(createdAt), deploymentIntentTime(updatedAt)); err != nil {
+		return fmt.Errorf("upsert deployment intent %s: %w", intent.Name, err)
+	}
+	return nil
+}
+
+func (d *DB) GetDeploymentIntent(ctx context.Context, name string) (*recovery.Intent, error) {
+	intent, err := scanDeploymentIntent(d.db.QueryRowContext(ctx, deploymentIntentSelect+` WHERE name = ?`, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("deployment intent %s not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get deployment intent %s: %w", name, err)
+	}
+	return intent, nil
+}
+
+func (d *DB) ListRunnableDeploymentIntents(ctx context.Context) ([]*recovery.Intent, error) {
+	rows, err := d.db.QueryContext(ctx, deploymentIntentSelect+`
+ WHERE desired_state = ?
+   AND (recovery_state != ? OR
+        (recovery_state = ? AND runtime IN (?, ?) AND next_attempt_at IS NOT NULL))
+ ORDER BY name ASC`, recovery.DesiredRunning, recovery.StateQuarantined,
+		recovery.StateQuarantined, "docker", "k3s")
+	if err != nil {
+		return nil, fmt.Errorf("list runnable deployment intents: %w", err)
+	}
+	defer rows.Close()
+
+	intents := make([]*recovery.Intent, 0)
+	for rows.Next() {
+		intent, err := scanDeploymentIntent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan runnable deployment intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runnable deployment intents: %w", err)
+	}
+	return intents, nil
+}
+
+func (d *DB) ListDeploymentIntents(ctx context.Context) ([]*recovery.Intent, error) {
+	rows, err := d.db.QueryContext(ctx, deploymentIntentSelect+` ORDER BY name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list deployment intents: %w", err)
+	}
+	defer rows.Close()
+
+	intents := make([]*recovery.Intent, 0)
+	for rows.Next() {
+		intent, err := scanDeploymentIntent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan deployment intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deployment intents: %w", err)
+	}
+	return intents, nil
+}
+
+func (d *DB) CompareAndSwapDeploymentIntent(ctx context.Context, intent *recovery.Intent, expectedRevision int64) (bool, error) {
+	if intent == nil {
+		return false, fmt.Errorf("deployment intent is nil")
+	}
+	configJSON, policyJSON, err := marshalDeploymentIntentJSON(intent)
+	if err != nil {
+		return false, err
+	}
+	updatedAt := time.Now().UTC().Truncate(time.Second)
+	result, err := d.db.ExecContext(ctx, `
+UPDATE deployment_intents SET
+    model = ?, engine_asset = ?, engine_version = ?, slot = ?, runtime = ?,
+    revision = revision + 1, config_json = ?, desired_state = ?, recovery_state = ?, recovery_policy_json = ?,
+    attempt_count = ?, consecutive_failure_count = ?, observed_restart_count = ?,
+    window_started_at = ?, next_attempt_at = ?, healthy_since = ?, last_exit_code = ?, last_error = ?, updated_at = ?
+WHERE name = ? AND revision = ?`,
+		intent.Model, intent.EngineAsset, intent.EngineVersion, intent.Slot, intent.Runtime,
+		configJSON, intent.DesiredState, intent.RecoveryState, policyJSON,
+		intent.AttemptCount, intent.ConsecutiveFailureCount, intent.ObservedRestartCount,
+		deploymentIntentTime(intent.WindowStartedAt), deploymentIntentTime(intent.NextAttemptAt), deploymentIntentTime(intent.HealthySince), intent.LastExitCode, recovery.SanitizeText(intent.LastError), deploymentIntentTime(updatedAt),
+		intent.Name, expectedRevision)
+	if err != nil {
+		return false, fmt.Errorf("compare and swap deployment intent %s: %w", intent.Name, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("compare and swap deployment intent %s rows affected: %w", intent.Name, err)
+	}
+	if updated == 1 {
+		intent.Revision = expectedRevision + 1
+		intent.UpdatedAt = updatedAt
+	}
+	return updated == 1, nil
+}
+
+func (d *DB) StopDeploymentIntent(ctx context.Context, name string) error {
+	if _, err := d.db.ExecContext(ctx, `
+UPDATE deployment_intents
+SET desired_state = ?, next_attempt_at = NULL, revision = revision + 1, updated_at = ?
+WHERE name = ?`, recovery.DesiredStopped, deploymentIntentTime(time.Now().UTC()), name); err != nil {
+		return fmt.Errorf("stop deployment intent %s: %w", name, err)
+	}
+	return nil
+}
+
+const deploymentIntentSelect = `
+SELECT name, model, engine_asset, engine_version, slot, runtime, revision,
+       config_json, desired_state, recovery_state, recovery_policy_json,
+       attempt_count, consecutive_failure_count, observed_restart_count,
+       window_started_at, next_attempt_at, healthy_since, last_exit_code, last_error,
+       created_at, updated_at
+FROM deployment_intents`
+
+type deploymentIntentScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDeploymentIntent(row deploymentIntentScanner) (*recovery.Intent, error) {
+	var (
+		intent                             recovery.Intent
+		configJSON, policyJSON             string
+		windowStartedAt, nextAttemptAt     sql.NullString
+		healthySince, createdAt, updatedAt sql.NullString
+		lastExitCode                       sql.NullInt64
+	)
+	if err := row.Scan(
+		&intent.Name, &intent.Model, &intent.EngineAsset, &intent.EngineVersion, &intent.Slot, &intent.Runtime, &intent.Revision,
+		&configJSON, &intent.DesiredState, &intent.RecoveryState, &policyJSON,
+		&intent.AttemptCount, &intent.ConsecutiveFailureCount, &intent.ObservedRestartCount,
+		&windowStartedAt, &nextAttemptAt, &healthySince, &lastExitCode, &intent.LastError, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	config, err := decodeDeploymentIntentConfigJSON(configJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode config JSON: %w", err)
+	}
+	intent.Config = config
+	if err := json.Unmarshal([]byte(policyJSON), &intent.Policy); err != nil {
+		return nil, fmt.Errorf("decode recovery policy JSON: %w", err)
+	}
+	var parseErr error
+	if intent.WindowStartedAt, parseErr = parseDeploymentIntentTime(windowStartedAt); parseErr != nil {
+		return nil, fmt.Errorf("decode window_started_at: %w", parseErr)
+	}
+	if intent.NextAttemptAt, parseErr = parseDeploymentIntentTime(nextAttemptAt); parseErr != nil {
+		return nil, fmt.Errorf("decode next_attempt_at: %w", parseErr)
+	}
+	if intent.HealthySince, parseErr = parseDeploymentIntentTime(healthySince); parseErr != nil {
+		return nil, fmt.Errorf("decode healthy_since: %w", parseErr)
+	}
+	if intent.CreatedAt, parseErr = parseDeploymentIntentTime(createdAt); parseErr != nil {
+		return nil, fmt.Errorf("decode created_at: %w", parseErr)
+	}
+	if intent.UpdatedAt, parseErr = parseDeploymentIntentTime(updatedAt); parseErr != nil {
+		return nil, fmt.Errorf("decode updated_at: %w", parseErr)
+	}
+	if lastExitCode.Valid {
+		value := int(lastExitCode.Int64)
+		intent.LastExitCode = &value
+	}
+	return &intent, nil
+}
+
+func marshalDeploymentIntentJSON(intent *recovery.Intent) (string, string, error) {
+	sanitizedConfig, err := recovery.SanitizeConfigChecked(intent.Config)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent config: %w", err)
+	}
+	configJSON, err := json.Marshal(sanitizedConfig)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent config: %w", err)
+	}
+	policyJSON, err := json.Marshal(intent.Policy)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent recovery policy: %w", err)
+	}
+	return string(configJSON), string(policyJSON), nil
+}
+
+func decodeDeploymentIntentConfigJSON(value string) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(value))
+	decoder.UseNumber()
+	var config map[string]any
+	if err := decoder.Decode(&config); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("unexpected trailing JSON value")
+		}
+		return nil, err
+	}
+	return config, nil
+}
+
+func deploymentIntentTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseDeploymentIntentTime(value sql.NullString) (time.Time, error) {
+	if !value.Valid || value.String == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, value.String)
 }
 
 func (d *DB) InsertExplorationPlan(ctx context.Context, plan *ExplorationPlanRow) error {
@@ -2829,6 +3145,38 @@ func (d *DB) LogAction(ctx context.Context, entry *AuditEntry) error {
 		return fmt.Errorf("log action %s: %w", entry.ToolName, err)
 	}
 	return nil
+}
+
+// LogRecoveryEvent stores a redacted recovery-controller event in the shared
+// audit stream. The event payload is JSON so callers can query lifecycle
+// metadata without adding a recovery-specific table or schema migration.
+func (d *DB) LogRecoveryEvent(ctx context.Context, event recovery.AuditEvent) error {
+	event.Source = strings.TrimSpace(event.Source)
+	if event.Source == "" {
+		event.Source = recovery.AuditSourceReconciler
+	}
+	event.Type = strings.TrimSpace(event.Type)
+	if event.Type == "" {
+		return fmt.Errorf("recovery audit event type is empty")
+	}
+	event.Reason = recovery.SanitizeText(event.Reason)
+	arguments, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal recovery audit event %s: %w", event.Type, err)
+	}
+	resultSummary := recovery.SanitizeText(strings.TrimSpace(event.Result))
+	if event.Reason != "" {
+		if resultSummary != "" {
+			resultSummary += ": "
+		}
+		resultSummary += event.Reason
+	}
+	return d.LogAction(ctx, &AuditEntry{
+		AgentType:     event.Source,
+		ToolName:      "deployment.recovery." + event.Type,
+		Arguments:     string(arguments),
+		ResultSummary: resultSummary,
+	})
 }
 
 // ListConfigurations returns configurations matching optional filters.

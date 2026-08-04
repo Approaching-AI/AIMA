@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jguan/aima/internal/recovery"
 	"github.com/jguan/aima/internal/runtime"
 
 	state "github.com/jguan/aima/internal"
@@ -208,6 +209,53 @@ func uniqueRuntimes(rts ...runtime.Runtime) []runtime.Runtime {
 		unique = append(unique, r)
 	}
 	return unique
+}
+
+func runtimeByName(name string, rts ...runtime.Runtime) runtime.Runtime {
+	name = strings.TrimSpace(name)
+	for _, candidate := range uniqueRuntimes(rts...) {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name()), name) {
+			return candidate
+		}
+	}
+	return nil
+}
+
+// observeExactDeploymentOnRuntime distinguishes confirmed absence from a
+// Runtime infrastructure failure. If List can see the exact object while
+// Status fails, it returns that list entry together with the detail error.
+func observeExactDeploymentOnRuntime(ctx context.Context, name string, target runtime.Runtime) (*runtime.DeploymentStatus, bool, error) {
+	if target == nil {
+		return nil, false, fmt.Errorf("runtime for deployment %q is unavailable", name)
+	}
+	status, statusErr := target.Status(ctx, name)
+	if statusErr == nil && status != nil && status.Name == name {
+		return status, true, nil
+	}
+	if statusErr == nil {
+		statusErr = fmt.Errorf("runtime returned no exact status for deployment %q", name)
+	}
+	statuses, listErr := target.List(ctx)
+	if listErr != nil {
+		return nil, false, fmt.Errorf(
+			"observe deployment %q on %s: status: %s; list: %s",
+			name,
+			target.Name(),
+			recovery.SanitizeText(statusErr.Error()),
+			recovery.SanitizeText(listErr.Error()),
+		)
+	}
+	for _, listed := range statuses {
+		if listed != nil && listed.Name == name {
+			return listed, true, fmt.Errorf(
+				"observe deployment %q on %s details: %s",
+				name,
+				target.Name(),
+				recovery.SanitizeText(statusErr.Error()),
+			)
+		}
+	}
+	return nil, false, nil
 }
 
 func findMatchingDeployments(ctx context.Context, query string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) []matchedDeployment {

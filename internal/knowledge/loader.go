@@ -763,7 +763,7 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	for _, warning := range finalizeEngineAssets(cat) {
 		slog.Warn(warning)
 	}
-	if err := validateEngineRequestAdapters(cat.EngineAssets); err != nil {
+	if err := validateCatalogRequestAdapters(cat); err != nil {
 		return nil, err
 	}
 
@@ -1031,41 +1031,62 @@ func cloneEngineRequestAdapter(src *EngineRequestAdapter) *EngineRequestAdapter 
 func validateEngineRequestAdapters(assets []EngineAsset) error {
 	for index := range assets {
 		engine := &assets[index]
-		adapter := engine.API.RequestAdapter
-		if adapter == nil {
+		name := strings.TrimSpace(engine.Metadata.Name)
+		if err := validateEngineRequestAdapter("engine "+name, engine.API.RequestAdapter); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCatalogRequestAdapters(cat *Catalog) error {
+	if cat == nil {
+		return nil
+	}
+	for name, profile := range cat.EngineProfiles {
+		if profile == nil {
 			continue
 		}
-		name := strings.TrimSpace(engine.Metadata.Name)
-		if adapter.Kind != "exact_context" {
-			return fmt.Errorf("engine %s: unknown request adapter kind %q", name, adapter.Kind)
+		if err := validateEngineRequestAdapter("engine profile "+strings.TrimSpace(name), profile.API.RequestAdapter); err != nil {
+			return err
 		}
-		if !strings.HasPrefix(strings.TrimSpace(adapter.Path), "/") {
-			return fmt.Errorf("engine %s request adapter: path must be absolute", name)
-		}
-		if strings.TrimSpace(adapter.ContextConfigKey) == "" {
-			return fmt.Errorf("engine %s request adapter: context_config_key is required", name)
-		}
-		if strings.TrimSpace(adapter.ProbeSubcommand) == "" {
-			return fmt.Errorf("engine %s request adapter: probe_subcommand is required", name)
-		}
-		if adapter.PaddingRole != "system" {
-			return fmt.Errorf("engine %s request adapter: padding_role must be system", name)
-		}
-		if strings.TrimSpace(adapter.PaddingPrefix) == "" {
-			return fmt.Errorf("engine %s request adapter: padding_prefix is required", name)
-		}
-		if adapter.PaddingUnit == "" {
-			return fmt.Errorf("engine %s request adapter: padding_unit is required", name)
-		}
-		if strings.TrimSpace(adapter.UpstreamModel) == "" {
-			return fmt.Errorf("engine %s request adapter: upstream_model is required", name)
-		}
-		if adapter.MaxAttempts == 0 {
-			adapter.MaxAttempts = 8
-		}
-		if adapter.MaxAttempts < 1 || adapter.MaxAttempts > 32 {
-			return fmt.Errorf("engine %s request adapter: max_attempts must be between 1 and 32", name)
-		}
+	}
+	return validateEngineRequestAdapters(cat.EngineAssets)
+}
+
+func validateEngineRequestAdapter(owner string, adapter *EngineRequestAdapter) error {
+	if adapter == nil {
+		return nil
+	}
+	if adapter.Kind != "exact_context" {
+		return fmt.Errorf("%s: unknown request adapter kind %q", owner, adapter.Kind)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(adapter.Path), "/") {
+		return fmt.Errorf("%s request adapter: path must be absolute", owner)
+	}
+	if strings.TrimSpace(adapter.ContextConfigKey) == "" {
+		return fmt.Errorf("%s request adapter: context_config_key is required", owner)
+	}
+	if strings.TrimSpace(adapter.ProbeSubcommand) == "" {
+		return fmt.Errorf("%s request adapter: probe_subcommand is required", owner)
+	}
+	if adapter.PaddingRole != "system" {
+		return fmt.Errorf("%s request adapter: padding_role must be system", owner)
+	}
+	if strings.TrimSpace(adapter.PaddingPrefix) == "" {
+		return fmt.Errorf("%s request adapter: padding_prefix is required", owner)
+	}
+	if adapter.PaddingUnit == "" {
+		return fmt.Errorf("%s request adapter: padding_unit is required", owner)
+	}
+	if strings.TrimSpace(adapter.UpstreamModel) == "" {
+		return fmt.Errorf("%s request adapter: upstream_model is required", owner)
+	}
+	if adapter.MaxAttempts == 0 {
+		adapter.MaxAttempts = 8
+	}
+	if adapter.MaxAttempts < 1 || adapter.MaxAttempts > 32 {
+		return fmt.Errorf("%s request adapter: max_attempts must be between 1 and 32", owner)
 	}
 	return nil
 }
@@ -1381,6 +1402,10 @@ func LoadCatalogPatchesLenient(fsys fs.FS, base *Catalog) (*Catalog, []string) {
 		}
 		warnings = append(warnings, w)
 	}
+	if err := validateCatalogRequestAdapters(cat); err != nil {
+		warnings = append(warnings, err.Error())
+		return &Catalog{EngineProfiles: make(map[string]*EngineProfile)}, warnings
+	}
 	return cat, warnings
 }
 
@@ -1431,7 +1456,7 @@ func ValidateCatalogPatch(base *Catalog, data []byte, path string) ([]byte, erro
 		return nil, err
 	}
 	finalizeEngineAssets(validationCat)
-	if err := validateEngineRequestAdapters(validationCat.EngineAssets); err != nil {
+	if err := validateCatalogRequestAdapters(validationCat); err != nil {
 		return nil, err
 	}
 	return assetData, nil
@@ -1658,6 +1683,16 @@ func extractName(data []byte) string {
 // mutated base catalog plus any post-merge finalize warnings (e.g. engine
 // assets whose profile reference can't be resolved even after merging).
 func MergeCatalog(base, overlay *Catalog) (*Catalog, []string) {
+	validationRawAssets := append([]EngineAsset(nil), rawEngineAssets(base)...)
+	validationCat := &Catalog{
+		RawEngineAssets: mergeSlice(validationRawAssets, rawEngineAssets(overlay), func(v EngineAsset) string { return v.Metadata.Name }),
+		EngineProfiles:  mergeEngineProfilesCloned(base.EngineProfiles, overlay.EngineProfiles),
+	}
+	warnings := finalizeEngineAssets(validationCat)
+	if err := validateCatalogRequestAdapters(validationCat); err != nil {
+		return base, append(warnings, err.Error())
+	}
+
 	base.HardwareProfiles = mergeSlice(base.HardwareProfiles, overlay.HardwareProfiles, func(v HardwareProfile) string { return v.Metadata.Name })
 	base.RawEngineAssets = mergeSlice(rawEngineAssets(base), rawEngineAssets(overlay), func(v EngineAsset) string { return v.Metadata.Name })
 	base.ModelAssets = mergeSlice(base.ModelAssets, overlay.ModelAssets, func(v ModelAsset) string { return v.Metadata.Name })
@@ -1665,11 +1700,7 @@ func MergeCatalog(base, overlay *Catalog) (*Catalog, []string) {
 	base.StackComponents = mergeSlice(base.StackComponents, overlay.StackComponents, func(v StackComponent) string { return v.Metadata.Name })
 	base.DeploymentScenarios = mergeSlice(base.DeploymentScenarios, overlay.DeploymentScenarios, func(v DeploymentScenario) string { return v.Metadata.Name })
 	base.EngineProfiles = mergeEngineProfiles(base.EngineProfiles, overlay.EngineProfiles)
-	warnings := finalizeEngineAssets(base)
-	if err := validateEngineRequestAdapters(base.EngineAssets); err != nil {
-		warnings = append(warnings, err.Error())
-	}
-	return base, warnings
+	return base, finalizeEngineAssets(base)
 }
 
 func rawEngineAssets(cat *Catalog) []EngineAsset {
@@ -1691,6 +1722,23 @@ func mergeEngineProfiles(base, overlay map[string]*EngineProfile) map[string]*En
 		merged[name] = profile
 	}
 	return merged
+}
+
+func mergeEngineProfilesCloned(base, overlay map[string]*EngineProfile) map[string]*EngineProfile {
+	merged := mergeEngineProfiles(base, overlay)
+	if len(merged) == 0 {
+		return nil
+	}
+	cloned := make(map[string]*EngineProfile, len(merged))
+	for name, profile := range merged {
+		if profile == nil {
+			continue
+		}
+		copy := *profile
+		copy.API.RequestAdapter = cloneEngineRequestAdapter(profile.API.RequestAdapter)
+		cloned[name] = &copy
+	}
+	return cloned
 }
 
 // MergeCatalogWithDigests merges overlay into base and checks for staleness.

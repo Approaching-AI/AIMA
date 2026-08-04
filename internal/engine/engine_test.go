@@ -757,6 +757,38 @@ func TestBinaryManagerImportBundleDoesNotPartiallyInstallInvalidArchive(t *testi
 	}
 }
 
+func TestBinaryManagerImportBundleRollsBackPromotionConflict(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "conflict.tar.zst")
+	writeTarZst(t, archivePath, []testTarEntry{
+		{name: "runtime/a-new-file", body: "new", mode: 0o644},
+		{name: "runtime/z-conflict", body: "file-over-directory", mode: 0o644},
+	})
+	distDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(distDir, "z-conflict"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "z-conflict", "keep"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "sentinel"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := NewBinaryManager(distDir).ImportBundle(context.Background(), archivePath, "", nil)
+	if err == nil {
+		t.Fatal("ImportBundle accepted a file-over-directory conflict")
+	}
+	if _, statErr := os.Stat(filepath.Join(distDir, "a-new-file")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed promotion left an earlier file installed: %v", statErr)
+	}
+	data, readErr := os.ReadFile(filepath.Join(distDir, "sentinel"))
+	if readErr != nil || string(data) != "keep" {
+		t.Fatalf("original dist changed: sentinel=%q err=%v", data, readErr)
+	}
+}
+
 func TestBuildDownloadSourceListUsesEnterpriseMirrors(t *testing.T) {
 	t.Setenv("AIMA_ENGINE_MIRROR_BASE", "https://repo.local/aima")
 	t.Setenv("AIMA_ENGINE_MIRROR_TEMPLATE", "https://proxy.local/{filename},https://encoded.local/{escaped_url}")

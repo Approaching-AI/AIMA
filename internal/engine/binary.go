@@ -29,7 +29,9 @@ type BinaryManager struct {
 
 // NewBinaryManager creates a BinaryManager for the given distribution directory.
 func NewBinaryManager(distDir string) *BinaryManager {
-	return &BinaryManager{distDir: distDir}
+	manager := &BinaryManager{distDir: distDir}
+	_ = recoverInterruptedPromotion(distDir)
+	return manager
 }
 
 // BinarySource describes where to download a native binary.
@@ -245,6 +247,9 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 		return fmt.Errorf("create import staging directory: %w", err)
 	}
 	defer os.RemoveAll(stageDir)
+	if err := copyDirContents(m.distDir, stageDir); err != nil {
+		return fmt.Errorf("stage current engine distribution: %w", err)
+	}
 	if err := installLocalBundle(bundlePath, stageDir, binaryName, onProgress); err != nil {
 		return err
 	}
@@ -254,7 +259,7 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 			return fmt.Errorf("binary %s not found after staging local bundle", binaryName)
 		}
 	}
-	if err := mergeStagedDir(stageDir, m.distDir); err != nil {
+	if err := promoteVersionedBundle(stageDir, m.distDir); err != nil {
 		return fmt.Errorf("promote imported engine bundle: %w", err)
 	}
 	if onProgress != nil {
@@ -530,12 +535,50 @@ func copyDirContents(srcDir, dstDir string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dstPath, 0o755)
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(target, dstPath)
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported file type in %s", srcPath)
+		}
 		return copyFile(srcPath, dstPath, info.Mode())
 	})
+}
+
+func recoverInterruptedPromotion(distDir string) error {
+	if strings.TrimSpace(distDir) == "" {
+		return nil
+	}
+	if _, err := os.Stat(distDir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	backups, err := filepath.Glob(distDir + ".backup-*")
+	if err != nil || len(backups) == 0 {
+		return err
+	}
+	newest := backups[0]
+	newestInfo, _ := os.Stat(newest)
+	for _, candidate := range backups[1:] {
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && (newestInfo == nil || info.ModTime().After(newestInfo.ModTime())) {
+			newest = candidate
+			newestInfo = info
+		}
+	}
+	return os.Rename(newest, distDir)
 }
 
 // download tries mirror URLs first, then primary. Extracts zip/tar.gz archives.

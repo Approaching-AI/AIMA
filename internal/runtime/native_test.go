@@ -809,6 +809,25 @@ func TestCommandLineMatchesRejectsUnknownLauncherPrefix(t *testing.T) {
 	}
 }
 
+func TestCommandPrefixMatchesPortableELFLoader(t *testing.T) {
+	expected := []string{
+		"/opt/aima/dist/linux-amd64/bin/aima-engine",
+		"serve", "--model-dir", "/models/qwen", "--port", "1024",
+	}
+	actual := []string{
+		"/opt/aima/dist/linux-amd64/lib/ld-linux-x86-64.so.2",
+		"--inhibit-cache",
+		"--library-path", "/opt/aima/dist/linux-amd64/lib",
+		"--argv0", "/opt/aima/dist/linux-amd64/bin/aima-engine",
+		"/opt/aima/dist/linux-amd64/libexec/aima-engine.real",
+		"serve", "--model-dir", "/models/qwen", "--port", "1024",
+	}
+
+	if !commandPrefixMatches(actual, expected) {
+		t.Fatalf("portable ELF loader command should match deployment metadata")
+	}
+}
+
 func TestProcToStatusUsesStartupErrorAsFailure(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "deploy.log")
 	if err := os.WriteFile(logPath, []byte("couldn't bind HTTP server socket: Address already in use\n"), 0o644); err != nil {

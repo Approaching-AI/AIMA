@@ -752,6 +752,28 @@ func (a catalogAdapter) RequestPatches(name string) []inferencehttp.RequestPatch
 	return nil
 }
 
+func (a catalogAdapter) RequestAdapter(engineName string) *inferencehttp.RequestAdapter {
+	for _, engine := range a.cat.EngineAssets {
+		if !strings.EqualFold(engine.Metadata.Name, engineName) || engine.API.RequestAdapter == nil {
+			continue
+		}
+		adapter := engine.API.RequestAdapter
+		return &inferencehttp.RequestAdapter{
+			Kind:             adapter.Kind,
+			Path:             adapter.Path,
+			ContextConfigKey: adapter.ContextConfigKey,
+			ProbeSubcommand:  adapter.ProbeSubcommand,
+			DisableThinking:  adapter.DisableThinking,
+			PaddingRole:      adapter.PaddingRole,
+			PaddingPrefix:    adapter.PaddingPrefix,
+			PaddingUnit:      adapter.PaddingUnit,
+			UpstreamModel:    adapter.UpstreamModel,
+			MaxAttempts:      adapter.MaxAttempts,
+		}
+	}
+	return nil
+}
+
 // Ensure adapters satisfy their interfaces at compile time.
 var _ fleet.MCPExecutor = (*fleetMCPAdapter)(nil)
 var _ stack.PodQuerier = (*podQuerierAdapter)(nil)

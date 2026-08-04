@@ -335,6 +335,110 @@ func TestLoadCatalog(t *testing.T) {
 	})
 }
 
+func TestLoadCatalogExactContextRequestAdapter(t *testing.T) {
+	cat, err := LoadCatalog(fstest.MapFS{
+		"engines/profiles/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: native
+api:
+  protocol: openai
+  base_path: /v1
+  request_adapter:
+    kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    disable_thinking: true
+    padding_role: system
+    padding_prefix: Ignore transport padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+`)},
+		"engines/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: native
+metadata:
+  name: native-test
+  type: native-test
+  version: v1
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.EngineAssets) != 1 {
+		t.Fatalf("EngineAssets = %d, want 1", len(cat.EngineAssets))
+	}
+	adapter := cat.EngineAssets[0].API.RequestAdapter
+	if adapter == nil {
+		t.Fatal("request adapter was not inherited from profile")
+	}
+	if adapter.Kind != "exact_context" || adapter.ContextConfigKey != "context_tokens" {
+		t.Fatalf("request adapter = %#v", adapter)
+	}
+	if adapter.MaxAttempts != 8 {
+		t.Fatalf("MaxAttempts = %d, want default 8", adapter.MaxAttempts)
+	}
+	if adapter.PaddingUnit != " ·" || adapter.UpstreamModel != "native-model" {
+		t.Fatalf("request adapter strings = %#v", adapter)
+	}
+
+	adapter.PaddingPrefix = "mutated"
+	if got := cat.EngineProfiles["native"].API.RequestAdapter.PaddingPrefix; got == "mutated" {
+		t.Fatal("engine asset shares request adapter pointer with profile")
+	}
+}
+
+func TestLoadCatalogRejectsInvalidRequestAdapter(t *testing.T) {
+	tests := []struct {
+		name    string
+		adapter string
+		want    string
+	}{
+		{
+			name: "unknown kind",
+			adapter: `kind: magic_padding
+    path: /v1/chat/completions`,
+			want: "unknown request adapter kind",
+		},
+		{
+			name: "missing context key",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model`,
+			want: "context_config_key",
+		},
+		{
+			name: "invalid attempts",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+    max_attempts: 33`,
+			want: "max_attempts",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := "kind: engine_asset\nmetadata:\n  name: invalid-adapter\n  type: test\n  version: v1\napi:\n  request_adapter:\n    " + test.adapter + "\n"
+			_, err := LoadCatalog(fstest.MapFS{
+				"engines/invalid.yaml": &fstest.MapFile{Data: []byte(data)},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadCatalog error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	// Test with the real embedded catalog
 	cat, err := LoadCatalog(catalogFS())

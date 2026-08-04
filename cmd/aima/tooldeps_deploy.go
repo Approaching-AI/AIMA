@@ -9,8 +9,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,6 +318,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 			proxyServer.RegisterBackend(modelName, &proxy.Backend{
 				ModelName:           modelName,
+				DeploymentName:      existingName,
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
 				ModelType:           catalogModelType(cat, modelName),
@@ -495,6 +496,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		proxyServer.RegisterBackend(modelName, &proxy.Backend{
 			ModelName:           modelName,
+			DeploymentName:      req.Name,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
 			ModelType:           catalogModelType(cat, modelName),

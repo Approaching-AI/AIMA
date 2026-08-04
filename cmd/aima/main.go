@@ -328,7 +328,18 @@ func run() error {
 		// AIMA_OPENCLAW_SET_DEFAULT (unset=set primary; false=leave user's primary).
 		SetDefaultModel: openclawSetDefaultFromEnv(),
 	}
-	proxyServer.SetRequestRewriter(inferencehttp.RequestBodyRewriter(inferenceHTTPDeps.Catalog))
+	inferenceRequestPreparer := inferencehttp.RequestBodyPreparer(
+		inferenceHTTPDeps.Catalog,
+		nativeRequestAdapterContextResolver(nativeRt),
+		nil,
+	)
+	proxyServer.SetRequestPreparer(func(ctx context.Context, path, contentType, model, upstreamModel, engineType, deploymentName string, body []byte) (proxy.PreparedRequest, error) {
+		prepared, err := inferenceRequestPreparer(ctx, path, contentType, model, upstreamModel, engineType, deploymentName, body)
+		if err != nil {
+			return proxy.PreparedRequest{}, err
+		}
+		return proxy.PreparedRequest{Body: prepared.Body, Finish: prepared.Finish}, nil
+	})
 	refreshOpenClawBackends := func(ctx context.Context) {
 		// Ensure proxy has up-to-date backends (CLI mode has no sync loop).
 		if deps.DeployList != nil {
@@ -984,6 +995,37 @@ func run() error {
 		rootCmd.SetArgs(args)
 	}
 	return rootCmd.ExecuteContext(ctx)
+}
+
+func nativeRequestAdapterContextResolver(rt runtime.Runtime) inferencehttp.AdapterContextResolver {
+	return func(ctx context.Context, deploymentName string) (inferencehttp.AdapterContext, error) {
+		if rt == nil {
+			return inferencehttp.AdapterContext{}, fmt.Errorf("native runtime is unavailable")
+		}
+		status, err := rt.Status(ctx, deploymentName)
+		if err != nil {
+			return inferencehttp.AdapterContext{}, err
+		}
+		if status == nil || status.Runtime != "native" {
+			return inferencehttp.AdapterContext{}, fmt.Errorf("deployment %q is not a native runtime deployment", deploymentName)
+		}
+		return inferencehttp.AdapterContext{
+			Command:   append([]string(nil), status.AdapterCommand...),
+			ModelPath: status.AdapterModelPath,
+			Config:    cloneStringAnyMap(status.Config),
+		}, nil
+	}
+}
+
+func cloneStringAnyMap(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	copy := make(map[string]any, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
 }
 
 func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig {

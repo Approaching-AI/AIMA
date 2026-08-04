@@ -442,6 +442,168 @@ func TestChatCompletions_RewritesModelToBackendUpstreamModel(t *testing.T) {
 	}
 }
 
+type testPreparationError struct {
+	status    int
+	errorType string
+	message   string
+}
+
+func (e testPreparationError) Error() string     { return e.message }
+func (e testPreparationError) HTTPStatus() int   { return e.status }
+func (e testPreparationError) ErrorType() string { return e.errorType }
+
+func TestRequestPreparerErrorStopsBackend(t *testing.T) {
+	backendCalls := 0
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	s.SetRequestPreparer(func(context.Context, string, string, string, string, string, string, []byte) (PreparedRequest, error) {
+		return PreparedRequest{}, testPreparationError{status: 400, errorType: "invalid_request", message: "bad fixed context"}
+	})
+	s.RegisterBackend("qwen3.6-35b-a3b", &Backend{
+		ModelName:     "qwen3.6-35b-a3b",
+		UpstreamModel: "native-model",
+		EngineType:    "native-test",
+		Address:       strings.TrimPrefix(backend.URL, "http://"),
+		Ready:         true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest || backendCalls != 0 {
+		t.Fatalf("status=%d backendCalls=%d, want 400/0; body=%s", w.Code, backendCalls, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"type":"invalid_request"`) || !strings.Contains(w.Body.String(), "bad fixed context") {
+		t.Fatalf("unexpected error body: %s", w.Body.String())
+	}
+}
+
+func TestRequestPreparerReceivesRouteContextAndFinishesSuccess(t *testing.T) {
+	var receivedModel string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode backend request: %v", err)
+		}
+		receivedModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, path, contentType, model, upstreamModel, engineType, deploymentName string, body []byte) (PreparedRequest, error) {
+		if path != "/v1/chat/completions" || contentType != "application/json" || model != "qwen3.6-35b-a3b" || upstreamModel != "native-model" || engineType != "native-test" || deploymentName != "deployment-native" {
+			t.Fatalf("preparer route context = %q %q %q %q %q %q", path, contentType, model, upstreamModel, engineType, deploymentName)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("decode preparer body: %v", err)
+		}
+		request["model"] = upstreamModel
+		preparedBody, _ := json.Marshal(request)
+		return PreparedRequest{Body: preparedBody, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("qwen3.6-35b-a3b", &Backend{
+		ModelName:      "qwen3.6-35b-a3b",
+		UpstreamModel:  "native-model",
+		EngineType:     "native-test",
+		DeploymentName: "deployment-native",
+		Address:        strings.TrimPrefix(backend.URL, "http://"),
+		Ready:          true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK || receivedModel != "native-model" {
+		t.Fatalf("status=%d backend model=%q", w.Code, receivedModel)
+	}
+	select {
+	case success := <-finish:
+		if !success {
+			t.Fatal("Finish called with false after successful exchange")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Finish was not called")
+	}
+}
+
+func TestRequestPreparerFinishesFalseForBackendFailure(t *testing.T) {
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, _, _, _, _, _, _ string, body []byte) (PreparedRequest, error) {
+		return PreparedRequest{Body: body, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("model", &Backend{ModelName: "model", Address: strings.TrimPrefix(backend.URL, "http://"), Ready: true})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if success := <-finish; success {
+		t.Fatal("Finish called with true for backend 500")
+	}
+}
+
+func TestRequestPreparerLeaseSpansSSEStream(t *testing.T) {
+	release := make(chan struct{})
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: first\n\n")
+		flusher.Flush()
+		<-release
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, _, _, _, _, _, _ string, body []byte) (PreparedRequest, error) {
+		return PreparedRequest{Body: body, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("model", &Backend{ModelName: "model", Address: strings.TrimPrefix(backend.URL, "http://"), Ready: true})
+
+	done := make(chan struct{})
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model","messages":[],"stream":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.handler().ServeHTTP(w, req)
+		close(done)
+	}()
+	select {
+	case success := <-finish:
+		t.Fatalf("Finish(%v) called before SSE completed", success)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE request did not complete")
+	}
+	if success := <-finish; !success {
+		t.Fatal("Finish called with false after successful SSE")
+	}
+}
+
 func TestChatCompletions_NotReadyModelReturns503(t *testing.T) {
 	backendCalls := 0
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {

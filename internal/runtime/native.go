@@ -192,9 +192,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	// Resolve binary: dist/ first, then the pre-installed engine dirs
 	// (AIMA_ENGINE_DIR — the SAME dirs the engine scanner uses, so anything scanning
 	// found is launchable), then auto-download if a source is available.
-	if resolved := r.findInDist(command[0]); resolved != "" {
-		command[0] = resolved
-	} else if resolved := r.findInEngineDirs(command[0]); resolved != "" {
+	if resolved := r.findLocalBinary(command[0], req.BinarySource); resolved != "" {
 		command[0] = resolved
 	} else if r.resolveBinary != nil && req.BinarySource != nil {
 		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
@@ -937,6 +935,27 @@ func (r *NativeRuntime) loadAllMeta() []*deploymentMeta {
 		}
 	}
 	return metas
+}
+
+// findLocalBinary resolves an already-installed native engine without invoking
+// the download resolver. The catalog source can name a nested bundle entry
+// (for example bin/aima-engine) while the startup command intentionally uses a
+// portable bare name. Both forms must remain launchable with --no-pull.
+func (r *NativeRuntime) findLocalBinary(commandName string, source *engine.BinarySource) string {
+	if resolved := r.findInDist(commandName); resolved != "" {
+		return resolved
+	}
+	if source != nil {
+		if resolved := r.findInDist(source.Binary); resolved != "" {
+			return resolved
+		}
+		for _, path := range source.ProbePaths {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+	return r.findInEngineDirs(commandName)
 }
 
 // findInDist checks for a binary in the dist directory.

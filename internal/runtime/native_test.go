@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 )
 
@@ -1383,5 +1384,22 @@ func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
 	}
 	if got := (&NativeRuntime{}).findInEngineDirs("llama-server"); got != "" {
 		t.Errorf("no engine dirs: got %q, want empty", got)
+	}
+}
+
+func TestFindLocalBinaryUsesNestedSourcePath(t *testing.T) {
+	distDir := t.TempDir()
+	want := filepath.Join(distDir, "bin", "aima-engine")
+	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+		t.Fatalf("mkdir nested binary dir: %v", err)
+	}
+	if err := os.WriteFile(want, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write nested binary: %v", err)
+	}
+
+	r := &NativeRuntime{distDir: distDir}
+	source := &engine.BinarySource{Binary: "bin/aima-engine"}
+	if got := r.findLocalBinary("aima-engine", source); got != want {
+		t.Fatalf("findLocalBinary = %q, want %q", got, want)
 	}
 }

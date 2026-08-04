@@ -40,7 +40,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 The Linux build was a static x86-64 ELF with SHA-256:
 
 ```text
-ed37b548650ffbdd527f419bdd08fee0bcb95f79013f0d0afff0b59330c8af5b
+6f190638bf45e1a6339be4da4ee410198b6257e3764700532652bf3574767345
 ```
 
 ## Target-host results

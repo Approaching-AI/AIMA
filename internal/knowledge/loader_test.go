@@ -651,6 +651,59 @@ func TestCloneEngineAssetCopiesRecoveryBackoff(t *testing.T) {
 	}
 }
 
+func TestEngineCompatibleVersionsParseMergeAndClone(t *testing.T) {
+	fs := fstest.MapFS{
+		"engines/profiles/engine-a.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: engine-a
+  version_default: "1.2.3"
+  compatible_versions: ["1.2.2", "1.2.x"]
+`)},
+		"engines/inherited.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-inherited
+  type: engine-a
+hardware:
+  gpu_arch: "*"
+`)},
+		"engines/override.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-override
+  type: engine-a
+  compatible_versions: ["1.1.9"]
+hardware:
+  gpu_arch: "*"
+`)},
+	}
+
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	byName := make(map[string]*EngineAsset)
+	for i := range cat.EngineAssets {
+		byName[cat.EngineAssets[i].Metadata.Name] = &cat.EngineAssets[i]
+	}
+	if got := byName["engine-a-inherited"].Metadata.CompatibleVersions; len(got) != 2 || got[0] != "1.2.2" || got[1] != "1.2.x" {
+		t.Fatalf("inherited compatible_versions = %v", got)
+	}
+	if got := byName["engine-a-override"].Metadata.CompatibleVersions; len(got) != 1 || got[0] != "1.1.9" {
+		t.Fatalf("override compatible_versions = %v", got)
+	}
+
+	byName["engine-a-inherited"].Metadata.CompatibleVersions[0] = "mutated"
+	if got := cat.EngineProfiles["engine-a"].Metadata.CompatibleVersions[0]; got != "1.2.2" {
+		t.Fatalf("finalized asset aliases profile compatible_versions: %q", got)
+	}
+	for _, raw := range cat.RawEngineAssets {
+		if raw.Metadata.Name == "engine-a-inherited" && len(raw.Metadata.CompatibleVersions) != 0 {
+			t.Fatalf("finalized asset mutated raw compatible_versions: %v", raw.Metadata.CompatibleVersions)
+		}
+	}
+}
+
 func TestMergeCatalogOverlayProfileRebuildsEngineAssets(t *testing.T) {
 	baseFS := fstest.MapFS{
 		"engines/profiles/vllm.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile

@@ -42,9 +42,10 @@ type EngineProfile struct {
 }
 
 type ProfileMeta struct {
-	Name             string   `yaml:"name"`
-	VersionDefault   string   `yaml:"version_default"`
-	SupportedFormats []string `yaml:"supported_formats"`
+	Name               string   `yaml:"name"`
+	VersionDefault     string   `yaml:"version_default"`
+	SupportedFormats   []string `yaml:"supported_formats"`
+	CompatibleVersions []string `yaml:"compatible_versions,omitempty"`
 }
 
 // --- Hardware Profile ---
@@ -201,6 +202,7 @@ type EngineMetadata struct {
 	Default             bool     `yaml:"default,omitempty" json:"default,omitempty"`
 	SupportedFormats    []string `yaml:"supported_formats,omitempty"    json:"supported_formats,omitempty"`
 	SupportedModelTypes []string `yaml:"supported_model_types,omitempty" json:"supported_model_types,omitempty"`
+	CompatibleVersions  []string `yaml:"compatible_versions,omitempty"   json:"compatible_versions,omitempty"`
 	Status              string   `yaml:"status,omitempty"        json:"status,omitempty"`
 	StatusReason        string   `yaml:"status_reason,omitempty" json:"status_reason,omitempty"`
 }
@@ -776,6 +778,9 @@ func mergeEngineProfile(ea *EngineAsset, p *EngineProfile) {
 	if len(ea.Metadata.SupportedFormats) == 0 {
 		ea.Metadata.SupportedFormats = p.Metadata.SupportedFormats
 	}
+	if len(ea.Metadata.CompatibleVersions) == 0 {
+		ea.Metadata.CompatibleVersions = append([]string(nil), p.Metadata.CompatibleVersions...)
+	}
 
 	// Startup: field-by-field merge
 	mergeStartup(&ea.Startup, &p.Startup)
@@ -990,6 +995,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst := src
 
 	dst.Metadata.SupportedFormats = append([]string(nil), src.Metadata.SupportedFormats...)
+	dst.Metadata.CompatibleVersions = append([]string(nil), src.Metadata.CompatibleVersions...)
 	dst.Image.Platforms = append([]string(nil), src.Image.Platforms...)
 	dst.Image.Registries = append([]string(nil), src.Image.Registries...)
 	dst.Startup.Command = append([]string(nil), src.Startup.Command...)

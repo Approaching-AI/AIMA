@@ -28,9 +28,11 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 | `aima engine scan` | 扫描本地引擎（容器镜像或 Native 二进制，自动检测） |
 | `aima engine info <name>` | 查看引擎详情（目录知识 + 本地可用性） |
 | `aima engine list` | 列出所有已注册引擎 |
+| `aima engine ensure <name> [--version <version>] [--apply]` | 规划或应用版本复用、安装和激活；默认只输出计划 |
+| `aima engine rollback <name> --runtime <container-or-native> --confirm` | 激活指定运行时组中 verified、available 的前一版本 |
 | `aima engine pull [name]` | 拉取引擎镜像（容器运行时） |
-| `aima engine import <path>` | 从 OCI tar 文件导入镜像（容器运行时） |
-| `aima engine remove <name>` | 删除引擎 |
+| `aima engine import <path>` | 从本地 OCI 包或版本化 Native 包离线导入 |
+| `aima engine remove <id> [--delete-files]` | 删除无引用库存；物理删除受所有权和路径保护 |
 
 ### MCP 工具
 
@@ -39,11 +41,86 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 | `engine.scan` | `engine.scan` | 扫描本地引擎（统一） |
 | `engine.info` | `engine.info` | 查询引擎详情（目录知识 + 本地状态） |
 | `engine.list` | `engine.list` | 列出所有引擎 |
+| `engine.ensure` | `engine.ensure` | 默认 plan-only；`apply=true` 才改变库存或激活版本 |
+| `engine.rollback` | `engine.rollback` | 指定 `runtime_type` 且 `confirm=true` 后回滚到该运行时组的 verified、available 前一版本 |
 | `engine.pull` | `engine.pull` | 拉取引擎镜像 |
-| `engine.import` | `engine.import` | 导入引擎镜像 |
-| `engine.remove` | `engine.remove` | 删除引擎 |
+| `engine.import` | `engine.import` | 离线导入容器或 Native 引擎 |
+| `engine.remove` | `engine.remove` | 删除无引用库存，可选受保护物理删除 |
 
 `aima engine plan` 已并入 `knowledge.resolve` + `deploy.dry_run(output=pod_yaml)`，不再是独立 CLI/MCP 工具。
+
+---
+
+## Engine 生命周期合同
+
+### 库存与来源
+
+SQLite v21 为每个 Engine 版本记录以下生命周期证据：
+
+| 字段 | 含义 |
+|------|------|
+| `asset_name` | Catalog Engine Asset 的稳定名称 |
+| `version` | 扫描、包布局或严格摘要证据得到的实际版本 |
+| `catalog_version` | 当前 Catalog 声明版本，不替代实际版本 |
+| `origin` | `managed`、`imported`、`preinstalled` 或 `legacy` |
+| `content_digest` | Native 文件 SHA256 或可取得的 OCI digest |
+| `location` | Native 绝对路径或容器镜像引用 |
+| `active` | 是否为该 asset/platform/runtime 当前默认版本 |
+| `lifecycle_status` | `discovered`、`staged`、`verified` 或 `active` |
+| `verification_status` | `unverified` 或 `verified` |
+| `previous_engine_id` | 激活事务记录的上一版本，用于显式回滚 |
+
+来源语义：
+
+- `managed`：AIMA 通过严格 ensure 流程取得并存放的资产。
+- `imported`：操作者显式从本地包导入、由 AIMA 暂存和记录摘要的资产。
+- `preinstalled`：在 Catalog probe、外部目录、PATH 或既有容器存储中发现的资产；文件保持原位。
+- `legacy`：v21 以前缺少所有权证据的库存，按不可物理删除处理。
+
+普通扫描不会把 `managed` 或 `imported` 降级为 `preinstalled`。
+
+### 版本目录与不可变性
+
+受管 Native 版本固定存放在：
+
+```text
+<AIMA_DATA_DIR>/dist/<os>-<arch>/<asset-name>/<version-or-digest>/
+```
+
+下载和导入先进入同一数据文件系统下的私有 staging 目录。校验通过后使用原子 rename 提升；如果目标已存在，只在目录类型、权限、链接目标和文件内容完全相同时复用，绝不覆盖不同内容。
+
+### Ensure 与严格校验
+
+`engine.ensure` 默认 `apply=false`，相同输入和库存产生稳定计划。计划会给出 `reuse`、`install`、`upgrade` 或 `activate` 动作、网络需求、校验证据、阻断原因和受影响部署名称。
+
+- 精确版本的本地资产优先，离线可复用时不访问网络。
+- 网络 Native 安装必须有 Catalog SHA256；容器安装必须有 Catalog OCI digest。
+- SHA256/digest 不匹配或无法取得预期证据时直接失败，旧 active 不变。
+- 非 active 的 unverified 版本不能被新激活。已经 active 的旧预装版本可以保持原状。
+- Catalog 版本标签不能冒充实际检测版本；兼容只接受 Catalog 明确列出的精确值或尾部 `.x` 规则。
+
+### 离线导入
+
+Native 离线包必须能由 Catalog 的 `source.binary` 唯一识别，并携带实际版本目录。支持的核心布局是：
+
+```text
+<asset-name>/<version>/<binary-and-support-files>
+```
+
+归档工具去掉共同顶层目录后，`<version>/<binary-and-support-files>` 也可接受，但该二进制在当前平台 Catalog 中必须只解析到一个兼容 Asset。裸单文件若没有版本目录会被拒绝，避免把 Catalog 版本误当成检测版本。
+
+本地导入是显式操作者信任边界：AIMA 始终记录导入后二进制 SHA256；Catalog 若为当前平台声明 `source.sha256`，文件包必须先通过该摘要校验。声明了文件 SHA256 时，目录型输入会被拒绝，因为无法证明它等同于声明的归档。导入只登记为 inactive `imported/verified`，后续仍需显式执行 `engine.ensure --apply` 才激活。
+
+OCI 导入后只把本次新发现的容器镜像标记为 `imported`；只有运行时 digest 与 Catalog OCI digest 一致时才标记 `verified` 并采用 Catalog 版本。
+
+### 激活、回滚与删除
+
+- 激活和回滚只修改 SQLite 版本指针，不调用 deploy 或 Runtime。
+- 回滚要求 `confirm=true`，且 `previous_engine_id` 必须存在、available、verified，并匹配 asset/platform/runtime。
+- 已运行部署继续使用其持久化 intent 中固定的 Engine Asset/版本。激活或回滚不会重启、替换或重新绑定现有部署；新选择只影响后续显式部署。
+- 删除前必须确认该版本不是 active、未被其他版本的回滚链引用、也未被部署 intent 引用。
+- `preinstalled` 和 `legacy` 永不物理删除。`managed`/`imported` 只有在 Native 绝对路径经 `Abs`、`EvalSymlinks`、`Rel` 证明严格位于 `AIMA_DATA_DIR` 下时，才允许 `delete_files=true`。
+- 容器镜像存储不位于 `AIMA_DATA_DIR`，因此生命周期删除接口不会物理删除镜像层；可删除的只是无引用库存记录。
 
 ---
 
@@ -60,10 +137,20 @@ CREATE TABLE engines (
     image TEXT NOT NULL,              -- 容器镜像名（容器引擎）或空（Native）
     tag TEXT NOT NULL,               -- 容器镜像 tag（容器引擎）或空（Native）
     size_bytes INTEGER,
-    platform TEXT,                    -- linux/amd64 | linux/arm64 | darwin/arm64 | windows/amd64
+    platform TEXT,                    -- linux-amd64 | linux-arm64 | darwin-arm64 | windows-amd64
     runtime_type TEXT DEFAULT 'container', -- "container" or "native"
     binary_path TEXT,                 -- Native 二进制路径（Native 引擎）
     available BOOLEAN DEFAULT TRUE,   -- 引擎是否在本地可用
+    asset_name TEXT,
+    version TEXT,
+    catalog_version TEXT,
+    origin TEXT DEFAULT 'legacy',
+    content_digest TEXT,
+    location TEXT,
+    active BOOLEAN DEFAULT FALSE,
+    lifecycle_status TEXT DEFAULT 'discovered',
+    verification_status TEXT DEFAULT 'unverified',
+    previous_engine_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -83,6 +170,11 @@ type EngineImage struct {
     RuntimeType string // "container" or "native"
     BinaryPath string // Native 二进制完整路径
     Available  bool   // 是否可用
+    Origin string     // managed | imported | preinstalled
+    CatalogVersion string
+    DetectedVersion string
+    VersionMatch string
+    ContentDigest string
     DockerOnly bool   // true = 镜像仅在 Docker 中，不在 K3S containerd 中
 }
 ```
@@ -177,7 +269,7 @@ engine.scan (ScanUnified)
 - 扫描 `~/.aima/dist/{os}-{arch}/` 目录
 - 扫描 PATH 中的可执行文件
 - 匹配 Engine Asset YAML 中的 `source.binary` 字段
-- 已知映射：`ghcr.io/ggerganov/llama.cpp` → `llama-server`
+- 映射和 probe 证据全部来自 Engine Asset YAML，不在 Go 中按引擎或厂商分支
 
 ---
 
@@ -265,11 +357,13 @@ BinaryManager.Resolve(ctx, source)
 ~/.aima/
   dist/
     linux-amd64/
-      llama-server           # llamacpp binary
+      <asset-name>/
+        <version>/
+          <binary>
     darwin-arm64/
-      llama-server
+      <asset-name>/<version>/<binary>
     windows-amd64/
-      llama-server.exe
+      <asset-name>/<version>/<binary>.exe
 ```
 
 **与 NativeRuntime 的集成**:
@@ -352,6 +446,16 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 
 # 在隔离环境导入
 ./aima engine import /media/usb/vllm-latest.tar
+
+# Native 包先导入为 inactive imported/verified
+./aima engine import /media/usb/engine-a-2.0.0.tar.gz
+
+# 先查看无副作用计划，再显式激活
+./aima engine ensure engine-a --version 2.0.0
+./aima engine ensure engine-a --version 2.0.0 --apply
+
+# 回滚只切换库存指针，不重启现有部署
+./aima engine rollback engine-a --runtime native --confirm
 ```
 
 ---
@@ -365,8 +469,8 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 - `internal/cli/engine.go` - CLI 命令处理
 - `internal/mcp/tools_engine.go` - Engine MCP 工具定义
 - `internal/mcp/tools.go` - `RegisterAllTools()` 注册入口
-- `internal/sqlite.go` - 数据库 schema (migrateV4 添加 runtime_type/binary_path)
+- `internal/sqlite.go` - SQLite v21 Engine 版本库存、激活、回滚和引用检查
 
 ---
 
-*最后更新：2026-04-08 (对齐当前 MCP surface，移除独立 engine.plan 文档入口)*
+*最后更新：2026-08-02（增加通用 Engine 版本生命周期、严格校验、离线导入、回滚与不可删除边界）*

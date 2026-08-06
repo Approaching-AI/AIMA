@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -395,6 +396,50 @@ func TestDeployApplyReconcilerRejectsDeploymentIntentCatalogVersionDrift(t *test
 	}
 	if got.EngineVersion != "1.2.2" || got.Policy.MaxAttempts != 11 || got.RecoveryState != recovery.StateWaiting || got.AttemptCount != 2 || got.ConsecutiveFailureCount != 4 || got.LastError != "pinned failure" {
 		t.Fatalf("pinned intent changed after catalog drift: %+v", got)
+	}
+}
+
+func TestDeployApplyReconcilerUsesPinnedInventoryAfterCatalogVersionChanges(t *testing.T) {
+	ctx, db, deps, rt, modelName := newDeploymentIntentHarness(t)
+	binaryPath := filepath.Join(t.TempDir(), "vllm-old")
+	if err := os.WriteFile(binaryPath, []byte("old-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, &state.Engine{
+		ID: "vllm-old", Type: "vllm", AssetName: "vllm-test", Version: "1.2.2", CatalogVersion: "1.2.2",
+		Platform: goruntime.GOOS + "-" + goruntime.GOARCH, RuntimeType: "native", BinaryPath: binaryPath,
+		Available: true, LifecycleStatus: "verified", VerificationStatus: "verified", Origin: "managed",
+	}); err != nil {
+		t.Fatalf("InsertEngine: %v", err)
+	}
+	pinnedPolicy := recovery.DefaultPolicy()
+	pinnedPolicy.MaxAttempts = 11
+	if err := db.UpsertDeploymentIntent(ctx, &recovery.Intent{
+		Name: modelName, Model: modelName, EngineAsset: "vllm-test", EngineVersion: "1.2.2", Slot: "default", Runtime: "native",
+		Config:       map[string]any{"port": 18080},
+		DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateRecovering, Policy: pinnedPolicy,
+		AttemptCount: 2, ConsecutiveFailureCount: 4, LastError: "pinned failure",
+	}); err != nil {
+		t.Fatalf("seed intent: %v", err)
+	}
+	rt.beforeDeploy = func(req *runtime.DeployRequest) {
+		if req.BinarySource == nil || len(req.BinarySource.ProbePaths) == 0 || req.BinarySource.ProbePaths[0] != binaryPath {
+			t.Fatalf("recovery binary source = %+v, want pinned inventory path %s", req.BinarySource, binaryPath)
+		}
+	}
+
+	if _, err := deps.DeployApply(deploymentReconcilerContext(t, ctx, db, modelName), "vllm-test", modelName, "", nil, true, recovery.PolicyPatch{}); err != nil {
+		t.Fatalf("DeployApply: %v", err)
+	}
+	if rt.deployCalls != 1 {
+		t.Fatalf("Runtime.Deploy calls = %d, want 1", rt.deployCalls)
+	}
+	got, err := db.GetDeploymentIntent(ctx, modelName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EngineVersion != "1.2.2" || got.Policy.MaxAttempts != 11 || got.AttemptCount != 2 || got.LastError != "pinned failure" {
+		t.Fatalf("pinned intent changed: %+v", got)
 	}
 }
 

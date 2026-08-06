@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 type EngineImage struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
+	AssetName       string `json:"asset_name,omitempty"`
 	Image           string `json:"image"` // container image name (container engines) or empty (native)
 	Tag             string `json:"tag"`   // container image tag (container engines) or empty (native)
 	SizeBytes       int64  `json:"size_bytes"`
@@ -29,9 +31,24 @@ type EngineImage struct {
 	RuntimeType     string `json:"runtime_type"` // "container" or "native"
 	BinaryPath      string `json:"binary_path"`  // path to native binary (native engines only)
 	Available       bool   `json:"available"`
+	Origin          string `json:"origin,omitempty"`
+	CatalogVersion  string `json:"catalog_version,omitempty"`
+	ContentDigest   string `json:"content_digest,omitempty"`
+	ContentVerified bool   `json:"content_verified,omitempty"`
 	DockerOnly      bool   `json:"docker_only,omitempty"`      // true if image is in Docker but not K3S containerd
 	DetectedVersion string `json:"detected_version,omitempty"` // version found by probing
 	VersionMatch    string `json:"version_match,omitempty"`    // "exact", "compatible", "unknown", "mismatch"
+}
+
+// AssetDescriptor contains only the Catalog evidence needed by scanning.
+type AssetDescriptor struct {
+	AssetName          string
+	Type               string
+	CatalogVersion     string
+	CompatibleVersions []string
+	Patterns           []string
+	Probe              *knowledge.EngineSourceProbe
+	ExpectedSHA256     string
 }
 
 // CommandRunner abstracts shell command execution for testability.
@@ -46,14 +63,13 @@ type CommandRunner interface {
 
 // ScanOptions configures engine scanning (both container and native).
 type ScanOptions struct {
-	AssetPatterns      map[string][]string // engine type -> patterns from Engine Asset YAML
-	Runner             CommandRunner
-	DistDir            string                                  // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
-	ExtraDirs          []string                                // extra dirs to scan for native binaries (from AIMA_ENGINE_DIR); engines installed off-PATH/off-dist
-	Platform           string                                  // current platform (e.g., "windows-amd64")
-	BinaryAssets       map[string]string                       // binary name -> engine type (native engines)
-	AutoImport         bool                                    // when true, auto-import Docker-only images to K3S containerd (heavy; use only during init)
-	PreinstalledProbes map[string]*knowledge.EngineSourceProbe // engine type -> probe config
+	Assets       []AssetDescriptor
+	Runner       CommandRunner
+	DistDir      string            // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
+	ExtraDirs    []string          // extra dirs to scan for native binaries (from AIMA_ENGINE_DIR); engines installed off-PATH/off-dist
+	Platform     string            // current platform (e.g., "windows-amd64")
+	BinaryAssets map[string]string // binary name -> Engine Asset name; legacy engine-type values remain accepted
+	AutoImport   bool              // when true, auto-import Docker-only images to K3S containerd (heavy; use only during init)
 }
 
 // ScanUnified discovers both container images and native binaries.
@@ -70,7 +86,7 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 	// Scan container images
 	images, err := listImages(ctx, opts.Runner)
 	if err == nil {
-		matched := matchImages(images, opts.AssetPatterns)
+		matched := matchImages(images, opts.Assets)
 
 		// Auto-import Docker-only images to containerd (only when explicitly requested)
 		if opts.AutoImport {
@@ -126,7 +142,7 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 	preinstalled := probePreinstalled(ctx, opts)
 	allEngines = append(allEngines, preinstalled...)
 
-	return allEngines, nil
+	return dedupeEngineImages(allEngines), nil
 }
 
 // ScanNative discovers native engine binaries in distDir, the AIMA_ENGINE_DIR
@@ -137,46 +153,139 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	if opts.DistDir == "" {
 		return nil, fmt.Errorf("distDir not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("scan native engines: %w", err)
+	}
 
-	// BinaryAssets maps binary filename -> engine type; populated from YAML source.binary fields.
+	// BinaryAssets maps binary filename -> Engine Asset name and is populated from
+	// YAML source.binary fields. Engine-type values remain accepted for callers
+	// that do not yet have descriptor identity.
 	// If not provided, native scan returns empty (caller must supply the mapping).
 	knownBinaries := opts.BinaryAssets
 	if knownBinaries == nil {
 		return nil, nil
 	}
 
-	// Build reverse lookup: filename (without .exe) -> engine type
-	filenameLookup := make(map[string]string)
-	for filename, engineType := range knownBinaries {
-		filenameLookup[filename] = engineType
+	filenameLookup := make(map[string]string, len(knownBinaries))
+	for filename, assetRef := range knownBinaries {
+		filenameLookup[normalizedBinaryName(filename)] = assetRef
+	}
+	assets := newAssetDescriptorIndex(opts.Assets)
+
+	// distDir is the AIMA-owned root. It may contain both the legacy flat layout
+	// and versioned <asset>/<version-or-digest>/<binary> layouts.
+	found, err := scanManagedEngineBinaries(ctx, opts.DistDir, filenameLookup, assets, opts.Platform)
+	if err != nil {
+		return nil, err
+	}
+	seenExternal := make(map[string]bool)
+	for _, image := range found {
+		seenExternal[normalizedBinaryName(filepath.Base(image.BinaryPath))] = true
 	}
 
-	var found []*EngineImage
-	seen := make(map[string]bool)
-
-	// distDir holds AIMA's own managed copy → dir-independent ID. Extra dirs and
-	// PATH dirs may hold the same binary name in different locations → salt the ID
-	// with the dir so they stay distinct. First match for a filename wins (seen).
-	found = append(found, scanDirForEngineBinaries(opts.DistDir, filenameLookup, seen, opts.Platform, false)...)
+	// External directories and PATH are never treated as AIMA-owned. The first
+	// external match for a binary name wins, preserving the existing scan order.
 	for _, dir := range opts.ExtraDirs {
-		found = append(found, scanDirForEngineBinaries(dir, filenameLookup, seen, opts.Platform, true)...)
+		found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
 	}
 	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
-		sep := string(os.PathListSeparator)
-		for _, dir := range strings.Split(pathEnv, sep) {
-			found = append(found, scanDirForEngineBinaries(dir, filenameLookup, seen, opts.Platform, true)...)
+		for _, dir := range strings.Split(pathEnv, string(os.PathListSeparator)) {
+			found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
 		}
 	}
 
 	return found, nil
 }
 
-// scanDirForEngineBinaries returns native engines for known binaries located
-// directly in dir (never recurses). saltID controls whether the engine ID is
-// salted with the dir, so the same binary name in multiple dirs yields distinct
-// IDs. Binaries whose filename is already in seen are skipped (first dir wins).
-func scanDirForEngineBinaries(dir string, filenameLookup map[string]string, seen map[string]bool, platform string, saltID bool) []*EngineImage {
-	if dir == "" {
+type assetDescriptorIndex struct {
+	byName map[string]AssetDescriptor
+	byType map[string][]AssetDescriptor
+}
+
+func newAssetDescriptorIndex(assets []AssetDescriptor) assetDescriptorIndex {
+	index := assetDescriptorIndex{
+		byName: make(map[string]AssetDescriptor, len(assets)),
+		byType: make(map[string][]AssetDescriptor),
+	}
+	for _, asset := range assets {
+		if name := normalizedAssetKey(asset.AssetName); name != "" {
+			index.byName[name] = asset
+		}
+		if engineType := normalizedAssetKey(asset.Type); engineType != "" {
+			index.byType[engineType] = append(index.byType[engineType], asset)
+		}
+	}
+	return index
+}
+
+func (index assetDescriptorIndex) resolve(ref string) AssetDescriptor {
+	key := normalizedAssetKey(ref)
+	if asset, ok := index.byName[key]; ok {
+		return asset
+	}
+	if assets := index.byType[key]; len(assets) > 0 {
+		return assets[0]
+	}
+	return AssetDescriptor{Type: strings.TrimSpace(ref)}
+}
+
+func normalizedAssetKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizedBinaryName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(filepath.Base(value)))
+	return strings.TrimSuffix(value, ".exe")
+}
+
+func scanManagedEngineBinaries(ctx context.Context, root string, filenameLookup map[string]string, assets assetDescriptorIndex, platform string) ([]*EngineImage, error) {
+	var found []*EngineImage
+	walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil || entry.IsDir() {
+			return nil
+		}
+		assetRef, ok := filenameLookup[normalizedBinaryName(entry.Name())]
+		if !ok {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+
+		descriptor := assets.resolve(assetRef)
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		parts := splitPathComponents(rel)
+		detectedVersion := ""
+		if len(parts) >= 3 && (descriptor.AssetName == "" || strings.EqualFold(parts[0], descriptor.AssetName)) {
+			detectedVersion = parts[1]
+		}
+		id := binaryHash(entry.Name())
+		if len(parts) > 1 {
+			id = ManagedNativeEngineID(descriptor.AssetName, detectedVersion, rel)
+		}
+		found = append(found, newNativeEngineImage(
+			id, path, info.Size(), platform, "managed", descriptor, detectedVersion,
+		))
+		return nil
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("scan managed engines: %w", err)
+	}
+	if walkErr != nil {
+		return nil, nil
+	}
+	return found, nil
+}
+
+func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets assetDescriptorIndex, seen map[string]bool, platform string) []*EngineImage {
+	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
 	entries, err := os.ReadDir(dir)
@@ -188,15 +297,11 @@ func scanDirForEngineBinaries(dir string, filenameLookup map[string]string, seen
 		if entry.IsDir() {
 			continue
 		}
-		name := entry.Name()
-		if seen[name] {
+		nameKey := normalizedBinaryName(entry.Name())
+		if seen[nameKey] {
 			continue
 		}
-		// Match known engine binary with or without .exe suffix.
-		engineType, ok := filenameLookup[strings.TrimSuffix(name, ".exe")]
-		if !ok {
-			engineType, ok = filenameLookup[name]
-		}
+		assetRef, ok := filenameLookup[nameKey]
 		if !ok {
 			continue
 		}
@@ -204,32 +309,58 @@ func scanDirForEngineBinaries(dir string, filenameLookup map[string]string, seen
 		if err != nil {
 			continue
 		}
-		id := binaryHash(name)
-		if saltID {
-			id = binaryHash(name + "-" + dir)
-		}
-		found = append(found, &EngineImage{
-			ID:          id,
-			Type:        engineType,
-			SizeBytes:   info.Size(),
-			Platform:    platform,
-			RuntimeType: "native",
-			BinaryPath:  filepath.Join(dir, name),
-			Available:   true,
-		})
-		seen[name] = true
+		path := filepath.Join(dir, entry.Name())
+		found = append(found, newNativeEngineImage(
+			binaryHash(entry.Name()+"-"+dir), path, info.Size(), platform,
+			"preinstalled", assets.resolve(assetRef), "",
+		))
+		seen[nameKey] = true
 	}
 	return found
+}
+
+func newNativeEngineImage(id, path string, size int64, platform, origin string, descriptor AssetDescriptor, detectedVersion string) *EngineImage {
+	contentDigest := fileContentDigest(path)
+	return &EngineImage{
+		ID:              id,
+		Type:            descriptor.Type,
+		AssetName:       descriptor.AssetName,
+		SizeBytes:       size,
+		Platform:        platform,
+		RuntimeType:     "native",
+		BinaryPath:      path,
+		Available:       true,
+		Origin:          origin,
+		CatalogVersion:  descriptor.CatalogVersion,
+		ContentDigest:   contentDigest,
+		ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
+		DetectedVersion: detectedVersion,
+		VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
+	}
+}
+
+func splitPathComponents(path string) []string {
+	clean := filepath.Clean(path)
+	if clean == "." || clean == "" {
+		return nil
+	}
+	return strings.FieldsFunc(clean, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
 }
 
 // probePreinstalled discovers pre-installed engines by checking known paths
 // and optionally running version detection commands.
 func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
-	if opts.PreinstalledProbes == nil {
+	if len(opts.Assets) == 0 {
 		return nil
 	}
 	var found []*EngineImage
-	for engineType, probe := range opts.PreinstalledProbes {
+	for _, descriptor := range opts.Assets {
+		probe := descriptor.Probe
+		if probe == nil {
+			continue
+		}
 		// Search probe.Paths for the binary
 		var binaryPath string
 		for _, p := range probe.Paths {
@@ -244,7 +375,6 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 
 		// Detect version
 		detectedVersion := probe.FallbackVersion
-		versionMatch := "unknown"
 		if len(probe.VersionCommand) > 0 && opts.Runner != nil {
 			// Execute version command with 5s timeout
 			cmdName, cmdArgs := resolveProbeCommand(binaryPath, probe.VersionCommand)
@@ -256,7 +386,6 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 				if reErr == nil {
 					if matches := re.FindSubmatch(out); len(matches) > 1 {
 						detectedVersion = string(matches[1])
-						versionMatch = "exact" // we found a version
 					}
 				}
 			}
@@ -268,19 +397,66 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 			size = info.Size()
 		}
 
+		identity := descriptor.AssetName
+		if identity == "" {
+			identity = descriptor.Type
+		}
+		contentDigest := fileContentDigest(binaryPath)
 		found = append(found, &EngineImage{
-			ID:              binaryHash("preinstalled-" + engineType),
-			Type:            engineType,
+			ID:              binaryHash("preinstalled-" + identity),
+			Type:            descriptor.Type,
+			AssetName:       descriptor.AssetName,
 			SizeBytes:       size,
 			Platform:        opts.Platform,
 			RuntimeType:     "native",
 			BinaryPath:      binaryPath,
 			Available:       true,
+			Origin:          "preinstalled",
+			CatalogVersion:  descriptor.CatalogVersion,
+			ContentDigest:   contentDigest,
+			ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
 			DetectedVersion: detectedVersion,
-			VersionMatch:    versionMatch,
+			VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
 		})
 	}
 	return found
+}
+
+func compareDetectedVersion(detected, catalog string, compatible []string) string {
+	detected = strings.TrimSpace(detected)
+	catalog = strings.TrimSpace(catalog)
+	if detected == "" || strings.EqualFold(detected, "unknown") || catalog == "" || strings.EqualFold(catalog, "unknown") {
+		return "unknown"
+	}
+	if detected == catalog {
+		return "exact"
+	}
+	for _, declared := range compatible {
+		declared = strings.TrimSpace(declared)
+		if declared == detected {
+			return "compatible"
+		}
+		if strings.HasSuffix(declared, ".x") {
+			prefix := strings.TrimSuffix(declared, "x")
+			if len(detected) > len(prefix) && strings.HasPrefix(detected, prefix) {
+				return "compatible"
+			}
+		}
+	}
+	return "mismatch"
+}
+
+func fileContentDigest(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return ""
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func resolveProbeCommand(binaryPath string, command []string) (string, []string) {
@@ -301,10 +477,54 @@ func binaryHash(name string) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
+func dedupeEngineImages(images []*EngineImage) []*EngineImage {
+	out := make([]*EngineImage, 0, len(images))
+	seen := make(map[string]int)
+	for _, image := range images {
+		if image == nil {
+			continue
+		}
+		key := image.RuntimeType + "|" + image.ID
+		if image.RuntimeType == "native" && image.BinaryPath != "" {
+			key = "native|" + filepath.Clean(image.BinaryPath)
+		}
+		if index, ok := seen[key]; ok {
+			if engineEvidenceScore(image) > engineEvidenceScore(out[index]) {
+				out[index] = image
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, image)
+	}
+	return out
+}
+
+func engineEvidenceScore(image *EngineImage) int {
+	if image == nil {
+		return 0
+	}
+	score := 0
+	if image.AssetName != "" {
+		score += 2
+	}
+	if image.DetectedVersion != "" && !strings.EqualFold(image.DetectedVersion, "unknown") {
+		score += 2
+	}
+	if image.ContentDigest != "" {
+		score++
+	}
+	if image.Origin == "managed" {
+		score += 4
+	}
+	return score
+}
+
 type imageInfo struct {
 	id     string
 	repo   string // image name without tag
 	tag    string
+	digest string // registry/OCI manifest digest, never a runtime image/config ID
 	size   int64
 	source string // "containerd" or "docker"
 }
@@ -358,9 +578,10 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 
 	var result struct {
 		Images []struct {
-			ID       string   `json:"id"`
-			RepoTags []string `json:"repoTags"`
-			Size     string   `json:"size"`
+			ID          string   `json:"id"`
+			RepoTags    []string `json:"repoTags"`
+			RepoDigests []string `json:"repoDigests"`
+			Size        string   `json:"size"`
 		} `json:"images"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
@@ -376,6 +597,7 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 				id:     img.ID,
 				repo:   repo,
 				tag:    tagStr,
+				digest: repoContentDigest(repo, img.RepoDigests),
 				size:   size,
 				source: "containerd",
 			})
@@ -386,7 +608,7 @@ func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 }
 
 func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {
-	output, err := runner.Run(ctx, "docker", "images", "--format", "{{json .}}", "--no-trunc")
+	output, err := runner.Run(ctx, "docker", "images", "--digests", "--format", "{{json .}}", "--no-trunc")
 	if err != nil {
 		return nil, err
 	}
@@ -400,6 +622,7 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			Repository string `json:"Repository"`
 			Tag        string `json:"Tag"`
 			ID         string `json:"ID"`
+			Digest     string `json:"Digest"`
 			Size       string `json:"Size"`
 		}
 		if err := json.Unmarshal([]byte(line), &img); err != nil {
@@ -409,6 +632,7 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 			id:     img.ID,
 			repo:   img.Repository,
 			tag:    img.Tag,
+			digest: normalizedContentDigest(img.Digest),
 			size:   0, // Docker format doesn't reliably include size
 			source: "docker",
 		})
@@ -417,34 +641,27 @@ func listDockerImages(ctx context.Context, runner CommandRunner) ([]imageInfo, e
 	return images, nil
 }
 
-// patternEntry pairs a pattern with its engine type. Using a slice instead of
-// a map guarantees deterministic matching order when multiple patterns exist.
+// patternEntry keeps Catalog identity with each matching rule.
 type patternEntry struct {
 	pattern    string
-	engineType string
+	descriptor AssetDescriptor
+	order      int
 }
 
-// matchImages matches images to engine types using YAML knowledge.
+// matchImages matches images to Engine Assets using YAML knowledge.
 // Knowledge-driven: patterns come from Engine Asset YAMLs, not hardcoded.
 // Tag-aware: patterns containing ":" match against "repo:tag"; others match repo only.
 // Tag-aware patterns take priority over repo-only patterns.
-func matchImages(images []imageInfo, assetPatterns map[string][]string) []*EngineImage {
+func matchImages(images []imageInfo, assets []AssetDescriptor) []*EngineImage {
 	var matched []*EngineImage
 	seen := make(map[string]bool)
 
 	// Split patterns into ordered slices: tag-aware (contain ":") vs repo-only.
-	// Sorted by engine type then pattern for deterministic order.
 	var tagPatterns, repoPatterns []patternEntry
-	engineTypes := make([]string, 0, len(assetPatterns))
-	for et := range assetPatterns {
-		engineTypes = append(engineTypes, et)
-	}
-	sort.Strings(engineTypes)
-
-	for _, engineType := range engineTypes {
-		for _, pattern := range assetPatterns[engineType] {
+	for order, descriptor := range assets {
+		for _, pattern := range descriptor.Patterns {
 			clean := strings.TrimPrefix(strings.TrimSuffix(pattern, "$"), "^")
-			entry := patternEntry{pattern: pattern, engineType: engineType}
+			entry := patternEntry{pattern: pattern, descriptor: descriptor, order: order}
 			if strings.Contains(clean, ":") {
 				tagPatterns = append(tagPatterns, entry)
 			} else {
@@ -462,22 +679,27 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 		searchName := strings.ToLower(img.repo)
 
 		// Tag-aware patterns take priority (match against repo:tag).
-		matchedEngineType := patternMatch(searchRef, tagPatterns)
-		if matchedEngineType == "" {
-			matchedEngineType = patternMatch(searchName, repoPatterns)
+		descriptor, ok := patternMatch(searchRef, tagPatterns)
+		if !ok {
+			descriptor, ok = patternMatch(searchName, repoPatterns)
 		}
-		if matchedEngineType == "" {
+		if !ok {
 			continue
 		}
 
 		matched = append(matched, &EngineImage{
-			ID:         img.id,
-			Type:       matchedEngineType,
-			Image:      img.repo,
-			Tag:        img.tag,
-			SizeBytes:  img.size,
-			Available:  true,
-			DockerOnly: img.source == "docker",
+			ID:             img.id,
+			Type:           descriptor.Type,
+			AssetName:      descriptor.AssetName,
+			Image:          img.repo,
+			Tag:            img.tag,
+			SizeBytes:      img.size,
+			Available:      true,
+			Origin:         "preinstalled",
+			CatalogVersion: descriptor.CatalogVersion,
+			ContentDigest:  img.digest,
+			DockerOnly:     img.source == "docker",
+			VersionMatch:   "unknown",
 		})
 		seen[img.id] = true
 	}
@@ -488,18 +710,20 @@ func matchImages(images []imageInfo, assetPatterns map[string][]string) []*Engin
 // patternMatch checks search string against a set of patterns.
 // Supports anchors: ^pattern (prefix), pattern$ (suffix), ^pattern$ (exact).
 // Patterns are sorted by specificity (exact > anchored > contains), then lexically.
-func patternMatch(search string, patterns []patternEntry) string {
+func patternMatch(search string, patterns []patternEntry) (AssetDescriptor, bool) {
 	type rule struct {
 		pattern    string
-		engineType string
+		descriptor AssetDescriptor
 		score      int
+		order      int
 	}
 	rules := make([]rule, 0, len(patterns))
 	for _, p := range patterns {
 		rules = append(rules, rule{
 			pattern:    p.pattern,
-			engineType: p.engineType,
+			descriptor: p.descriptor,
 			score:      patternScore(strings.ToLower(p.pattern)),
+			order:      p.order,
 		})
 	}
 	// Deterministic order: higher specificity first, then lexical tie-break.
@@ -510,7 +734,10 @@ func patternMatch(search string, patterns []patternEntry) string {
 		if rules[i].pattern != rules[j].pattern {
 			return rules[i].pattern < rules[j].pattern
 		}
-		return rules[i].engineType < rules[j].engineType
+		if rules[i].order != rules[j].order {
+			return rules[i].order < rules[j].order
+		}
+		return rules[i].descriptor.AssetName < rules[j].descriptor.AssetName
 	})
 
 	for _, r := range rules {
@@ -528,23 +755,54 @@ func patternMatch(search string, patterns []patternEntry) string {
 		switch {
 		case hasPrefix && hasSuffix:
 			if search == cmp {
-				return r.engineType
+				return r.descriptor, true
 			}
 		case hasPrefix:
 			if strings.HasPrefix(search, cmp) {
-				return r.engineType
+				return r.descriptor, true
 			}
 		case hasSuffix:
 			if strings.HasSuffix(search, cmp) {
-				return r.engineType
+				return r.descriptor, true
 			}
 		default:
 			if search == cmp || strings.Contains(search, cmp) {
-				return r.engineType
+				return r.descriptor, true
 			}
 		}
 	}
+	return AssetDescriptor{}, false
+}
+
+func repoContentDigest(repo string, repoDigests []string) string {
+	for _, value := range repoDigests {
+		name, digest, ok := strings.Cut(strings.TrimSpace(value), "@")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(repo)) {
+			continue
+		}
+		if normalized := normalizedContentDigest(digest); normalized != "" {
+			return normalized
+		}
+	}
 	return ""
+}
+
+func normalizedContentDigest(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "sha256:") && len(value) > len("sha256:") {
+		return value
+	}
+	return ""
+}
+
+func digestMatches(actual, expected string) bool {
+	actual = normalizedContentDigest(actual)
+	expected = strings.TrimSpace(expected)
+	if expected != "" && !strings.Contains(expected, ":") {
+		expected = "sha256:" + expected
+	}
+	expected = normalizedContentDigest(expected)
+	return actual != "" && expected != "" && strings.EqualFold(actual, expected)
 }
 
 func patternScore(pattern string) int {

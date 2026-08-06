@@ -1098,6 +1098,42 @@ func explorerConfigStorageKey(key string) string {
 	return "explorer." + key
 }
 
+func stateEngineFromScan(img *engine.EngineImage) *state.Engine {
+	if img == nil {
+		return nil
+	}
+	location := img.BinaryPath
+	if location == "" {
+		location = img.Image
+		if location != "" && img.Tag != "" {
+			location += ":" + img.Tag
+		}
+	}
+	entry := &state.Engine{
+		ID:             img.ID,
+		Type:           img.Type,
+		Image:          img.Image,
+		Tag:            img.Tag,
+		SizeBytes:      img.SizeBytes,
+		Platform:       img.Platform,
+		RuntimeType:    img.RuntimeType,
+		BinaryPath:     img.BinaryPath,
+		Available:      img.Available,
+		AssetName:      img.AssetName,
+		Version:        img.DetectedVersion,
+		CatalogVersion: img.CatalogVersion,
+		Origin:         img.Origin,
+		ContentDigest:  img.ContentDigest,
+		Location:       location,
+	}
+	if img.RuntimeType == "native" && img.Origin == "preinstalled" && img.ContentVerified &&
+		(img.VersionMatch == "exact" || img.VersionMatch == "compatible") {
+		entry.LifecycleStatus = "verified"
+		entry.VerificationStatus = "verified"
+	}
+	return entry
+}
+
 // buildToolDeps wires all ToolDeps fields to real implementations.
 // All runtime variants are provided via ac so DeployApply can select per-deployment.
 func buildToolDeps(ac *appContext) *mcp.ToolDeps {
@@ -1111,7 +1147,18 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 
 	scanEnginesCore := func(ctx context.Context, runtimeFilter string, autoImport bool) (json.RawMessage, error) {
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
-		assetPatterns := make(map[string][]string)
+		platform := goruntime.GOOS + "-" + goruntime.GOARCH
+		var preferredAssets, fallbackAssets []*knowledge.EngineAsset
+		for i := range cat.EngineAssets {
+			ea := &cat.EngineAssets[i]
+			if engineCompatibleWithHost(ea, hwInfo) {
+				preferredAssets = append(preferredAssets, ea)
+			} else {
+				fallbackAssets = append(fallbackAssets, ea)
+			}
+		}
+		orderedAssets := append(preferredAssets, fallbackAssets...)
+		assetDescriptors := make([]engine.AssetDescriptor, 0, len(orderedAssets))
 		binaryAssets := make(map[string]string)
 		// Generic interpreters — not engine binaries, skip when inferring from startup.command[0].
 		interpreters := map[string]bool{
@@ -1119,10 +1166,20 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			"bash": true, "sh": true, "zsh": true,
 			"node": true, "java": true, "ruby": true,
 		}
-		for _, ea := range cat.EngineAssets {
-			if len(ea.Patterns) > 0 {
-				assetPatterns[ea.Metadata.Type] = append(assetPatterns[ea.Metadata.Type], ea.Patterns...)
+		for _, ea := range orderedAssets {
+			descriptor := engine.AssetDescriptor{
+				AssetName:          ea.Metadata.Name,
+				Type:               ea.Metadata.Type,
+				CatalogVersion:     ea.Metadata.Version,
+				CompatibleVersions: append([]string(nil), ea.Metadata.CompatibleVersions...),
+				Patterns:           append([]string(nil), ea.Patterns...),
 			}
+			if ea.Source != nil {
+				descriptor.ExpectedSHA256 = ea.Source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]
+				descriptor.Probe = ea.Source.Probe
+			}
+			assetDescriptors = append(assetDescriptors, descriptor)
+
 			// Determine native binary name: explicit source.binary, or infer from startup.command[0]
 			binName := ""
 			if ea.Source != nil && ea.Source.Binary != "" {
@@ -1134,23 +1191,14 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				}
 			}
 			if binName != "" {
-				// First registration wins — avoids variant-specific types (e.g. "vllm-spark")
-				// overwriting the generic type (e.g. "vllm") when multiple engine YAMLs share
-				// the same binary. The resolver picks the correct variant by hardware later.
+				// Host-compatible assets are ordered first; the first registration keeps
+				// shared binary names deterministic without engine-specific branches.
 				if _, exists := binaryAssets[binName]; !exists {
-					binaryAssets[binName] = ea.Metadata.Type
-					binaryAssets[binName+".exe"] = ea.Metadata.Type
+					binaryAssets[binName] = ea.Metadata.Name
+					binaryAssets[binName+".exe"] = ea.Metadata.Name
 				}
 			}
 		}
-		// Build preinstalled probes from engine assets with source.install_type == "preinstalled"
-		preinstalledProbes := make(map[string]*knowledge.EngineSourceProbe)
-		for _, ea := range cat.EngineAssets {
-			if ea.Source != nil && ea.Source.InstallType == "preinstalled" && ea.Source.Probe != nil {
-				preinstalledProbes[ea.Metadata.Name] = ea.Source.Probe
-			}
-		}
-		platform := goruntime.GOOS + "-" + goruntime.GOARCH
 		distDir := filepath.Join(dataDir, "dist", platform)
 		// AIMA_ENGINE_DIR lists dirs holding pre-installed engine binaries that
 		// live off PATH and off dist (e.g. Windows D:\tools\llama-b9180-...\).
@@ -1162,14 +1210,13 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			}
 		}
 		images, err := engine.ScanUnified(ctx, engine.ScanOptions{
-			AssetPatterns:      assetPatterns,
-			Runner:             &execRunner{},
-			DistDir:            distDir,
-			ExtraDirs:          engineExtraDirs,
-			Platform:           platform,
-			BinaryAssets:       binaryAssets,
-			AutoImport:         autoImport,
-			PreinstalledProbes: preinstalledProbes,
+			Assets:       assetDescriptors,
+			Runner:       &execRunner{},
+			DistDir:      distDir,
+			ExtraDirs:    engineExtraDirs,
+			Platform:     platform,
+			BinaryAssets: binaryAssets,
+			AutoImport:   autoImport,
 		})
 		if err != nil {
 			return nil, err
@@ -1181,17 +1228,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			if runtimeFilter == "auto" || img.RuntimeType == runtimeFilter {
 				filtered = append(filtered, img)
 				scannedIDs = append(scannedIDs, img.ID)
-				if err := db.UpsertScannedEngine(ctx, &state.Engine{
-					ID:          img.ID,
-					Type:        img.Type,
-					Image:       img.Image,
-					Tag:         img.Tag,
-					SizeBytes:   img.SizeBytes,
-					Platform:    img.Platform,
-					RuntimeType: img.RuntimeType,
-					BinaryPath:  img.BinaryPath,
-					Available:   img.Available,
-				}); err != nil {
+				if err := db.UpsertScannedEngine(ctx, stateEngineFromScan(img)); err != nil {
 					slog.Warn("engine scan: failed to persist engine", "id", img.ID, "error", err)
 				}
 			}

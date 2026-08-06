@@ -424,6 +424,40 @@ func splitImageRef(ref string) (name, tag string) {
 	return ref[:absColon], ref[absColon+1:]
 }
 
+func engineRegistriesWithEnv(registries []string) []string {
+	envRegistries := splitRegistryEnv(os.Getenv("AIMA_ENGINE_REGISTRIES"))
+	envRegistries = append(envRegistries, splitRegistryEnv(os.Getenv("AIMA_ENGINE_REGISTRY"))...)
+	if len(envRegistries) == 0 {
+		return registries
+	}
+	seen := make(map[string]struct{}, len(envRegistries)+len(registries))
+	out := make([]string, 0, len(envRegistries)+len(registries))
+	for _, value := range append(envRegistries, registries...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func splitRegistryEnv(raw string) []string {
+	var values []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	}) {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
 type deployOptions struct {
 	allowAutoPull bool
 }

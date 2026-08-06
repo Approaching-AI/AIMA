@@ -436,12 +436,9 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledContainerAsset(t *test
 	defer db.Close()
 
 	if err := db.InsertEngine(ctx, &state.Engine{
-		ID:          "engine-local-vllm",
-		Type:        "vllm",
-		Image:       "local/vllm",
-		Tag:         "custom",
-		RuntimeType: "container",
-		Available:   true,
+		ID: "engine-local-vllm", Type: "vllm", AssetName: "vllm-catalog", Version: "1.0",
+		Image: "local/vllm", Tag: "custom", Platform: "linux-amd64", RuntimeType: "container",
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
 	}); err != nil {
 		t.Fatalf("InsertEngine: %v", err)
 	}
@@ -514,11 +511,9 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := db.InsertEngine(ctx, &state.Engine{
-		ID:          "engine-native-llamacpp",
-		Type:        "llamacpp",
-		RuntimeType: "native",
-		BinaryPath:  binaryPath,
-		Available:   true,
+		ID: "engine-native-llamacpp", Type: "llamacpp", AssetName: "llamacpp-native", Version: "1.0",
+		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: binaryPath,
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
 	}); err != nil {
 		t.Fatalf("InsertEngine: %v", err)
 	}
@@ -570,5 +565,70 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 	}
 	if strings.TrimSpace(resolved.EngineImage) != "" {
 		t.Fatalf("resolved engine image = %q, want empty for native overlay", resolved.EngineImage)
+	}
+}
+
+func TestResolveDeploymentUsesRolledBackActiveEngineVersion(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	root := t.TempDir()
+	v1Binary := filepath.Join(root, "v1", "engine-server")
+	v2Binary := filepath.Join(root, "v2", "engine-server")
+	for _, binary := range []string{v1Binary, v2Binary} {
+		if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(binary, []byte(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v1 := &state.Engine{
+		ID: "engine-v1", Type: "llamacpp", AssetName: "llamacpp-native", Version: "1.0.0",
+		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: v1Binary, Available: true,
+		LifecycleStatus: "verified", VerificationStatus: "verified",
+	}
+	v2 := &state.Engine{
+		ID: "engine-v2", Type: "llamacpp", AssetName: "llamacpp-native", Version: "2.0.0",
+		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: v2Binary, Available: true, Active: true,
+		LifecycleStatus: "active", VerificationStatus: "verified", PreviousEngineID: v1.ID,
+	}
+	if err := db.InsertEngine(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+	if activeID, err := db.RollbackEngineVersion(ctx, v2.ID); err != nil || activeID != v1.ID {
+		t.Fatalf("RollbackEngineVersion = %q, %v", activeID, err)
+	}
+
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{{
+			Metadata: knowledge.EngineMetadata{Name: "llamacpp-native", Type: "llamacpp", Version: "2.0.0", SupportedFormats: []string{"gguf"}},
+			Hardware: knowledge.EngineHardware{GPUArch: "Ada"}, Runtime: knowledge.EngineRuntime{Default: "native"},
+			Source: &knowledge.EngineSource{Binary: "engine-server", Platforms: []string{"linux/amd64"}},
+		}},
+		ModelAssets: []knowledge.ModelAsset{{
+			Metadata: knowledge.ModelMetadata{Name: "demo-model", Type: "llm"},
+			Storage:  knowledge.ModelStorage{DefaultPathPattern: "/models/demo"},
+			Variants: []knowledge.ModelVariant{{Name: "demo-gguf", Engine: "llamacpp", Format: "gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "Ada"}}},
+		}},
+	}
+	rd, err := resolveDeployment(ctx, cat, db, nil, knowledge.HardwareInfo{
+		GPUArch: "Ada", Platform: "linux/amd64", RuntimeType: "native",
+	}, "demo-model", "llamacpp", "", map[string]any{"model_path": "/models/demo"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveDeployment: %v", err)
+	}
+	if rd.EngineAsset == nil || rd.EngineAsset.Metadata.Version != "1.0.0" {
+		t.Fatalf("resolved Engine Asset = %+v, want rolled-back v1", rd.EngineAsset)
+	}
+	if rd.Resolved.Source == nil || rd.Resolved.Source.Probe == nil || rd.Resolved.Source.Probe.Paths[0] != v1Binary {
+		t.Fatalf("resolved native source = %+v, want %s", rd.Resolved.Source, v1Binary)
 	}
 }

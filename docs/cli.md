@@ -22,7 +22,7 @@ CLI 永不实现 MCP 工具之外的逻辑——确保 Agent 和人类走同一�
 
 ```bash
 aima init                                 # 安装基础设施栈（默认 Docker 层，--k3s 安装完整栈）
-aima serve                                # 启动 AIMA 服务器
+aima serve                                # 启动 AIMA 服务器及部署恢复 Controller
 aima run <model>                          # 下载、部署并直接提供服务（类似 ollama run）
 aima deploy <model> [--engine] [--slot]   # 部署推理服务
 aima undeploy <name>                      # 删除部署
@@ -44,9 +44,13 @@ aima model remove --delete-files <name>   # 删除模型记录并删除文件
 aima engine scan                          # 扫描本地引擎
 aima engine info <name>                   # 查看引擎详情
 aima engine list                          # 列出可用引擎
+aima engine ensure <name>                 # 输出无副作用的版本计划
+aima engine ensure <name> --version <v> --apply  # 校验、安装或激活指定版本
+aima engine rollback <name> --runtime <container|native> --confirm  # 回滚指定运行时组
 aima engine pull [engine]                 # 拉取引擎镜像
-aima engine import <path>                 # 从 OCI tar 导入
-aima engine remove <engine>               # 删除引擎镜像
+aima engine import <path>                 # 离线导入 OCI 或版本化 Native 包
+aima engine remove <engine-id>            # 删除无引用库存记录
+aima engine remove <engine-id> --delete-files  # 仅删除 AIMA 数据目录内受管 Native 文件
 ```
 
 ### 知识、目录与基准
@@ -108,6 +112,30 @@ aima mcp                                  # 通过 stdio 启动 MCP 服务
 aima tui                                  # 打开终端仪表盘
 aima version                              # 查看版本信息
 ```
+
+---
+
+## 部署恢复的 CLI 语义
+
+- 自动恢复只在 `aima serve` 运行期间生效。关闭 serve、只运行 `aima mcp`，或执行一次性 CLI 命令，都不会留下独立恢复守护进程。
+- `aima undeploy <name>` 通过共享 `deploy.delete` 路径先把持久化意图置为 `stopped`，再删除 Runtime 对象。该操作表示明确停止，后台 Controller 不会把它重新部署。
+- 在 AIMA 之外结束 Native 进程、Docker 容器或 K3S Pod 不等同于 `undeploy`，不会修改 desired state。Native 可由 AIMA 按策略重新部署；Docker/K3S 的普通重启仍由各自平台负责，AIMA 只观察重启计数并执行有界隔离。
+- 状态显示 `recovery_state=quarantined` 时，自动尝试预算已耗尽。修复根因后重新执行原始 `aima deploy <model>`（或直接调用 MCP `deploy.apply`）会执行显式 apply、清除隔离计数并重新部署。
+
+默认策略为：启用；每 5 秒检查；Native 连续 3 次失败后恢复；600 秒窗口内最多 3 次恢复；失败退避 2/10/30 秒；持续健康 600 秒后清空计数。Catalog Engine Asset 和 MCP `recovery_policy` 可以在通用边界内覆盖这些值；CLI 当前没有独立的恢复策略 flag。
+
+显式部署、删除和后台恢复只在同一个 AIMA 进程内共享部署操作锁。不要同时启动多个写进程并让它们共享同一 SQLite 数据库；当前锁不提供跨进程 Runtime 副作用协调。
+
+---
+
+## Engine 生命周期的 CLI 语义
+
+- `aima engine ensure` 默认只输出计划；没有 `--apply` 时不下载、不写数据库、不切换 active。
+- 网络安装要求 Catalog 中存在严格 SHA256/OCI digest。校验失败保持旧 active 不变。
+- `aima engine import` 对 Native 包要求实际版本目录，导入后只登记为 inactive；使用 `ensure --apply` 才激活。
+- `aima engine rollback` 必须显式传 `--runtime container|native` 和 `--confirm`，且该运行时组的前一版本必须 verified、available。
+- 激活和回滚不会重启当前部署。部署继续使用持久化 intent 中固定的 Engine Asset/版本，直到操作者显式重新部署。
+- `engine remove --delete-files` 只允许无引用的 `managed`/`imported` Native 资产，且规范路径必须严格位于 `AIMA_DATA_DIR`。preinstalled、legacy、容器镜像层和外部路径不会被物理删除。
 
 ---
 
@@ -187,4 +215,4 @@ aima ask "为什么我的模型推理很慢？"
 
 ---
 
-*最后更新：2026-04-24 (对齐 onboarding 首次使用路径，移除不存在的 engine plan / discover 示例)*
+*最后更新：2026-08-02（增加 Engine ensure、rollback、离线导入和删除保护语义）*

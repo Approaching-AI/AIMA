@@ -477,6 +477,67 @@ func TestDefaultEngineAssetPrefersCatalogDefault(t *testing.T) {
 	}
 }
 
+func TestScanEngineOriginEvidenceMapping(t *testing.T) {
+	scanned := &engine.EngineImage{
+		ID:              "engine-id",
+		Type:            "engine-a",
+		Image:           "example/engine-a",
+		Tag:             "v1",
+		SizeBytes:       42,
+		Platform:        "linux-amd64",
+		RuntimeType:     "container",
+		Available:       true,
+		AssetName:       "engine-a-container",
+		CatalogVersion:  "1.2.3",
+		DetectedVersion: "1.2.2",
+		Origin:          "preinstalled",
+		ContentDigest:   "sha256:abc123",
+		VersionMatch:    "compatible",
+	}
+	got := stateEngineFromScan(scanned)
+	if got.ID != scanned.ID || got.AssetName != scanned.AssetName || got.Version != scanned.DetectedVersion ||
+		got.CatalogVersion != scanned.CatalogVersion || got.Origin != scanned.Origin ||
+		got.ContentDigest != scanned.ContentDigest || got.Location != "example/engine-a:v1" {
+		t.Fatalf("state Engine evidence = %+v", got)
+	}
+}
+
+func TestStateEngineFromScanRequiresTrustedDigestForPreinstalledNative(t *testing.T) {
+	for _, versionMatch := range []string{"exact", "compatible"} {
+		t.Run(versionMatch, func(t *testing.T) {
+			got := stateEngineFromScan(&engine.EngineImage{
+				ID: "native-" + versionMatch, Type: "engine-a", AssetName: "engine-a-native",
+				RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+				Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: versionMatch,
+				ContentDigest: "sha256:abc123", ContentVerified: true,
+			})
+			if got.Active || got.LifecycleStatus != "verified" || got.VerificationStatus != "verified" {
+				t.Fatalf("state Engine = %+v", got)
+			}
+		})
+	}
+
+	untrusted := stateEngineFromScan(&engine.EngineImage{
+		ID: "native-self-hash", Type: "engine-a", AssetName: "engine-a-native",
+		RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+		Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: "exact",
+		ContentDigest: "sha256:self-computed",
+	})
+	if untrusted.LifecycleStatus != "" || untrusted.VerificationStatus != "" {
+		t.Fatalf("self-computed digest was trusted: %+v", untrusted)
+	}
+
+	got := stateEngineFromScan(&engine.EngineImage{
+		ID: "native-mismatch", Type: "engine-a", AssetName: "engine-a-native",
+		RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+		Origin: "preinstalled", DetectedVersion: "9.9.9", VersionMatch: "mismatch",
+		ContentDigest: "sha256:abc123",
+	})
+	if got.LifecycleStatus != "" || got.VerificationStatus != "" {
+		t.Fatalf("mismatched preinstall was trusted: %+v", got)
+	}
+}
+
 func TestDedupeScannedEnginesPrefersCatalogImageForSameTypeAndTag(t *testing.T) {
 	hw := knowledge.HardwareInfo{
 		GPUArch:  "Blackwell",
@@ -1306,6 +1367,7 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		{name: "explore start blocked for agent", tool: "explore", args: json.RawMessage(`{"action":"start","kind":"tune","target":{"model":"qwen3-8b"}}`), wantBlock: true},
 		{name: "explore result allowed", tool: "explore", args: json.RawMessage(`{"action":"result","id":"run-1"}`), wantBlock: false},
 		{name: "allowed readonly", tool: "knowledge.resolve", args: json.RawMessage(`{"model":"qwen3-8b"}`), wantBlock: false},
+		{name: "engine rollback blocked", tool: "engine.rollback", args: json.RawMessage(`{"name":"engine-a","confirm":true}`), wantBlock: true},
 		{name: "fleet exec recursive blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.exec","params":{}}`), wantBlock: true},
 		{name: "fleet exec stack init blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"stack","params":{"action":"init"}}`), wantBlock: true},
 		{name: "fleet exec fleet info allowed", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.info","params":{}}`), wantBlock: false},
@@ -1332,6 +1394,102 @@ func TestIsBlockedAgentTool(t *testing.T) {
 				t.Fatalf("isBlockedAgentTool(%q) = %v, want %v", tt.tool, blocked, tt.wantBlock)
 			}
 		})
+	}
+}
+
+func TestMCPToolAdapter_EngineEnsureApprovalFlow(t *testing.T) {
+	s := mcp.NewServer()
+	var calls []bool
+	s.RegisterTool(&mcp.Tool{
+		Name:        "engine.ensure",
+		Description: "test engine ensure",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			var p struct {
+				Apply bool `json:"apply"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			calls = append(calls, p.Apply)
+			if !p.Apply {
+				return mcp.TextResult(`{"plan":{"action":"upgrade"},"applied":false}`), nil
+			}
+			return mcp.TextResult(`{"plan":{"action":"upgrade"},"applied":true}`), nil
+		},
+	})
+
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+	result, err := adapter.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"name":"engine-a","apply":true}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || result.IsError || !strings.Contains(result.Content, "NEEDS_APPROVAL") || !strings.Contains(result.Content, `"action":"upgrade"`) {
+		t.Fatalf("approval result = %+v", result)
+	}
+	if len(calls) != 1 || calls[0] {
+		t.Fatalf("ensure calls = %#v, want forced plan-only call", calls)
+	}
+
+	adapter.mu.Lock()
+	var approvalID int64
+	for id := range adapter.pending {
+		approvalID = id
+	}
+	adapter.mu.Unlock()
+	if approvalID == 0 {
+		t.Fatal("expected pending approval")
+	}
+	approved, err := adapter.executeApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("executeApproval: %v", err)
+	}
+	if !strings.Contains(string(approved), `"applied":true`) || len(calls) != 2 || !calls[1] {
+		t.Fatalf("approved=%s calls=%#v", approved, calls)
+	}
+}
+
+func TestMCPToolAdapter_BlocksEngineRollback(t *testing.T) {
+	s := mcp.NewServer()
+	calls := 0
+	s.RegisterTool(&mcp.Tool{
+		Name:        "engine.rollback",
+		Description: "test engine rollback",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			calls++
+			return mcp.TextResult(`{"applied":true}`), nil
+		},
+	})
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+
+	result, err := adapter.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","confirm":true}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Content, "BLOCKED") {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 0 {
+		t.Fatalf("blocked rollback calls = %d", calls)
+	}
+}
+
+func TestForceEngineEnsurePlanOnly(t *testing.T) {
+	for _, input := range []json.RawMessage{
+		json.RawMessage(`{"name":"engine-a","apply":true}`),
+		json.RawMessage(`{"name":"engine-a"}`),
+		json.RawMessage(`null`),
+		json.RawMessage(`not-json`),
+	} {
+		output := forceEngineEnsurePlanOnly(input)
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(output, &params); err != nil {
+			t.Fatalf("forceEngineEnsurePlanOnly(%s) returned invalid JSON %s: %v", input, output, err)
+		}
+		if string(params["apply"]) != "false" {
+			t.Fatalf("forceEngineEnsurePlanOnly(%s) = %s", input, output)
+		}
 	}
 }
 

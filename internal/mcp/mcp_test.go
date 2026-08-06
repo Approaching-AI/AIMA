@@ -508,7 +508,7 @@ func TestRegisterAllTools(t *testing.T) {
 	expectedTools := []string{
 		"hardware.detect", "hardware.metrics",
 		"model.scan", "model.list", "model.pull", "model.import", "model.info",
-		"engine.scan", "engine.list", "engine.pull", "engine.remove",
+		"engine.scan", "engine.list", "engine.ensure", "engine.rollback", "engine.pull", "engine.remove",
 		"external.scan", "external.list", "external.import",
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.save", "knowledge.promote",
@@ -528,6 +528,84 @@ func TestRegisterAllTools(t *testing.T) {
 		if !names[name] {
 			t.Errorf("missing tool: %s", name)
 		}
+	}
+}
+
+func TestEngineEnsureToolContract(t *testing.T) {
+	s := NewServer()
+	calls := 0
+	deps := &ToolDeps{
+		EnsureEngine: func(_ context.Context, name, version string, apply bool) (json.RawMessage, error) {
+			calls++
+			if name != "engine-a" || version != "" || apply {
+				t.Fatalf("EnsureEngine(%q, %q, %v)", name, version, apply)
+			}
+			return json.RawMessage(`{"plan":{"action":"reuse"},"applied":false}`), nil
+		},
+	}
+	registerEngineTools(s, deps)
+
+	result, err := s.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"name":"engine-a","apply":false}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, `"action":"reuse"`) {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 1 {
+		t.Fatalf("EnsureEngine calls = %d, want 1", calls)
+	}
+
+	missing, err := s.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"version":"1.0.0"}`))
+	if err != nil {
+		t.Fatalf("missing-name ExecuteTool: %v", err)
+	}
+	if !missing.IsError || !strings.Contains(missing.Content[0].Text, "name is required") {
+		t.Fatalf("missing-name result = %+v", missing)
+	}
+	if calls != 1 {
+		t.Fatalf("missing name called EnsureEngine; calls=%d", calls)
+	}
+}
+
+func TestEngineRollbackToolContract(t *testing.T) {
+	s := NewServer()
+	calls := 0
+	mutations := 0
+	deps := &ToolDeps{
+		RollbackEngine: func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
+			calls++
+			if name != "engine-a" || runtimeType != "native" {
+				t.Fatalf("name = %q runtime_type = %q", name, runtimeType)
+			}
+			if confirm {
+				mutations++
+			}
+			return json.RawMessage(`{"asset_name":"engine-a","confirmed":false,"applied":false,"refused":true}`), nil
+		},
+	}
+	registerEngineTools(s, deps)
+
+	result, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","runtime_type":"native","confirm":false}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.IsError || !strings.Contains(result.Content[0].Text, `"refused":true`) {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 1 || mutations != 0 {
+		t.Fatalf("calls=%d mutations=%d, want one refusal and no mutation", calls, mutations)
+	}
+
+	missing, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"runtime_type":"native","confirm":true}`))
+	if err != nil {
+		t.Fatalf("missing-name ExecuteTool: %v", err)
+	}
+	if !missing.IsError || !strings.Contains(missing.Content[0].Text, "name is required") {
+		t.Fatalf("missing-name result = %+v", missing)
+	}
+	if calls != 1 || mutations != 0 {
+		t.Fatalf("missing name reached RollbackEngine; calls=%d mutations=%d", calls, mutations)
 	}
 }
 

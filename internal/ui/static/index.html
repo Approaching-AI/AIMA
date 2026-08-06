@@ -5962,6 +5962,30 @@ body {
         </template>
 
         <div class="deploy-scroll-body" x-show="!deployDetailMinimized">
+        <div class="modal-section" x-show="deployScenarioName">
+          <div class="modal-section-title" x-text="t('deploy_cluster_config')"></div>
+          <div class="deploy-form-grid">
+            <template x-for="input in deployScenarioInputs" :key="input.name">
+              <div class="modal-field">
+                <label x-text="input.label || input.name"></label>
+                <template x-if="input.kind === 'device'">
+                  <select x-model="input.value" @change="markDeployConfigDirty(); refreshDeployDryRun()">
+                    <option value="" x-text="t('deploy_select_device')"></option>
+                    <template x-for="device in fleet.filter(d => !d.self)" :key="device.id">
+                      <option :value="device.id" x-text="device.name + (device.addr ? ' (' + device.addr + ')' : '')"></option>
+                    </template>
+                  </select>
+                </template>
+                <template x-if="input.kind !== 'device'">
+                  <input type="text" x-model="input.value" @change="markDeployConfigDirty(); refreshDeployDryRun()" :placeholder="input.required ? t('deploy_required_input') : ''">
+                </template>
+                <div class="modal-hint" x-text="input.description || ''"></div>
+              </div>
+            </template>
+          </div>
+          <div class="modal-hint" x-text="t('deploy_cluster_hint')"></div>
+        </div>
+
         <div class="modal-section">
           <div class="modal-section-title" x-text="t('deploy_model_info')"></div>
           <div class="deploy-grid">
@@ -5992,7 +6016,7 @@ body {
           </div>
         </div>
 
-        <div class="modal-section">
+        <div class="modal-section" x-show="!deployScenarioName">
           <div class="modal-section-title" x-text="t('deploy_basic_config')"></div>
           <div class="deploy-form-grid">
             <div class="modal-field">
@@ -6023,7 +6047,7 @@ body {
           </div>
         </div>
 
-        <div class="modal-section">
+        <div class="modal-section" x-show="!deployScenarioName">
           <div class="modal-section-title" x-text="t('deploy_launch_params')"></div>
           <div class="deploy-param-list">
             <template x-for="param in visibleDeployParams()" :key="param.id">
@@ -6047,7 +6071,7 @@ body {
           </div>
         </div>
 
-        <div class="modal-section">
+        <div class="modal-section" x-show="!deployScenarioName">
           <div class="modal-section-title" x-text="t('deploy_compat_title')"></div>
           <div class="deploy-compat-card">
             <div class="deploy-compat-head">
@@ -6069,7 +6093,7 @@ body {
           </div>
         </div>
 
-        <div class="modal-section">
+        <div class="modal-section" x-show="!deployScenarioName">
           <div class="modal-section-title" x-text="t('deploy_vram_estimate')"></div>
           <div class="deploy-vram-card">
             <div class="deploy-vram-top">
@@ -6096,7 +6120,7 @@ body {
           <div class="modal-hint" x-text="deployVramHint()"></div>
         </div>
 
-        <div class="modal-section" x-show="deployVramSuggestions().length > 0">
+        <div class="modal-section" x-show="!deployScenarioName && deployVramSuggestions().length > 0">
           <div class="modal-section-title" x-text="t('deploy_suggestions')"></div>
           <div class="deploy-suggestion-list">
             <template x-for="suggestion in deployVramSuggestions()" :key="suggestion.key + suggestion.value">
@@ -6770,6 +6794,10 @@ var I18N = {
     deploy_vram_hint_tight: 'This should be treated as risky; leave extra memory if other services are running.',
     deploy_vram_hint_ok: 'This config has enough estimated headroom for startup.',
     deploy_basic_config: 'Basic config',
+    deploy_cluster_config: 'Multi-device configuration',
+    deploy_cluster_hint: 'Fabric values are saved in this browser after a successful launch; they are never written to the catalog.',
+    deploy_select_device: 'Select a Fleet device',
+    deploy_required_input: 'required',
     deploy_auto_engine: 'Auto-select engine',
     deploy_engine_hint: 'AIMA will choose the best available engine.',
     deploy_recommended_engine: 'Recommended',
@@ -7191,6 +7219,10 @@ var I18N = {
     deploy_vram_hint_tight: '\u8FD9\u7EC4\u53C2\u6570\u53EF\u4EE5\u5C1D\u8BD5\uFF0C\u4F46\u5EFA\u8BAE\u5148\u786E\u8BA4\u6CA1\u6709\u5176\u4ED6\u670D\u52A1\u5360\u7528\u663E\u5B58\u3002',
     deploy_vram_hint_ok: '\u8FD9\u7EC4\u53C2\u6570\u6709\u8DB3\u591F\u7684\u4F30\u7B97\u4F59\u91CF\u3002',
     deploy_basic_config: '\u57FA\u7840\u914D\u7F6E',
+    deploy_cluster_config: '\u591A\u8BBE\u5907\u914D\u7F6E',
+    deploy_cluster_hint: '\u6210\u529F\u542F\u52A8\u540E\u4F1A\u628A\u7F51\u7EDC\u53C2\u6570\u4FDD\u5B58\u5728\u5F53\u524D\u6D4F\u89C8\u5668\uFF0C\u4E0D\u4F1A\u5199\u5165\u6A21\u578B\u76EE\u5F55\u3002',
+    deploy_select_device: '\u9009\u62E9 Fleet \u8BBE\u5907',
+    deploy_required_input: '\u5FC5\u586B',
     deploy_auto_engine: '\u81EA\u52A8\u9009\u62E9\u5F15\u64CE',
     deploy_engine_hint: 'AIMA \u4F1A\u9009\u62E9\u5F53\u524D\u6700\u5408\u9002\u7684\u5F15\u64CE\u3002',
     deploy_recommended_engine: '\u63A8\u8350',
@@ -8047,6 +8079,8 @@ function aimaApp() {
     deployDefaultsApplied: false,
     deployDefaultsAvailable: false,
     deploySavedDefaults: null,
+    deployScenarioName: '',
+    deployScenarioInputs: [],
     deploymentDetailOpen: false,
     deploymentDetailLoading: false,
     deploymentDetailFeedback: null,
@@ -10284,9 +10318,12 @@ function aimaApp() {
       this.deployDetailMaximized = false;
       this.deployDefaultsAvailable = false;
       this.deploySavedDefaults = null;
+      this.deployScenarioName = String(fullModel.deployment_scenario || '').trim();
+      this.deployScenarioInputs = [];
       this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_loading_plan') };
       this.deployDetailOpen = true;
-      this.refreshDeployDryRun();
+      if (this.deployScenarioName) this.loadDeployScenario();
+      else this.refreshDeployDryRun();
     },
 
     closeDeployDetail() {
@@ -10324,9 +10361,80 @@ function aimaApp() {
       this.refreshDeployDryRun();
     },
 
+    deployScenarioBindings() {
+      const bindings = {};
+      for (const input of this.deployScenarioInputs || []) {
+        bindings[input.name] = String(input.value || '').trim();
+      }
+      return bindings;
+    },
+
+    async loadDeployScenario() {
+      const scenarioName = this.deployScenarioName;
+      if (!scenarioName) return;
+      this.deployDetailLoading = true;
+      const data = await this.callTool('scenario.show', { name: scenarioName });
+      if (!this.deployDetailOpen || this.deployScenarioName !== scenarioName) return;
+      this.deployDetailLoading = false;
+      if (!data || data._err) {
+        this.deployDetailFeedback = { type: 'error', text: (data && data._err) || 'scenario.show failed' };
+        return;
+      }
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem('aima_scenario_bindings_' + scenarioName) || '{}'); } catch (_) {}
+      const firstRemote = (this.fleet || []).find(device => !device.self && device.online !== false);
+      this.deployScenarioInputs = (Array.isArray(data.inputs) ? data.inputs : []).map(input => ({
+        ...input,
+        value: saved[input.name] !== undefined
+          ? saved[input.name]
+          : (input.default || (input.kind === 'device' && firstRemote ? firstRemote.id : ''))
+      }));
+      await this.refreshDeployScenarioDryRun();
+    },
+
+    async refreshDeployScenarioDryRun() {
+      const scenarioName = this.deployScenarioName;
+      if (!scenarioName) return;
+      const missing = (this.deployScenarioInputs || []).filter(input => input.required && !String(input.value || '').trim());
+      if (missing.length > 0) {
+        this.deployDetailDirty = true;
+        this.deployDetailLastCheckedAt = '';
+        this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_required_input') + ': ' + missing.map(input => input.label || input.name).join(', ') };
+        return;
+      }
+      const seq = ++this.deployDryRunSeq;
+      this.deployDetailLoading = true;
+      this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_loading_plan') };
+      try {
+        const data = await this.callTool('scenario.apply', {
+          name: scenarioName,
+          dry_run: true,
+          bindings: this.deployScenarioBindings()
+        });
+        if (seq !== this.deployDryRunSeq || !this.deployDetailOpen) return;
+        if (!data || data._err) {
+          this.deployDetailFeedback = { type: 'warning', text: this.t('deploy_preflight_failed') + ': ' + ((data && data._err) || 'scenario dry-run failed') };
+          return;
+        }
+        this.deployDetailPlan = data;
+        const failures = (data.deployments || []).filter(item => item.status === 'error');
+        this.deployDetailFeedback = failures.length
+          ? { type: 'warning', text: this.t('deploy_preflight_failed') + ': ' + failures[0].error }
+          : { type: 'success', text: this.t('deploy_preflight_ready') };
+        this.deployDetailDirty = false;
+        this.deployDetailLastCheckedAt = new Date().toLocaleTimeString();
+      } finally {
+        if (seq === this.deployDryRunSeq) this.deployDetailLoading = false;
+      }
+    },
+
     async refreshDeployDryRun(forceRecommended = false) {
       const modelName = this.deployDetailModel && this.deployDetailModel.name;
       if (!modelName) return;
+      if (this.deployScenarioName) {
+        await this.refreshDeployScenarioDryRun();
+        return;
+      }
       const seq = ++this.deployDryRunSeq;
       const requestEngine = forceRecommended ? '' : this.deployEngineRequestValue();
       this.deployDetailLoading = true;
@@ -11015,11 +11123,21 @@ function aimaApp() {
       this.scrollChat();
       this.deployDetailOpen = false;
       try {
-        const data = await this.callTool('deploy.run', request);
+        const deploySingle = async () => {
+          const data = await this.callTool('deploy.run', request);
+          return data;
+        };
+        const scenarioBindings = this.deployScenarioBindings();
+        const data = this.deployScenarioName
+          ? await this.callTool('scenario.apply', { name: this.deployScenarioName, bindings: scenarioBindings })
+          : await deploySingle();
         if (!data || data._err) {
           const errMsg = data && data._err ? data._err : 'tool returned no data';
           this.messages.push({ role: 'error', text: 'Deploy ' + modelName + ' failed: ' + errMsg });
           return;
+        }
+        if (this.deployScenarioName) {
+          localStorage.setItem('aima_scenario_bindings_' + this.deployScenarioName, JSON.stringify(scenarioBindings));
         }
         const address = data && data.address ? data.address : '';
         this.messages.push({ role: 'system', text: address ? ('Deploy ' + modelName + ' ready. Use the API Access panel for calls.') : this.t('deploy_started_background') });
@@ -11504,6 +11622,7 @@ function aimaApp() {
         id: d.id || d.name || 'unknown',
         name: d.name || d.id || 'unknown',
         online: d.online !== false,
+        self: d.self === true,
         meta: (d.models && d.models.length > 0) ? d.models.join(', ') : (d.addr_v4 || ''),
         addr: d.addr_v4 || '',
         port: d.port || 6188

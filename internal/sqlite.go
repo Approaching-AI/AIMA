@@ -33,26 +33,27 @@ func (d *DB) RawDB() *sql.DB {
 }
 
 type Model struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Type             string    `json:"type"`
-	Path             string    `json:"path"`
-	Format           string    `json:"format"`
-	SizeBytes        int64     `json:"size_bytes"`
-	DetectedArch     string    `json:"detected_arch"`
-	DetectedParams   string    `json:"detected_params"`
-	ModelClass       string    `json:"model_class"`
-	UIRole           string    `json:"ui_role"`
-	UIDisplayNote    string    `json:"ui_display_note"`
-	UIDisplayNoteZh  string    `json:"ui_display_note_zh"`
-	StandaloneDeploy *bool     `json:"standalone_deploy,omitempty"`
-	TotalParams      int64     `json:"total_params"`
-	ActiveParams     int64     `json:"active_params"`
-	Quantization     string    `json:"quantization"`
-	QuantSrc         string    `json:"quant_src"`
-	Status           string    `json:"status"`
-	DownloadProgress float64   `json:"download_progress"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Type               string    `json:"type"`
+	Path               string    `json:"path"`
+	Format             string    `json:"format"`
+	SizeBytes          int64     `json:"size_bytes"`
+	DetectedArch       string    `json:"detected_arch"`
+	DetectedParams     string    `json:"detected_params"`
+	ModelClass         string    `json:"model_class"`
+	UIRole             string    `json:"ui_role"`
+	UIDisplayNote      string    `json:"ui_display_note"`
+	UIDisplayNoteZh    string    `json:"ui_display_note_zh"`
+	StandaloneDeploy   *bool     `json:"standalone_deploy,omitempty"`
+	DeploymentScenario string    `json:"deployment_scenario,omitempty"`
+	TotalParams        int64     `json:"total_params"`
+	ActiveParams       int64     `json:"active_params"`
+	Quantization       string    `json:"quantization"`
+	QuantSrc           string    `json:"quant_src"`
+	Status             string    `json:"status"`
+	DownloadProgress   float64   `json:"download_progress"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func boolPtrToNullBool(value *bool) sql.NullBool {

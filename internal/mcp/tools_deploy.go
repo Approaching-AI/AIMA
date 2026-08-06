@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jguan/aima/internal/recovery"
 )
 
 func registerDeployTools(s *Server, deps *ToolDeps) {
@@ -112,26 +114,39 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				`"config":{"type":"object","description":"Engine config overrides, e.g. {\"gpu_memory_utilization\": 0.9, \"max_model_len\": 131072, \"tensor_parallel_size\": 2}"},`+
 				`"max_cold_start_s":{"type":"integer","description":"Maximum acceptable cold start time in seconds. Engines exceeding this are excluded from auto-selection. 0 or omitted means no constraint."},`+
 				`"auto_pull":{"type":"boolean","description":"Whether to auto-download missing models/engine images. Defaults to true. Set false to fail fast if resources are not locally available."},`+
-				`"no_pull":{"type":"boolean","description":"Alias for auto_pull=false. Require all model/engine assets to already exist locally."}`,
+				`"no_pull":{"type":"boolean","description":"Alias for auto_pull=false. Require all model/engine assets to already exist locally."},`+
+				`"recovery_policy":{"type":"object","description":"Optional deployment recovery policy overrides.","properties":{`+
+				`"enabled":{"type":"boolean"},`+
+				`"check_interval_s":{"type":"integer","minimum":1,"maximum":300},`+
+				`"consecutive_failures":{"type":"integer","minimum":1,"maximum":20},`+
+				`"max_attempts":{"type":"integer","minimum":1,"maximum":20},`+
+				`"window_s":{"type":"integer","minimum":1,"maximum":86400},`+
+				`"backoff_s":{"type":"array","items":{"type":"integer","minimum":1,"maximum":3600}},`+
+				`"stable_reset_s":{"type":"integer","minimum":1,"maximum":86400}`+
+				`},"additionalProperties":false}`,
 			"model"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.DeployApply == nil {
 				return ErrorResult("deploy.apply not implemented"), nil
 			}
 			var p struct {
-				Model         string         `json:"model"`
-				Engine        string         `json:"engine"`
-				Slot          string         `json:"slot"`
-				Config        map[string]any `json:"config"`
-				MaxColdStartS int            `json:"max_cold_start_s"`
-				AutoPull      *bool          `json:"auto_pull"`
-				NoPull        bool           `json:"no_pull"`
+				Model          string               `json:"model"`
+				Engine         string               `json:"engine"`
+				Slot           string               `json:"slot"`
+				Config         map[string]any       `json:"config"`
+				MaxColdStartS  int                  `json:"max_cold_start_s"`
+				AutoPull       *bool                `json:"auto_pull"`
+				NoPull         bool                 `json:"no_pull"`
+				RecoveryPolicy recovery.PolicyPatch `json:"recovery_policy"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
 			}
 			if p.Model == "" {
 				return ErrorResult("model is required"), nil
+			}
+			if _, err := recovery.ResolvePolicy(recovery.DefaultPolicy(), p.RecoveryPolicy); err != nil {
+				return ErrorResult(fmt.Sprintf("invalid recovery_policy: %v", err)), nil
 			}
 			if p.MaxColdStartS > 0 {
 				if p.Config == nil {
@@ -140,7 +155,7 @@ func registerDeployTools(s *Server, deps *ToolDeps) {
 				p.Config["max_cold_start_s"] = p.MaxColdStartS
 			}
 			noPull := p.NoPull || (p.AutoPull != nil && !*p.AutoPull)
-			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config, noPull)
+			data, err := deps.DeployApply(ctx, p.Engine, p.Model, p.Slot, p.Config, noPull, p.RecoveryPolicy)
 			if err != nil {
 				return nil, fmt.Errorf("deploy apply %s: %w", p.Model, err)
 			}

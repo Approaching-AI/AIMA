@@ -404,9 +404,10 @@ func (r *DockerRuntime) Logs(ctx context.Context, name string, tailLines int) (s
 // --- internal types ---
 
 type dockerInspect struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	State struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	RestartCount int    `json:"RestartCount"`
+	State        struct {
 		Status     string `json:"Status"` // running, created, exited, paused, restarting
 		StartedAt  string `json:"StartedAt"`
 		ExitCode   int    `json:"ExitCode"`
@@ -616,14 +617,15 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 	name := strings.TrimPrefix(di.Name, "/")
 
 	ds := &DeploymentStatus{
-		Name:    name,
-		Image:   di.Config.Image,
-		Phase:   phase,
-		Ready:   ready,
-		Address: addr,
-		Config:  dockerLaunchConfigFromInspect(di),
-		Labels:  labels,
-		Runtime: "docker",
+		Name:     name,
+		Image:    di.Config.Image,
+		Phase:    phase,
+		Ready:    ready,
+		Address:  addr,
+		Config:   dockerLaunchConfigFromInspect(di),
+		Labels:   labels,
+		Runtime:  "docker",
+		Restarts: di.RestartCount,
 	}
 	setDeploymentStartFromString(ds, di.State.StartedAt)
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jguan/aima/internal/knowledge"
@@ -19,6 +20,11 @@ const (
 	portDialTimeout   = time.Second
 )
 
+var (
+	inFlightPortsMu sync.Mutex
+	inFlightPorts   = make(map[int]struct{})
+)
+
 func allocateDeploymentPorts(
 	ctx context.Context,
 	owner string,
@@ -26,24 +32,31 @@ func allocateDeploymentPorts(
 	req *runtime.DeployRequest,
 	provenance map[string]string,
 	deployments []*runtime.DeploymentStatus,
-) error {
+) (func(), error) {
+	noop := func() {}
 	if req == nil {
-		return nil
+		return noop, nil
 	}
 
 	bindings := requestPortBindings(req)
 	if len(bindings) == 0 {
 		applyPortLabels(runtimeName, req, nil)
-		return nil
+		return noop, nil
 	}
 
 	hostIndexes := hostPortBindingIndexes(runtimeName, req, bindings)
 	if len(hostIndexes) == 0 {
 		applyPortLabels(runtimeName, req, bindings)
-		return nil
+		return noop, nil
 	}
 
+	inFlightPortsMu.Lock()
+	defer inFlightPortsMu.Unlock()
+
 	reservedPorts := reservedHostPorts(deployments, owner)
+	for port := range inFlightPorts {
+		reservedPorts[port] = struct{}{}
+	}
 	ownerPorts := ownerHostPorts(deployments, owner)
 	selectedPorts := make(map[int]struct{}, len(hostIndexes))
 	if req.Config == nil {
@@ -65,7 +78,7 @@ func allocateDeploymentPorts(
 		}
 		port, err := chooseHostPort(binding.Port, explicit, reservedPorts, selectedPorts)
 		if err != nil {
-			return err
+			return noop, err
 		}
 		bindings[idx].Port = port
 		if binding.ConfigKey != "" {
@@ -75,7 +88,18 @@ func allocateDeploymentPorts(
 	}
 
 	applyPortLabels(runtimeName, req, bindings)
-	return nil
+	chosen := make([]int, 0, len(selectedPorts))
+	for port := range selectedPorts {
+		inFlightPorts[port] = struct{}{}
+		chosen = append(chosen, port)
+	}
+	return func() {
+		inFlightPortsMu.Lock()
+		defer inFlightPortsMu.Unlock()
+		for _, port := range chosen {
+			delete(inFlightPorts, port)
+		}
+	}, nil
 }
 
 func requestPortBindings(req *runtime.DeployRequest) []knowledge.PortBinding {

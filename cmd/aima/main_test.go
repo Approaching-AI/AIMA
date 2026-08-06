@@ -24,6 +24,7 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/recovery"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -1174,7 +1175,7 @@ func TestApplyScenarioSkipsRemainingDeploymentsAndPostDeployAfterWaitFailure(t *
 
 	deployCalls := 0
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			deployCalls++
 			if model != "model-a" {
 				t.Fatalf("unexpected DeployApply for %s", model)
@@ -1239,7 +1240,7 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			return json.RawMessage(`{"name":"model-a-engine-a"}`), nil
 		},
 		DeployStatus: func(context.Context, string) (json.RawMessage, error) {

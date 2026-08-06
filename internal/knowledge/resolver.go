@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -1789,6 +1790,12 @@ func toFloat64(v any) float64 {
 		return float64(x)
 	case int64:
 		return float64(x)
+	case json.Number:
+		value, err := x.Float64()
+		if err == nil {
+			return value
+		}
+		return 0
 	default:
 		return 0
 	}

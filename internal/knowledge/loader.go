@@ -240,6 +240,19 @@ type EngineStartup struct {
 	Warmup             WarmupConfig        `yaml:"warmup"                           json:"warmup"`
 	ExtraVolumes       []ContainerVolume   `yaml:"extra_volumes,omitempty"          json:"extra_volumes,omitempty"`
 	LogPatterns        *StartupLogPatterns `yaml:"log_patterns,omitempty"           json:"log_patterns,omitempty"`
+	Recovery           RecoveryPolicy      `yaml:"recovery,omitempty"               json:"recovery,omitempty"`
+}
+
+// RecoveryPolicy contains optional catalog values for deployment recovery.
+// Nil pointer fields allow an engine asset to inherit profile defaults.
+type RecoveryPolicy struct {
+	Enabled             *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	CheckIntervalS      *int  `yaml:"check_interval_s,omitempty" json:"check_interval_s,omitempty"`
+	ConsecutiveFailures *int  `yaml:"consecutive_failures,omitempty" json:"consecutive_failures,omitempty"`
+	MaxAttempts         *int  `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
+	WindowS             *int  `yaml:"window_s,omitempty" json:"window_s,omitempty"`
+	BackoffS            []int `yaml:"backoff_s,omitempty" json:"backoff_s,omitempty"`
+	StableResetS        *int  `yaml:"stable_reset_s,omitempty" json:"stable_reset_s,omitempty"`
 }
 
 // StartupPort describes a named listening port that should be supplied to the
@@ -857,6 +870,31 @@ func mergeStartup(dst, src *EngineStartup) {
 	if len(dst.InternalArgs) == 0 {
 		dst.InternalArgs = src.InternalArgs
 	}
+	mergeRecoveryPolicy(&dst.Recovery, &src.Recovery)
+}
+
+func mergeRecoveryPolicy(dst, src *RecoveryPolicy) {
+	if dst.Enabled == nil {
+		dst.Enabled = src.Enabled
+	}
+	if dst.CheckIntervalS == nil {
+		dst.CheckIntervalS = src.CheckIntervalS
+	}
+	if dst.ConsecutiveFailures == nil {
+		dst.ConsecutiveFailures = src.ConsecutiveFailures
+	}
+	if dst.MaxAttempts == nil {
+		dst.MaxAttempts = src.MaxAttempts
+	}
+	if dst.WindowS == nil {
+		dst.WindowS = src.WindowS
+	}
+	if len(dst.BackoffS) == 0 {
+		dst.BackoffS = append([]int(nil), src.BackoffS...)
+	}
+	if dst.StableResetS == nil {
+		dst.StableResetS = src.StableResetS
+	}
 }
 
 func mergeAmplifier(dst, src *EngineAmplifier) {
@@ -960,6 +998,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
 	dst.Startup.InternalArgs = append([]string(nil), src.Startup.InternalArgs...)
 	dst.Startup.ExtraVolumes = append([]ContainerVolume(nil), src.Startup.ExtraVolumes...)
+	dst.Startup.Recovery.BackoffS = append([]int(nil), src.Startup.Recovery.BackoffS...)
 	if src.Startup.LogPatterns != nil {
 		logPatterns := *src.Startup.LogPatterns
 		logPatterns.Phases = append([]StartupPhasePattern(nil), src.Startup.LogPatterns.Phases...)

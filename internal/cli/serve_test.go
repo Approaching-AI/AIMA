@@ -4,10 +4,87 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/proxy"
 )
+
+func TestServeBackgroundStartsOnceAndReceivesCancelledContext(t *testing.T) {
+	t.Setenv("AIMA_API_KEY", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	var calls int32
+	app := &App{
+		Proxy: proxy.NewServer(),
+		ServeBackground: func(ctx context.Context) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				close(started)
+			}
+			<-ctx.Done()
+			close(stopped)
+		},
+	}
+	cmd := newServeCmd(app)
+	cmd.SetArgs([]string{"--addr=127.0.0.1:0", "--mdns=false"})
+	done := make(chan error, 1)
+	go func() { done <- cmd.ExecuteContext(ctx) }()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve background hook did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve command: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve command did not stop after cancellation")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve background context was not cancelled")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("serve background calls = %d, want 1", got)
+	}
+}
+
+func TestServeBackgroundDoesNotStartForInvalidConfiguration(t *testing.T) {
+	t.Setenv("AIMA_API_KEY", "")
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "insecure listen", args: []string{"--addr=0.0.0.0:6188", "--mdns=false"}},
+		{name: "invalid static backend", args: []string{"--addr=127.0.0.1:0", "--mdns=false", "--backend=invalid"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls int32
+			app := &App{
+				Proxy: proxy.NewServer(),
+				ServeBackground: func(context.Context) {
+					atomic.AddInt32(&calls, 1)
+				},
+			}
+			cmd := newServeCmd(app)
+			cmd.SetArgs(tt.args)
+			if err := cmd.ExecuteContext(context.Background()); err == nil {
+				t.Fatal("serve error = nil, want validation failure")
+			}
+			if got := atomic.LoadInt32(&calls); got != 0 {
+				t.Fatalf("serve background calls = %d, want zero", got)
+			}
+		})
+	}
+}
 
 func TestIsLoopbackListenAddr(t *testing.T) {
 	tests := []struct {

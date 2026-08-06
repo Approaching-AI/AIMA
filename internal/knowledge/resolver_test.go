@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -2380,6 +2381,23 @@ func TestCheckFitTPExceedsGPUCount(t *testing.T) {
 			t.Fatalf("expected Fit=true without TP config, got Reason=%q", fit.Reason)
 		}
 	})
+}
+
+func TestCheckFitUsesPersistedJSONNumbers(t *testing.T) {
+	resolved := &ResolvedConfig{Config: map[string]any{
+		"gpu_memory_utilization": json.Number("0.95"),
+		"tensor_parallel_size":   json.Number("2"),
+	}}
+	hw := HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 16384, GPUCount: 1}
+
+	fit := CheckFit(resolved, hw)
+	if fit.Fit || !strings.Contains(fit.Reason, "tensor_parallel_size=2") {
+		t.Fatalf("persisted numeric fit = %+v, want one-GPU TP rejection", fit)
+	}
+	adjusted, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok || toFloat64(adjusted) != 0.5 {
+		t.Fatalf("persisted numeric adjustments = %+v, want gpu_memory_utilization=0.5", fit.Adjustments)
+	}
 }
 
 // TestBuildSyntheticConfig_NoVRAMLeakForEnginesWithoutDeclaredKnob is the

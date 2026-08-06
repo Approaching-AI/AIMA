@@ -27,6 +27,7 @@ import (
 	"github.com/jguan/aima/internal/onboarding"
 	"github.com/jguan/aima/internal/openclaw"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/recovery"
 	"github.com/jguan/aima/internal/runtime"
 	"github.com/jguan/aima/internal/support"
 	"github.com/jguan/aima/internal/ui"
@@ -245,7 +246,7 @@ func run() error {
 			if modelName == "" {
 				return nil, fmt.Errorf("snapshot missing model label, cannot redeploy")
 			}
-			result, err := deps.DeployApply(ctx, engineType, modelName, "", nil, false)
+			result, err := deps.DeployApply(ctx, engineType, modelName, "", nil, false, recovery.PolicyPatch{})
 			if err != nil {
 				return nil, fmt.Errorf("redeploy %s: %w", modelName, err)
 			}
@@ -947,6 +948,12 @@ func run() error {
 		Support:       supportSvc,
 		LLMClient:     llmClient,
 		OpenBrowser:   defaultRootArgs(os.Args) != nil,
+		ServeBackground: recovery.NewController(
+			db,
+			deps.RecoveryObserve,
+			deps.RecoveryApply,
+			deps.RecoveryDelete,
+		).Start,
 	}
 
 	rootCmd := cli.NewRootCmd(app)
@@ -1531,7 +1538,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 
 		// Step 4: Deploy
 		notify("deploying", model)
-		deployData, err := deps.DeployApply(ctx, engineType, model, slot, configOverrides, noPull)
+		deployData, err := deps.DeployApply(ctx, engineType, model, slot, configOverrides, noPull, recovery.PolicyPatch{})
 		if err != nil {
 			return nil, fmt.Errorf("deploy: %w", err)
 		}

@@ -36,22 +36,23 @@ type deploymentMeta struct {
 
 // nativeProcess tracks a running inference engine process started in THIS CLI session.
 type nativeProcess struct {
-	name           string
-	cmd            *exec.Cmd // nil when launched via schtasks on Windows
-	pid            int       // Process ID; set even when cmd is nil
-	processGroupID int
-	cancel         context.CancelFunc
-	done           chan struct{}
-	logFile        *os.File
-	logPath        string
-	port           int
-	labels         map[string]string
-	startTime      time.Time
-	startupTimeout time.Duration
-	ready          bool
-	exited         bool
-	exitSuccess    bool // true if process exited with code 0
-	mu             sync.Mutex
+	name            string
+	cmd             *exec.Cmd // nil when launched via schtasks on Windows
+	pid             int       // Process ID; set even when cmd is nil
+	processGroupID  int
+	cancel          context.CancelFunc
+	done            chan struct{}
+	logFile         *os.File
+	logPath         string
+	port            int
+	healthCheckPath string
+	labels          map[string]string
+	startTime       time.Time
+	startupTimeout  time.Duration
+	ready           bool
+	exited          bool
+	exitSuccess     bool // true if process exited with code 0
+	mu              sync.Mutex
 }
 
 // BinaryResolveFunc resolves a native engine binary, downloading if needed.
@@ -267,19 +268,24 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	}
 
 	now := time.Now()
+	healthCheckPath := ""
+	if req.HealthCheck != nil {
+		healthCheckPath = req.HealthCheck.Path
+	}
 	proc := &nativeProcess{
-		name:           req.Name,
-		cmd:            cmd,
-		pid:            procPID,
-		processGroupID: procGroupID,
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		logFile:        procLogFile,
-		logPath:        logPath,
-		port:           primaryPort,
-		labels:         req.Labels,
-		startTime:      now,
-		startupTimeout: effectiveHealthTimeout(req.HealthCheck),
+		name:            req.Name,
+		cmd:             cmd,
+		pid:             procPID,
+		processGroupID:  procGroupID,
+		cancel:          cancel,
+		done:            make(chan struct{}),
+		logFile:         procLogFile,
+		logPath:         logPath,
+		port:            primaryPort,
+		healthCheckPath: healthCheckPath,
+		labels:          req.Labels,
+		startTime:       now,
+		startupTimeout:  effectiveHealthTimeout(req.HealthCheck),
 	}
 
 	r.mu.Lock()
@@ -471,14 +477,22 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 		return status
 	}
 
-	persisted := r.metaToStatus(meta)
 	proc.mu.Lock()
 	exited := proc.exited
+	trackedPID := proc.pid
+	trackedCommand := proc.cmd
 	proc.mu.Unlock()
+	persistedAuthoritative := !exited && trackedPID <= 0 && trackedCommand == nil && meta.PID > 0
+	if !exited && !persistedAuthoritative {
+		if len(status.Config) == 0 && len(meta.Config) > 0 {
+			status.Config = cloneConfigForStatus(meta.Config)
+		}
+		return status
+	}
+
+	persisted := r.metaToStatus(meta)
 	switch {
 	case persisted.Phase == "failed" && status.Phase != "failed" && !(isStalePortReuseFailure(persisted.Message) && !exited):
-		return persisted
-	case persisted.Ready && !status.Ready:
 		return persisted
 	}
 
@@ -596,7 +610,7 @@ func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
 	}
 }
 
-func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthCheckConfig, warmup *WarmupConfig) {
+func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthCheckConfig, warmup *WarmupConfig) error {
 	timeout := effectiveHealthTimeout(hc)
 	deadline := time.Now().Add(timeout)
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", proc.port, hc.Path)
@@ -618,7 +632,7 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 		proc.mu.Unlock()
 		if exited {
 			slog.Warn("health check aborted: process already exited", "name", proc.name)
-			return
+			return fmt.Errorf("health check aborted: process exited")
 		}
 
 		resp, err := hcClient.Get(url)
@@ -633,16 +647,21 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 					continue
 				}
 				proc.mu.Lock()
+				if proc.exited {
+					proc.mu.Unlock()
+					return fmt.Errorf("health check aborted: process exited")
+				}
 				proc.ready = true
 				proc.mu.Unlock()
 				slog.Info("native deployment ready", "name", proc.name)
-				return
+				return nil
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
 
 	slog.Warn("health check timeout", "name", proc.name, "url", url)
+	return fmt.Errorf("health check timed out before deployment became ready")
 }
 
 // warmup sends a dummy inference request to force model weight loading and CUDA kernel compilation.
@@ -686,9 +705,29 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 	ready := proc.ready
 	exited := proc.exited
 	exitSuccess := proc.exitSuccess
+	healthCheckPath := proc.healthCheckPath
+	port := proc.port
+	startTime := proc.startTime
+	startupTimeout := proc.startupTimeout
 	proc.mu.Unlock()
+	healthRegressed := false
+	if !exited && ready && healthCheckPath != "" {
+		ready = httpHealthy(port, healthCheckPath)
+		healthRegressed = !ready
+	}
 
-	portBound := proc.port > 0 && portAlive(proc.port)
+	portBound := port > 0 && portAlive(port)
+	if startupTimeout <= 0 {
+		startupTimeout = 60 * time.Second
+	}
+	healthTimedOut := !exited && !ready && healthCheckPath != "" && !startTime.IsZero() && time.Since(startTime) >= startupTimeout
+	proc.mu.Lock()
+	if proc.exited {
+		exited = true
+		exitSuccess = proc.exitSuccess
+		ready = false
+	}
+	proc.mu.Unlock()
 
 	phase := "running"
 	if exited {
@@ -698,6 +737,8 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 			phase = "failed"
 		}
 		ready = false
+	} else if healthRegressed || healthTimedOut {
+		phase = "failed"
 	} else if !ready {
 		phase = "starting"
 	}
@@ -706,9 +747,15 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 		Name:    proc.name,
 		Phase:   phase,
 		Ready:   ready,
-		Address: fmt.Sprintf("127.0.0.1:%d", proc.port),
+		Address: fmt.Sprintf("127.0.0.1:%d", port),
 		Labels:  proc.labels,
 		Runtime: "native",
+	}
+	if healthRegressed {
+		ds.Message = "health check failed after deployment became ready"
+	} else if healthTimedOut {
+		ds.Message = "health check timed out before deployment became ready"
+		ds.Stalled = true
 	}
 	setDeploymentStartFromTime(ds, proc.startTime)
 
@@ -733,6 +780,22 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
 	processMatches := meta.PID <= 0 || processMatchesMeta(meta)
+	healthCheckPath := meta.HealthCheckPath
+	if healthCheckPath == "" {
+		engineName := ""
+		if meta.Labels != nil {
+			engineName = meta.Labels["aima.dev/engine"]
+		}
+		if asset := findEngineAsset(r.engineAssets, engineName); asset != nil {
+			healthCheckPath = asset.Startup.HealthCheck.Path
+		}
+	}
+	timeout := meta.HealthCheckTimeout
+	if timeout <= 0 {
+		timeout = 60
+	}
+	healthTimedOut := processMatches && healthCheckPath != "" && !meta.StartTime.IsZero() &&
+		time.Since(meta.StartTime) >= time.Duration(timeout)*time.Second
 
 	phase := "running"
 	ready := false
@@ -741,27 +804,20 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 		ready = false
 	} else if alive {
 		// Port is alive (TCP), but check HTTP health to confirm engine is truly ready.
-		// Look up engine asset for the health check path.
-		engineName := ""
-		if meta.Labels != nil {
-			engineName = meta.Labels["aima.dev/engine"]
-		}
-		if meta.HealthCheckPath != "" {
-			ready = httpHealthy(meta.Port, meta.HealthCheckPath)
-		} else if asset := findEngineAsset(r.engineAssets, engineName); asset != nil && asset.Startup.HealthCheck.Path != "" {
-			ready = httpHealthy(meta.Port, asset.Startup.HealthCheck.Path)
+		if healthCheckPath != "" {
+			ready = httpHealthy(meta.Port, healthCheckPath)
 		} else {
 			// No health check info available; fall back to TCP alive.
 			ready = true
 		}
 		if !ready {
-			phase = "starting"
+			if healthTimedOut {
+				phase = "failed"
+			} else {
+				phase = "starting"
+			}
 		}
 	} else {
-		timeout := meta.HealthCheckTimeout
-		if timeout == 0 {
-			timeout = 60
-		}
 		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
 			phase = "starting"
 		} else {
@@ -798,6 +854,13 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 			ds.Message = "deployment metadata is stale; port is in use by another process"
 		} else {
 			ds.Message = "process exited before readiness"
+		}
+	}
+	if healthTimedOut && !ds.Ready {
+		ds.Phase = "failed"
+		ds.Stalled = true
+		if ds.Message == "" {
+			ds.Message = "health check timed out before deployment became ready"
 		}
 	}
 

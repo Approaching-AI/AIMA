@@ -36,13 +36,14 @@ func DefaultPatrolConfig() PatrolConfig {
 
 // Alert is a structured patrol alert.
 type Alert struct {
-	ID         string     `json:"id"`
-	Severity   string     `json:"severity"` // "info", "warning", "critical"
-	Type       string     `json:"type"`     // "gpu_temp", "gpu_idle", "deploy_crash", "vram_opportunity", "power_throttle"
-	Message    string     `json:"message"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
-	Resolved   bool       `json:"resolved"`
+	ID          string     `json:"id"`
+	Severity    string     `json:"severity"` // "info", "warning", "critical"
+	Type        string     `json:"type"`     // "gpu_temp", "gpu_idle", "deploy_crash", "vram_opportunity", "power_throttle"
+	Message     string     `json:"message"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
+	Resolved    bool       `json:"resolved"`
+	quarantined bool
 }
 
 // PatrolStatus describes the patrol loop state.
@@ -194,11 +195,20 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 	deployAlerts := p.checkDeployments(ctx)
 	newAlerts = append(newAlerts, deployAlerts...)
 
-	// 3. Persist and track
+	// 3. Track new alerts. Quarantine alerts have a stable identity and remain
+	// singular while unresolved, even if deploy.list reports them repeatedly.
 	p.mu.Lock()
-	p.alerts = append(p.alerts, newAlerts...)
+	trackedAlerts := make([]Alert, 0, len(newAlerts))
+	for _, alert := range newAlerts {
+		if alert.quarantined && p.hasUnresolvedAlertLocked(alert.ID) {
+			continue
+		}
+		p.alerts = append(p.alerts, alert)
+		trackedAlerts = append(trackedAlerts, alert)
+	}
 	p.lastRun = now
 	p.mu.Unlock()
+	newAlerts = trackedAlerts
 
 	if p.persist != nil {
 		for _, alert := range newAlerts {
@@ -213,10 +223,9 @@ func (p *Patrol) RunOnce(ctx context.Context) []Alert {
 		p.emitEvent(alert)
 	}
 
-	// Automated response to alerts
-	if config.SelfHealEnabled {
-		p.reactToAlerts(ctx, newAlerts)
-	}
+	// Quarantine notifications are operator-facing and remain enabled even when
+	// automatic healing is disabled. Other reactions retain the existing gate.
+	p.reactToAlerts(ctx, newAlerts, config.SelfHealEnabled)
 
 	return newAlerts
 }
@@ -280,9 +289,11 @@ func (p *Patrol) checkDeployments(ctx context.Context) []Alert {
 	}
 
 	var deploys []struct {
-		Name   string `json:"name"`
-		Phase  string `json:"phase"`
-		Status string `json:"status"`
+		Name             string `json:"name"`
+		Phase            string `json:"phase"`
+		Status           string `json:"status"`
+		RecoveryState    string `json:"recovery_state"`
+		QuarantineReason string `json:"quarantine_reason"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &deploys); err != nil {
 		return nil
@@ -290,6 +301,10 @@ func (p *Patrol) checkDeployments(ctx context.Context) []Alert {
 
 	var alerts []Alert
 	for _, d := range deploys {
+		if strings.EqualFold(strings.TrimSpace(d.RecoveryState), "quarantined") {
+			alerts = append(alerts, makeQuarantineAlert(d.Name, d.QuarantineReason))
+			continue
+		}
 		phase := d.Phase
 		if phase == "" {
 			phase = d.Status
@@ -301,6 +316,24 @@ func (p *Patrol) checkDeployments(ctx context.Context) []Alert {
 		}
 	}
 	return alerts
+}
+
+func makeQuarantineAlert(name, reason string) Alert {
+	name = strings.TrimSpace(name)
+	reason = strings.TrimSpace(reason)
+	message := fmt.Sprintf("Deployment %s is quarantined", name)
+	if reason != "" {
+		message += ": " + reason
+	}
+	h := sha256.Sum256([]byte("deploy_crash:" + name + ":quarantined"))
+	return Alert{
+		ID:          hex.EncodeToString(h[:8]),
+		Severity:    "critical",
+		Type:        "deploy_crash",
+		Message:     message,
+		CreatedAt:   time.Now(),
+		quarantined: true,
+	}
 }
 
 func makeAlert(severity, typ, message string) Alert {
@@ -451,7 +484,7 @@ func (p *Patrol) RecentActions(limit int) []PatrolAction {
 }
 
 func (p *Patrol) emitEvent(alert Alert) {
-	if p.eventBus == nil {
+	if p.eventBus == nil || alert.quarantined {
 		return
 	}
 	var eventType string
@@ -485,15 +518,28 @@ func isOOMCrash(msg string) bool {
 		strings.Contains(lower, " oom:")
 }
 
-func (p *Patrol) reactToAlerts(ctx context.Context, alerts []Alert) {
+func (p *Patrol) reactToAlerts(ctx context.Context, alerts []Alert, selfHealEnabled bool) {
 	for _, alert := range alerts {
 		switch {
+		case alert.quarantined:
+			p.recordAction(ctx, alert.ID, "notify", "deployment recovery is quarantined; operator action required", true)
+		case !selfHealEnabled:
+			continue
 		case alert.Type == "deploy_crash" && alert.Severity == "critical":
 			p.handleCrash(ctx, alert)
 		case alert.Type == "gpu_temp" && alert.Severity == "warning":
 			p.handleOverheat(ctx, alert)
 		}
 	}
+}
+
+func (p *Patrol) hasUnresolvedAlertLocked(id string) bool {
+	for i := range p.alerts {
+		if p.alerts[i].ID == id && !p.alerts[i].Resolved {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Patrol) handleCrash(ctx context.Context, alert Alert) {

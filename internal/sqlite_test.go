@@ -2,12 +2,16 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jguan/aima/internal/recovery"
 )
 
 func mustOpen(t *testing.T) *DB {
@@ -24,6 +28,468 @@ func TestOpenClose(t *testing.T) {
 	db := mustOpen(t)
 	if db == nil {
 		t.Fatal("expected non-nil DB")
+	}
+}
+
+func TestMigrateV20CreatesDeploymentIntents(t *testing.T) {
+	db := mustOpen(t)
+
+	var version int
+	if err := db.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version < 20 {
+		t.Fatalf("user_version=%d want at least 20", version)
+	}
+	for _, col := range []string{
+		"name", "model", "engine_asset", "engine_version", "slot", "runtime", "revision",
+		"config_json", "desired_state", "recovery_state", "recovery_policy_json",
+		"attempt_count", "consecutive_failure_count", "observed_restart_count",
+		"window_started_at", "next_attempt_at", "healthy_since", "last_exit_code", "last_error",
+		"created_at", "updated_at",
+	} {
+		var count int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('deployment_intents') WHERE name = ?`, col).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("missing %s", col)
+		}
+	}
+	for _, index := range []struct {
+		name    string
+		columns []string
+	}{
+		{"idx_deployment_intents_desired_recovery", []string{"desired_state", "recovery_state"}},
+		{"idx_deployment_intents_next_attempt_at", []string{"next_attempt_at"}},
+	} {
+		rows, err := db.db.Query(`SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno`, index.name)
+		if err != nil {
+			t.Fatalf("index info for %s: %v", index.name, err)
+		}
+		var columns []string
+		for rows.Next() {
+			var seq int
+			var name string
+			if err := rows.Scan(&seq, &name); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			columns = append(columns, name)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		rows.Close()
+		if !reflect.DeepEqual(columns, index.columns) {
+			t.Errorf("index %s columns = %v, want %v", index.name, columns, index.columns)
+		}
+	}
+}
+
+func TestDeploymentIntentRoundTripsSanitizedConfig(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	exitCode := 17
+	intent := &recovery.Intent{
+		Name:                    "intent-1",
+		Model:                   "model-1",
+		EngineAsset:             "engine-1",
+		EngineVersion:           "1.2.3",
+		Slot:                    "slot-a",
+		Runtime:                 "native",
+		Revision:                4,
+		Config:                  map[string]any{"ctx_size": 8192, "api_key": "secret", "nested": map[string]any{"token": "nested-secret"}},
+		DesiredState:            recovery.DesiredRunning,
+		RecoveryState:           recovery.StateWaiting,
+		Policy:                  recovery.DefaultPolicy(),
+		AttemptCount:            2,
+		ConsecutiveFailureCount: 1,
+		ObservedRestartCount:    3,
+		WindowStartedAt:         time.Date(2026, 7, 30, 8, 9, 10, 123456789, time.FixedZone("UTC+8", 8*60*60)),
+		NextAttemptAt:           time.Date(2026, 7, 30, 0, 10, 11, 0, time.UTC),
+		HealthySince:            time.Date(2026, 7, 29, 23, 0, 0, 0, time.UTC),
+		LastExitCode:            &exitCode,
+		LastError:               "startup failed",
+		CreatedAt:               time.Date(2026, 7, 29, 22, 0, 0, 0, time.UTC),
+		UpdatedAt:               time.Date(2026, 7, 29, 22, 1, 0, 0, time.UTC),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatalf("UpsertDeploymentIntent: %v", err)
+	}
+
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatalf("GetDeploymentIntent: %v", err)
+	}
+	if got.Name != intent.Name || got.Model != intent.Model || got.EngineAsset != intent.EngineAsset || got.EngineVersion != intent.EngineVersion || got.Slot != intent.Slot || got.Runtime != intent.Runtime || got.Revision != intent.Revision {
+		t.Fatalf("identity fields = %#v", got)
+	}
+	if got.DesiredState != recovery.DesiredRunning || got.RecoveryState != recovery.StateWaiting || got.AttemptCount != 2 || got.ConsecutiveFailureCount != 1 || got.ObservedRestartCount != 3 || got.LastError != "startup failed" {
+		t.Fatalf("recovery fields = %#v", got)
+	}
+	if got.LastExitCode == nil || *got.LastExitCode != exitCode {
+		t.Fatalf("LastExitCode = %v, want %d", got.LastExitCode, exitCode)
+	}
+	if !reflect.DeepEqual(got.Policy, intent.Policy) {
+		t.Fatalf("Policy = %#v, want %#v", got.Policy, intent.Policy)
+	}
+	if !got.WindowStartedAt.Equal(intent.WindowStartedAt.UTC()) || !got.NextAttemptAt.Equal(intent.NextAttemptAt.UTC()) || !got.HealthySince.Equal(intent.HealthySince.UTC()) || !got.CreatedAt.Equal(intent.CreatedAt.UTC()) || !got.UpdatedAt.Equal(intent.UpdatedAt.UTC()) {
+		t.Fatalf("timestamps = %#v", got)
+	}
+	ctxSize, ok := got.Config["ctx_size"].(json.Number)
+	if !ok || ctxSize.String() != "8192" || got.Config["api_key"] != "[REDACTED]" {
+		t.Fatalf("Config = %#v", got.Config)
+	}
+	nested, ok := got.Config["nested"].(map[string]any)
+	if !ok || nested["token"] != "[REDACTED]" {
+		t.Fatalf("nested config = %#v", got.Config["nested"])
+	}
+
+	var configJSON string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&configJSON); err != nil {
+		t.Fatalf("select stored config: %v", err)
+	}
+	if strings.Contains(configJSON, "secret") {
+		t.Fatalf("stored config leaks a secret: %s", configJSON)
+	}
+}
+
+func TestDeploymentIntentRoundTripPreservesLargeIntegerJSONToken(t *testing.T) {
+	const want = "9007199254740993"
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{
+		Name:          "intent-large-integer",
+		Config:        map[string]any{"large_integer": uint64(9007199254740993)},
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	var configJSON string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&configJSON); err != nil {
+		t.Fatal(err)
+	}
+	if configJSON != `{"large_integer":9007199254740993}` {
+		t.Fatalf("stored config JSON = %s", configJSON)
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	number, ok := got.Config["large_integer"].(json.Number)
+	if !ok || number.String() != want {
+		t.Fatalf("retrieved large integer = %#v", got.Config["large_integer"])
+	}
+}
+
+func TestDeploymentIntentCASRejectsStaleRevision(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{Name: "intent-cas", Revision: 1, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intent.RecoveryState = recovery.StateWaiting
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("stale revision updated row")
+	}
+
+	ok, err = db.CompareAndSwapDeploymentIntent(ctx, intent, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current revision did not update row")
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 2 || got.RecoveryState != recovery.StateWaiting {
+		t.Fatalf("CAS result = %#v", got)
+	}
+}
+
+func TestDeploymentIntentCASUsesFreshAuditTimeAndDoesNotMutateStaleCaller(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	initialUpdatedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	intent := &recovery.Intent{
+		Name:          "intent-cas-audit",
+		Revision:      1,
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+		UpdatedAt:     initialUpdatedAt,
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	caller, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller.RecoveryState = recovery.StateWaiting
+	staleBefore := *caller
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, caller, 99)
+	if err != nil || ok {
+		t.Fatalf("stale CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	if !reflect.DeepEqual(*caller, staleBefore) {
+		t.Fatalf("stale CAS mutated caller: %#v", caller)
+	}
+
+	ok, err = db.CompareAndSwapDeploymentIntent(ctx, caller, 1)
+	if err != nil || !ok {
+		t.Fatalf("current CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	if !caller.UpdatedAt.After(initialUpdatedAt) || caller.Revision != 2 {
+		t.Fatalf("successful CAS caller = %#v", caller)
+	}
+	stored, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.UpdatedAt.After(initialUpdatedAt) || !stored.UpdatedAt.Equal(caller.UpdatedAt) {
+		t.Fatalf("stored updated_at = %v, caller = %v", stored.UpdatedAt, caller.UpdatedAt)
+	}
+}
+
+func TestDeploymentIntentPersistenceRedactsConfigAndLastErrorWithoutMutatingCaller(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	typedMap := map[string]string{"openai_api_key": "upsert-key-secret"}
+	typedSlice := []map[string]string{{"github_token": "upsert-token-secret"}}
+	intent := &recovery.Intent{
+		Name:          "intent-redaction",
+		Revision:      1,
+		Config:        map[string]any{"typed_map": typedMap, "typed_slice": typedSlice},
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+		LastError:     "api_key=upsert-error-secret; Authorization: Bearer upsert-bearer-secret",
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if typedMap["openai_api_key"] != "upsert-key-secret" || typedSlice[0]["github_token"] != "upsert-token-secret" || strings.Contains(intent.LastError, "[REDACTED]") {
+		t.Fatalf("persistence mutated caller: %#v", intent)
+	}
+
+	assertStoredIntentSecretsRedacted(t, db, ctx, intent.Name, []string{"upsert-key-secret", "upsert-token-secret", "upsert-error-secret", "upsert-bearer-secret"})
+	intent, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Config = map[string]any{"service_token": "cas-token-secret"}
+	intent.LastError = "password: cas-password-secret; bearer cas-bearer-secret"
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 1)
+	if err != nil || !ok {
+		t.Fatalf("CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	assertStoredIntentSecretsRedacted(t, db, ctx, intent.Name, []string{"cas-token-secret", "cas-password-secret", "cas-bearer-secret"})
+}
+
+func TestDeploymentIntentReadReportsMalformedJSONAndTimestamps(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{Name: "intent-invalid-read", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode config JSON") {
+		t.Fatalf("GetDeploymentIntent malformed config error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{}', recovery_policy_json = '{' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode recovery policy JSON") {
+		t.Fatalf("GetDeploymentIntent malformed recovery policy error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{} {}', recovery_policy_json = '{"enabled":true}' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode config JSON") {
+		t.Fatalf("GetDeploymentIntent trailing config error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{}', updated_at = 'not-a-timestamp' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode updated_at") {
+		t.Fatalf("GetDeploymentIntent malformed timestamp error = %v", err)
+	}
+}
+
+func TestDeploymentIntentPersistenceRejectsUnsupportedConfigValues(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	unsupported := make(chan int)
+	intent := &recovery.Intent{Name: "intent-invalid-write", Config: map[string]any{"unsupported": unsupported}, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+		t.Fatalf("UpsertDeploymentIntent unsupported config error = %v", err)
+	}
+	intent.Config = nil
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intent.Config = map[string]any{"unsupported": unsupported}
+	if ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 0); ok || err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+		t.Fatalf("CompareAndSwapDeploymentIntent unsupported config = (%v, %v)", ok, err)
+	}
+}
+
+func TestDeploymentIntentPersistenceRejectsCyclicConfigWithoutPartialRow(t *testing.T) {
+	type recursiveConfig struct {
+		Next *recursiveConfig `json:"next"`
+	}
+	mapCycle := map[string]any{}
+	mapCycle["self"] = mapCycle
+	pointerCycle := &recursiveConfig{}
+	pointerCycle.Next = pointerCycle
+
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, test := range []struct {
+		name   string
+		config map[string]any
+	}{
+		{"map", map[string]any{"cycle": mapCycle}},
+		{"pointer", map[string]any{"cycle": pointerCycle}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			intent := &recovery.Intent{Name: "intent-cycle-" + test.name, Config: test.config, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+			if err := db.UpsertDeploymentIntent(ctx, intent); err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+				t.Fatalf("UpsertDeploymentIntent cycle error = %v", err)
+			}
+			var count int
+			if err := db.RawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("partial row count = %d", count)
+			}
+		})
+	}
+}
+
+func assertStoredIntentSecretsRedacted(t *testing.T, db *DB, ctx context.Context, name string, secrets []string) {
+	t.Helper()
+	var configJSON, lastError string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json, last_error FROM deployment_intents WHERE name = ?`, name).Scan(&configJSON, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(configJSON, secret) || strings.Contains(lastError, secret) {
+			t.Fatalf("stored intent leaks %q: config=%q last_error=%q", secret, configJSON, lastError)
+		}
+	}
+}
+
+func TestListRunnableDeploymentIntentsIncludesPendingQuarantineEnforcement(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, intent := range []*recovery.Intent{
+		{Name: "healthy", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+		{Name: "waiting", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateWaiting, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantine-enforced", Runtime: "docker", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantine-pending", Runtime: "docker", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy(), NextAttemptAt: time.Now().UTC()},
+		{Name: "native-quarantine", Runtime: "native", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy(), NextAttemptAt: time.Now().UTC()},
+		{Name: "stopped", DesiredState: recovery.DesiredStopped, RecoveryState: recovery.StateWaiting, Policy: recovery.DefaultPolicy()},
+	} {
+		if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+			t.Fatalf("UpsertDeploymentIntent(%s): %v", intent.Name, err)
+		}
+	}
+
+	got, err := db.ListRunnableDeploymentIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListRunnableDeploymentIntents: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, intent := range got {
+		names = append(names, intent.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"healthy", "quarantine-pending", "waiting"}) {
+		t.Fatalf("runnable intent names = %v", names)
+	}
+}
+
+func TestListDeploymentIntentsIncludesStoppedAndQuarantined(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, intent := range []*recovery.Intent{
+		{Name: "healthy", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantined", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy()},
+		{Name: "stopped", DesiredState: recovery.DesiredStopped, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+	} {
+		if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+			t.Fatalf("UpsertDeploymentIntent(%s): %v", intent.Name, err)
+		}
+	}
+
+	got, err := db.ListDeploymentIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListDeploymentIntents: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, intent := range got {
+		names = append(names, intent.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"healthy", "quarantined", "stopped"}) {
+		t.Fatalf("intent names = %v", names)
+	}
+}
+
+func TestStopDeploymentIntentStopsAndClearsScheduledAttempt(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{
+		Name:          "intent-stop",
+		Revision:      5,
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateWaiting,
+		Policy:        recovery.DefaultPolicy(),
+		NextAttemptAt: time.Now().UTC().Add(time.Minute),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StopDeploymentIntent(ctx, intent.Name); err != nil {
+		t.Fatalf("StopDeploymentIntent: %v", err)
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DesiredState != recovery.DesiredStopped || !got.NextAttemptAt.IsZero() || got.Revision != 6 {
+		t.Fatalf("stopped intent = %#v", got)
+	}
+}
+
+func TestIntentConfigRedactsSensitiveKeys(t *testing.T) {
+	got := recovery.SanitizeConfig(map[string]any{
+		"ctx_size": 8192,
+		"api_key":  "secret",
+		"nested":   map[string]any{"token": "x"},
+	})
+	if got["ctx_size"] != 8192 || got["api_key"] != "[REDACTED]" {
+		t.Fatalf("got %#v", got)
+	}
+	nested, ok := got["nested"].(map[string]any)
+	if !ok || nested["token"] != "[REDACTED]" {
+		t.Fatalf("nested config = %#v", got["nested"])
 	}
 }
 
@@ -622,6 +1088,52 @@ func TestAuditLog(t *testing.T) {
 
 	if err := db.LogAction(ctx, entry); err != nil {
 		t.Fatalf("LogAction: %v", err)
+	}
+}
+
+func TestRecoveryAuditLog(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	event := recovery.AuditEvent{
+		Type:          recovery.AuditRecoveryFailed,
+		Source:        recovery.AuditSourceReconciler,
+		Deployment:    "generic-deployment",
+		Model:         "generic-model",
+		Runtime:       "native",
+		EngineAsset:   "generic-engine",
+		EngineVersion: "1.2.3",
+		Result:        recovery.AuditResultFailed,
+		Reason:        "launch failed token=secret-value",
+		RecoveryState: recovery.StateWaiting,
+		AttemptCount:  2,
+		Revision:      7,
+		NextAttemptAt: time.Unix(20_000, 0).UTC().Format(time.RFC3339),
+	}
+
+	if err := db.LogRecoveryEvent(ctx, event); err != nil {
+		t.Fatalf("LogRecoveryEvent: %v", err)
+	}
+	var agentType, toolName, arguments, resultSummary string
+	if err := db.db.QueryRowContext(ctx, `
+SELECT agent_type, tool_name, arguments, result_summary
+FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&agentType, &toolName, &arguments, &resultSummary); err != nil {
+		t.Fatalf("query recovery audit: %v", err)
+	}
+	if agentType != recovery.AuditSourceReconciler || toolName != "deployment.recovery."+recovery.AuditRecoveryFailed {
+		t.Fatalf("audit identity = %q/%q", agentType, toolName)
+	}
+	if strings.Contains(arguments, "secret-value") || strings.Contains(resultSummary, "secret-value") {
+		t.Fatalf("audit leaked credential: arguments=%q result=%q", arguments, resultSummary)
+	}
+	var stored recovery.AuditEvent
+	if err := json.Unmarshal([]byte(arguments), &stored); err != nil {
+		t.Fatalf("decode recovery audit arguments: %v", err)
+	}
+	if stored.Deployment != event.Deployment || stored.EngineVersion != event.EngineVersion || stored.Reason != "launch failed token=[REDACTED]" {
+		t.Fatalf("stored recovery audit = %+v", stored)
+	}
+	if !strings.Contains(resultSummary, recovery.AuditResultFailed) || !strings.Contains(resultSummary, "[REDACTED]") {
+		t.Fatalf("result summary = %q, want failed and redacted reason", resultSummary)
 	}
 }
 

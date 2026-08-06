@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,21 @@ func TestResolvePortBindingsLegacy(t *testing.T) {
 	}
 	if !bindings[0].Primary {
 		t.Fatal("legacy binding should be primary")
+	}
+}
+
+func TestResolvePortBindingsLegacyPersistedJSONNumber(t *testing.T) {
+	bindings := ResolvePortBindings(EngineStartup{}, map[string]any{"port": json.Number("8080")})
+	if len(bindings) != 1 {
+		t.Fatalf("len(bindings) = %d, want 1", len(bindings))
+	}
+	if bindings[0].Port != 8080 {
+		t.Fatalf("port = %d, want 8080", bindings[0].Port)
+	}
+
+	command := AppendPortBindings([]string{"llama-server"}, bindings)
+	if got := strings.Join(command, " "); !strings.Contains(got, "--port 8080") {
+		t.Fatalf("command = %q, missing persisted port flag", got)
 	}
 }
 

@@ -78,6 +78,24 @@ func TestFormatConfigFlag(t *testing.T) {
 		}
 	})
 
+	t.Run("integral JSON numbers stay in decimal notation", func(t *testing.T) {
+		cases := []struct {
+			value any
+			want  string
+		}{
+			{float64(1048576), "1048576"},
+			{float32(1048576), "1048576"},
+			{json.Number("1048576"), "1048576"},
+			{float64(0.835), "0.835"},
+		}
+		for _, tc := range cases {
+			got := FormatConfigFlag("max_model_len", tc.value)
+			if len(got) != 2 || got[1] != tc.want {
+				t.Fatalf("value=%v: got %v, want decimal value %q", tc.value, got, tc.want)
+			}
+		}
+	})
+
 	t.Run("underscore keys become hyphenated flags", func(t *testing.T) {
 		got := FormatConfigFlag("mem_fraction_static", 0.7)
 		if got[0] != "--mem-fraction-static" {

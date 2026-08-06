@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -14,6 +15,7 @@ import (
 var podTemplate = template.Must(template.New("pod").Funcs(template.FuncMap{
 	"deviceVolName":     deviceVolName,
 	"containerPortName": containerPortName,
+	"yamlQuote":         strconv.Quote,
 }).Parse(`apiVersion: v1
 kind: Pod
 metadata:
@@ -35,6 +37,10 @@ metadata:
 spec:
   schedulerName: default-scheduler
   restartPolicy: Always
+  {{- if .HostNetwork }}
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  {{- end }}
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
   {{- end }}
@@ -54,7 +60,7 @@ spec:
       {{- if .Args }}
       command:
         {{- range .Args }}
-        - "{{ . }}"
+        - {{ yamlQuote . }}
         {{- end }}
       {{- end }}
       {{- if .Ports }}
@@ -68,7 +74,7 @@ spec:
       env:
         {{- range $k, $v := .ExtraEnv }}
         - name: {{ $k }}
-          value: "{{ $v }}"
+          value: {{ yamlQuote $v }}
         {{- end }}
       {{- end }}
       {{- if .HasContainerSecurity }}
@@ -187,6 +193,7 @@ type podData struct {
 	Devices                 []string           // device paths to mount, e.g. ["/dev/kfd", "/dev/dri"]
 	ExtraVolumes            []ContainerVolume  // additional host mounts
 	Security                *ContainerSecurity // pod-level securityContext
+	HostNetwork             bool
 }
 
 func (d podData) HasAnnotations() bool {
@@ -364,6 +371,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.Devices = resolved.Container.Devices
 		data.ExtraVolumes = resolved.Container.Volumes
 		data.Security = resolved.Container.Security
+		data.HostNetwork = resolved.Container.NetworkMode == "host"
 	}
 
 	// Merge engine extra_volumes (e.g. patch scripts) into pod volumes.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -109,6 +110,16 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	// --shm-size
 	if req.Container != nil && req.Container.ShmSize != "" {
 		args = append(args, "--shm-size", req.Container.ShmSize)
+	}
+	if req.Container != nil {
+		keys := make([]string, 0, len(req.Container.Ulimits))
+		for key := range req.Container.Ulimits {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			args = append(args, "--ulimit", key+"="+req.Container.Ulimits[key])
+		}
 	}
 
 	// Port publish (skip when using host network)

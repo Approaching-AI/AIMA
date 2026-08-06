@@ -256,7 +256,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
 	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
 	resolved.CPUArch = hw.CPUArch
-	resolved.Container = c.findContainerAccess(hw)
+	resolved.Container = mergeContainerAccess(c.findContainerAccess(hw), engine.Container)
 
 	// Set runtime recommendation from engine's platform_recommendations
 	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {
@@ -772,6 +772,68 @@ func (c *Catalog) findContainerAccess(hw HardwareInfo) *ContainerAccess {
 		return hp.Container
 	}
 	return nil
+}
+
+func mergeContainerAccess(base, override *ContainerAccess) *ContainerAccess {
+	if base == nil && override == nil {
+		return nil
+	}
+	out := &ContainerAccess{}
+	merge := func(src *ContainerAccess) {
+		if src == nil {
+			return
+		}
+		out.Devices = appendUniqueStrings(out.Devices, src.Devices...)
+		out.PartitionRemoveEnv = appendUniqueStrings(out.PartitionRemoveEnv, src.PartitionRemoveEnv...)
+		out.Volumes = append(out.Volumes, src.Volumes...)
+		if out.Env == nil {
+			out.Env = map[string]string{}
+		}
+		for k, v := range src.Env {
+			out.Env[k] = v
+		}
+		if out.Ulimits == nil {
+			out.Ulimits = map[string]string{}
+		}
+		for k, v := range src.Ulimits {
+			out.Ulimits[k] = v
+		}
+		if src.Security != nil {
+			copied := *src.Security
+			copied.SupplementalGroups = append([]int(nil), src.Security.SupplementalGroups...)
+			out.Security = &copied
+		}
+		if src.DockerRuntime != "" {
+			out.DockerRuntime = src.DockerRuntime
+		}
+		if src.NetworkMode != "" {
+			out.NetworkMode = src.NetworkMode
+		}
+		if src.ShmSize != "" {
+			out.ShmSize = src.ShmSize
+		}
+		if src.Init {
+			out.Init = true
+		}
+	}
+	merge(base)
+	merge(override)
+	return out
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 // findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.

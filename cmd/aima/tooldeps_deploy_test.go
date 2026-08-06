@@ -1,12 +1,32 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/runtime"
 )
+
+func TestSplitDeploymentEnvOverrides(t *testing.T) {
+	config, env, err := splitDeploymentEnvOverrides(map[string]any{
+		"max_model_len": 1048576,
+		"_env": map[string]any{
+			"NODE_RANK": 1,
+			"HEADLESS":  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("splitDeploymentEnvOverrides: %v", err)
+	}
+	if !reflect.DeepEqual(config, map[string]any{"max_model_len": 1048576}) {
+		t.Fatalf("config = %#v", config)
+	}
+	if !reflect.DeepEqual(env, map[string]string{"NODE_RANK": "1", "HEADLESS": "true"}) {
+		t.Fatalf("env = %#v", env)
+	}
+}
 
 func TestResolvedServedModelNameExpandsModelTemplate(t *testing.T) {
 	got := resolvedServedModelName("GLM-4.1V-9B-Thinking-FP4", map[string]any{

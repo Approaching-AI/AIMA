@@ -302,6 +302,7 @@ func TestBuildRunArgs_Ascend(t *testing.T) {
 			DockerRuntime: "ascend",
 			NetworkMode:   "host",
 			ShmSize:       "500g",
+			Ulimits:       map[string]string{"memlock": "-1:-1"},
 			Init:          true,
 			Devices:       []string{"/dev/davinci0", "/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"},
 			Env:           map[string]string{"PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True"},
@@ -317,6 +318,7 @@ func TestBuildRunArgs_Ascend(t *testing.T) {
 	assertContains(t, argStr, "--init", "init flag")
 	assertContains(t, argStr, "--network host", "host network")
 	assertContains(t, argStr, "--shm-size 500g", "shared memory size")
+	assertContains(t, argStr, "--ulimit memlock=-1:-1", "memlock ulimit")
 	assertContains(t, argStr, "--privileged", "privileged mode")
 	assertContains(t, argStr, "--device /dev/davinci0", "davinci device")
 	assertContains(t, argStr, "--device /dev/davinci_manager", "davinci manager device")

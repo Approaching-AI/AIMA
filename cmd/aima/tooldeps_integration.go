@@ -85,6 +85,7 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 					"memory_budget":       ds.MemoryBudget,
 					"startup_order":       ds.StartupOrder,
 					"alternative_configs": ds.AlternativeConfigs,
+					"inputs":              ds.Inputs,
 				})
 			}
 		}
@@ -95,8 +96,8 @@ func buildIntegrationDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return nil, fmt.Errorf("scenario %q not found (available: %v)", name, names)
 	}
 
-	deps.ScenarioApply = func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error) {
-		return applyScenario(ctx, cat, ac.rt.Name(), deps, name, dryRun)
+	deps.ScenarioApply = func(ctx context.Context, name string, dryRun bool, bindings map[string]string) (json.RawMessage, error) {
+		return applyScenario(ctx, cat, ac.rt.Name(), deps, name, dryRun, bindings)
 	}
 
 	// Knowledge sync (K6)

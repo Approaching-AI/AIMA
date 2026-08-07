@@ -58,6 +58,18 @@ startup:
   health_check:
     path: /health
     timeout_s: 120
+  warmup:
+    enabled: true
+    timeout_s: 30
+    request_body:
+      messages:
+        - role: user
+          content: Return JSON
+      max_tokens: 64
+      response_format:
+        type: json_object
+      chat_template_kwargs:
+        enable_thinking: false
 api:
   protocol: openai
   base_path: /v1
@@ -254,6 +266,20 @@ func TestLoadCatalog(t *testing.T) {
 	t.Run("engine assets loaded", func(t *testing.T) {
 		if len(cat.EngineAssets) != 2 {
 			t.Fatalf("EngineAssets count = %d, want 2", len(cat.EngineAssets))
+		}
+		var engine *EngineAsset
+		for i := range cat.EngineAssets {
+			if cat.EngineAssets[i].Metadata.Name == "testengine-1.0" {
+				engine = &cat.EngineAssets[i]
+				break
+			}
+		}
+		if engine == nil {
+			t.Fatal("test engine not loaded")
+		}
+		responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
+		if !ok || responseFormat["type"] != "json_object" {
+			t.Fatalf("structured warmup response_format = %#v", engine.Startup.Warmup.RequestBody["response_format"])
 		}
 	})
 

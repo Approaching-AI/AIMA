@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -667,24 +668,20 @@ func (r *NativeRuntime) healthCheckAndWarmup(proc *nativeProcess, hc *HealthChec
 // warmup sends a dummy inference request to force model weight loading and CUDA kernel compilation.
 // It returns true only when the engine accepts the request successfully.
 func (r *NativeRuntime) warmup(proc *nativeProcess, cfg *WarmupConfig, client *http.Client) bool {
-	prompt := cfg.Prompt
-	if prompt == "" {
-		prompt = "Hello"
-	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 1
-	}
 	modelName := proc.name
 	if proc.labels != nil && proc.labels["aima.dev/model"] != "" {
 		modelName = proc.labels["aima.dev/model"]
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", proc.port)
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, modelName, prompt, maxTokens)
+	body, err := BuildWarmupRequestBody(modelName, *cfg)
+	if err != nil {
+		slog.Warn("warmup request build failed", "name", proc.name, "error", err)
+		return false
+	}
 
 	slog.Info("warming up engine", "name", proc.name, "url", url)
-	resp, err := client.Post(url, "application/json", strings.NewReader(body))
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("warmup request failed", "name", proc.name, "error", err)
 		return false

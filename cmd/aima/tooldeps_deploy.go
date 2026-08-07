@@ -197,9 +197,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		if resolved.Warmup != nil {
 			req.Warmup = &runtime.WarmupConfig{
-				Prompt:    resolved.Warmup.Prompt,
-				MaxTokens: resolved.Warmup.MaxTokens,
-				TimeoutS:  resolved.Warmup.TimeoutS,
+				Enabled:     resolved.Warmup.Enabled,
+				Prompt:      resolved.Warmup.Prompt,
+				MaxTokens:   resolved.Warmup.MaxTokens,
+				TimeoutS:    resolved.Warmup.TimeoutS,
+				RequestBody: resolved.Warmup.RequestBody,
 			}
 		}
 

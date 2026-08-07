@@ -294,10 +294,11 @@ type HealthCheck struct {
 
 // WarmupConfig describes how to warm up an engine after health check passes.
 type WarmupConfig struct {
-	Enabled   bool   `yaml:"enabled"    json:"enabled"`
-	Prompt    string `yaml:"prompt"     json:"prompt"`
-	MaxTokens int    `yaml:"max_tokens" json:"max_tokens"`
-	TimeoutS  int    `yaml:"timeout_s"  json:"timeout_s"`
+	Enabled     bool           `yaml:"enabled"                json:"enabled"`
+	Prompt      string         `yaml:"prompt"                 json:"prompt"`
+	MaxTokens   int            `yaml:"max_tokens"             json:"max_tokens"`
+	TimeoutS    int            `yaml:"timeout_s"              json:"timeout_s"`
+	RequestBody map[string]any `yaml:"request_body,omitempty" json:"request_body,omitempty"`
 }
 
 type EngineAPI struct {
@@ -866,6 +867,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	}
 	if dst.Warmup.TimeoutS == 0 {
 		dst.Warmup.TimeoutS = src.Warmup.TimeoutS
+	}
+	if dst.Warmup.RequestBody == nil {
+		dst.Warmup.RequestBody = src.Warmup.RequestBody
 	}
 	if len(dst.ExtraVolumes) == 0 {
 		dst.ExtraVolumes = src.ExtraVolumes

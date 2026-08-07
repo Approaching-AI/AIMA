@@ -1,8 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -101,11 +102,7 @@ type HealthCheckConfig struct {
 }
 
 // WarmupConfig defines how to warm up an engine after health check passes.
-type WarmupConfig struct {
-	Prompt    string
-	MaxTokens int
-	TimeoutS  int
-}
+type WarmupConfig = knowledge.WarmupConfig
 
 const servedModelLabel = "aima.dev/served-model"
 
@@ -311,20 +308,15 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
 		address = "http://" + address
 	}
-	prompt := strings.TrimSpace(cfg.Prompt)
-	if prompt == "" {
-		prompt = "Hello"
-	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 1
-	}
 	timeout := time.Duration(cfg.TimeoutS) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, model, prompt, maxTokens)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", strings.NewReader(body))
+	body, err := BuildWarmupRequestBody(model, cfg)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -335,4 +327,32 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// BuildWarmupRequestBody returns an isolated OpenAI-compatible warmup body.
+// The deployment's served model always wins over a catalog-supplied value.
+func BuildWarmupRequestBody(model string, cfg WarmupConfig) ([]byte, error) {
+	body := make(map[string]any)
+	if len(cfg.RequestBody) > 0 {
+		raw, err := json.Marshal(cfg.RequestBody)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return nil, err
+		}
+	} else {
+		prompt := strings.TrimSpace(cfg.Prompt)
+		if prompt == "" {
+			prompt = "Hello"
+		}
+		maxTokens := cfg.MaxTokens
+		if maxTokens <= 0 {
+			maxTokens = 1
+		}
+		body["messages"] = []any{map[string]any{"role": "user", "content": prompt}}
+		body["max_tokens"] = maxTokens
+	}
+	body["model"] = model
+	return json.Marshal(body)
 }

@@ -54,20 +54,15 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 		address = "http://" + address
 	}
 	url := strings.TrimRight(address, "/") + "/v1/chat/completions"
-	prompt := strings.TrimSpace(cfg.Prompt)
-	if prompt == "" {
-		prompt = "Hello"
-	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 1
-	}
 	timeout := time.Duration(cfg.TimeoutS) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, model, prompt, maxTokens)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	body, err := runtime.BuildWarmupRequestBody(model, cfg)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
 	if err != nil {
 		return false
 	}

@@ -26,7 +26,8 @@ variants:
       unified_memory: true
     engine: qwen36-gb10-structured-bf16
     format: safetensors
-    default_config: {}
+    default_config:
+      served_model_name: qwen3.6-35b-a3b-bf16
     expected_performance:
       startup_time_s: 300
       cold_start_time_s: 900

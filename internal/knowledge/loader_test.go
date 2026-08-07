@@ -396,6 +396,9 @@ func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *t
 		for _, variant := range model.Variants {
 			if variant.Engine == "qwen36-gb10-structured-bf16" {
 				foundVariant = true
+				if got := variant.DefaultConfig["served_model_name"]; got != "qwen3.6-35b-a3b-bf16" {
+					t.Fatalf("structured served_model_name = %#v", got)
+				}
 			}
 		}
 	}

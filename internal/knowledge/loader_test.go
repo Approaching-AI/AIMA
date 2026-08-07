@@ -323,6 +323,52 @@ func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	}
 }
 
+func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "qwen36-gb10-structured-bf16" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("qwen36 structured GB10 engine is missing")
+	}
+	for _, arg := range engine.Startup.Command {
+		if strings.HasPrefix(arg, "--speculative-") {
+			t.Fatalf("structured engine contains speculative argument %q", arg)
+		}
+	}
+	responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("structured engine warmup response_format = %#v", engine.Startup.Warmup.RequestBody["response_format"])
+	}
+
+	var foundAlias, foundVariant bool
+	for _, model := range cat.ModelAssets {
+		if model.Metadata.Name != "qwen3.6-35b-a3b" {
+			continue
+		}
+		for _, alias := range model.Metadata.Aliases {
+			if alias == "qwen3.6-35b-a3b-bf16" {
+				foundAlias = true
+			}
+		}
+		for _, variant := range model.Variants {
+			if variant.Engine == "qwen36-gb10-structured-bf16" {
+				foundVariant = true
+			}
+		}
+	}
+	if !foundAlias || !foundVariant {
+		t.Fatalf("qwen3.6 structured mapping incomplete: alias=%v variant=%v", foundAlias, foundVariant)
+	}
+}
+
 func TestScenarioNewFields(t *testing.T) {
 	cat, err := LoadCatalog(catalogFS())
 	if err != nil {

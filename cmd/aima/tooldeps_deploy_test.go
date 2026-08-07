@@ -1148,6 +1148,11 @@ func TestDeploymentOperationLockCandidatesIncludeCatalogAndDiscoveredIdentity(t 
 func TestDeployDeleteCanonicalQueryRemovesAliasDeployment(t *testing.T) {
 	ctx, db, deps, rt, modelName := newDeploymentIntentHarness(t)
 	alias := "alias-" + modelName
+	rt.beforeDeploy = func(req *runtime.DeployRequest) {
+		if got := req.Labels[proxy.LabelRequestedModel]; got != alias {
+			t.Fatalf("requested model label = %q, want %q", got, alias)
+		}
+	}
 	if _, err := deps.DeployApply(ctx, "vllm", alias, "", nil, true, recovery.PolicyPatch{}); err != nil {
 		t.Fatalf("DeployApply alias: %v", err)
 	}

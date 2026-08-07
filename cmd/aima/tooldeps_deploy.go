@@ -163,10 +163,11 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				// runtime's findEngineAsset lookup (keyed on metadata.name)
 				// can gate health_check + warmup. Fall through to the type
 				// alias when the resolver has no asset binding.
-				"aima.dev/engine":      firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
-				"aima.dev/model":       modelName,
-				"aima.dev/slot":        resolved.Slot,
-				proxy.LabelServedModel: upstreamModel,
+				"aima.dev/engine":         firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
+				"aima.dev/model":          modelName,
+				"aima.dev/slot":           resolved.Slot,
+				proxy.LabelServedModel:    upstreamModel,
+				proxy.LabelRequestedModel: strings.TrimSpace(requestedModel),
 			},
 		}
 		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {

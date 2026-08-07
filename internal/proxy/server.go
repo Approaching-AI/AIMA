@@ -28,6 +28,11 @@ const DefaultPort = 6188
 // requests to this model when the engine expects a different served name.
 const LabelServedModel = "aima.dev/served-model"
 
+// LabelRequestedModel stores the catalog name or alias supplied by the deploy
+// caller. The proxy exposes it as an additional route while retaining the
+// canonical catalog model route.
+const LabelRequestedModel = "aima.dev/requested-model"
+
 // LabelParameterCount stores the model parameter count used for agent ranking.
 const LabelParameterCount = "aima.dev/parameter_count"
 

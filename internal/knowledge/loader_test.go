@@ -378,6 +378,15 @@ func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *t
 			t.Fatalf("structured engine contains speculative argument %q", arg)
 		}
 	}
+	var toolParser string
+	for i, arg := range engine.Startup.Command {
+		if arg == "--tool-call-parser" && i+1 < len(engine.Startup.Command) {
+			toolParser = engine.Startup.Command[i+1]
+		}
+	}
+	if toolParser != "qwen3_coder" {
+		t.Fatalf("structured engine tool call parser = %q, want qwen3_coder", toolParser)
+	}
 	responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
 	if !ok || responseFormat["type"] != "json_object" {
 		t.Fatalf("structured engine warmup response_format = %#v", engine.Startup.Warmup.RequestBody["response_format"])

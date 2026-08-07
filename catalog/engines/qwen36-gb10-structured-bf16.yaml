@@ -35,6 +35,8 @@ startup:
     - "131072"
     - --reasoning-parser
     - qwen3
+    - --tool-call-parser
+    - qwen3_coder
     - --mem-fraction-static
     - "0.80"
     - --max-running-requests

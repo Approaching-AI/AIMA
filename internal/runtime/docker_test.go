@@ -35,10 +35,37 @@ func TestBuildRunArgs_NVIDIA(t *testing.T) {
 	assertContains(t, argStr, "--env NVIDIA_VISIBLE_DEVICES=all", "NVIDIA env")
 	assertContains(t, argStr, "--env VLLM_WORKER_MULTIPROC_METHOD=spawn", "extra env")
 	assertContains(t, argStr, "--volume /data/models/qwen3:/models:ro", "model volume")
-	assertContains(t, argStr, "--publish 8000:8000", "port publish")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish")
 	assertContains(t, argStr, "--restart unless-stopped", "restart policy")
 	assertContains(t, argStr, "--entrypoint vllm", "entrypoint override")
 	assertContains(t, argStr, "serve /models", "command with model path substitution")
+}
+
+func TestBuildRunArgs_PublishesBackendOnLoopbackByDefault(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	assertContains(t, joinArgs(args), "--publish 127.0.0.1:8000:8000", "loopback publish")
+}
+
+func TestBuildRunArgs_HonorsExplicitPublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "192.168.10.20",
+		},
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	assertContains(t, joinArgs(args), "--publish 192.168.10.20:8000:8000", "explicit publish host")
 }
 
 func TestBuildRunArgs_AMD(t *testing.T) {
@@ -284,7 +311,7 @@ func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
 	assertContains(t, argStr, "--grpc_port_v1beta1 32108", "custom gRPC v1beta1 port flag")
 	assertContains(t, argStr, "--grpc_port 32109", "custom gRPC port flag")
 	assertContains(t, argStr, "--http_port 32110", "custom HTTP port flag")
-	assertContains(t, argStr, "--publish 32110:32110", "only primary HTTP port is published")
+	assertContains(t, argStr, "--publish 127.0.0.1:32110:32110", "only primary HTTP port is published")
 	assertNotContains(t, argStr, "--publish 32108:32108", "extra ports should stay container-local on bridge network")
 	assertNotContains(t, argStr, "--publish 32109:32109", "extra ports should stay container-local on bridge network")
 }
@@ -345,7 +372,7 @@ func TestBuildRunArgs_ExistingUnchanged(t *testing.T) {
 	args := r.buildRunArgs("test-vllm", req)
 	argStr := joinArgs(args)
 
-	assertContains(t, argStr, "--publish 8000:8000", "port publish without host network")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish without host network")
 	assertNotContains(t, argStr, "--runtime", "no runtime flag for NVIDIA")
 	assertNotContains(t, argStr, "--init", "no init flag")
 	assertNotContains(t, argStr, "--network", "no network flag")

@@ -112,10 +112,11 @@ type ContainerAccess struct {
 	PartitionRemoveEnv []string           `yaml:"partition_remove_env,omitempty"`
 	Volumes            []ContainerVolume  `yaml:"volumes,omitempty"`
 	Security           *ContainerSecurity `yaml:"security,omitempty"`
-	DockerRuntime      string             `yaml:"docker_runtime,omitempty"` // --runtime flag (e.g. "ascend")
-	NetworkMode        string             `yaml:"network_mode,omitempty"`   // "host" for --network host
-	ShmSize            string             `yaml:"shm_size,omitempty"`       // --shm-size (e.g. "500g")
-	Init               bool               `yaml:"init,omitempty"`           // --init flag
+	DockerRuntime      string             `yaml:"docker_runtime,omitempty"`                             // --runtime flag (e.g. "ascend")
+	NetworkMode        string             `yaml:"network_mode,omitempty"`                               // "host" for --network host
+	PublishHost        string             `yaml:"publish_host,omitempty" json:"publish_host,omitempty"` // Docker host IP for published ports; defaults to loopback
+	ShmSize            string             `yaml:"shm_size,omitempty"`                                   // --shm-size (e.g. "500g")
+	Init               bool               `yaml:"init,omitempty"`                                       // --init flag
 }
 
 type ContainerVolume struct {

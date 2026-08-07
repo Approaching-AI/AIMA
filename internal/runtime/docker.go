@@ -114,7 +114,11 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	// Port publish (skip when using host network)
 	if port := primaryPortForRequest(req); port > 0 && (req.Container == nil || req.Container.NetworkMode != "host") {
 		portStr := strconv.Itoa(port)
-		args = append(args, "--publish", portStr+":"+portStr)
+		publishHost := "127.0.0.1"
+		if req.Container != nil && strings.TrimSpace(req.Container.PublishHost) != "" {
+			publishHost = strings.TrimSpace(req.Container.PublishHost)
+		}
+		args = append(args, "--publish", publishHost+":"+portStr+":"+portStr)
 	}
 
 	// AIMA owns readiness via knowledge YAML. Never inherit image-baked

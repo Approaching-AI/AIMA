@@ -1,0 +1,34 @@
+kind: model_asset
+metadata:
+  name: qwen3.6-35b-a3b-nvfp4
+  type: llm
+  family: qwen
+  parameter_count: "35B"
+  aliases:
+    - Qwen3.6-35B-A3B-NVFP4
+    - Qwen3.6-35B-A3B-NVFP4-RedHatAI
+    - RedHatAI/Qwen3.6-35B-A3B-NVFP4
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: modelscope
+      repo: RedHatAI/Qwen3.6-35B-A3B-NVFP4
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  - name: qwen3.6-35b-a3b-nvfp4-gb10-sglang-dflash
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: qwen36-gb10-highspeed
+    format: safetensors
+    default_config: {}
+    expected_performance:
+      startup_time_s: 205
+      cold_start_time_s: 900
+      disk_mib: 23964
+      max_context_tokens: 131072
+      notes: "Validated on NVIDIA GB10 with compressed-tensors W4A4 NVFP4 and Qwen3.6 DFlash. Keep SGLang MoE runner selection automatic; forcing triton_kernel breaks NVFP4 weight loading."

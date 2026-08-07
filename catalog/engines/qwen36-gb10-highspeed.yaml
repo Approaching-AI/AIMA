@@ -1,0 +1,117 @@
+kind: engine_asset
+_profile: sglang
+metadata:
+  name: qwen36-gb10-highspeed
+  type: sglang
+  version: "main-pr2-nvfp4"
+  supported_model_types: [llm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  # Build locally from Approaching-AI/qwen36-gb10-highspeed. The validated
+  # NVFP4 build applies PR #2 and lets SGLang select the MoE runner backend.
+  name: qwen36-gb10
+  tag: local-nvfp4
+  size_approx_mb: 12000
+  platforms: [linux/arm64]
+  distribution: local
+patterns:
+  - "^qwen36-gb10-highspeed$"
+  - "qwen36-gb10"
+startup:
+  command:
+    - /opt/nvidia/nvidia_entrypoint.sh
+    - python3
+    - -m
+    - sglang.launch_server
+    - --model-path
+    - "{{.ModelPath}}"
+    - --host
+    - 0.0.0.0
+    - --served-model-name
+    - "{{.ModelName}}"
+    - --trust-remote-code
+    - --dtype
+    - bfloat16
+    - --context-length
+    - "131072"
+    - --reasoning-parser
+    - qwen3
+    - --mem-fraction-static
+    - "0.80"
+    - --max-running-requests
+    - "4"
+    - --chunked-prefill-size
+    - "32768"
+    - --max-prefill-tokens
+    - "32768"
+    - --attention-backend
+    - flashinfer
+    - --enable-cache-report
+    - --speculative-algorithm
+    - DFLASH
+    - --speculative-draft-model-path
+    - /draft-model
+    - --speculative-num-draft-tokens
+    - "12"
+    - --speculative-dflash-block-size
+    - "12"
+    - --speculative-draft-attention-backend
+    - flashinfer
+    - --speculative-draft-window-size
+    - "8192"
+    - --prefill-attention-backend
+    - flashinfer
+    - --decode-attention-backend
+    - flashinfer
+    - --mamba-scheduler-strategy
+    - extra_buffer
+    - --cuda-graph-bs
+    - "1"
+    - "2"
+    - "4"
+  env:
+    SGLANG_ENABLE_SPEC_V2: "1"
+    SGLANG_FORCE_SHARED_EXPERT_FUSION: "1"
+    SGLANG_MOE_CONFIG_DIR: /opt/qwen36/moe-config
+    SGLANG_TORCH_NATIVE_SDPA_BACKEND: flash
+    SGLANG_TORCH_NATIVE_SDPA_LOWER_RIGHT: "1"
+    SGLANG_TRITON_KERNELS_CORRECT_SHARED_FUSION: "1"
+    SGLANG_TRITON_KERNELS_FAST_SHARED_APPEND: "1"
+    SGLANG_TRITON_KERNELS_FUSED_SWIGLU: "1"
+    SGLANG_TRITON_KERNELS_NATIVE_SHARED_FUSION: "1"
+    SGLANG_TRITON_KERNELS_OPT_FLAGS: '{"is_persistent":false,"block_m":64,"block_k":32,"num_stages":3}'
+    SGLANG_TRITON_KERNELS_PREALLOC_SECOND_OUTPUT: "1"
+    TRITON_KERNELS_MATMUL_OGS_W2_FUSED_REDUCE: "1"
+  health_check:
+    path: /health
+    timeout_s: 900
+  warmup:
+    enabled: true
+    prompt: Hello
+    max_tokens: 1
+    timeout_s: 120
+  extra_volumes:
+    # The DFlash companion checkpoint is downloaded separately. Installations
+    # using a custom AIMA data directory can override this host path at L1.
+    - name: qwen36-dflash
+      host_path: /var/lib/aima/models/Qwen3.6-35B-A3B-DFlash
+      mount_path: /draft-model
+      read_only: true
+amplifier:
+  features:
+    - continuous_batching
+    - nvfp4
+    - dflash_speculative_decoding
+    - flashinfer_attention
+  performance_gain: "GB10-specific SGLang NVFP4 path with DFlash"
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container
+time_constraints:
+  cold_start_s: [120, 900]
+  model_switch_s: [120, 900]
+power_constraints:
+  typical_draw_watts: [40, 100]

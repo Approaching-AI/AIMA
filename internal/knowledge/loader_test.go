@@ -384,8 +384,8 @@ func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *t
 			toolParser = engine.Startup.Command[i+1]
 		}
 	}
-	if toolParser != "auto" {
-		t.Fatalf("structured engine tool call parser = %q, want auto", toolParser)
+	if toolParser != "qwen3_coder" {
+		t.Fatalf("structured engine tool call parser = %q, want qwen3_coder", toolParser)
 	}
 	responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
 	if !ok || responseFormat["type"] != "json_object" {

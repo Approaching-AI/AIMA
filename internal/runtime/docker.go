@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -118,7 +119,7 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		if req.Container != nil && strings.TrimSpace(req.Container.PublishHost) != "" {
 			publishHost = strings.TrimSpace(req.Container.PublishHost)
 		}
-		args = append(args, "--publish", publishHost+":"+portStr+":"+portStr)
+		args = append(args, "--publish", net.JoinHostPort(publishHost, portStr)+":"+portStr)
 	}
 
 	// AIMA owns readiness via knowledge YAML. Never inherit image-baked

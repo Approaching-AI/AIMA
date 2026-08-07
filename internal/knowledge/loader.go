@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -130,6 +131,22 @@ type ContainerSecurity struct {
 	Privileged         bool  `yaml:"privileged,omitempty"`
 	RunAsUser          *int  `yaml:"run_as_user,omitempty"`
 	SupplementalGroups []int `yaml:"supplemental_groups,omitempty"`
+}
+
+func validateContainerAccess(container *ContainerAccess) error {
+	if container == nil || strings.TrimSpace(container.PublishHost) == "" {
+		return nil
+	}
+	host := strings.TrimSpace(container.PublishHost)
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("container publish_host %q must be an IP literal", host)
+	}
+	if !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+		return fmt.Errorf("container publish_host %q must be loopback, private, or explicitly unspecified", host)
+	}
+	container.PublishHost = host
+	return nil
 }
 
 // --- Engine Asset ---
@@ -1141,6 +1158,9 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 	case "hardware_profile":
 		var hp HardwareProfile
 		if err := yaml.Unmarshal(data, &hp); err != nil {
+			return fmt.Errorf("parse hardware profile %s: %w", path, err)
+		}
+		if err := validateContainerAccess(hp.Container); err != nil {
 			return fmt.Errorf("parse hardware profile %s: %w", path, err)
 		}
 		cat.HardwareProfiles = append(cat.HardwareProfiles, hp)

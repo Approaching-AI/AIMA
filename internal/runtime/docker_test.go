@@ -68,6 +68,20 @@ func TestBuildRunArgs_HonorsExplicitPublishHost(t *testing.T) {
 	assertContains(t, joinArgs(args), "--publish 192.168.10.20:8000:8000", "explicit publish host")
 }
 
+func TestBuildRunArgs_FormatsExplicitIPv6PublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "::1",
+		},
+	}
+
+	args := r.buildRunArgs("test", req)
+	assertContains(t, strings.Join(args, " "), "--publish [::1]:8000:8000", "IPv6 publish")
+}
+
 func TestBuildRunArgs_AMD(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

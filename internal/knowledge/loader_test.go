@@ -1,10 +1,45 @@
 package knowledge
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func TestContainerPublishHostRejectsNonPrivateOrNonLiteralAddresses(t *testing.T) {
+	for _, host := range []string{"model.internal", "8.8.8.8"} {
+		t.Run(host, func(t *testing.T) {
+			cat := &Catalog{}
+			err := cat.parseAsset([]byte(fmt.Sprintf(`kind: hardware_profile
+metadata:
+  name: invalid-publish-host
+container:
+  publish_host: %q
+`, host)), "hardware/invalid.yaml")
+			if err == nil || !strings.Contains(err.Error(), "publish_host") {
+				t.Fatalf("parseAsset() error = %v, want publish_host validation", err)
+			}
+		})
+	}
+}
+
+func TestContainerPublishHostAcceptsExplicitLoopbackPrivateAndUnspecifiedIPs(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "192.168.121.157", "0.0.0.0", "::1"} {
+		t.Run(host, func(t *testing.T) {
+			cat := &Catalog{}
+			err := cat.parseAsset([]byte(fmt.Sprintf(`kind: hardware_profile
+metadata:
+  name: valid-publish-host
+container:
+  publish_host: %q
+`, host)), "hardware/valid.yaml")
+			if err != nil {
+				t.Fatalf("parseAsset() error = %v", err)
+			}
+		})
+	}
+}
 
 func testFS() fstest.MapFS {
 	return fstest.MapFS{

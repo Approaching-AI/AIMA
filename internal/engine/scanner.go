@@ -65,6 +65,7 @@ type CommandRunner interface {
 type ScanOptions struct {
 	Assets       []AssetDescriptor
 	Runner       CommandRunner
+	Logger       *slog.Logger
 	DistDir      string            // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
 	ExtraDirs    []string          // extra dirs to scan for native binaries (from AIMA_ENGINE_DIR); engines installed off-PATH/off-dist
 	Platform     string            // current platform (e.g., "windows-amd64")
@@ -81,12 +82,19 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 		return nil, fmt.Errorf("scan engines: %w", err)
 	}
 
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	var allEngines []*EngineImage
+	var containerCandidates, containerMatches, nativeMatches int
 
 	// Scan container images
 	images, err := listImages(ctx, opts.Runner)
 	if err == nil {
+		containerCandidates = len(images)
 		matched := matchImages(images, opts.Assets)
+		containerMatches = len(matched)
 
 		// Auto-import Docker-only images to containerd (only when explicitly requested)
 		if opts.AutoImport {
@@ -128,19 +136,35 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 			img.Platform = opts.Platform
 		}
 		allEngines = append(allEngines, matched...)
+	} else {
+		logger.Warn("engine scan: container discovery unavailable", "error", err)
 	}
 
 	// Scan native binaries
 	if opts.DistDir != "" {
 		native, err := ScanNative(ctx, opts)
 		if err == nil {
+			nativeMatches = len(native)
 			allEngines = append(allEngines, native...)
+		} else if ctx.Err() != nil {
+			return nil, fmt.Errorf("scan native engines: %w", ctx.Err())
+		} else {
+			logger.Warn("engine scan: native discovery failed", "dist_dir", opts.DistDir, "error", err)
 		}
 	}
 
 	// Probe pre-installed engines
 	preinstalled := probePreinstalled(ctx, opts)
 	allEngines = append(allEngines, preinstalled...)
+	logger.Info("engine scan complete",
+		"platform", opts.Platform,
+		"dist_dir", opts.DistDir,
+		"extra_dirs", opts.ExtraDirs,
+		"container_candidates", containerCandidates,
+		"container_matches", containerMatches,
+		"native_matches", nativeMatches,
+		"preinstalled_matches", len(preinstalled),
+		"total", len(allEngines))
 
 	return dedupeEngineImages(allEngines), nil
 }
@@ -186,11 +210,21 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	// External directories and PATH are never treated as AIMA-owned. The first
 	// external match for a binary name wins, preserving the existing scan order.
 	for _, dir := range opts.ExtraDirs {
-		found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
+		matches, err := scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)
+		if err != nil {
+			logger := opts.Logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Warn("engine scan: configured engine directory unavailable", "dir", dir, "error", err)
+			continue
+		}
+		found = append(found, matches...)
 	}
 	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
 		for _, dir := range strings.Split(pathEnv, string(os.PathListSeparator)) {
-			found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
+			matches, _ := scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)
+			found = append(found, matches...)
 		}
 	}
 
@@ -284,13 +318,13 @@ func scanManagedEngineBinaries(ctx context.Context, root string, filenameLookup 
 	return found, nil
 }
 
-func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets assetDescriptorIndex, seen map[string]bool, platform string) []*EngineImage {
+func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets assetDescriptorIndex, seen map[string]bool, platform string) ([]*EngineImage, error) {
 	if strings.TrimSpace(dir) == "" {
-		return nil
+		return nil, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var found []*EngineImage
 	for _, entry := range entries {
@@ -316,7 +350,7 @@ func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets 
 		))
 		seen[nameKey] = true
 	}
-	return found
+	return found, nil
 }
 
 func newNativeEngineImage(id, path string, size int64, platform, origin string, descriptor AssetDescriptor, detectedVersion string) *EngineImage {
@@ -534,8 +568,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 
 	// Try crictl (K3S containerd)
 	containerdSet := make(map[string]bool)
-	crictlImages, err := listCrictlImages(ctx, runner)
-	if err == nil {
+	crictlImages, crictlErr := listCrictlImages(ctx, runner)
+	if crictlErr == nil {
 		allImages = append(allImages, crictlImages...)
 		for _, img := range crictlImages {
 			containerdSet[img.repo+":"+img.tag] = true
@@ -543,8 +577,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 	}
 
 	// Also try docker (may have additional images)
-	dockerImages, err := listDockerImages(ctx, runner)
-	if err == nil {
+	dockerImages, dockerErr := listDockerImages(ctx, runner)
+	if dockerErr == nil {
 		for _, img := range dockerImages {
 			if containerdSet[img.repo+":"+img.tag] {
 				continue // already in containerd, skip Docker duplicate
@@ -553,8 +587,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 		}
 	}
 
-	if len(allImages) == 0 {
-		return nil, fmt.Errorf("neither crictl nor docker available")
+	if crictlErr != nil && dockerErr != nil {
+		return nil, fmt.Errorf("container discovery failed (crictl: %v; docker: %v)", crictlErr, dockerErr)
 	}
 
 	return allImages, nil
@@ -563,11 +597,16 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 // runCrictl tries standalone crictl, then K3S-embedded crictl as fallback.
 // K3S bundles crictl as a subcommand (k3s crictl) — standalone crictl may not exist.
 func runCrictl(ctx context.Context, runner CommandRunner, args ...string) ([]byte, error) {
-	if out, err := runner.Run(ctx, "crictl", args...); err == nil {
+	out, standaloneErr := runner.Run(ctx, "crictl", args...)
+	if standaloneErr == nil {
 		return out, nil
 	}
 	k3sArgs := append([]string{"crictl"}, args...)
-	return runner.Run(ctx, "k3s", k3sArgs...)
+	out, k3sErr := runner.Run(ctx, "k3s", k3sArgs...)
+	if k3sErr != nil {
+		return nil, fmt.Errorf("standalone crictl: %v; k3s crictl: %v", standaloneErr, k3sErr)
+	}
+	return out, nil
 }
 
 func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {

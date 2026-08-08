@@ -152,7 +152,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		return nil, err
 	}
 
-	model, variant, err := c.findModelVariant(modelName, engineType, engine, selectionHW)
+	model, variant, err := c.findModelVariant(modelName, engineType, engine, selectionHW, &ropts)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +455,7 @@ type resolveOpts struct {
 	MaxColdStartS     int
 	GoldenConfig      GoldenConfigFunc
 	LocalImageChecker func(imageRef string) bool
+	ModelFormat       string
 }
 
 // WithMaxColdStart filters engines whose cold start exceeds the given seconds.
@@ -476,6 +477,11 @@ func WithLocalImageChecker(fn func(imageRef string) bool) ResolveOption {
 	return func(o *resolveOpts) { o.LocalImageChecker = fn }
 }
 
+// WithModelFormat restricts selection to variants compatible with a local model artifact.
+func WithModelFormat(format string) ResolveOption {
+	return func(o *resolveOpts) { o.ModelFormat = strings.ToLower(strings.TrimSpace(format)) }
+}
+
 // InferEngineType picks the best engine for a model on the given hardware.
 // Priority: collect all candidates that can run (format + VRAM fit or offload),
 // then rank by amplifier.performance_multiplier (descending), cold_start as tiebreaker.
@@ -494,6 +500,9 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 
 		for _, v := range ma.Variants {
 			if strings.TrimSpace(v.Compatibility.UnsupportedReason) != "" {
+				continue
+			}
+			if ropts.ModelFormat != "" && !strings.EqualFold(v.Format, ropts.ModelFormat) {
 				continue
 			}
 			if v.Hardware.GPUArch != hw.GPUArch && v.Hardware.GPUArch != "*" {
@@ -661,7 +670,7 @@ func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*Mod
 	if ferr != nil {
 		return nil, nil, engineType, ferr
 	}
-	ma, variant, err := c.findModelVariant(modelName, engineType, engine, hw)
+	ma, variant, err := c.findModelVariant(modelName, engineType, engine, hw, nil)
 	if err != nil {
 		return ma, nil, engineType, err
 	}
@@ -814,7 +823,7 @@ func platformInList(platform string, platforms []string) bool {
 	return false
 }
 
-func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *EngineAsset, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
+func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *EngineAsset, hw HardwareInfo, ropts *resolveOpts) (*ModelAsset, *ModelVariant, error) {
 	type rankedVariant struct {
 		variant *ModelVariant
 		rank    int
@@ -843,6 +852,9 @@ func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *Engine
 		var gpuModelMatch, archMatch, wildcardMatch *rankedVariant
 		for j := range ma.Variants {
 			v := &ma.Variants[j]
+			if ropts != nil && ropts.ModelFormat != "" && !strings.EqualFold(v.Format, ropts.ModelFormat) {
+				continue
+			}
 			rank := matchRank(v)
 			if rank < 0 {
 				continue

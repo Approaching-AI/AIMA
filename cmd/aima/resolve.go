@@ -233,7 +233,13 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 // resolveWithFallback tries catalog resolution first; on "not found in catalog",
 // falls back to building a synthetic ModelAsset from the model's DB scan record.
 func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string, opts ...knowledge.ResolveOption) (*knowledge.ResolvedConfig, string, error) {
-	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, opts...)
+	effectiveOpts := append([]knowledge.ResolveOption(nil), opts...)
+	if db != nil {
+		if localModel, lookupErr := db.FindModelByName(ctx, modelName); lookupErr == nil && localModel.Format != "" {
+			effectiveOpts = append(effectiveOpts, knowledge.WithModelFormat(localModel.Format))
+		}
+	}
+	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, effectiveOpts...)
 	if err == nil {
 		// Catalog hit — prefer the actual scanned path when the catalog default
 		// is empty or no longer matches the files present on this device.
@@ -309,7 +315,7 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	}
 	overrides["model_path"] = dbModel.Path
 
-	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, opts...)
+	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, effectiveOpts...)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve auto-detected config for %s: %w", dbModel.Name, err)
 	}

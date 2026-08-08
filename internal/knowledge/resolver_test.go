@@ -1221,23 +1221,23 @@ func TestResolveAMD395Qwen36NativeBF16(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if resolved.Engine != "aima-amd395-qwen36-native" || resolved.EngineAssetName != "aima-amd395-qwen36-native" {
+	if resolved.Engine != "aima-engine-native" || resolved.EngineAssetName != "aima-engine-native-amd395" {
 		t.Fatalf("engine = %q asset = %q", resolved.Engine, resolved.EngineAssetName)
 	}
 	if resolved.ModelFormat != "safetensors" || resolved.RuntimeRecommendation != "native" {
 		t.Fatalf("format/runtime = %q/%q", resolved.ModelFormat, resolved.RuntimeRecommendation)
 	}
-	if resolved.Config["context_tokens"] != 8192 || resolved.Config["cache_capacity"] != 9216 {
+	if resolved.Config["context_tokens"] != 8192 {
 		t.Fatalf("config = %#v", resolved.Config)
 	}
-	if resolved.Source == nil || resolved.Source.Binary != "bin/aima-engine" {
+	if resolved.Source == nil || resolved.Source.Binary != "aima-engine" {
 		t.Fatalf("source = %#v", resolved.Source)
 	}
 	if len(resolved.Command) < 2 || resolved.Command[0] != "aima-engine" || resolved.Command[1] != "serve" {
 		t.Fatalf("command = %q", resolved.Command)
 	}
-	if resolved.Warmup != nil {
-		t.Fatalf("warmup = %#v, want nil", resolved.Warmup)
+	if resolved.Warmup == nil || !resolved.Warmup.Enabled {
+		t.Fatalf("warmup = %#v, want enabled", resolved.Warmup)
 	}
 }
 

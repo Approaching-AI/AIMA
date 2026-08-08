@@ -1175,6 +1175,44 @@ func TestEnrichNvidiaGPU(t *testing.T) {
 }
 
 func TestEnrichAMDGPU(t *testing.T) {
+	t.Run("uses DRM GTT pool for Strix Halo unified memory", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /sys/class/drm/card1/device/vendor":              {output: []byte("0x1002\n")},
+			"cat /sys/class/drm/card1/device/uevent":              {output: []byte("DRIVER=amdgpu\nPCI_ID=1002:1586\n")},
+			"cat /sys/class/drm/card1/device/device":              {output: []byte("0x1586\n")},
+			"cat /sys/class/drm/card1/device/mem_info_vram_total": {output: []byte("536870912\n")},
+			"cat /sys/class/drm/card1/device/mem_info_gtt_total":  {output: []byte("103079215104\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics", Arch: "RDNA3.5", ComputeID: "gfx1151", VRAMMiB: 512, Count: 1}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if !gpu.UnifiedMemory {
+			t.Error("UnifiedMemory = false, want true")
+		}
+		if gpu.VRAMMiB != 98304 {
+			t.Errorf("VRAMMiB = %d, want 98304", gpu.VRAMMiB)
+		}
+	})
+
+	t.Run("does not change discrete GPU memory", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /sys/class/drm/card0/device/vendor":              {output: []byte("0x1002\n")},
+			"cat /sys/class/drm/card0/device/uevent":              {output: []byte("DRIVER=amdgpu\nPCI_ID=1002:744C\n")},
+			"cat /sys/class/drm/card0/device/device":              {output: []byte("0x744c\n")},
+			"cat /sys/class/drm/card0/device/mem_info_vram_total": {output: []byte("25769803776\n")},
+			"cat /sys/class/drm/card0/device/mem_info_gtt_total":  {output: []byte("68719476736\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "Radeon RX 7900 XTX", VRAMMiB: 24576, Count: 1}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.UnifiedMemory {
+			t.Error("UnifiedMemory = true, want false")
+		}
+		if gpu.VRAMMiB != 24576 {
+			t.Errorf("VRAMMiB = %d, want 24576", gpu.VRAMMiB)
+		}
+	})
+
 	t.Run("fills SDK and driver version", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
 			"cat /opt/rocm/.info/version": {output: []byte("6.4.0\n")},

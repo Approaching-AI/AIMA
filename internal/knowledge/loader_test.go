@@ -2,6 +2,8 @@ package knowledge
 
 import (
 	"fmt"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -597,38 +599,72 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalog(real FS): %v", err)
 	}
-	engine := cat.FindEngineByName("aima-amd395-qwen36-native", HardwareInfo{
+	engine := cat.FindEngineByName("aima-engine-native-amd395", HardwareInfo{
 		GPUArch:  "RDNA3.5",
 		Platform: "linux/amd64",
 	})
 	if engine == nil {
-		t.Fatal("aima-amd395-qwen36-native engine not found")
+		t.Fatal("aima-engine-native-amd395 engine not found")
 	}
-	if engine.Metadata.Version != "v1.4.1" || engine.Runtime.Default != "native" {
-		t.Fatalf("engine version/runtime = %q/%q", engine.Metadata.Version, engine.Runtime.Default)
+	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.0" {
+		t.Fatalf("metadata = %+v", engine.Metadata)
 	}
-	if engine.Source == nil || engine.Source.Binary != "bin/aima-engine" {
-		t.Fatalf("engine source = %#v", engine.Source)
+	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "preinstalled" {
+		t.Fatalf("source = %+v", engine.Source)
 	}
-	const wantArchive = "aima-engine-native-portable-b98b7bc698ae.tar.zst"
-	if got := engine.Source.Download["linux/amd64"]; !strings.HasSuffix(got, "/"+wantArchive) {
-		t.Fatalf("download URL = %q, want %s", got, wantArchive)
+	if !engine.Source.Supports("linux/amd64") || engine.Source.Supports("windows/amd64") {
+		t.Fatalf("source platforms = %v", engine.Source.Platforms)
 	}
-	const wantSHA = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
-	if got := engine.Source.SHA256["linux/amd64"]; got != wantSHA {
-		t.Fatalf("sha256 = %q, want %q", got, wantSHA)
+	if engine.Source.Probe == nil {
+		t.Fatal("source.probe is nil")
 	}
-	if len(engine.Source.Mirror["linux/amd64"]) == 0 {
-		t.Fatal("expected expanded mirror URLs")
+	versionMatch := regexp.MustCompile(engine.Source.Probe.VersionPattern).FindStringSubmatch("aima-engine-native 1.5.0-native")
+	if len(versionMatch) != 2 || versionMatch[1] != "1.5.0" {
+		t.Fatalf("version pattern match = %v", versionMatch)
 	}
-	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.Warmup.Enabled {
-		t.Fatalf("health/warmup = %#v/%#v", engine.Startup.HealthCheck, engine.Startup.Warmup)
+	wantCommand := []string{"aima-engine", "serve", "--model-dir", "{{.ModelPath}}", "--host", "127.0.0.1"}
+	if !reflect.DeepEqual(engine.Startup.Command, wantCommand) {
+		t.Fatalf("startup.command = %v, want %v", engine.Startup.Command, wantCommand)
 	}
 	if engine.API.UpstreamModel != "aima-amd395-qwen36-35b" {
 		t.Fatalf("upstream model = %q", engine.API.UpstreamModel)
 	}
-	if engine.API.RequestAdapter != nil {
-		t.Fatalf("v1.4.1 should not require a request adapter: %#v", engine.API.RequestAdapter)
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.HealthCheck.TimeoutS != 120 {
+		t.Fatalf("health check = %+v", engine.Startup.HealthCheck)
+	}
+}
+
+func TestAMD395Qwen36LocalPrecisionPaths(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		RAMTotalMiB:   131072,
+		UnifiedMemory: true,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	native, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "aima-engine-native", nil)
+	if err != nil {
+		t.Fatalf("resolve native BF16: %v", err)
+	}
+	if native.EngineAssetName != "aima-engine-native-amd395" || native.ModelFormat != "safetensors" {
+		t.Fatalf("native resolution = engine %q format %q", native.EngineAssetName, native.ModelFormat)
+	}
+
+	gguf, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "llamacpp", nil)
+	if err != nil {
+		t.Fatalf("resolve llama.cpp GGUF: %v", err)
+	}
+	if gguf.EngineAssetName != "llamacpp-hip-linux" || gguf.ModelFormat != "gguf" {
+		t.Fatalf("GGUF resolution = engine %q format %q", gguf.EngineAssetName, gguf.ModelFormat)
+	}
+	if got := gguf.Config["quantization"]; got != "int4" {
+		t.Fatalf("GGUF quantization = %v, want int4", got)
 	}
 }
 

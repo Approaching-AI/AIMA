@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -954,15 +955,44 @@ func TestScanBothFail(t *testing.T) {
 		},
 	}
 
+	var logs bytes.Buffer
 	results, err := ScanUnified(context.Background(), ScanOptions{
 		Assets: testAssetDescriptors(map[string][]string{"vllm": {"vllm/vllm-openai"}}),
 		Runner: runner,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 0 {
 		t.Errorf("expected empty results when no runtime available, got %d", len(results))
+	}
+	for _, want := range []string{"container discovery unavailable", "crictl not found", "docker not found", "engine scan complete", "total=0"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("scan logs missing %q: %s", want, logs.String())
+		}
+	}
+}
+
+func TestScanEmptyContainerRuntimeIsAvailable(t *testing.T) {
+	var logs bytes.Buffer
+	runner := &mockRunner{responses: map[string]mockResponse{
+		"crictl images -o json":                        {output: []byte(`{"images":[]}`)},
+		"docker images --format {{json .}} --no-trunc": {err: fmt.Errorf("docker not found")},
+	}}
+
+	results, err := ScanUnified(context.Background(), ScanOptions{
+		Runner: runner,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no images, got %+v", results)
+	}
+	if strings.Contains(logs.String(), "container discovery unavailable") {
+		t.Fatalf("empty available runtime reported as unavailable: %s", logs.String())
 	}
 }
 
@@ -1709,6 +1739,51 @@ func TestScanNativeFindsBinaryInExtraDirs(t *testing.T) {
 	}
 	if got := results[0].RuntimeType; got != "native" {
 		t.Errorf("RuntimeType = %q, want native", got)
+	}
+}
+
+func TestScanNativeNormalizesCatalogBinaryPath(t *testing.T) {
+	t.Setenv("PATH", "")
+	distDir := t.TempDir()
+	engineDir := t.TempDir()
+	binPath := filepath.Join(engineDir, "aima-engine")
+	if err := os.WriteFile(binPath, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:      distDir,
+		Platform:     "linux-amd64",
+		BinaryAssets: map[string]string{"bin/aima-engine": "aima-engine-native"},
+		ExtraDirs:    []string{engineDir},
+	})
+	if err != nil {
+		t.Fatalf("scan native: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 native engine, got %d: %+v", len(results), results)
+	}
+	if got := results[0]; got.BinaryPath != binPath || got.Type != "aima-engine-native" {
+		t.Fatalf("normalized binary match = %+v, want path %q and native type", got, binPath)
+	}
+}
+
+func TestScanNativeLogsInvalidConfiguredDirectory(t *testing.T) {
+	t.Setenv("PATH", "")
+	var logs bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing")
+
+	_, err := ScanNative(context.Background(), ScanOptions{
+		DistDir:      t.TempDir(),
+		BinaryAssets: map[string]string{"aima-engine": "aima-engine-native"},
+		ExtraDirs:    []string{missing},
+		Logger:       slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("scan native: %v", err)
+	}
+	if !strings.Contains(logs.String(), missing) || !strings.Contains(logs.String(), "configured engine directory unavailable") {
+		t.Fatalf("missing directory diagnostic not logged: %s", logs.String())
 	}
 }
 

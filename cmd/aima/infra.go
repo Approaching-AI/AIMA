@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -43,7 +42,7 @@ func defaultLLMEndpoint() string {
 // Endpoint defaults to localhost proxy; model auto-discovered from /v1/models.
 func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
 	settings := loadLLMSettings(ctx, db)
-	opts := []agent.OpenAIOption{agent.WithDiscoverFunc(discoverFleetLLM)}
+	opts := []agent.OpenAIOption{}
 	if settings.Model != "" {
 		opts = append(opts, agent.WithModel(settings.Model))
 	}
@@ -200,60 +199,6 @@ func parseExtraParamsStrict(s string) (map[string]any, error) {
 		return nil, fmt.Errorf("llm.extra_params must be a JSON object")
 	}
 	return m, nil
-}
-
-// discoverFleetLLM discovers LLM endpoints from fleet devices via mDNS.
-// Called lazily by OpenAIClient when local endpoint has no models.
-func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint {
-	services, err := proxy.Discover(ctx, 3*time.Second)
-	if err != nil {
-		slog.Debug("fleet LLM discovery: mDNS failed", "error", err)
-		return nil
-	}
-
-	var endpoints []agent.FleetEndpoint
-	for _, svc := range services {
-		addr := svc.AddrV4
-		if addr == "" {
-			addr = svc.Host
-		}
-		if addr == "" {
-			continue
-		}
-		if proxy.IsLocalIP(addr) {
-			continue
-		}
-		models := proxy.QueryRemoteStatus(ctx, addr, svc.Port, apiKey)
-		bestModel, ok := proxy.BestAdvertisedModel(models)
-		if !ok || strings.TrimSpace(bestModel.ID) == "" {
-			continue
-		}
-		baseURL := fmt.Sprintf("http://%s:%d/v1", addr, svc.Port)
-		slog.Debug("fleet LLM discovery: candidate", "addr", baseURL, "models", models)
-		endpoints = append(endpoints, agent.FleetEndpoint{
-			BaseURL:             baseURL,
-			Model:               bestModel.ID,
-			ParameterCount:      bestModel.ParameterCount,
-			ContextWindowTokens: bestModel.ContextWindowTokens,
-		})
-	}
-	sort.SliceStable(endpoints, func(i, j int) bool {
-		return proxy.BetterAdvertisedModel(
-			proxy.AdvertisedModel{
-				ID:                  endpoints[i].Model,
-				ParameterCount:      endpoints[i].ParameterCount,
-				ContextWindowTokens: endpoints[i].ContextWindowTokens,
-				Remote:              true,
-			},
-			proxy.AdvertisedModel{
-				ID:                  endpoints[j].Model,
-				ParameterCount:      endpoints[j].ParameterCount,
-				ContextWindowTokens: endpoints[j].ContextWindowTokens,
-				Remote:              true,
-			},
-		)
-	})
-	return endpoints
 }
 
 // detectHWProfile returns the hardware profile name (e.g. "nvidia-rtx4090-x86") or "" if detection fails.

@@ -511,6 +511,12 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 			outReq.Host = target.Host
 			outReq.Body = io.NopCloser(bytes.NewReader(body))
 			outReq.ContentLength = int64(len(body))
+			// The bearer token authenticates the client to AIMA; local inference
+			// engines do not need it and must never receive that credential.
+			// Remote AIMA peers currently use the shared proxy credential.
+			if !backend.Remote && !backend.External {
+				outReq.Header.Del("Authorization")
+			}
 		},
 		FlushInterval: -1, // flush immediately for SSE
 		ModifyResponse: func(resp *http.Response) error {

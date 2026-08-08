@@ -936,6 +936,41 @@ func TestProxyForwardsRequestBody(t *testing.T) {
 	}
 }
 
+func TestProxyDoesNotForwardClientAuthorizationToLocalBackend(t *testing.T) {
+	var receivedAuthorization string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
+	})
+	defer backend.Close()
+
+	s := NewServer(WithAPIKey("aima-client-key"))
+	s.RegisterBackend("qwen3-8b", &Backend{
+		ModelName:  "qwen3-8b",
+		EngineType: "vllm",
+		Address:    strings.TrimPrefix(backend.URL, "http://"),
+		Ready:      true,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"qwen3-8b","messages":[]}`),
+	)
+	req.Header.Set("Authorization", "Bearer aima-client-key")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if receivedAuthorization != "" {
+		t.Fatalf("local backend received client Authorization header: %q", receivedAuthorization)
+	}
+}
+
 func TestAPIKeyHotReload(t *testing.T) {
 	s := NewServer()
 	handler := s.handler() // build handler once, just like Start() does

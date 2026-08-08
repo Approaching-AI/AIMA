@@ -65,7 +65,29 @@ func TestBuildRunArgs_HonorsExplicitPublishHost(t *testing.T) {
 	}
 
 	args := r.buildRunArgs("test-model", req)
-	assertContains(t, joinArgs(args), "--publish 192.168.10.20:8000:8000", "explicit publish host")
+	argStr := joinArgs(args)
+	assertContains(t, argStr, "--publish 192.168.10.20:8000:8000", "explicit publish host")
+	assertContains(t, argStr, "--label aima.dev/publish_host=192.168.10.20", "publish host identity")
+}
+
+func TestDockerPublishedAddressUsesPersistedPublishHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		port   int
+		want   string
+	}{
+		{name: "legacy defaults to loopback", labels: nil, port: 8000, want: "127.0.0.1:8000"},
+		{name: "private IPv4", labels: map[string]string{"aima.dev/publish_host": "192.168.10.20"}, port: 8000, want: "192.168.10.20:8000"},
+		{name: "IPv6 loopback", labels: map[string]string{"aima.dev/publish_host": "::1"}, port: 8000, want: "[::1]:8000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dockerPublishedAddress(tt.labels, tt.port); got != tt.want {
+				t.Fatalf("dockerPublishedAddress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestBuildRunArgs_FormatsExplicitIPv6PublishHost(t *testing.T) {

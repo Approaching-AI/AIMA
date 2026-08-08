@@ -40,6 +40,24 @@ type deploymentIntentRuntime struct {
 	events       []string
 }
 
+func TestCloneWarmupRequestBodyDoesNotAliasNestedValues(t *testing.T) {
+	source := map[string]any{
+		"response_format": map[string]any{"type": "json_object"},
+		"messages":        []any{map[string]any{"role": "user", "content": "test"}},
+	}
+	cloned := cloneWarmupRequestBody(source)
+
+	cloned["response_format"].(map[string]any)["type"] = "text"
+	cloned["messages"].([]any)[0].(map[string]any)["content"] = "changed"
+
+	if got := source["response_format"].(map[string]any)["type"]; got != "json_object" {
+		t.Fatalf("source response_format was mutated: %v", got)
+	}
+	if got := source["messages"].([]any)[0].(map[string]any)["content"]; got != "test" {
+		t.Fatalf("source message was mutated: %v", got)
+	}
+}
+
 func (r *deploymentIntentRuntime) Deploy(_ context.Context, req *runtime.DeployRequest) error {
 	r.deployCalls++
 	r.events = append(r.events, "deploy")

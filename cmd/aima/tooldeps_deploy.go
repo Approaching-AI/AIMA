@@ -202,7 +202,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				Prompt:      resolved.Warmup.Prompt,
 				MaxTokens:   resolved.Warmup.MaxTokens,
 				TimeoutS:    resolved.Warmup.TimeoutS,
-				RequestBody: resolved.Warmup.RequestBody,
+				RequestBody: cloneWarmupRequestBody(resolved.Warmup.RequestBody),
 			}
 		}
 
@@ -1014,6 +1014,32 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 		}
 		return logs, err
+	}
+}
+
+func cloneWarmupRequestBody(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = cloneWarmupRequestValue(value)
+	}
+	return cloned
+}
+
+func cloneWarmupRequestValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneWarmupRequestBody(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneWarmupRequestValue(item)
+		}
+		return cloned
+	default:
+		return value
 	}
 }
 

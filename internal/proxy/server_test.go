@@ -985,6 +985,39 @@ func TestProxyDoesNotForwardClientAuthorizationToAnyBackend(t *testing.T) {
 	}
 }
 
+func TestProxyUsesConfiguredUpstreamAPIKeyInsteadOfClientAuthorization(t *testing.T) {
+	var receivedAuthorization string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
+	})
+	defer backend.Close()
+
+	s := NewServer(WithAPIKey("aima-client-key"), WithTransport(backend.Client().Transport))
+	s.RegisterBackend("remote-model", &Backend{
+		ModelName:      "remote-model",
+		Address:        strings.TrimPrefix(backend.URL, "http://"),
+		Ready:          true,
+		Remote:         true,
+		UpstreamAPIKey: "peer-specific-key",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"remote-model","messages":[]}`,
+	))
+	req.Header.Set("Authorization", "Bearer aima-client-key")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if receivedAuthorization != "Bearer peer-specific-key" {
+		t.Fatalf("upstream Authorization = %q, want peer-specific credential", receivedAuthorization)
+	}
+}
+
 func TestNewServerUsesTransportWithoutEnvironmentProxy(t *testing.T) {
 	s := NewServer()
 	transport, ok := s.transport.(*http.Transport)

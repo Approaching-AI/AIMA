@@ -60,7 +60,9 @@ type Backend struct {
 	BasePath            string            `json:"base_path"`
 	Ready               bool              `json:"ready"`
 	Remote              bool              `json:"remote"` // true = discovered via mDNS, not a local deployment
+	Discovered          bool              `json:"discovered,omitempty"`
 	External            bool              `json:"external"`
+	UpstreamAPIKey      string            `json:"-"`
 	PathOverrides       map[string]string `json:"path_overrides,omitempty"`
 	ParameterCount      string            `json:"parameter_count,omitempty"`
 	ContextWindowTokens int               `json:"context_window_tokens,omitempty"`
@@ -527,6 +529,9 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 			// peers and external services require separately configured trust and
 			// credentials rather than reusing a client-supplied header.
 			outReq.Header.Del("Authorization")
+			if backend.UpstreamAPIKey != "" {
+				outReq.Header.Set("Authorization", "Bearer "+backend.UpstreamAPIKey)
+			}
 		},
 		FlushInterval: -1, // flush immediately for SSE
 		ModifyResponse: func(resp *http.Response) error {

@@ -205,6 +205,7 @@ func TestResolveMCPProfile(t *testing.T) {
 }
 
 func TestParseStaticBackendSpec(t *testing.T) {
+	t.Setenv("AIMA_TEST_PEER_KEY", "peer-secret")
 	model, backend, err := parseStaticBackendSpec("qwen3.6=http://127.0.0.1:18310/v1,engine=vllm,upstream=qwen3.6-served,param=35B,context=32768")
 	if err != nil {
 		t.Fatalf("parseStaticBackendSpec() error = %v", err)
@@ -238,6 +239,19 @@ func TestParseStaticBackendSpec(t *testing.T) {
 	}
 	if backend.ContextWindowTokens != 32768 {
 		t.Fatalf("backend.ContextWindowTokens = %d, want 32768", backend.ContextWindowTokens)
+	}
+}
+
+func TestParseStaticBackendSpecLoadsSeparateUpstreamKeyFromEnvironment(t *testing.T) {
+	t.Setenv("AIMA_TEST_PEER_KEY", "peer-secret")
+	_, backend, err := parseStaticBackendSpec(
+		"remote=http://192.0.2.10:6188/v1,upstream_api_key_env=AIMA_TEST_PEER_KEY",
+	)
+	if err != nil {
+		t.Fatalf("parseStaticBackendSpec() error = %v", err)
+	}
+	if backend.UpstreamAPIKey != "peer-secret" {
+		t.Fatal("separate upstream API key was not loaded")
 	}
 }
 

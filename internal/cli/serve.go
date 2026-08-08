@@ -228,9 +228,9 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&mcpProfile, "mcp-profile", "", "MCP tool profile: operator, patrol, explorer (default: all tools)")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
 	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
-	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Discover remote inference services via mDNS")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Observe remote inference services via mDNS without trusting or routing to them")
 	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
-	cmd.Flags().StringArrayVar(&staticBackends, "backend", nil, "Static backend registration: model=http://host:port[/base],engine=vllm,upstream=served,param=35B,context=32768")
+	cmd.Flags().StringArrayVar(&staticBackends, "backend", nil, "Trusted static backend: model=http://host:port[/base],engine=vllm,upstream=served,param=35B,context=32768,upstream_api_key_env=ENV")
 
 	return cmd
 }
@@ -327,6 +327,15 @@ func parseStaticBackendSpec(spec string) (string, *proxy.Backend, error) {
 				return "", nil, fmt.Errorf("static backend %q has invalid context value %q", spec, value)
 			}
 			backend.ContextWindowTokens = contextWindow
+		case "upstream_api_key_env", "upstream-api-key-env":
+			if value == "" {
+				return "", nil, fmt.Errorf("static backend %q has empty upstream API key environment name", spec)
+			}
+			upstreamKey := strings.TrimSpace(os.Getenv(value))
+			if upstreamKey == "" {
+				return "", nil, fmt.Errorf("static backend %q requires non-empty environment %s", spec, value)
+			}
+			backend.UpstreamAPIKey = upstreamKey
 		default:
 			return "", nil, fmt.Errorf("static backend %q has unknown option %q", spec, key)
 		}

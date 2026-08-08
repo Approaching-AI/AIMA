@@ -23,6 +23,16 @@ import (
 // DefaultPort is the default listen port for the AIMA proxy server.
 const DefaultPort = 6188
 
+// newDirectTransport returns an HTTP transport that never consults
+// HTTP_PROXY/HTTPS_PROXY. Model backends are infrastructure endpoints selected
+// by AIMA, so silently routing credentials or inference traffic through a
+// process-environment proxy would cross the configured trust boundary.
+func newDirectTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return transport
+}
+
 // LabelServedModel stores the upstream model identifier expected by the backend.
 // The proxy keeps routing by AIMA's canonical model name, but rewrites forwarded
 // requests to this model when the engine expects a different served name.
@@ -174,8 +184,9 @@ func (s *Server) SetOnReady(fn func(addr string)) {
 
 func NewServer(opts ...Option) *Server {
 	s := &Server{
-		addr:   fmt.Sprintf(":%d", DefaultPort),
-		routes: make(map[string]*Backend),
+		addr:      fmt.Sprintf(":%d", DefaultPort),
+		routes:    make(map[string]*Backend),
+		transport: newDirectTransport(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -511,12 +522,11 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 			outReq.Host = target.Host
 			outReq.Body = io.NopCloser(bytes.NewReader(body))
 			outReq.ContentLength = int64(len(body))
-			// The bearer token authenticates the client to AIMA; local inference
-			// engines do not need it and must never receive that credential.
-			// Remote AIMA peers currently use the shared proxy credential.
-			if !backend.Remote && !backend.External {
-				outReq.Header.Del("Authorization")
-			}
+			// The bearer token authenticates the client to AIMA. It is never an
+			// upstream credential and must not cross any backend boundary. Remote
+			// peers and external services require separately configured trust and
+			// credentials rather than reusing a client-supplied header.
+			outReq.Header.Del("Authorization")
 		},
 		FlushInterval: -1, // flush immediately for SSE
 		ModifyResponse: func(resp *http.Response) error {

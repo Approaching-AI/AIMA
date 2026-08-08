@@ -11,14 +11,16 @@ import (
 	"time"
 )
 
+var directHTTPClient = &http.Client{Transport: newDirectTransport()}
+
 // SyncRemoteBackends discovers remote aima instances and registers their models.
 // Local backends (Remote==false) always take priority — remote models with the
 // same name are skipped. localPort is the proxy's own listen port; services
 // on a local IP with the same port are skipped to prevent self-discovery loops.
-// The proxy's API key is forwarded to remote /v1/models queries so that
-// authenticated peers respond correctly.
+// Discovery is deliberately unauthenticated: an mDNS advertisement is not a
+// trust relationship, so the proxy's client API key must never be disclosed to
+// the advertised address. Authenticated peers require an explicit pairing path.
 func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredService, localPort int) {
-	apiKey := s.APIKey()
 	// Collect local model names (Remote==false)
 	localModels := make(map[string]bool)
 	for name, b := range s.ListBackends() {
@@ -48,7 +50,7 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			continue
 		}
 
-		models := QueryRemoteStatus(ctx, addr, svc.Port, apiKey)
+		models := QueryRemoteStatus(ctx, addr, svc.Port, "")
 		for _, model := range models {
 			// Local always wins
 			if localModels[strings.ToLower(model.ID)] {
@@ -129,7 +131,7 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := directHTTPClient.Do(req)
 	if err != nil {
 		slog.Debug("remote: failed to query status", "url", url, "error", err)
 		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
@@ -202,7 +204,7 @@ func QueryRemoteModels(ctx context.Context, addr string, port int, apiKey string
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := directHTTPClient.Do(req)
 	if err != nil {
 		slog.Debug("remote: failed to query models", "url", url, "error", err)
 		return nil

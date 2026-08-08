@@ -220,6 +220,35 @@ func TestQueryRemoteModels_WithAPIKey(t *testing.T) {
 	}
 }
 
+func TestSyncRemoteBackendsDoesNotDiscloseServerAPIKey(t *testing.T) {
+	var receivedAuthorization string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"models": []map[string]any{{
+				"model_name": "remote-model",
+				"model_type": "llm",
+				"ready":      true,
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	s := NewServer(WithAPIKey("server-client-key"))
+	SyncRemoteBackends(context.Background(), s, []DiscoveredService{{
+		Name: "untrusted-mdns-advertisement", AddrV4: addr, Port: port,
+	}}, 0)
+
+	if receivedAuthorization != "" {
+		t.Fatalf("discovered service received AIMA server key: %q", receivedAuthorization)
+	}
+	if backend := s.ListBackends()["remote-model"]; backend == nil {
+		t.Fatal("unauthenticated advertised model was not registered")
+	}
+}
+
 func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {

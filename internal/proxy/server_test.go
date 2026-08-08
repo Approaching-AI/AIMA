@@ -936,38 +936,63 @@ func TestProxyForwardsRequestBody(t *testing.T) {
 	}
 }
 
-func TestProxyDoesNotForwardClientAuthorizationToLocalBackend(t *testing.T) {
-	var receivedAuthorization string
-	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
-		receivedAuthorization = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
-	})
-	defer backend.Close()
+func TestProxyDoesNotForwardClientAuthorizationToAnyBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		remote   bool
+		external bool
+	}{
+		{name: "managed local"},
+		{name: "discovered or static remote", remote: true},
+		{name: "external service", external: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var receivedAuthorization string
+			backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+				receivedAuthorization = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
+			})
+			defer backend.Close()
 
-	s := NewServer(WithAPIKey("aima-client-key"))
-	s.RegisterBackend("qwen3-8b", &Backend{
-		ModelName:  "qwen3-8b",
-		EngineType: "vllm",
-		Address:    strings.TrimPrefix(backend.URL, "http://"),
-		Ready:      true,
-	})
+			s := NewServer(WithAPIKey("aima-client-key"), WithTransport(backend.Client().Transport))
+			s.RegisterBackend("qwen3-8b", &Backend{
+				ModelName:  "qwen3-8b",
+				EngineType: "vllm",
+				Address:    strings.TrimPrefix(backend.URL, "http://"),
+				Ready:      true,
+				Remote:     tc.remote,
+				External:   tc.external,
+			})
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v1/chat/completions",
-		strings.NewReader(`{"model":"qwen3-8b","messages":[]}`),
-	)
-	req.Header.Set("Authorization", "Bearer aima-client-key")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.handler().ServeHTTP(w, req)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(`{"model":"qwen3-8b","messages":[]}`),
+			)
+			req.Header.Set("Authorization", "Bearer aima-client-key")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			s.handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if receivedAuthorization != "" {
+				t.Fatalf("backend received client Authorization header: %q", receivedAuthorization)
+			}
+		})
 	}
-	if receivedAuthorization != "" {
-		t.Fatalf("local backend received client Authorization header: %q", receivedAuthorization)
+}
+
+func TestNewServerUsesTransportWithoutEnvironmentProxy(t *testing.T) {
+	s := NewServer()
+	transport, ok := s.transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http.Transport", s.transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("default backend transport must not use environment proxies")
 	}
 }
 

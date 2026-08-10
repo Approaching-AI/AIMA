@@ -1642,6 +1642,81 @@ func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
 	}
 }
 
+func TestNativeBundleLaunchEnvironment(t *testing.T) {
+	distDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(distDir); err == nil {
+		distDir = resolved
+	}
+	binDir := filepath.Join(distDir, "bin")
+	libDir := filepath.Join(distDir, "lib")
+	backendDir := filepath.Join(binDir, "backends")
+	engineRoot := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(engineRoot); err == nil {
+		engineRoot = resolved
+	}
+	engineDir := filepath.Join(engineRoot, "configured-engine")
+	engineLibDir := filepath.Join(engineDir, "lib64")
+	for _, dir := range []string{binDir, libDir, backendDir, engineLibDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binaryPath := filepath.Join(binDir, "engine-server")
+	if err := os.WriteFile(binaryPath, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := nativeLibraryDirs(binaryPath, distDir, engineDir)
+	wantDirs := []string{binDir, backendDir, distDir, libDir, engineDir, engineLibDir}
+	for _, want := range wantDirs {
+		if !containsString(dirs, want) {
+			t.Fatalf("nativeLibraryDirs(%q) = %v, missing %q", binaryPath, dirs, want)
+		}
+	}
+
+	key := "LD_LIBRARY_PATH"
+	if runtime.GOOS == "darwin" {
+		key = "DYLD_LIBRARY_PATH"
+	}
+	existingA := filepath.Join(t.TempDir(), "catalog-libs")
+	existingB := filepath.Join(t.TempDir(), "parent-libs")
+	env := []string{"KEEP=value", key + "=" + existingB}
+	env = setEnvValue(env, key, existingA+string(os.PathListSeparator)+existingB)
+	env = prependEnvPaths(env, key, dirs)
+	got, ok := envValue(env, key)
+	if !ok {
+		t.Fatalf("%s missing from environment", key)
+	}
+	wantPaths := append(append([]string(nil), dirs...), existingA, existingB)
+	if strings.Join(wantPaths, string(os.PathListSeparator)) != got {
+		t.Fatalf("%s = %q, want %q", key, got, strings.Join(wantPaths, string(os.PathListSeparator)))
+	}
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, key+"=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("%s appears %d times in %v", key, count, env)
+	}
+	if got := nativeWorkDir("/catalog/work", binDir); got != "/catalog/work" {
+		t.Fatalf("explicit work dir = %q", got)
+	}
+	if got := nativeWorkDir("", binDir); got != binDir {
+		t.Fatalf("bundle work dir = %q, want %q", got, binDir)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFindLocalBinaryUsesNestedSourcePath(t *testing.T) {
 	distDir := t.TempDir()
 	want := filepath.Join(distDir, "bin", "aima-engine")

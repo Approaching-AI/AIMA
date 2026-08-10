@@ -31,7 +31,7 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 | `aima engine ensure <name> [--version <version>] [--apply]` | 规划或应用版本复用、安装和激活；默认只输出计划 |
 | `aima engine rollback <name> --runtime <container-or-native> --confirm` | 激活指定运行时组中 verified、available 的前一版本 |
 | `aima engine pull [name]` | 拉取引擎镜像（容器运行时） |
-| `aima engine import <path>` | 从本地 OCI 包或版本化 Native 包离线导入 |
+| `aima engine import <path>` | 从本地 OCI 包、Native 二进制、目录或压缩包离线导入 |
 | `aima engine remove <id> [--delete-files]` | 删除无引用库存；物理删除受所有权和路径保护 |
 
 ### MCP 工具
@@ -365,6 +365,21 @@ BinaryManager.Resolve(ctx, source)
     windows-amd64/
       <asset-name>/<version>/<binary>.exe
 ```
+
+**导入本地 native bundle**:
+
+```bash
+# 二进制与共享库位于同一目录时，会同时导入共享库和常见运行目录
+aima engine import /opt/llamacpp/llama-server
+
+# 二进制与运行库分散在 bundle 内时，直接导入完整目录或压缩包
+aima engine import /opt/llamacpp
+aima engine import /media/usb/llamacpp-linux-amd64.tar.gz
+```
+
+Linux 单文件导入会解析软链接的真实目录，并复制同目录的 `*.so*` 及
+`lib`、`lib64`、`plugins`、`backends` 目录。启动时 AIMA 从实际二进制目录运行，
+并将这些目录合并到 `LD_LIBRARY_PATH`，避免动态 backend 因只复制主程序而缺失。
 
 **与 NativeRuntime 的集成**:
 - `BinaryManager` 通过 `BinaryResolveFunc` 函数类型注入到 `NativeRuntime`

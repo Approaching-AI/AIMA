@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -73,6 +74,38 @@ func TestEngineRemoveProtectsPreinstalledAndLegacyFiles(t *testing.T) {
 			}
 			if len(store.events) != 1 || store.events[0] != "references" {
 				t.Fatalf("events = %#v", store.events)
+			}
+		})
+	}
+}
+
+func TestLooksLikeNativeEngineBundleRecognizesExtensionlessExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows native executables are recognized by .exe suffix")
+	}
+	root := t.TempDir()
+	executable := filepath.Join(root, "llama-server")
+	plainFile := filepath.Join(root, "container-image")
+	if err := os.WriteFile(executable, []byte("engine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plainFile, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "extensionless executable", path: executable, want: true},
+		{name: "plain extensionless file", path: plainFile, want: false},
+		{name: "ambiguous tar archive", path: filepath.Join(root, "engine.tar.gz"), want: false},
+		{name: "directory", path: root, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := looksLikeNativeEngineBundle(tt.path); got != tt.want {
+				t.Fatalf("looksLikeNativeEngineBundle(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}

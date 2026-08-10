@@ -194,12 +194,15 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	// Resolve binary: dist/ first, then the pre-installed engine dirs
 	// (AIMA_ENGINE_DIR — the SAME dirs the engine scanner uses, so anything scanning
 	// found is launchable), then auto-download if a source is available.
+	resolvedBundleDir := ""
 	if resolved := r.findLocalBinary(command[0], req.BinarySource); resolved != "" {
 		command[0] = resolved
+		resolvedBundleDir = nativeBinaryDir(resolved)
 	} else if r.resolveBinary != nil && req.BinarySource != nil {
 		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
 		if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
 			command[0] = resolved
+			resolvedBundleDir = nativeBinaryDir(resolved)
 		} else if binarySourcePinned(req.BinarySource) {
 			logFile.Close()
 			clearPlaceholder()
@@ -208,10 +211,11 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 			slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
 		}
 	}
+	effectiveWorkDir := nativeWorkDir(req.WorkDir, resolvedBundleDir)
 
 	// Create cancellable context for this process
 	procCtx, cancel := context.WithCancel(context.Background())
-	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "), "work_dir", req.WorkDir)
+	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "), "work_dir", effectiveWorkDir)
 
 	var cmd *exec.Cmd
 	var procPID int
@@ -229,7 +233,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		launched := false
 		if hasInteractiveSession() {
 			logFile.Close() // batch file manages the log output
-			if pid, serr := r.launchViaSchtasks(req.Name, command, logPath, req.Env, req.WorkDir); serr == nil {
+			if pid, serr := r.launchViaSchtasks(req.Name, command, logPath, req.Env, effectiveWorkDir); serr == nil {
 				procPID = pid
 				procLogFile = nil
 				launched = true
@@ -249,7 +253,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 			slog.Info("no interactive desktop session; starting engine directly in current session", "name", req.Name)
 		}
 		if !launched {
-			startedCmd, serr := r.startDirect(procCtx, command, logFile, req.Env, req.WorkDir)
+			startedCmd, serr := r.startDirect(procCtx, command, logFile, req.Env, effectiveWorkDir)
 			if serr != nil {
 				cancel()
 				logFile.Close()
@@ -266,28 +270,23 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		configureDetachedProcess(cmd)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		// Build environment: start with parent env, add distDir library path, then request env vars.
+		// Keep bundle-local backends ahead of system libraries while preserving catalog env.
 		env := os.Environ()
-		if r.distDir != "" {
-			ldVar := "LD_LIBRARY_PATH"
-			if goruntime.GOOS == "darwin" {
-				ldVar = "DYLD_LIBRARY_PATH"
-			}
-			existing := os.Getenv(ldVar)
-			newVal := r.distDir
-			if existing != "" {
-				newVal = r.distDir + ":" + existing
-			}
-			env = append(env, ldVar+"="+newVal)
-		}
 		for k, v := range req.Env {
-			env = append(env, k+"="+v)
+			env = setEnvValue(env, k, v)
+		}
+		ldVar := "LD_LIBRARY_PATH"
+		if goruntime.GOOS == "darwin" {
+			ldVar = "DYLD_LIBRARY_PATH"
+		}
+		if libraryDirs := nativeLibraryDirs(command[0], r.distDir, r.engineDirs...); len(libraryDirs) > 0 {
+			env = prependEnvPaths(env, ldVar, libraryDirs)
 		}
 		if len(env) > 0 {
 			cmd.Env = env
 		}
-		if req.WorkDir != "" {
-			cmd.Dir = req.WorkDir
+		if effectiveWorkDir != "" {
+			cmd.Dir = effectiveWorkDir
 		}
 		if err := cmd.Start(); err != nil {
 			cancel()
@@ -373,7 +372,7 @@ func (r *NativeRuntime) startDirect(ctx context.Context, command []string, logFi
 	cmd.Stderr = logFile
 	env := os.Environ()
 	for k, v := range reqEnv {
-		env = append(env, k+"="+v)
+		env = setEnvValue(env, k, v)
 	}
 	cmd.Env = env
 	if workDir != "" {
@@ -383,6 +382,104 @@ func (r *NativeRuntime) startDirect(ctx context.Context, command []string, logFi
 		return nil, err
 	}
 	return cmd, nil
+}
+
+func nativeLibraryDirs(binaryPath, distDir string, engineDirs ...string) []string {
+	var dirs []string
+	seen := make(map[string]bool)
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		dir = filepath.Clean(dir)
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = resolved
+		}
+		if seen[dir] {
+			return
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	addRoot := func(root string) {
+		add(root)
+		for _, name := range []string{"lib", "lib64", "plugins", "backends"} {
+			add(filepath.Join(root, name))
+		}
+	}
+
+	if filepath.IsAbs(binaryPath) {
+		binaryDir := nativeBinaryDir(binaryPath)
+		addRoot(binaryDir)
+		if strings.EqualFold(filepath.Base(binaryDir), "bin") {
+			addRoot(filepath.Dir(binaryDir))
+		}
+	}
+	addRoot(distDir)
+	for _, engineDir := range engineDirs {
+		addRoot(engineDir)
+	}
+	return dirs
+}
+
+func nativeBinaryDir(binaryPath string) string {
+	if resolved, err := filepath.EvalSymlinks(binaryPath); err == nil {
+		return filepath.Dir(resolved)
+	}
+	return filepath.Dir(binaryPath)
+}
+
+func nativeWorkDir(configured, resolvedBundleDir string) string {
+	if configured != "" {
+		return configured
+	}
+	return resolvedBundleDir
+}
+
+func prependEnvPaths(env []string, key string, paths []string) []string {
+	combined := make([]string, 0, len(paths)+4)
+	seen := make(map[string]bool)
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" && !seen[path] {
+			seen[path] = true
+			combined = append(combined, path)
+		}
+	}
+	if existing, ok := envValue(env, key); ok {
+		for _, path := range filepath.SplitList(existing) {
+			path = strings.TrimSpace(path)
+			if path != "" && !seen[path] {
+				seen[path] = true
+				combined = append(combined, path)
+			}
+		}
+	}
+	return setEnvValue(env, key, strings.Join(combined, string(os.PathListSeparator)))
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix), true
+		}
+	}
+	return "", false
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	result := env[:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func (r *NativeRuntime) Delete(_ context.Context, name string) error {

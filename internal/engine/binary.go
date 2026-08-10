@@ -500,8 +500,89 @@ func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(
 				destName += ".exe"
 			}
 		}
-		return copyFile(bundlePath, filepath.Join(destDir, destName), info.Mode())
+		return installStandaloneBinary(bundlePath, filepath.Join(destDir, destName), info.Mode())
 	}
+}
+
+func installStandaloneBinary(binaryPath, destPath string, mode os.FileMode) error {
+	realPath, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		return fmt.Errorf("resolve local engine binary %s: %w", binaryPath, err)
+	}
+	if err := copyFile(realPath, destPath, mode); err != nil {
+		return err
+	}
+	return copyRuntimeCompanions(filepath.Dir(realPath), filepath.Dir(destPath))
+}
+
+func copyRuntimeCompanions(srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("read engine binary directory %s: %w", srcDir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		srcPath := filepath.Join(srcDir, name)
+		dstPath := filepath.Join(dstDir, name)
+		if entry.IsDir() {
+			if isRuntimeCompanionDir(name) {
+				if err := copyDirContents(srcPath, dstPath); err != nil {
+					return fmt.Errorf("copy engine runtime directory %s: %w", srcPath, err)
+				}
+			}
+			continue
+		}
+		if !isSharedLibraryName(name) {
+			continue
+		}
+		if err := copyRuntimeCompanionFile(srcPath, dstPath, entry); err != nil {
+			return fmt.Errorf("copy engine runtime library %s: %w", srcPath, err)
+		}
+	}
+	return nil
+}
+
+func isRuntimeCompanionDir(name string) bool {
+	switch strings.ToLower(name) {
+	case "lib", "lib64", "plugins", "backends":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSharedLibraryName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".so") || strings.Contains(lower, ".so.") ||
+		strings.HasSuffix(lower, ".dylib") || strings.HasSuffix(lower, ".dll")
+}
+
+func copyRuntimeCompanionFile(srcPath, dstPath string, entry os.DirEntry) error {
+	if entry.Type()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(dstPath); err == nil {
+			if err := os.Remove(dstPath); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return os.Symlink(target, dstPath)
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("unsupported file type")
+	}
+	return copyFile(srcPath, dstPath, info.Mode())
 }
 
 func finalizeNativeDist(destDir, binaryName string) {
@@ -516,7 +597,12 @@ func finalizeNativeDist(destDir, binaryName string) {
 				break
 			}
 		}
-		createSoSymlinks(destDir)
+		_ = filepath.WalkDir(destDir, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				createSoSymlinks(path)
+			}
+			return nil
+		})
 	}
 }
 

@@ -776,6 +776,81 @@ func TestBinaryManagerImportBundleDoesNotPartiallyInstallInvalidArchive(t *testi
 	}
 }
 
+func TestBinaryManagerImportStandaloneBinaryCopiesRuntimeCompanions(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("symlink fixture requires Unix semantics")
+	}
+
+	for _, tt := range []struct {
+		name           string
+		withCompanions bool
+	}{
+		{name: "plain binary"},
+		{name: "binary with runtime bundle", withCompanions: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceRoot := t.TempDir()
+			bundleDir := filepath.Join(sourceRoot, "engine-bundle")
+			if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			binaryPath := filepath.Join(bundleDir, "llama-server-real")
+			if err := os.WriteFile(binaryPath, []byte("engine"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			importPath := filepath.Join(sourceRoot, "llama-server")
+			if err := os.Symlink(binaryPath, importPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bundleDir, "README.txt"), []byte("unrelated"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(bundleDir, "assets"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.withCompanions {
+				if err := os.WriteFile(filepath.Join(bundleDir, "libggml-base.so.1.2"), []byte("base"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("libggml-base.so.1.2", filepath.Join(bundleDir, "libggml-base.so")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(bundleDir, "backends"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bundleDir, "backends", "libggml-hip.so"), []byte("hip"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			distDir := t.TempDir()
+			if err := NewBinaryManager(distDir).ImportBundle(context.Background(), importPath, "", nil); err != nil {
+				t.Fatalf("ImportBundle: %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Join(distDir, "llama-server")); err != nil || string(got) != "engine" {
+				t.Fatalf("imported binary = %q, err=%v", got, err)
+			}
+			for _, unwanted := range []string{"README.txt", "assets"} {
+				if _, err := os.Stat(filepath.Join(distDir, unwanted)); !os.IsNotExist(err) {
+					t.Fatalf("unrelated companion %s was imported: %v", unwanted, err)
+				}
+			}
+			if !tt.withCompanions {
+				return
+			}
+			if got, err := os.ReadFile(filepath.Join(distDir, "libggml-base.so.1.2")); err != nil || string(got) != "base" {
+				t.Fatalf("versioned library = %q, err=%v", got, err)
+			}
+			if target, err := os.Readlink(filepath.Join(distDir, "libggml-base.so")); err != nil || target != "libggml-base.so.1.2" {
+				t.Fatalf("library symlink target = %q, err=%v", target, err)
+			}
+			if got, err := os.ReadFile(filepath.Join(distDir, "backends", "libggml-hip.so")); err != nil || string(got) != "hip" {
+				t.Fatalf("backend library = %q, err=%v", got, err)
+			}
+		})
+	}
+}
+
 func TestBinaryManagerImportBundleRollsBackPromotionConflict(t *testing.T) {
 	t.Parallel()
 

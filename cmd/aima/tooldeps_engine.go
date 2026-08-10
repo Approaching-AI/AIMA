@@ -482,8 +482,13 @@ func removeAuthorizedEnginePath(path string) error {
 
 func looksLikeNativeEngineBundle(path string) bool {
 	info, err := os.Stat(path)
-	if err == nil && info.IsDir() {
-		return true
+	if err == nil {
+		if info.IsDir() {
+			return true
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return true
+		}
 	}
 	lower := strings.ToLower(path)
 	switch {

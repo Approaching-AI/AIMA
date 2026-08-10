@@ -55,13 +55,15 @@ AIMA 支持两种引擎运行时，提供统一的用户界面：
 
 ### 库存与来源
 
-SQLite v21 为每个 Engine 版本记录以下生命周期证据：
+SQLite v22 为每个 Engine 版本记录以下生命周期证据：
 
 | 字段 | 含义 |
 |------|------|
 | `asset_name` | Catalog Engine Asset 的稳定名称 |
 | `version` | 扫描、包布局或严格摘要证据得到的实际版本 |
 | `catalog_version` | 当前 Catalog 声明版本，不替代实际版本 |
+| `detected_version` | 由 Catalog probe 或已校验导入得到的实际版本 |
+| `version_match` | 实际版本与 Catalog 的关系：`exact`、`compatible`、`mismatch` 或 `unknown` |
 | `origin` | `managed`、`imported`、`preinstalled` 或 `legacy` |
 | `content_digest` | Native 文件 SHA256 或可取得的 OCI digest |
 | `location` | Native 绝对路径或容器镜像引用 |
@@ -378,10 +380,16 @@ aima engine import /media/usb/llamacpp-linux-amd64.tar.gz
 ```
 
 Linux 单文件导入会解析软链接的真实目录，并复制同目录的 `*.so*` 及
-`lib`、`lib64`、`plugins`、`backends` 目录。启动时 AIMA 从实际二进制目录运行，
+`lib`、`lib64`、`libexec`、`amdgcn`、`plugins`、`backends` 目录。对于
+`root/bin/<binary> + root/{lib,libexec,amdgcn}` 布局，导入会保留原目录拓扑。
+启动时 AIMA 从 bundle root 运行，
 并将这些目录合并到 `LD_LIBRARY_PATH`，避免动态 backend 因只复制主程序而缺失。
 若 `AIMA_ENGINE_DIR` 或 `LD_LIBRARY_PATH` 中存在同名、同内容的二进制，导入时也会
 从该目录收集运行库；哈希不一致的引擎目录不会混用。
+
+导入在 staging 和最终 dist 位置分别执行 Catalog 声明的 `--version` smoke，并确认
+scanner 与 resolver 都能定位最终 binary。版本 unknown/mismatch、缺少 bundle loader
+或共享库、扫描不可见、resolver 不可见都会直接使导入失败，不会写入可用库存。
 
 **与 NativeRuntime 的集成**:
 - `BinaryManager` 通过 `BinaryResolveFunc` 函数类型注入到 `NativeRuntime`
@@ -486,7 +494,7 @@ docker save vllm/vllm-openai:latest -o /media/usb/vllm-latest.tar
 - `internal/cli/engine.go` - CLI 命令处理
 - `internal/mcp/tools_engine.go` - Engine MCP 工具定义
 - `internal/mcp/tools.go` - `RegisterAllTools()` 注册入口
-- `internal/sqlite.go` - SQLite v21 Engine 版本库存、激活、回滚和引用检查
+- `internal/sqlite.go` - SQLite v22 Engine 版本库存、版本探测证据、激活、回滚和引用检查
 
 ---
 

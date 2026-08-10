@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -184,18 +185,15 @@ func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
 	expectedSHA256 := source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]
 	if strings.TrimSpace(expectedSHA256) != "" {
 		installDir := m.installDir(source)
-		if path, ok := findBinaryInDir(installDir, source.Binary); ok && verifyBundleProvenance(installDir, path, expectedSHA256) == nil {
+		if path, ok := FindBinaryInDir(installDir, source.Binary); ok && verifyBundleProvenance(installDir, path, expectedSHA256) == nil {
 			return path, true
 		}
 		return "", false
 	}
 
 	if source.Binary != "" {
-		for _, c := range binaryCandidates(source.Binary) {
-			p := filepath.Join(m.distDir, c)
-			if _, err := os.Stat(p); err == nil {
-				return p, true
-			}
+		if path, ok := FindBinaryInDir(m.distDir, source.Binary); ok {
+			return path, true
 		}
 	}
 
@@ -255,7 +253,7 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 	}
 	finalizeNativeDist(stageDir, binaryName)
 	if binaryName != "" {
-		if _, ok := findBinaryInDir(stageDir, binaryName); !ok {
+		if _, ok := FindBinaryInDir(stageDir, binaryName); !ok {
 			return fmt.Errorf("binary %s not found after staging local bundle", binaryName)
 		}
 	}
@@ -337,18 +335,57 @@ type bundleProvenance struct {
 
 const bundleProvenanceFile = ".aima-provenance.json"
 
-func findBinaryInDir(dir, binaryName string) (string, bool) {
+// FindBinaryInDir resolves a native binary from a bundle root. An explicit
+// relative path wins; otherwise nested bundle layouts such as bin/<binary> are
+// searched recursively and selected deterministically.
+func FindBinaryInDir(dir, binaryName string) (string, bool) {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	binaryName = strings.TrimSpace(binaryName)
+	if dir == "." || binaryName == "" {
+		return "", false
+	}
 	for _, candidate := range binaryCandidates(binaryName) {
-		path := filepath.Join(dir, candidate)
+		path := filepath.Join(dir, filepath.FromSlash(candidate))
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path, true
 		}
 	}
-	return "", false
+	wanted := make(map[string]bool)
+	for _, candidate := range binaryCandidates(binaryName) {
+		wanted[normalizedBinaryName(candidate)] = true
+	}
+	var matches []string
+	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if wanted[normalizedBinaryName(entry.Name())] {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if len(matches) == 0 {
+		return "", false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		leftDepth := len(splitBundlePath(matches[i]))
+		rightDepth := len(splitBundlePath(matches[j]))
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		return matches[i] < matches[j]
+	})
+	return matches[0], true
+}
+
+func splitBundlePath(value string) []string {
+	return strings.FieldsFunc(filepath.Clean(value), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
 }
 
 func writeBundleProvenance(dir, binaryName, sourceSHA256 string) error {
-	binaryPath, ok := findBinaryInDir(dir, binaryName)
+	binaryPath, ok := FindBinaryInDir(dir, binaryName)
 	if !ok {
 		return fmt.Errorf("binary %s not found in staged bundle", binaryName)
 	}
@@ -509,6 +546,12 @@ func installStandaloneBinary(binaryPath, destPath string, mode os.FileMode) erro
 	if err != nil {
 		return fmt.Errorf("resolve local engine binary %s: %w", binaryPath, err)
 	}
+	if bundleRoot, relativeBinary, ok := matchingRuntimeBundle(binaryPath, realPath, filepath.Base(destPath)); ok {
+		if err := copyFile(realPath, filepath.Join(filepath.Dir(destPath), relativeBinary), mode); err != nil {
+			return err
+		}
+		return copyRuntimeCompanions(bundleRoot, filepath.Dir(destPath))
+	}
 	if err := copyFile(realPath, destPath, mode); err != nil {
 		return err
 	}
@@ -531,6 +574,40 @@ func installStandaloneBinary(binaryPath, destPath string, mode os.FileMode) erro
 		}
 	}
 	return nil
+}
+
+func matchingRuntimeBundle(importPath, realPath, binaryName string) (string, string, bool) {
+	sourceDir := filepath.Dir(realPath)
+	if strings.EqualFold(filepath.Base(sourceDir), "bin") {
+		root := filepath.Dir(sourceDir)
+		if hasNestedRuntimeBundle(root) {
+			return root, filepath.Join("bin", binaryName), true
+		}
+	}
+	for _, root := range configuredRuntimeDirs() {
+		if !hasRuntimeCompanions(root) {
+			continue
+		}
+		candidate, ok := FindBinaryInDir(root, filepath.Base(importPath))
+		if !ok || !sameFileContents(realPath, candidate) {
+			continue
+		}
+		relative, err := filepath.Rel(root, candidate)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		return root, relative, true
+	}
+	return "", "", false
+}
+
+func hasNestedRuntimeBundle(root string) bool {
+	for _, name := range []string{"libexec", "amdgcn"} {
+		if info, err := os.Stat(filepath.Join(root, name)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func configuredRuntimeDirs() []string {
@@ -628,7 +705,7 @@ func copyRuntimeCompanions(srcDir, dstDir string) error {
 
 func isRuntimeCompanionDir(name string) bool {
 	switch strings.ToLower(name) {
-	case "lib", "lib64", "plugins", "backends":
+	case "lib", "lib64", "libexec", "amdgcn", "plugins", "backends":
 		return true
 	default:
 		return false

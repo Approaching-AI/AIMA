@@ -1176,21 +1176,23 @@ func stateEngineFromScan(img *engine.EngineImage) *state.Engine {
 		}
 	}
 	entry := &state.Engine{
-		ID:             img.ID,
-		Type:           img.Type,
-		Image:          img.Image,
-		Tag:            img.Tag,
-		SizeBytes:      img.SizeBytes,
-		Platform:       img.Platform,
-		RuntimeType:    img.RuntimeType,
-		BinaryPath:     img.BinaryPath,
-		Available:      img.Available,
-		AssetName:      img.AssetName,
-		Version:        img.DetectedVersion,
-		CatalogVersion: img.CatalogVersion,
-		Origin:         img.Origin,
-		ContentDigest:  img.ContentDigest,
-		Location:       location,
+		ID:              img.ID,
+		Type:            img.Type,
+		Image:           img.Image,
+		Tag:             img.Tag,
+		SizeBytes:       img.SizeBytes,
+		Platform:        img.Platform,
+		RuntimeType:     img.RuntimeType,
+		BinaryPath:      img.BinaryPath,
+		Available:       img.Available,
+		AssetName:       img.AssetName,
+		Version:         img.DetectedVersion,
+		CatalogVersion:  img.CatalogVersion,
+		DetectedVersion: img.DetectedVersion,
+		VersionMatch:    img.VersionMatch,
+		Origin:          img.Origin,
+		ContentDigest:   img.ContentDigest,
+		Location:        location,
 	}
 	if img.RuntimeType == "native" && img.Origin == "preinstalled" && img.ContentVerified &&
 		(img.VersionMatch == "exact" || img.VersionMatch == "compatible") {

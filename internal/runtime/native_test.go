@@ -1642,6 +1642,22 @@ func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
 	}
 }
 
+func TestFindLocalBinaryKeepsValidatedExplicitPath(t *testing.T) {
+	distDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(distDir, "aima-engine"), []byte("wrong"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exactPath := filepath.Join(t.TempDir(), "aima-engine")
+	if err := os.WriteFile(exactPath, []byte("exact"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewNativeRuntime(t.TempDir(), distDir, t.TempDir())
+	got := rt.findLocalBinary(exactPath, &engine.BinarySource{Binary: "aima-engine"})
+	if got != exactPath {
+		t.Fatalf("findLocalBinary = %q, want validated path %q", got, exactPath)
+	}
+}
+
 func TestNativeBundleLaunchEnvironment(t *testing.T) {
 	distDir := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(distDir); err == nil {
@@ -1649,6 +1665,8 @@ func TestNativeBundleLaunchEnvironment(t *testing.T) {
 	}
 	binDir := filepath.Join(distDir, "bin")
 	libDir := filepath.Join(distDir, "lib")
+	libexecDir := filepath.Join(distDir, "libexec")
+	deviceLibDir := filepath.Join(distDir, "amdgcn")
 	backendDir := filepath.Join(binDir, "backends")
 	engineRoot := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(engineRoot); err == nil {
@@ -1656,7 +1674,7 @@ func TestNativeBundleLaunchEnvironment(t *testing.T) {
 	}
 	engineDir := filepath.Join(engineRoot, "configured-engine")
 	engineLibDir := filepath.Join(engineDir, "lib64")
-	for _, dir := range []string{binDir, libDir, backendDir, engineLibDir} {
+	for _, dir := range []string{binDir, libDir, libexecDir, deviceLibDir, backendDir, engineLibDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -1667,7 +1685,7 @@ func TestNativeBundleLaunchEnvironment(t *testing.T) {
 	}
 
 	dirs := nativeLibraryDirs(binaryPath, distDir, engineDir)
-	wantDirs := []string{binDir, backendDir, distDir, libDir, engineDir, engineLibDir}
+	wantDirs := []string{binDir, backendDir, distDir, libDir, libexecDir, engineDir, engineLibDir}
 	for _, want := range wantDirs {
 		if !containsString(dirs, want) {
 			t.Fatalf("nativeLibraryDirs(%q) = %v, missing %q", binaryPath, dirs, want)
@@ -1705,6 +1723,9 @@ func TestNativeBundleLaunchEnvironment(t *testing.T) {
 	}
 	if got := nativeWorkDir("", binDir); got != binDir {
 		t.Fatalf("bundle work dir = %q, want %q", got, binDir)
+	}
+	if got := nativeBundleRoot(binaryPath); got != distDir {
+		t.Fatalf("nativeBundleRoot = %q, want %q", got, distDir)
 	}
 }
 

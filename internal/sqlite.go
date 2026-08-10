@@ -101,6 +101,8 @@ type Engine struct {
 	AssetName          string    `json:"asset_name"`
 	Version            string    `json:"version"`
 	CatalogVersion     string    `json:"catalog_version"`
+	DetectedVersion    string    `json:"detected_version"`
+	VersionMatch       string    `json:"version_match"`
 	Origin             string    `json:"origin"`
 	ContentDigest      string    `json:"content_digest"`
 	Location           string    `json:"location"`
@@ -476,6 +478,10 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v21: versioned engine inventory with verification and activation state
 	if err := d.migrateV21(ctx); err != nil {
 		return fmt.Errorf("migrate v21: %w", err)
+	}
+	// v22: persist native engine probe version evidence
+	if err := d.migrateV22(ctx); err != nil {
+		return fmt.Errorf("migrate v22: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1529,6 +1535,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_engines_one_active_version
 	return nil
 }
 
+func (d *DB) migrateV22(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 22 {
+		return nil
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"detected_version", "TEXT NOT NULL DEFAULT ''"},
+		{"version_match", "TEXT NOT NULL DEFAULT 'unknown'"},
+	} {
+		var count int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name = ?`, column.name).Scan(&count); err != nil {
+			return fmt.Errorf("check engines.%s column: %w", column.name, err)
+		}
+		if count == 0 {
+			statement := fmt.Sprintf("ALTER TABLE engines ADD COLUMN %s %s", column.name, column.definition)
+			if _, err := d.db.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("add engines.%s column: %w", column.name, err)
+			}
+		}
+	}
+	if _, err := d.db.ExecContext(ctx, `
+UPDATE engines
+   SET detected_version = version
+ WHERE detected_version = '' AND version <> ''`); err != nil {
+		return fmt.Errorf("backfill engine detected versions: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 22"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) UpsertDeploymentIntent(ctx context.Context, intent *recovery.Intent) error {
 	if intent == nil {
 		return fmt.Errorf("deployment intent is nil")
@@ -2290,6 +2333,7 @@ const engineSelectColumns = `
 id, type, image, tag, COALESCE(size_bytes, 0), COALESCE(platform, ''),
 COALESCE(runtime_type, 'container'), COALESCE(binary_path, ''), COALESCE(available, 0),
 COALESCE(asset_name, ''), COALESCE(version, ''), COALESCE(catalog_version, ''),
+COALESCE(detected_version, ''), COALESCE(version_match, 'unknown'),
 COALESCE(origin, 'legacy'), COALESCE(content_digest, ''), COALESCE(location, ''),
 COALESCE(active, 0), COALESCE(lifecycle_status, 'discovered'),
 COALESCE(verification_status, 'unverified'), COALESCE(previous_engine_id, ''), created_at`
@@ -2303,7 +2347,7 @@ func scanEngineRow(scanner engineRowScanner) (*Engine, error) {
 	err := scanner.Scan(
 		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform,
 		&e.RuntimeType, &e.BinaryPath, &e.Available, &e.AssetName,
-		&e.Version, &e.CatalogVersion, &e.Origin, &e.ContentDigest,
+		&e.Version, &e.CatalogVersion, &e.DetectedVersion, &e.VersionMatch, &e.Origin, &e.ContentDigest,
 		&e.Location, &e.Active, &e.LifecycleStatus, &e.VerificationStatus,
 		&e.PreviousEngineID, &e.CreatedAt,
 	)
@@ -2339,6 +2383,9 @@ func normalizeEngineForStorage(e *Engine) (Engine, error) {
 	if stored.VerificationStatus == "" {
 		stored.VerificationStatus = "unverified"
 	}
+	if stored.VersionMatch == "" {
+		stored.VersionMatch = "unknown"
+	}
 	return stored, nil
 }
 
@@ -2350,12 +2397,12 @@ func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
 	_, err = d.db.ExecContext(ctx,
 		`INSERT INTO engines (
 			id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available,
-			asset_name, version, catalog_version, origin, content_digest, location, active,
+			asset_name, version, catalog_version, detected_version, version_match, origin, content_digest, location, active,
 			lifecycle_status, verification_status, previous_engine_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stored.ID, stored.Type, stored.Image, stored.Tag, stored.SizeBytes, stored.Platform,
 		stored.RuntimeType, stored.BinaryPath, stored.Available, stored.AssetName, stored.Version,
-		stored.CatalogVersion, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
+		stored.CatalogVersion, stored.DetectedVersion, stored.VersionMatch, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
 		stored.LifecycleStatus, stored.VerificationStatus, stored.PreviousEngineID)
 	if err != nil {
 		return fmt.Errorf("insert engine %s: %w", stored.ID, err)
@@ -2372,9 +2419,9 @@ func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
 	_, err = d.db.ExecContext(ctx,
 		`INSERT INTO engines (
 			id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available,
-			asset_name, version, catalog_version, origin, content_digest, location, active,
+			asset_name, version, catalog_version, detected_version, version_match, origin, content_digest, location, active,
 			lifecycle_status, verification_status, previous_engine_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   type=excluded.type, image=excluded.image, tag=excluded.tag,
 		   size_bytes=excluded.size_bytes, platform=excluded.platform,
@@ -2383,6 +2430,8 @@ func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
 		   asset_name=COALESCE(NULLIF(excluded.asset_name, ''), engines.asset_name),
 		   version=COALESCE(NULLIF(excluded.version, ''), engines.version),
 		   catalog_version=COALESCE(NULLIF(excluded.catalog_version, ''), engines.catalog_version),
+		   detected_version=COALESCE(NULLIF(excluded.detected_version, ''), engines.detected_version),
+		   version_match=COALESCE(NULLIF(excluded.version_match, ''), engines.version_match),
 		   origin=CASE
 		     WHEN engines.origin IN ('managed', 'imported') THEN engines.origin
 		     WHEN excluded.origin = 'legacy' AND engines.origin <> 'legacy' THEN engines.origin
@@ -2405,7 +2454,7 @@ func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
 		   previous_engine_id=engines.previous_engine_id`,
 		stored.ID, stored.Type, stored.Image, stored.Tag, stored.SizeBytes, stored.Platform,
 		stored.RuntimeType, stored.BinaryPath, stored.Available, stored.AssetName, stored.Version,
-		stored.CatalogVersion, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
+		stored.CatalogVersion, stored.DetectedVersion, stored.VersionMatch, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
 		stored.LifecycleStatus, stored.VerificationStatus, stored.PreviousEngineID)
 	if err != nil {
 		return fmt.Errorf("upsert scanned engine %s: %w", stored.ID, err)
@@ -2428,7 +2477,7 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT `+engineSelectColumns+`
-		 FROM engines WHERE available = 1 ORDER BY created_at DESC`)
+		 FROM engines ORDER BY available DESC, created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list engines: %w", err)
 	}

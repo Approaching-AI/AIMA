@@ -237,6 +237,15 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err := requirePinnedRuntime(pinnedIntent, activeRt); err != nil {
 			return nil, err
 		}
+		if activeRt.Name() == "native" {
+			binaryPath, err := validatedPreinstalledNativeBinary(ctx, db, resolved, engineAsset)
+			if err != nil {
+				return nil, err
+			}
+			if binaryPath != "" && len(req.Command) > 0 {
+				req.Command[0] = binaryPath
+			}
+		}
 		deployName := knowledge.SanitizePodName(modelName + "-" + resolved.Engine)
 		operationNames := deploymentApplyLockNames(cat, modelName, canonicalName, deployName, deploymentIntentName(req, activeRt.Name()), pinnedIntent)
 		var existing *runtime.DeploymentStatus
@@ -1059,6 +1068,55 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		return logs, err
 	}
+}
+
+func validatedPreinstalledNativeBinary(ctx context.Context, db *state.DB, resolved *knowledge.ResolvedConfig, asset *knowledge.EngineAsset) (string, error) {
+	if db == nil || resolved == nil || asset == nil || asset.Source == nil || asset.Source.Probe == nil || asset.Source.InstallType != "preinstalled" {
+		return "", nil
+	}
+	expected := strings.TrimSpace(asset.Metadata.Version)
+	if expected == "" {
+		return "", nil
+	}
+	entries, err := db.ListEngines(ctx)
+	if err != nil {
+		return "", fmt.Errorf("validate native engine version: %w", err)
+	}
+	var evidence []*state.Engine
+	for _, entry := range entries {
+		if entry == nil || entry.RuntimeType != "native" || !strings.EqualFold(entry.AssetName, asset.Metadata.Name) {
+			continue
+		}
+		evidence = append(evidence, entry)
+		if entry.Available && entry.VersionMatch == "exact" && entry.DetectedVersion == expected && entry.BinaryPath != "" {
+			if info, statErr := os.Stat(entry.BinaryPath); statErr == nil && !info.IsDir() {
+				return entry.BinaryPath, nil
+			}
+		}
+	}
+	if len(evidence) == 0 {
+		return "", fmt.Errorf("native engine %s requires detected version %s; no scan evidence is available (run 'aima engine scan --runtime native')", asset.Metadata.Name, expected)
+	}
+	parts := make([]string, 0, len(evidence))
+	for _, entry := range evidence {
+		detected := entry.DetectedVersion
+		if detected == "" {
+			detected = "unknown"
+		}
+		match := entry.VersionMatch
+		if match == "" {
+			match = "unknown"
+		}
+		detail := detected + " (" + match + ")"
+		if entry.BinaryPath != "" {
+			if info, statErr := os.Stat(entry.BinaryPath); statErr != nil || info.IsDir() {
+				detail += " [binary unavailable]"
+			}
+		}
+		parts = append(parts, detail)
+	}
+	sort.Strings(parts)
+	return "", fmt.Errorf("native engine %s requires catalog version %s; detected %s", asset.Metadata.Name, expected, strings.Join(parts, ", "))
 }
 
 func cloneWarmupRequestBody(source map[string]any) map[string]any {

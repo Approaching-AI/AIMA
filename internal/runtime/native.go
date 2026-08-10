@@ -197,12 +197,12 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	resolvedBundleDir := ""
 	if resolved := r.findLocalBinary(command[0], req.BinarySource); resolved != "" {
 		command[0] = resolved
-		resolvedBundleDir = nativeBinaryDir(resolved)
+		resolvedBundleDir = nativeBundleRoot(resolved)
 	} else if r.resolveBinary != nil && req.BinarySource != nil {
 		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
 		if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
 			command[0] = resolved
-			resolvedBundleDir = nativeBinaryDir(resolved)
+			resolvedBundleDir = nativeBundleRoot(resolved)
 		} else if binarySourcePinned(req.BinarySource) {
 			logFile.Close()
 			clearPlaceholder()
@@ -281,6 +281,9 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		}
 		if libraryDirs := nativeLibraryDirs(command[0], r.distDir, r.engineDirs...); len(libraryDirs) > 0 {
 			env = prependEnvPaths(env, ldVar, libraryDirs)
+		}
+		if deviceLib := filepath.Join(nativeBundleRoot(command[0]), "amdgcn"); pathIsDirectory(deviceLib) {
+			env = prependEnvPaths(env, "HIP_DEVICE_LIB_PATH", []string{deviceLib})
 		}
 		if len(env) > 0 {
 			cmd.Env = env
@@ -406,7 +409,7 @@ func nativeLibraryDirs(binaryPath, distDir string, engineDirs ...string) []strin
 	}
 	addRoot := func(root string) {
 		add(root)
-		for _, name := range []string{"lib", "lib64", "plugins", "backends"} {
+		for _, name := range []string{"lib", "lib64", "libexec", "plugins", "backends"} {
 			add(filepath.Join(root, name))
 		}
 	}
@@ -430,6 +433,19 @@ func nativeBinaryDir(binaryPath string) string {
 		return filepath.Dir(resolved)
 	}
 	return filepath.Dir(binaryPath)
+}
+
+func nativeBundleRoot(binaryPath string) string {
+	dir := nativeBinaryDir(binaryPath)
+	if strings.EqualFold(filepath.Base(dir), "bin") {
+		return filepath.Dir(dir)
+	}
+	return dir
+}
+
+func pathIsDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func nativeWorkDir(configured, resolvedBundleDir string) string {
@@ -642,6 +658,9 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 		if len(status.Config) == 0 && len(meta.Config) > 0 {
 			status.Config = cloneConfigForStatus(meta.Config)
 		}
+		status.AdapterCommand = append([]string(nil), meta.Command...)
+		status.AdapterModelPath = meta.ModelPath
+		status.AdapterInstanceID = fmt.Sprintf("%d:%d", meta.PID, meta.StartTime.UnixNano())
 		return status
 	}
 
@@ -940,7 +959,7 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 
 // metaToStatus converts persisted metadata to a DeploymentStatus by checking port liveness
 // and HTTP health endpoint (not just TCP). vLLM and other engines bind the port early,
-	// before model weights are loaded, so TCP alive does NOT mean ready to serve.
+// before model weights are loaded, so TCP alive does NOT mean ready to serve.
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
 	processState := processMetaMatching
@@ -1108,6 +1127,11 @@ func (r *NativeRuntime) findLocalBinary(commandName string, source *engine.Binar
 	if binarySourcePinned(source) {
 		return ""
 	}
+	if filepath.IsAbs(commandName) || strings.ContainsRune(commandName, os.PathSeparator) {
+		if info, err := os.Stat(commandName); err == nil && !info.IsDir() {
+			return commandName
+		}
+	}
 	if resolved := r.findInDist(commandName); resolved != "" {
 		return resolved
 	}
@@ -1135,14 +1159,22 @@ func binarySourcePinned(source *engine.BinarySource) bool {
 // findInDist checks for a binary in the dist directory.
 // On Windows, also tries with .exe suffix.
 func (r *NativeRuntime) findInDist(name string) string {
-	return findBinaryIn([]string{r.distDir}, name)
+	if resolved, ok := engine.FindBinaryInDir(r.distDir, name); ok {
+		return resolved
+	}
+	return ""
 }
 
 // findInEngineDirs resolves a bare engine binary name against the pre-installed
 // engine dirs (AIMA_ENGINE_DIR). This mirrors how the engine scanner discovers
 // binaries, so an engine that scanning found is also the one that gets launched.
 func (r *NativeRuntime) findInEngineDirs(name string) string {
-	return findBinaryIn(r.engineDirs, name)
+	for _, dir := range r.engineDirs {
+		if resolved, ok := engine.FindBinaryInDir(dir, name); ok {
+			return resolved
+		}
+	}
+	return ""
 }
 
 // findBinaryIn returns the absolute path of name (with .exe on Windows) in the

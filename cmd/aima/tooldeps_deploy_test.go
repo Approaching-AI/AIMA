@@ -254,6 +254,51 @@ func TestEngineSourceSHA256UsesCurrentPlatform(t *testing.T) {
 	}
 }
 
+func TestValidatedPreinstalledNativeBinaryBlocksMismatchAndSelectsExact(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	asset := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "aima-engine-native-amd395", Type: "aima-engine-native", Version: "1.5.0"},
+		Source:   &knowledge.EngineSource{Binary: "aima-engine", InstallType: "preinstalled", Probe: &knowledge.EngineSourceProbe{}},
+	}
+	oldPath := filepath.Join(t.TempDir(), "aima-engine-1.4.1")
+	if err := db.InsertEngine(ctx, &state.Engine{
+		ID: "old", Type: asset.Metadata.Type, AssetName: asset.Metadata.Name, RuntimeType: "native",
+		BinaryPath: oldPath, Platform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		Version: "1.4.1", CatalogVersion: "1.5.0", DetectedVersion: "1.4.1", VersionMatch: "mismatch", Available: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset); err == nil || !strings.Contains(err.Error(), "1.4.1 (mismatch)") {
+		t.Fatalf("mismatch validation error = %v", err)
+	}
+	exactPath := filepath.Join(t.TempDir(), "aima-engine-1.5.0")
+	if err := os.WriteFile(exactPath, []byte("exact"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, &state.Engine{
+		ID: "exact", Type: asset.Metadata.Type, AssetName: asset.Metadata.Name, RuntimeType: "native",
+		BinaryPath: exactPath, Platform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		Version: "1.5.0", CatalogVersion: "1.5.0", DetectedVersion: "1.5.0", VersionMatch: "exact", Available: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset)
+	if err != nil || got != exactPath {
+		t.Fatalf("exact validation = %q, %v, want %q", got, err, exactPath)
+	}
+	if err := os.Remove(exactPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset); err == nil || !strings.Contains(err.Error(), "binary unavailable") {
+		t.Fatalf("stale exact validation error = %v, want unavailable binary rejection", err)
+	}
+}
+
 func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
 	tests := []struct {
 		value any
@@ -479,6 +524,7 @@ func TestDeployApplyReconcilerUsesPinnedInventoryAfterCatalogVersionChanges(t *t
 	}
 	if err := db.InsertEngine(ctx, &state.Engine{
 		ID: "vllm-old", Type: "vllm", AssetName: "vllm-test", Version: "1.2.2", CatalogVersion: "1.2.2",
+		DetectedVersion: "1.2.2", VersionMatch: "exact",
 		Platform: goruntime.GOOS + "-" + goruntime.GOARCH, RuntimeType: "native", BinaryPath: binaryPath,
 		Available: true, LifecycleStatus: "verified", VerificationStatus: "verified", Origin: "managed",
 	}); err != nil {

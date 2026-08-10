@@ -80,7 +80,8 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		installed := make([]*state.Engine, 0)
 		for _, e := range allEngines {
-			if strings.ToLower(e.Type) == nameLower ||
+			if strings.EqualFold(e.AssetName, name) ||
+				strings.ToLower(e.Type) == nameLower ||
 				strings.Contains(strings.ToLower(e.Image), nameLower) ||
 				strings.HasPrefix(e.ID, name) {
 				installed = append(installed, e)

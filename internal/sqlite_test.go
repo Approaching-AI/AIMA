@@ -88,19 +88,19 @@ func TestMigrateV20CreatesDeploymentIntents(t *testing.T) {
 	}
 }
 
-func TestMigrateV21ExtendsEngineInventory(t *testing.T) {
+func TestMigrateV22ExtendsEngineInventory(t *testing.T) {
 	db := mustOpen(t)
 
 	var version int
 	if err := db.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 21 {
-		t.Fatalf("user_version=%d want 21", version)
+	if version != 22 {
+		t.Fatalf("user_version=%d want 22", version)
 	}
 	for _, col := range []string{
 		"asset_name", "version", "catalog_version", "origin", "content_digest",
-		"location", "active", "lifecycle_status", "verification_status", "previous_engine_id",
+		"detected_version", "version_match", "location", "active", "lifecycle_status", "verification_status", "previous_engine_id",
 	} {
 		var count int
 		if err := db.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name = ?`, col).Scan(&count); err != nil {
@@ -1347,6 +1347,8 @@ func lifecycleTestEngine(id, version string) *Engine {
 		AssetName:          "engine-a",
 		Version:            version,
 		CatalogVersion:     version,
+		DetectedVersion:    version,
+		VersionMatch:       "exact",
 		Origin:             "managed",
 		ContentDigest:      "sha256:" + id,
 		Location:           "/data/dist/linux-amd64/engine-a/" + version,

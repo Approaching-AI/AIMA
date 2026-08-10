@@ -247,7 +247,7 @@ func TestEngineOfflineLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundlePath := filepath.Join(t.TempDir(), "engine-a-2.0.0.tar.gz")
-	writeNativeEngineBundle(t, bundlePath, "engine-a", "2.0.0", "engine-server", []byte("engine-v2"))
+	writeNativeEngineBundle(t, bundlePath, "engine-a", "2.0.0", "engine-server", []byte("#!/bin/sh\nexit 0\n"))
 	bundleDigest, err := sha256FileDigest(bundlePath)
 	if err != nil {
 		t.Fatalf("bundle digest: %v", err)

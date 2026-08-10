@@ -560,6 +560,7 @@ func TestScanEngineOriginEvidenceMapping(t *testing.T) {
 	got := stateEngineFromScan(scanned)
 	if got.ID != scanned.ID || got.AssetName != scanned.AssetName || got.Version != scanned.DetectedVersion ||
 		got.CatalogVersion != scanned.CatalogVersion || got.Origin != scanned.Origin ||
+		got.DetectedVersion != scanned.DetectedVersion || got.VersionMatch != scanned.VersionMatch ||
 		got.ContentDigest != scanned.ContentDigest || got.Location != "example/engine-a:v1" {
 		t.Fatalf("state Engine evidence = %+v", got)
 	}

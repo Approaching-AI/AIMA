@@ -893,6 +893,46 @@ func TestBinaryManagerImportStandaloneBinaryUsesConfiguredCompanionDir(t *testin
 	}
 }
 
+func TestBinaryManagerImportStandaloneBinaryPreservesNestedConfiguredBundle(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses Linux bundle topology")
+	}
+	configuredRoot := t.TempDir()
+	for _, dir := range []string{"bin", "lib", "libexec", "amdgcn"} {
+		if err := os.MkdirAll(filepath.Join(configuredRoot, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binaryBody := []byte("nested-engine")
+	if err := os.WriteFile(filepath.Join(configuredRoot, "bin", "aima-engine"), binaryBody, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"lib/libengine.so", "libexec/loader", "amdgcn/device.bc"} {
+		if err := os.WriteFile(filepath.Join(configuredRoot, filepath.FromSlash(file)), []byte(file), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	standalone := filepath.Join(t.TempDir(), "aima-engine")
+	if err := os.WriteFile(standalone, binaryBody, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AIMA_ENGINE_DIR", configuredRoot)
+	t.Setenv("LD_LIBRARY_PATH", "")
+
+	distDir := t.TempDir()
+	if err := NewBinaryManager(distDir).ImportBundle(context.Background(), standalone, "", nil); err != nil {
+		t.Fatalf("ImportBundle: %v", err)
+	}
+	for _, path := range []string{"bin/aima-engine", "lib/libengine.so", "libexec/loader", "amdgcn/device.bc"} {
+		if _, err := os.Stat(filepath.Join(distDir, filepath.FromSlash(path))); err != nil {
+			t.Fatalf("missing imported bundle path %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(distDir, "aima-engine")); !os.IsNotExist(err) {
+		t.Fatalf("standalone import flattened nested launcher: %v", err)
+	}
+}
+
 func TestBinaryManagerImportBundleRollsBackPromotionConflict(t *testing.T) {
 	t.Parallel()
 
@@ -1605,6 +1645,50 @@ func TestCompareDetectedVersion(t *testing.T) {
 	}
 }
 
+func TestProbePreinstalledEnforcesCatalogVersionForEveryPath(t *testing.T) {
+	root := t.TempDir()
+	oldBinary := filepath.Join(root, "1.4.1", "aima-engine")
+	exactBinary := filepath.Join(root, "1.5.0", "aima-engine")
+	for _, path := range []string{oldBinary, exactBinary} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("engine"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &mockRunner{responses: map[string]mockResponse{
+		oldBinary + " --version":   {output: []byte("aima-engine-native 1.4.1-native")},
+		exactBinary + " --version": {output: []byte("aima-engine-native 1.5.0-native")},
+	}}
+	images := probePreinstalled(context.Background(), ScanOptions{
+		Assets: []AssetDescriptor{{
+			AssetName: "aima-engine-native-amd395", Type: "aima-engine-native", CatalogVersion: "1.5.0",
+			Probe: &knowledge.EngineSourceProbe{
+				Paths: []string{oldBinary, exactBinary}, VersionCommand: []string{"./aima-engine", "--version"},
+				VersionPattern: `aima-engine-native[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)-native`,
+			},
+		}},
+		Runner: runner, Platform: "linux-amd64",
+	})
+	if len(images) != 2 {
+		t.Fatalf("probe results = %d, want 2", len(images))
+	}
+	byVersion := make(map[string]*EngineImage)
+	for _, image := range images {
+		byVersion[image.DetectedVersion] = image
+	}
+	if old := byVersion["1.4.1"]; old == nil || old.VersionMatch != "mismatch" || old.Available {
+		t.Fatalf("1.4.1 evidence = %+v, want mismatch/unavailable", old)
+	}
+	if exact := byVersion["1.5.0"]; exact == nil || exact.VersionMatch != "exact" || !exact.Available {
+		t.Fatalf("1.5.0 evidence = %+v, want exact/available", exact)
+	}
+	if images[0].ID == images[1].ID {
+		t.Fatalf("probe paths shared ID %q", images[0].ID)
+	}
+}
+
 func TestScanExplicitProbeOriginAndVersionEvidence(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "engine-a")
@@ -1856,6 +1940,57 @@ func TestScanNativeFindsBinaryInExtraDirs(t *testing.T) {
 	}
 	if got := results[0].RuntimeType; got != "native" {
 		t.Errorf("RuntimeType = %q, want native", got)
+	}
+}
+
+func TestScanNativeFindsAndProbesNestedBundleInExtraDirs(t *testing.T) {
+	t.Setenv("PATH", "")
+	distDir := t.TempDir()
+	bundleRoot := t.TempDir()
+	binPath := filepath.Join(bundleRoot, "bin", "aima-engine")
+	oldBinPath := filepath.Join(bundleRoot, "legacy", "bin", "aima-engine")
+	for _, path := range []string{binPath, oldBinPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("stub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &mockRunner{responses: map[string]mockResponse{
+		binPath + " --version":    {output: []byte("aima-engine-native 1.5.0-native")},
+		oldBinPath + " --version": {output: []byte("aima-engine-native 1.4.1-native")},
+	}}
+	results, err := ScanNative(context.Background(), ScanOptions{
+		DistDir: distDir, ExtraDirs: []string{bundleRoot}, Platform: "linux-amd64", Runner: runner,
+		BinaryAssets: map[string]string{"aima-engine": "aima-engine-native-amd395"},
+		Assets: []AssetDescriptor{{
+			AssetName: "aima-engine-native-amd395", Type: "aima-engine-native", CatalogVersion: "1.5.0",
+			Probe: &knowledge.EngineSourceProbe{
+				VersionCommand:  []string{"./aima-engine", "--version"},
+				VersionPattern:  `aima-engine-native[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)-native`,
+				FallbackVersion: "unknown",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("nested bundle scan evidence = %+v", results)
+	}
+	byVersion := make(map[string]*EngineImage)
+	for _, result := range results {
+		byVersion[result.DetectedVersion] = result
+	}
+	if exact := byVersion["1.5.0"]; exact == nil || exact.BinaryPath != binPath || exact.VersionMatch != "exact" || !exact.Available {
+		t.Fatalf("exact nested bundle scan evidence = %+v", exact)
+	}
+	if old := byVersion["1.4.1"]; old == nil || old.BinaryPath != oldBinPath || old.VersionMatch != "mismatch" || old.Available {
+		t.Fatalf("old nested bundle scan evidence = %+v", old)
+	}
+	if results[0].ID == results[1].ID {
+		t.Fatalf("nested binaries share inventory ID %q", results[0].ID)
 	}
 }
 

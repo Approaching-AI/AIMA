@@ -851,6 +851,48 @@ func TestBinaryManagerImportStandaloneBinaryCopiesRuntimeCompanions(t *testing.T
 	}
 }
 
+func TestBinaryManagerImportStandaloneBinaryUsesConfiguredCompanionDir(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		candidateContent string
+		wantLibrary      bool
+	}{
+		{name: "matching binary", candidateContent: "same-engine", wantLibrary: true},
+		{name: "different binary version", candidateContent: "other-engine", wantLibrary: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceDir := t.TempDir()
+			binaryPath := filepath.Join(sourceDir, "llama-server")
+			if err := os.WriteFile(binaryPath, []byte("same-engine"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			companionDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(companionDir, "llama-server"), []byte(tt.candidateContent), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(companionDir, "libggml-hip.so"), []byte("hip"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("AIMA_ENGINE_DIR", companionDir)
+			t.Setenv("LD_LIBRARY_PATH", "")
+			t.Setenv("DYLD_LIBRARY_PATH", "")
+
+			distDir := t.TempDir()
+			if err := NewBinaryManager(distDir).ImportBundle(context.Background(), binaryPath, "", nil); err != nil {
+				t.Fatalf("ImportBundle: %v", err)
+			}
+			got, err := os.ReadFile(filepath.Join(distDir, "libggml-hip.so"))
+			if tt.wantLibrary {
+				if err != nil || string(got) != "hip" {
+					t.Fatalf("configured runtime library = %q, err=%v", got, err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("library from mismatched binary was imported: %v", err)
+			}
+		})
+	}
+}
+
 func TestBinaryManagerImportBundleRollsBackPromotionConflict(t *testing.T) {
 	t.Parallel()
 

@@ -512,7 +512,91 @@ func installStandaloneBinary(binaryPath, destPath string, mode os.FileMode) erro
 	if err := copyFile(realPath, destPath, mode); err != nil {
 		return err
 	}
-	return copyRuntimeCompanions(filepath.Dir(realPath), filepath.Dir(destPath))
+	destDir := filepath.Dir(destPath)
+	sourceDir := filepath.Dir(realPath)
+	if err := copyRuntimeCompanions(sourceDir, destDir); err != nil {
+		return err
+	}
+	for _, dir := range configuredRuntimeDirs() {
+		if samePath(dir, sourceDir) || !hasRuntimeCompanions(dir) {
+			continue
+		}
+		candidate := filepath.Join(dir, filepath.Base(binaryPath))
+		if !sameFileContents(realPath, candidate) {
+			continue
+		}
+		slog.Info("importing native engine runtime companions", "binary", binaryPath, "dir", dir)
+		if err := copyRuntimeCompanions(dir, destDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func configuredRuntimeDirs() []string {
+	values := []string{os.Getenv("AIMA_ENGINE_DIR")}
+	switch goruntime.GOOS {
+	case "darwin":
+		values = append(values, os.Getenv("DYLD_LIBRARY_PATH"))
+	case "linux":
+		values = append(values, os.Getenv("LD_LIBRARY_PATH"))
+	}
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, value := range values {
+		for _, dir := range filepath.SplitList(value) {
+			if dir = strings.TrimSpace(dir); dir != "" {
+				dir = filepath.Clean(dir)
+				if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+					dir = resolved
+				}
+				if !seen[dir] {
+					seen[dir] = true
+					dirs = append(dirs, dir)
+				}
+			}
+		}
+	}
+	return dirs
+}
+
+func hasRuntimeCompanions(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if isSharedLibraryName(entry.Name()) || entry.IsDir() && isRuntimeCompanionDir(entry.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameFileContents(first, second string) bool {
+	firstInfo, err := os.Stat(first)
+	if err != nil || !firstInfo.Mode().IsRegular() {
+		return false
+	}
+	secondInfo, err := os.Stat(second)
+	if err != nil || !secondInfo.Mode().IsRegular() || firstInfo.Size() != secondInfo.Size() {
+		return false
+	}
+	if os.SameFile(firstInfo, secondInfo) {
+		return true
+	}
+	firstHash, err := fileSHA256(first)
+	if err != nil {
+		return false
+	}
+	secondHash, err := fileSHA256(second)
+	return err == nil && firstHash == secondHash
+}
+
+func samePath(first, second string) bool {
+	firstPath, firstErr := filepath.EvalSymlinks(first)
+	secondPath, secondErr := filepath.EvalSymlinks(second)
+	return firstErr == nil && secondErr == nil && firstPath == secondPath
 }
 
 func copyRuntimeCompanions(srcDir, dstDir string) error {

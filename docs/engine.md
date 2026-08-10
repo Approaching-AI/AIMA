@@ -380,6 +380,8 @@ aima engine import /media/usb/llamacpp-linux-amd64.tar.gz
 Linux 单文件导入会解析软链接的真实目录，并复制同目录的 `*.so*` 及
 `lib`、`lib64`、`plugins`、`backends` 目录。启动时 AIMA 从实际二进制目录运行，
 并将这些目录合并到 `LD_LIBRARY_PATH`，避免动态 backend 因只复制主程序而缺失。
+若 `AIMA_ENGINE_DIR` 或 `LD_LIBRARY_PATH` 中存在同名、同内容的二进制，导入时也会
+从该目录收集运行库；哈希不一致的引擎目录不会混用。
 
 **与 NativeRuntime 的集成**:
 - `BinaryManager` 通过 `BinaryResolveFunc` 函数类型注入到 `NativeRuntime`

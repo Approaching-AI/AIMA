@@ -407,6 +407,7 @@ func TestEngineImportNativeAcceptsCompatibleBuildVersion(t *testing.T) {
 	service := &engineLifecycleService{
 		inventory: inv, dataDir: t.TempDir(), inventoryPlatform: goruntime.GOOS + "-" + goruntime.GOARCH,
 		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		resolveAsset:       func(context.Context, string) (*knowledge.EngineAsset, error) { return &asset, nil },
 		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{asset} },
 	}
 
@@ -416,6 +417,13 @@ func TestEngineImportNativeAcceptsCompatibleBuildVersion(t *testing.T) {
 	}
 	if imported.DetectedVersion != "9637" || imported.VersionMatch != "compatible" || !imported.Available {
 		t.Fatalf("imported compatible evidence = %+v", imported)
+	}
+	ensured, err := service.Ensure(context.Background(), engine.EnsureRequest{Name: asset.Metadata.Name, Apply: true})
+	if err != nil {
+		t.Fatalf("Ensure compatible build: %v", err)
+	}
+	if !ensured.Applied || ensured.Plan.Action != "reuse" || ensured.ActiveEngineID != imported.ID || !inv.engines[0].Active {
+		t.Fatalf("compatible ensure result = %+v, inventory = %+v", ensured, inv.engines)
 	}
 }
 

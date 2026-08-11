@@ -299,6 +299,42 @@ func TestValidatedPreinstalledNativeBinaryBlocksMismatchAndSelectsExact(t *testi
 	}
 }
 
+func TestValidatedPreinstalledNativeBinarySelectsCompatibleBuild(t *testing.T) {
+	for _, expected := range []string{"b9330", "9637"} {
+		t.Run(expected, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := state.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			binaryPath := filepath.Join(t.TempDir(), "llama-server")
+			if err := os.WriteFile(binaryPath, []byte("compatible"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.InsertEngine(ctx, &state.Engine{
+				ID: "llama-b9637", Type: "llamacpp", AssetName: "llamacpp-hip-linux",
+				Version: "9637", CatalogVersion: "b9330", DetectedVersion: "9637", VersionMatch: "compatible",
+				Platform: goruntime.GOOS + "-" + goruntime.GOARCH, RuntimeType: "native", BinaryPath: binaryPath,
+				Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified", Origin: "imported",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			asset := &knowledge.EngineAsset{
+				Metadata: knowledge.EngineMetadata{
+					Name: "llamacpp-hip-linux", Type: "llamacpp", Version: expected, CompatibleVersions: []string{"b9637"},
+				},
+				Source: &knowledge.EngineSource{Binary: "llama-server", InstallType: "preinstalled", Probe: &knowledge.EngineSourceProbe{}},
+			}
+			got, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{Source: asset.Source}, asset)
+			if err != nil || got != binaryPath {
+				t.Fatalf("compatible validation = %q, %v, want %q", got, err, binaryPath)
+			}
+		})
+	}
+}
+
 func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
 	tests := []struct {
 		value any

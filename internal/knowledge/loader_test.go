@@ -2,6 +2,9 @@ package knowledge
 
 import (
 	"fmt"
+	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -335,6 +338,110 @@ func TestLoadCatalog(t *testing.T) {
 	})
 }
 
+func TestLoadCatalogExactContextRequestAdapter(t *testing.T) {
+	cat, err := LoadCatalog(fstest.MapFS{
+		"engines/profiles/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: native
+api:
+  protocol: openai
+  base_path: /v1
+  request_adapter:
+    kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    disable_thinking: true
+    padding_role: system
+    padding_prefix: Ignore transport padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+`)},
+		"engines/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: native
+metadata:
+  name: native-test
+  type: native-test
+  version: v1
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.EngineAssets) != 1 {
+		t.Fatalf("EngineAssets = %d, want 1", len(cat.EngineAssets))
+	}
+	adapter := cat.EngineAssets[0].API.RequestAdapter
+	if adapter == nil {
+		t.Fatal("request adapter was not inherited from profile")
+	}
+	if adapter.Kind != "exact_context" || adapter.ContextConfigKey != "context_tokens" {
+		t.Fatalf("request adapter = %#v", adapter)
+	}
+	if adapter.MaxAttempts != 8 {
+		t.Fatalf("MaxAttempts = %d, want default 8", adapter.MaxAttempts)
+	}
+	if adapter.PaddingUnit != " ·" || adapter.UpstreamModel != "native-model" {
+		t.Fatalf("request adapter strings = %#v", adapter)
+	}
+
+	adapter.PaddingPrefix = "mutated"
+	if got := cat.EngineProfiles["native"].API.RequestAdapter.PaddingPrefix; got == "mutated" {
+		t.Fatal("engine asset shares request adapter pointer with profile")
+	}
+}
+
+func TestLoadCatalogRejectsInvalidRequestAdapter(t *testing.T) {
+	tests := []struct {
+		name    string
+		adapter string
+		want    string
+	}{
+		{
+			name: "unknown kind",
+			adapter: `kind: magic_padding
+    path: /v1/chat/completions`,
+			want: "unknown request adapter kind",
+		},
+		{
+			name: "missing context key",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model`,
+			want: "context_config_key",
+		},
+		{
+			name: "invalid attempts",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+    max_attempts: 33`,
+			want: "max_attempts",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := "kind: engine_asset\nmetadata:\n  name: invalid-adapter\n  type: test\n  version: v1\napi:\n  request_adapter:\n    " + test.adapter + "\n"
+			_, err := LoadCatalog(fstest.MapFS{
+				"engines/invalid.yaml": &fstest.MapFile{Data: []byte(data)},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadCatalog error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	// Test with the real embedded catalog
 	cat, err := LoadCatalog(catalogFS())
@@ -413,6 +520,157 @@ func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *t
 	}
 	if !foundAlias || !foundVariant {
 		t.Fatalf("qwen3.6 structured mapping incomplete: alias=%v variant=%v", foundAlias, foundVariant)
+	}
+}
+
+func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-windows" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-windows engine not found in catalog")
+	}
+	const want = "prune_interval=1h:prune_after=168h:cache_size=0%:cache_size_bytes=0:cache_size_files=100000"
+	if got := engine.Startup.Env["AMD_COMGR_CACHE_POLICY"]; got != want {
+		t.Fatalf("AMD_COMGR_CACHE_POLICY = %q, want %q", got, want)
+	}
+}
+
+func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-linux" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-linux engine not found in catalog")
+	}
+	if engine.Metadata.Version != "b9330" {
+		t.Fatalf("version = %q, want b9330", engine.Metadata.Version)
+	}
+	if len(engine.Metadata.CompatibleVersions) != 1 || engine.Metadata.CompatibleVersions[0] != "b9637" {
+		t.Fatalf("compatible versions = %v, want [b9637]", engine.Metadata.CompatibleVersions)
+	}
+	if engine.Source == nil || !engine.Source.Supports("linux/amd64") {
+		t.Fatal("llamacpp-hip-linux does not support linux/amd64")
+	}
+	if engine.Source.Supports("windows/amd64") {
+		t.Fatal("llamacpp-hip-linux unexpectedly supports windows/amd64")
+	}
+	if engine.Source.Probe == nil || engine.Source.Probe.VersionPattern != "version:[[:space:]]+([0-9]+)" {
+		t.Fatalf("version probe = %+v", engine.Source.Probe)
+	}
+	wantURL := "https://github.com/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-ubuntu-rocm-7.2-x64.tar.gz"
+	if got := engine.Source.Download["linux/amd64"]; got != wantURL {
+		t.Fatalf("download URL = %q, want %q", got, wantURL)
+	}
+
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch:         "RDNA3.5",
+		GPUVRAMMiB:      65536,
+		GPUCount:        1,
+		UnifiedMemory:   true,
+		CPUArch:         "amd64",
+		CPUCores:        16,
+		RAMTotalMiB:     65536,
+		HardwareProfile: "amd-radeon-8060s-x86",
+		Platform:        "linux/amd64",
+		RuntimeType:     "native",
+	}, "qwen3.6-35b-a3b", "llamacpp", map[string]any{})
+	if err != nil {
+		t.Fatalf("resolve AMD395 Linux config: %v", err)
+	}
+	if resolved.EngineAssetName != "llamacpp-hip-linux" {
+		t.Fatalf("engine asset = %q, want llamacpp-hip-linux", resolved.EngineAssetName)
+	}
+}
+
+func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	engine := cat.FindEngineByName("aima-engine-native-amd395", HardwareInfo{
+		GPUArch:  "RDNA3.5",
+		Platform: "linux/amd64",
+	})
+	if engine == nil {
+		t.Fatal("aima-engine-native-amd395 engine not found")
+	}
+	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.1" {
+		t.Fatalf("metadata = %+v", engine.Metadata)
+	}
+	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "preinstalled" {
+		t.Fatalf("source = %+v", engine.Source)
+	}
+	if !engine.Source.Supports("linux/amd64") || engine.Source.Supports("windows/amd64") {
+		t.Fatalf("source platforms = %v", engine.Source.Platforms)
+	}
+	if engine.Source.Probe == nil {
+		t.Fatal("source.probe is nil")
+	}
+	versionMatch := regexp.MustCompile(engine.Source.Probe.VersionPattern).FindStringSubmatch("aima-engine-native 1.5.1-native")
+	if len(versionMatch) != 2 || versionMatch[1] != "1.5.1" {
+		t.Fatalf("version pattern match = %v", versionMatch)
+	}
+	wantCommand := []string{"aima-engine", "serve", "--model-dir", "{{.ModelPath}}", "--host", "127.0.0.1"}
+	if !reflect.DeepEqual(engine.Startup.Command, wantCommand) {
+		t.Fatalf("startup.command = %v, want %v", engine.Startup.Command, wantCommand)
+	}
+	if engine.API.UpstreamModel != "aima-amd395-qwen36-35b" {
+		t.Fatalf("upstream model = %q", engine.API.UpstreamModel)
+	}
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.HealthCheck.TimeoutS != 120 {
+		t.Fatalf("health check = %+v", engine.Startup.HealthCheck)
+	}
+}
+
+func TestAMD395Qwen36LocalPrecisionPaths(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		RAMTotalMiB:   131072,
+		UnifiedMemory: true,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	native, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "aima-engine-native", nil)
+	if err != nil {
+		t.Fatalf("resolve native BF16: %v", err)
+	}
+	if native.EngineAssetName != "aima-engine-native-amd395" || native.ModelFormat != "safetensors" {
+		t.Fatalf("native resolution = engine %q format %q", native.EngineAssetName, native.ModelFormat)
+	}
+
+	gguf, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "llamacpp", nil)
+	if err != nil {
+		t.Fatalf("resolve llama.cpp GGUF: %v", err)
+	}
+	if gguf.EngineAssetName != "llamacpp-hip-linux" || gguf.ModelFormat != "gguf" {
+		t.Fatalf("GGUF resolution = engine %q format %q", gguf.EngineAssetName, gguf.ModelFormat)
+	}
+	if got := gguf.Config["quantization"]; got != "int4" {
+		t.Fatalf("GGUF quantization = %v, want int4", got)
 	}
 }
 
@@ -1189,6 +1447,179 @@ func TestKindToDir(t *testing.T) {
 		if got := KindToDir(tt.kind); got != tt.dir {
 			t.Errorf("KindToDir(%q) = %q, want %q", tt.kind, got, tt.dir)
 		}
+	}
+}
+
+func TestCatalogAssetYAMLAndValidateCatalogPatch(t *testing.T) {
+	base, err := LoadCatalog(fstest.MapFS{
+		"models/demo.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: demo-model
+  type: llm
+  family: demo
+  parameter_count: 1b
+storage:
+  formats: [safetensors]
+  default_path_pattern: models/demo-model
+  sources: []
+variants:
+  - name: default
+    engine: vllm
+    format: safetensors
+    hardware:
+      gpu_arch: Any
+      vram_min_mib: 1024
+    default_config:
+      max_model_len: 2048
+      gpu_memory_utilization: 0.8
+    expected_performance: {}
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	patch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants:
+  - name: default
+    default_config:
+      gpu_memory_utilization: 0.9
+`)
+
+	effective, err := ValidateCatalogPatch(base, patch, "models/demo-model.patch.yaml")
+	if err != nil {
+		t.Fatalf("ValidateCatalogPatch: %v", err)
+	}
+	if !strings.Contains(string(effective), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("effective patch YAML missing override:\n%s", string(effective))
+	}
+	if !strings.Contains(string(effective), "max_model_len: 2048") {
+		t.Fatalf("effective patch YAML lost base config:\n%s", string(effective))
+	}
+
+	overlay := &Catalog{ModelAssets: []ModelAsset{}}
+	if err := overlay.parseAsset(effective, "effective.yaml"); err != nil {
+		t.Fatalf("parse effective patch: %v", err)
+	}
+	merged, _ := MergeCatalog(base, overlay)
+	yamlData, found, err := CatalogAssetYAML(merged, "model_asset", "demo-model")
+	if err != nil {
+		t.Fatalf("CatalogAssetYAML: %v", err)
+	}
+	if !found {
+		t.Fatal("CatalogAssetYAML did not find demo-model")
+	}
+	if !strings.Contains(string(yamlData), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("catalog asset YAML missing effective value:\n%s", string(yamlData))
+	}
+
+	badPatch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants: wrong-type
+`)
+	if _, err := ValidateCatalogPatch(base, badPatch, "models/demo-model.bad.patch.yaml"); err == nil {
+		t.Fatal("ValidateCatalogPatch accepted invalid asset schema")
+	}
+}
+
+func TestValidateCatalogPatchRejectsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patch := []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)
+
+	if _, err := ValidateCatalogPatch(base, patch, "engines/native-demo.patch.yaml"); err == nil || !strings.Contains(err.Error(), "unknown request adapter kind") {
+		t.Fatalf("ValidateCatalogPatch error = %v, want unknown adapter rejection", err)
+	}
+}
+
+func TestLoadCatalogPatchesLenientSkipsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patchFS := fstest.MapFS{
+		"engines/native-demo.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineAssets) != 0 {
+		t.Fatalf("invalid adapter patch was loaded: %#v", overlay.EngineAssets)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want adapter validation warning", warnings)
+	}
+}
+
+func TestLoadCatalogPatchesLenientSkipsInvalidProfileRequestAdapter(t *testing.T) {
+	base := &Catalog{
+		EngineProfiles: map[string]*EngineProfile{
+			"native": {Kind: "engine_profile", Metadata: ProfileMeta{Name: "native"}},
+		},
+		RawEngineAssets: []EngineAsset{{
+			Kind: "engine_asset", Profile: "native", Metadata: EngineMetadata{Name: "native-demo"},
+		}},
+	}
+	patchFS := fstest.MapFS{
+		"engines/profiles/native.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile_patch
+metadata:
+  name: native
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineProfiles) != 0 {
+		t.Fatalf("invalid profile adapter patch was loaded: %#v", overlay.EngineProfiles)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want profile adapter validation warning", warnings)
+	}
+}
+
+func TestMergeCatalogRejectsInvalidEffectiveRequestAdapterWithoutMutation(t *testing.T) {
+	base := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind: "engine_asset", Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	overlay := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+		API:      EngineAPI{RequestAdapter: &EngineRequestAdapter{Kind: "unknown_adapter"}},
+	}}}
+
+	merged, warnings := MergeCatalog(base, overlay)
+	if merged != base {
+		t.Fatal("MergeCatalog returned a different base pointer")
+	}
+	if got := rawEngineAssets(base)[0].API.RequestAdapter; got != nil {
+		t.Fatalf("invalid overlay mutated effective catalog: %#v", got)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want effective adapter validation warning", warnings)
 	}
 }
 

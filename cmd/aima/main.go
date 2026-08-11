@@ -315,14 +315,31 @@ func run() error {
 	}
 	inferenceHTTPRoutes := inferencehttp.RegisterRoutes(inferenceHTTPDeps)
 	openclawDeps := &openclaw.Deps{
-		Backends:   openClawBackendAdapter{proxyServer},
-		Catalog:    catalogAdapter{cat},
-		ConfigPath: openclaw.DefaultConfigPath(),
+		Backends: openClawBackendAdapter{proxyServer},
+		Catalog:  catalogAdapter{cat},
+		// Config dir is overridable so a partner using a custom dir name (e.g.
+		// .byClaw) can target it: AIMA_OPENCLAW_CONFIG=<path>/openclaw.json. Skills,
+		// extensions and managed-state all follow filepath.Dir(ConfigPath).
+		ConfigPath: firstNonEmpty(os.Getenv("AIMA_OPENCLAW_CONFIG"), openclaw.DefaultConfigPath()),
 		ProxyAddr:  fmt.Sprintf("http://127.0.0.1:%d/v1", proxy.DefaultPort),
 		APIKey:     proxyServer.APIKey,
 		MCPCommand: mcpCommand,
+		// Whether sync sets the synced model as OpenClaw's primary. Partner-owned via
+		// AIMA_OPENCLAW_SET_DEFAULT (unset=set primary; false=leave user's primary).
+		SetDefaultModel: openclawSetDefaultFromEnv(),
 	}
-	proxyServer.SetRequestRewriter(inferencehttp.RequestBodyRewriter(inferenceHTTPDeps.Catalog))
+	inferenceRequestPreparer := inferencehttp.RequestBodyPreparer(
+		inferenceHTTPDeps.Catalog,
+		nativeRequestAdapterContextResolver(nativeRt),
+		nil,
+	)
+	proxyServer.SetRequestPreparer(func(ctx context.Context, path, contentType, model, upstreamModel, engineType, deploymentName string, body []byte) (proxy.PreparedRequest, error) {
+		prepared, err := inferenceRequestPreparer(ctx, path, contentType, model, upstreamModel, engineType, deploymentName, body)
+		if err != nil {
+			return proxy.PreparedRequest{}, err
+		}
+		return proxy.PreparedRequest{Body: prepared.Body, Finish: prepared.Finish}, nil
+	})
 	refreshOpenClawBackends := func(ctx context.Context) {
 		// Ensure proxy has up-to-date backends (CLI mode has no sync loop).
 		if deps.DeployList != nil {
@@ -356,6 +373,28 @@ func run() error {
 			DryRun:   dryRun,
 			Sections: sections,
 		})
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OpenClawExclude = func(ctx context.Context, model string) (json.RawMessage, error) {
+		refreshOpenClawBackends(ctx)
+		if err := openclaw.Exclude(ctx, openclawDeps, model); err != nil {
+			return nil, err
+		}
+		result, err := openclaw.Inspect(ctx, openclawDeps)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	deps.OpenClawInclude = func(ctx context.Context, model string) (json.RawMessage, error) {
+		refreshOpenClawBackends(ctx)
+		if err := openclaw.Include(ctx, openclawDeps, model); err != nil {
+			return nil, err
+		}
+		result, err := openclaw.Inspect(ctx, openclawDeps)
 		if err != nil {
 			return nil, err
 		}
@@ -958,6 +997,38 @@ func run() error {
 	return rootCmd.ExecuteContext(ctx)
 }
 
+func nativeRequestAdapterContextResolver(rt runtime.Runtime) inferencehttp.AdapterContextResolver {
+	return func(ctx context.Context, deploymentName string) (inferencehttp.AdapterContext, error) {
+		if rt == nil {
+			return inferencehttp.AdapterContext{}, fmt.Errorf("native runtime is unavailable")
+		}
+		status, err := rt.Status(ctx, deploymentName)
+		if err != nil {
+			return inferencehttp.AdapterContext{}, err
+		}
+		if status == nil || status.Runtime != "native" {
+			return inferencehttp.AdapterContext{}, fmt.Errorf("deployment %q is not a native runtime deployment", deploymentName)
+		}
+		return inferencehttp.AdapterContext{
+			Command:    append([]string(nil), status.AdapterCommand...),
+			ModelPath:  status.AdapterModelPath,
+			Config:     cloneStringAnyMap(status.Config),
+			InstanceID: status.AdapterInstanceID,
+		}, nil
+	}
+}
+
+func cloneStringAnyMap(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	copy := make(map[string]any, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
 func loadExplorerConfig(ctx context.Context, db *state.DB) agent.ExplorerConfig {
 	config := agent.ExplorerConfig{
 		Schedule: agent.DefaultScheduleConfig(),
@@ -1105,21 +1176,23 @@ func stateEngineFromScan(img *engine.EngineImage) *state.Engine {
 		}
 	}
 	entry := &state.Engine{
-		ID:             img.ID,
-		Type:           img.Type,
-		Image:          img.Image,
-		Tag:            img.Tag,
-		SizeBytes:      img.SizeBytes,
-		Platform:       img.Platform,
-		RuntimeType:    img.RuntimeType,
-		BinaryPath:     img.BinaryPath,
-		Available:      img.Available,
-		AssetName:      img.AssetName,
-		Version:        img.DetectedVersion,
-		CatalogVersion: img.CatalogVersion,
-		Origin:         img.Origin,
-		ContentDigest:  img.ContentDigest,
-		Location:       location,
+		ID:              img.ID,
+		Type:            img.Type,
+		Image:           img.Image,
+		Tag:             img.Tag,
+		SizeBytes:       img.SizeBytes,
+		Platform:        img.Platform,
+		RuntimeType:     img.RuntimeType,
+		BinaryPath:      img.BinaryPath,
+		Available:       img.Available,
+		AssetName:       img.AssetName,
+		Version:         img.DetectedVersion,
+		CatalogVersion:  img.CatalogVersion,
+		DetectedVersion: img.DetectedVersion,
+		VersionMatch:    img.VersionMatch,
+		Origin:          img.Origin,
+		ContentDigest:   img.ContentDigest,
+		Location:        location,
 	}
 	if img.RuntimeType == "native" && img.Origin == "preinstalled" && img.ContentVerified &&
 		(img.VersionMatch == "exact" || img.VersionMatch == "compatible") {
@@ -1395,8 +1468,33 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				onPhase(phase, msg)
 			}
 		}
+		syncOpenClawAfterReady := func() {
+			if deps == nil || deps.OpenClawSync == nil {
+				return
+			}
+			if !openClawImplicitSyncAllowed(ctx, db) {
+				slog.Info("deploy: openclaw sync skipped by policy", "model", model)
+				return
+			}
+			if _, err := deps.OpenClawSync(ctx, false); err != nil {
+				slog.Warn("deploy: openclaw sync after ready failed", "model", model, "error", err)
+				notify("warning", "OpenClaw sync failed after deploy: "+err.Error())
+			} else {
+				slog.Info("deploy: openclaw sync complete after ready", "model", model)
+			}
+		}
 
-		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration) (json.RawMessage, error) {
+		waitForDeployment := func(deployName, runtimeName, resolvedEngine string, resolvedConfig map[string]any, warmup knowledge.WarmupConfig, deployTimeout time.Duration, cleanupOnFailure bool) (json.RawMessage, error) {
+			cleanup := func() deploymentCleanupResult {
+				if !cleanupOnFailure {
+					return deploymentCleanupResult{}
+				}
+				result := cleanupFailedDeployment(ctx, deployName, deps.DeployDelete)
+				if result.Attempted {
+					notify("cleanup", result.Message)
+				}
+				return result
+			}
 			notify("waiting", deployName)
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
@@ -1415,10 +1513,8 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				case <-timer.C:
-					return json.Marshal(map[string]any{
-						"name": deployName, "status": "timeout",
-						"message": fmt.Sprintf("deployment started but not ready within %s", deployTimeout),
-					})
+					msg := fmt.Sprintf("deployment started but not ready within %s", deployTimeout)
+					return nil, newDeploymentRunError(deployErrorTimeout, msg, cleanup())
 				case <-ticker.C:
 					statusData, err := deps.DeployStatus(ctx, deployName)
 					if err != nil {
@@ -1447,6 +1543,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 						if status.Runtime != "" {
 							runtimeName = status.Runtime
 						}
+						syncOpenClawAfterReady()
 						return json.Marshal(map[string]any{
 							"name": deployName, "model": model, "engine": resolvedEngine,
 							"runtime": runtimeName, "address": status.Address, "status": "ready",
@@ -1459,7 +1556,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 							StartupMessage: status.StartupMessage,
 							ErrorLines:     status.ErrorLines,
 						}, deps.DeployStatus, deps.DeployLogs)
-						return nil, fmt.Errorf("deployment failed: %s", msg)
+						return nil, newDeploymentRunError(classifyDeploymentFailure(msg), "deployment failed: "+msg, cleanup())
 					}
 					phase := status.StartupPhase
 					if phase == "" {
@@ -1484,10 +1581,11 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			return nil, fmt.Errorf("resolve: %w", err)
 		}
 		var plan struct {
-			Engine    string         `json:"engine"`
-			Runtime   string         `json:"runtime"`
-			Config    map[string]any `json:"config"`
-			FitReport struct {
+			Engine             string         `json:"engine"`
+			EngineSourceSHA256 string         `json:"engine_source_sha256"`
+			Runtime            string         `json:"runtime"`
+			Config             map[string]any `json:"config"`
+			FitReport          struct {
 				Fit    bool     `json:"fit"`
 				Reason string   `json:"reason"`
 				Warns  []string `json:"warnings"`
@@ -1497,7 +1595,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 			return nil, fmt.Errorf("parse resolve result: %w", err)
 		}
 		if !plan.FitReport.Fit {
-			return nil, fmt.Errorf("hardware not compatible: %s", plan.FitReport.Reason)
+			return nil, newDeploymentRunError(deployErrorHardwareIncompatible, "hardware not compatible: "+plan.FitReport.Reason, deploymentCleanupResult{})
 		}
 		notify("resolved", fmt.Sprintf("engine=%s runtime=%s", plan.Engine, plan.Runtime))
 		for _, warn := range plan.FitReport.Warns {
@@ -1506,26 +1604,29 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		deployName := knowledge.SanitizePodName(model + "-" + plan.Engine)
 		if statusData, statusErr := deps.DeployStatus(ctx, deployName); statusErr == nil {
 			var status struct {
-				Phase   string `json:"phase"`
-				Ready   bool   `json:"ready"`
-				Address string `json:"address"`
-				Runtime string `json:"runtime"`
+				Phase   string            `json:"phase"`
+				Ready   bool              `json:"ready"`
+				Address string            `json:"address"`
+				Runtime string            `json:"runtime"`
+				Labels  map[string]string `json:"labels"`
 			}
 			if err := json.Unmarshal(statusData, &status); err == nil {
+				sourceMatches := deploymentEngineSourceMatches(&runtime.DeploymentStatus{Labels: status.Labels}, plan.EngineSourceSHA256)
 				switch {
-				case status.Ready:
+				case status.Ready && sourceMatches:
 					notify("reusing", deployName)
 					notify("ready", status.Address)
 					runtimeName := plan.Runtime
 					if status.Runtime != "" {
 						runtimeName = status.Runtime
 					}
+					syncOpenClawAfterReady()
 					return json.Marshal(map[string]any{
 						"name": deployName, "model": model, "engine": plan.Engine,
 						"runtime": runtimeName, "address": status.Address, "status": "ready",
 						"config": plan.Config,
 					})
-				case status.Phase == "running" || status.Phase == "starting":
+				case (status.Phase == "running" || status.Phase == "starting") && sourceMatches:
 					notify("reusing", deployName)
 					runtimeName := plan.Runtime
 					if status.Runtime != "" {
@@ -1540,7 +1641,9 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 							deployTimeout = time.Duration(t) * time.Second
 						}
 					}
-					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout)
+					return waitForDeployment(deployName, runtimeName, plan.Engine, plan.Config, warmup, deployTimeout, false)
+				case !sourceMatches:
+					notify("reconciling", "engine source changed; replacing existing deployment")
 				}
 			}
 		}
@@ -1577,6 +1680,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		var deployResult struct {
 			Name    string `json:"name"`
 			Runtime string `json:"runtime"`
+			Reused  bool   `json:"reused"`
 		}
 		if err := json.Unmarshal(deployData, &deployResult); err != nil || deployResult.Name == "" {
 			return deployData, nil
@@ -1590,7 +1694,7 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 				deployTimeout = time.Duration(t) * time.Second
 			}
 		}
-		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup, deployTimeout)
+		return waitForDeployment(deployResult.Name, deployResult.Runtime, plan.Engine, plan.Config, warmup, deployTimeout, !deployResult.Reused)
 	}
 
 	deps = &mcp.ToolDeps{}

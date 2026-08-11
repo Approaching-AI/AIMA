@@ -31,19 +31,20 @@ var deployedPluginRoots = []string{
 
 // SyncResult holds the categorized models ready for OpenClaw config generation.
 type SyncResult struct {
-	LLMModels      []ModelEntry    `json:"llmModels,omitempty"`
-	VLMModels      []ModelEntry    `json:"vlmModels,omitempty"`
-	ASRModels      []AudioEntry    `json:"asrModels,omitempty"`
-	TTSModel       *TTSEntry       `json:"ttsModel,omitempty"`
-	ImageGenModels []ImageGenEntry `json:"imageGenModels,omitempty"`
-	MCPServer      *MCPServerEntry `json:"mcpServer,omitempty"`
-	ProxyAddr      string          `json:"proxyAddr"`
-	APIKey         string          `json:"apiKey,omitempty"`
-	ProxyReachable bool            `json:"proxyReachable"`
-	ProxyWarning   string          `json:"proxyWarning,omitempty"`
-	ConfigPath     string          `json:"configPath"`
-	ConfigExists   bool            `json:"configExists"`
-	Written        bool            `json:"written"`
+	LLMModels        []ModelEntry    `json:"llmModels,omitempty"`
+	VLMModels        []ModelEntry    `json:"vlmModels,omitempty"`
+	ASRModels        []AudioEntry    `json:"asrModels,omitempty"`
+	TTSModel         *TTSEntry       `json:"ttsModel,omitempty"`
+	ImageGenModels   []ImageGenEntry `json:"imageGenModels,omitempty"`
+	MCPServer        *MCPServerEntry `json:"mcpServer,omitempty"`
+	ProxyAddr        string          `json:"proxyAddr"`
+	APIKey           string          `json:"apiKey,omitempty"`
+	ProxyReachable   bool            `json:"proxyReachable"`
+	ProxyWarning     string          `json:"proxyWarning,omitempty"`
+	SkipDefaultModel bool            `json:"skipDefaultModel,omitempty"`
+	ConfigPath       string          `json:"configPath"`
+	ConfigExists     bool            `json:"configExists"`
+	Written          bool            `json:"written"`
 }
 
 // MCPServerEntry describes the stdio MCP server entry AIMA wants OpenClaw to use.
@@ -91,6 +92,8 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		APIKey:     deps.proxyAPIKey(),
 		ConfigPath: deps.ConfigPath,
 		MCPServer:  desiredMCPServer(deps),
+		// Skip touching OpenClaw's primary chat model only when explicitly disabled.
+		SkipDefaultModel: deps.SetDefaultModel != nil && !*deps.SetDefaultModel,
 	}
 
 	// Preflight: the provider we write points OpenClaw's chat data plane at
@@ -105,14 +108,28 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 			"proxy", deps.ProxyAddr, "detail", result.ProxyWarning)
 	}
 
+	// Read managed state up front so the categorization loop can skip models the
+	// user has revoked from sync (ExcludedModels). The same state is reused for
+	// the merge below.
+	managed, err := ReadManagedState(deps.ConfigPath)
+	if err != nil {
+		return result, fmt.Errorf("openclaw sync: %w", err)
+	}
+
 	var ttsIDs []string
 
 	for _, b := range backends {
 		if !b.Ready || b.Remote {
 			continue
 		}
+		if managed.IsExcluded(b.ModelName) {
+			continue // user revoked this model from OpenClaw sync
+		}
 
-		modelType := deps.Catalog.ModelType(b.ModelName)
+		modelType := strings.TrimSpace(deps.Catalog.ModelType(b.ModelName))
+		if modelType == "" {
+			modelType = strings.TrimSpace(b.ModelType)
+		}
 		switch modelType {
 		case "llm", "vlm":
 			ctxWindow := b.ContextWindowTokens // prefer actual deployment config
@@ -170,12 +187,10 @@ func Sync(ctx context.Context, deps *Deps, dryRun bool) (*SyncResult, error) {
 		result.ConfigExists = true
 	}
 
-	managed, err := ReadManagedState(deps.ConfigPath)
-	if err != nil {
-		return result, fmt.Errorf("openclaw sync: %w", err)
-	}
-
 	merged, nextManaged := MergeAIMAConfigWithState(existing, managed, result)
+	// Preserve user revocations across the reconcile: MergeAIMAConfigWithState
+	// rebuilds nextManaged from "what AIMA wrote", which never includes them.
+	nextManaged.ExcludedModels = managed.ExcludedModels
 	if dryRun {
 		return result, nil
 	}

@@ -30,6 +30,7 @@ type deploymentMeta struct {
 	Labels             map[string]string `json:"labels"`
 	LogPath            string            `json:"log_path"`
 	Command            []string          `json:"command"`
+	ModelPath          string            `json:"model_path,omitempty"`
 	StartTime          time.Time         `json:"start_time"`
 	HealthCheckPath    string            `json:"health_check_path,omitempty"`
 	HealthCheckTimeout int               `json:"health_check_timeout_s,omitempty"`
@@ -193,22 +194,28 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	// Resolve binary: dist/ first, then the pre-installed engine dirs
 	// (AIMA_ENGINE_DIR — the SAME dirs the engine scanner uses, so anything scanning
 	// found is launchable), then auto-download if a source is available.
-	if resolved := r.findInDist(command[0]); resolved != "" {
+	resolvedBundleDir := ""
+	if resolved := r.findLocalBinary(command[0], req.BinarySource); resolved != "" {
 		command[0] = resolved
-	} else if resolved := r.findInEngineDirs(command[0]); resolved != "" {
-		command[0] = resolved
+		resolvedBundleDir = nativeBundleRoot(resolved)
 	} else if r.resolveBinary != nil && req.BinarySource != nil {
 		slog.Info("binary not in dist or engine dirs, attempting auto-download", "binary", command[0])
 		if resolved, err := r.resolveBinary(ctx, req.BinarySource); err == nil {
 			command[0] = resolved
+			resolvedBundleDir = nativeBundleRoot(resolved)
+		} else if binarySourcePinned(req.BinarySource) {
+			logFile.Close()
+			clearPlaceholder()
+			return fmt.Errorf("resolve pinned engine binary: %w", err)
 		} else {
 			slog.Warn("auto-download failed, will try PATH", "binary", command[0], "error", err)
 		}
 	}
+	effectiveWorkDir := nativeWorkDir(req.WorkDir, resolvedBundleDir)
 
 	// Create cancellable context for this process
 	procCtx, cancel := context.WithCancel(context.Background())
-	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "), "work_dir", req.WorkDir)
+	slog.Info("native deploy", "name", req.Name, "command", strings.Join(command, " "), "work_dir", effectiveWorkDir)
 
 	var cmd *exec.Cmd
 	var procPID int
@@ -216,46 +223,73 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	var procLogFile *os.File
 
 	if goruntime.GOOS == "windows" {
-		_ = procCtx // schtasks creates its own process context
-		// On Windows, launch via schtasks /it to ensure the process runs in the
-		// interactive desktop session (Session 1). GPU engines (Vulkan/DirectX)
-		// need display session access which is unavailable via SSH (Session 0).
-		logFile.Close() // batch file will manage log output
-		pid, err := r.launchViaSchtasks(req.Name, command, logPath, req.Env, req.WorkDir)
-		if err != nil {
-			cancel()
-			clearPlaceholder()
-			return fmt.Errorf("start %s via schtasks: %w", req.Name, err)
+		// schtasks /it runs the engine in the interactive desktop session
+		// (Session 1), which some GPU engines need for display access. But /it
+		// only launches anything when AIMA itself has an interactive session;
+		// over SSH / headless AIMA runs in Session 0, where /it reports success
+		// yet spawns nothing. So use schtasks only when interactive, and fall
+		// back to a direct detached start otherwise (or if schtasks yields no
+		// process — e.g. Windows Script Host disabled).
+		launched := false
+		if hasInteractiveSession() {
+			logFile.Close() // batch file manages the log output
+			if pid, serr := r.launchViaSchtasks(req.Name, command, logPath, req.Env, effectiveWorkDir); serr == nil {
+				procPID = pid
+				procLogFile = nil
+				launched = true
+			} else {
+				slog.Warn("schtasks launch failed; falling back to direct start", "name", req.Name, "error", serr)
+			}
+			if !launched {
+				// Reopen the log for the direct path (schtasks closed it).
+				var oerr error
+				if logFile, oerr = os.Create(logPath); oerr != nil {
+					cancel()
+					clearPlaceholder()
+					return fmt.Errorf("reopen log for direct start: %w", oerr)
+				}
+			}
+		} else {
+			slog.Info("no interactive desktop session; starting engine directly in current session", "name", req.Name)
 		}
-		procPID = pid
-		procLogFile = nil
+		if !launched {
+			startedCmd, serr := r.startDirect(procCtx, command, logFile, req.Env, effectiveWorkDir)
+			if serr != nil {
+				cancel()
+				logFile.Close()
+				clearPlaceholder()
+				return fmt.Errorf("start %s: %w", req.Name, serr)
+			}
+			cmd = startedCmd
+			procPID = startedCmd.Process.Pid
+			procGroupID = childProcessGroupID(procPID)
+			procLogFile = logFile
+		}
 	} else {
 		cmd = exec.CommandContext(procCtx, command[0], command[1:]...)
 		configureDetachedProcess(cmd)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		// Build environment: start with parent env, add distDir library path, then request env vars.
+		// Keep bundle-local backends ahead of system libraries while preserving catalog env.
 		env := os.Environ()
-		if r.distDir != "" {
-			ldVar := "LD_LIBRARY_PATH"
-			if goruntime.GOOS == "darwin" {
-				ldVar = "DYLD_LIBRARY_PATH"
-			}
-			existing := os.Getenv(ldVar)
-			newVal := r.distDir
-			if existing != "" {
-				newVal = r.distDir + ":" + existing
-			}
-			env = append(env, ldVar+"="+newVal)
-		}
 		for k, v := range req.Env {
-			env = append(env, k+"="+v)
+			env = setEnvValue(env, k, v)
+		}
+		ldVar := "LD_LIBRARY_PATH"
+		if goruntime.GOOS == "darwin" {
+			ldVar = "DYLD_LIBRARY_PATH"
+		}
+		if libraryDirs := nativeLibraryDirs(command[0], r.distDir, r.engineDirs...); len(libraryDirs) > 0 {
+			env = prependEnvPaths(env, ldVar, libraryDirs)
+		}
+		if deviceLib := filepath.Join(nativeBundleRoot(command[0]), "amdgcn"); pathIsDirectory(deviceLib) {
+			env = prependEnvPaths(env, "HIP_DEVICE_LIB_PATH", []string{deviceLib})
 		}
 		if len(env) > 0 {
 			cmd.Env = env
 		}
-		if req.WorkDir != "" {
-			cmd.Dir = req.WorkDir
+		if effectiveWorkDir != "" {
+			cmd.Dir = effectiveWorkDir
 		}
 		if err := cmd.Start(); err != nil {
 			cancel()
@@ -304,6 +338,7 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 		Labels:         req.Labels,
 		LogPath:        logPath,
 		Command:        command,
+		ModelPath:      req.ModelPath,
 		StartTime:      now,
 	}
 	if req.HealthCheck != nil {
@@ -326,6 +361,141 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 	}
 
 	return nil
+}
+
+// startDirect launches the engine directly in AIMA's own session, redirecting
+// stdout/stderr to logFile. Used on Windows when there is no interactive session
+// (or schtasks fails). It mirrors the bat wrapper's behaviour (request env vars +
+// working directory) but as a real child process, so its PID and exit status are
+// known immediately instead of being discovered after the fact.
+func (r *NativeRuntime) startDirect(ctx context.Context, command []string, logFile *os.File, reqEnv map[string]string, workDir string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	configureDetachedProcess(cmd)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	env := os.Environ()
+	for k, v := range reqEnv {
+		env = setEnvValue(env, k, v)
+	}
+	cmd.Env = env
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+func nativeLibraryDirs(binaryPath, distDir string, engineDirs ...string) []string {
+	var dirs []string
+	seen := make(map[string]bool)
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		dir = filepath.Clean(dir)
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = resolved
+		}
+		if seen[dir] {
+			return
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	addRoot := func(root string) {
+		add(root)
+		for _, name := range []string{"lib", "lib64", "libexec", "plugins", "backends"} {
+			add(filepath.Join(root, name))
+		}
+	}
+
+	if filepath.IsAbs(binaryPath) {
+		binaryDir := nativeBinaryDir(binaryPath)
+		addRoot(binaryDir)
+		if strings.EqualFold(filepath.Base(binaryDir), "bin") {
+			addRoot(filepath.Dir(binaryDir))
+		}
+	}
+	addRoot(distDir)
+	for _, engineDir := range engineDirs {
+		addRoot(engineDir)
+	}
+	return dirs
+}
+
+func nativeBinaryDir(binaryPath string) string {
+	if resolved, err := filepath.EvalSymlinks(binaryPath); err == nil {
+		return filepath.Dir(resolved)
+	}
+	return filepath.Dir(binaryPath)
+}
+
+func nativeBundleRoot(binaryPath string) string {
+	dir := nativeBinaryDir(binaryPath)
+	if strings.EqualFold(filepath.Base(dir), "bin") {
+		return filepath.Dir(dir)
+	}
+	return dir
+}
+
+func pathIsDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func nativeWorkDir(configured, resolvedBundleDir string) string {
+	if configured != "" {
+		return configured
+	}
+	return resolvedBundleDir
+}
+
+func prependEnvPaths(env []string, key string, paths []string) []string {
+	combined := make([]string, 0, len(paths)+4)
+	seen := make(map[string]bool)
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" && !seen[path] {
+			seen[path] = true
+			combined = append(combined, path)
+		}
+	}
+	if existing, ok := envValue(env, key); ok {
+		for _, path := range filepath.SplitList(existing) {
+			path = strings.TrimSpace(path)
+			if path != "" && !seen[path] {
+				seen[path] = true
+				combined = append(combined, path)
+			}
+		}
+	}
+	return setEnvValue(env, key, strings.Join(combined, string(os.PathListSeparator)))
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix), true
+		}
+	}
+	return "", false
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	result := env[:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func (r *NativeRuntime) Delete(_ context.Context, name string) error {
@@ -488,12 +658,16 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 		if len(status.Config) == 0 && len(meta.Config) > 0 {
 			status.Config = cloneConfigForStatus(meta.Config)
 		}
+		status.AdapterCommand = append([]string(nil), meta.Command...)
+		status.AdapterModelPath = meta.ModelPath
+		status.AdapterInstanceID = fmt.Sprintf("%d:%d", meta.PID, meta.StartTime.UnixNano())
 		return status
 	}
 
 	persisted := r.metaToStatus(meta)
+	ignorePersistedFailure := persisted.Phase == "failed" && status.Phase != "failed" && !exited
 	switch {
-	case persisted.Phase == "failed" && status.Phase != "failed" && !(isStalePortReuseFailure(persisted.Message) && !exited):
+	case persisted.Phase == "failed" && status.Phase != "failed" && exited:
 		return persisted
 	}
 
@@ -510,14 +684,13 @@ func (r *NativeRuntime) procStatusWithPersistedOverride(name string, proc *nativ
 	if status.ErrorLines == "" {
 		status.ErrorLines = persisted.ErrorLines
 	}
-	if status.Message == "" && !(status.Phase != "failed" && isStalePortReuseFailure(persisted.Message)) {
+	if status.Message == "" && !ignorePersistedFailure {
 		status.Message = persisted.Message
 	}
+	status.AdapterCommand = append([]string(nil), persisted.AdapterCommand...)
+	status.AdapterModelPath = persisted.AdapterModelPath
+	status.AdapterInstanceID = persisted.AdapterInstanceID
 	return status
-}
-
-func isStalePortReuseFailure(msg string) bool {
-	return msg == "deployment metadata is stale; port is in use by another process"
 }
 
 func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (string, error) {
@@ -532,9 +705,22 @@ func (r *NativeRuntime) Logs(_ context.Context, name string, tailLines int) (str
 	// Try persisted metadata for log path
 	meta, err := r.loadMeta(name)
 	if err != nil {
+		if fallback := nativeFallbackLogPath(r.logDir, name); fallback != "" {
+			if logs, fallbackErr := readTail(fallback, tailLines); fallbackErr == nil {
+				return logs, nil
+			}
+		}
 		return "", fmt.Errorf("deployment %q not found", name)
 	}
 	return readTail(meta.LogPath, tailLines)
+}
+
+func nativeFallbackLogPath(logDir, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return ""
+	}
+	return filepath.Join(logDir, name+".log")
 }
 
 func (r *NativeRuntime) watchProcess(proc *nativeProcess) {
@@ -776,7 +962,10 @@ func (r *NativeRuntime) procToStatus(proc *nativeProcess) *DeploymentStatus {
 // before model weights are loaded, so TCP alive does NOT mean ready to serve.
 func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	alive := portAlive(meta.Port)
-	processMatches := meta.PID <= 0 || processMatchesMeta(meta)
+	processState := processMetaMatching
+	if meta.PID > 0 {
+		processState = processStateForMeta(meta)
+	}
 	healthCheckPath := meta.HealthCheckPath
 	if healthCheckPath == "" {
 		engineName := ""
@@ -791,15 +980,13 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if timeout <= 0 {
 		timeout = 60
 	}
-	healthTimedOut := processMatches && healthCheckPath != "" && !meta.StartTime.IsZero() &&
+	processActive := processState == processMetaMatching || processState == processMetaStarting
+	healthTimedOut := processActive && healthCheckPath != "" && !meta.StartTime.IsZero() &&
 		time.Since(meta.StartTime) >= time.Duration(timeout)*time.Second
 
-	phase := "running"
+	phase := metaPhaseForProcessState(processState, alive, meta.StartTime, meta.HealthCheckTimeout)
 	ready := false
-	if !processMatches {
-		phase = "failed"
-		ready = false
-	} else if alive {
+	if phase != "failed" && alive {
 		// Port is alive (TCP), but check HTTP health to confirm engine is truly ready.
 		if healthCheckPath != "" {
 			ready = httpHealthy(meta.Port, healthCheckPath)
@@ -814,24 +1001,19 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 				phase = "starting"
 			}
 		}
-	} else {
-		if time.Since(meta.StartTime) < time.Duration(timeout)*time.Second {
-			phase = "starting"
-		} else {
-			// Port dead past health check timeout: process crashed or never started.
-			// Intentional stops go through Delete() which removes metadata entirely.
-			phase = "failed"
-		}
 	}
 
 	ds := &DeploymentStatus{
-		Name:    meta.Name,
-		Phase:   phase,
-		Ready:   ready,
-		Address: fmt.Sprintf("127.0.0.1:%d", meta.Port),
-		Config:  cloneConfigForStatus(meta.Config),
-		Labels:  meta.Labels,
-		Runtime: "native",
+		Name:              meta.Name,
+		Phase:             phase,
+		Ready:             ready,
+		Address:           fmt.Sprintf("127.0.0.1:%d", meta.Port),
+		Config:            cloneConfigForStatus(meta.Config),
+		Labels:            meta.Labels,
+		Runtime:           "native",
+		AdapterCommand:    append([]string(nil), meta.Command...),
+		AdapterModelPath:  meta.ModelPath,
+		AdapterInstanceID: fmt.Sprintf("%d:%d", meta.PID, meta.StartTime.UnixNano()),
 	}
 	setDeploymentStartFromTime(ds, meta.StartTime)
 
@@ -846,11 +1028,26 @@ func (r *NativeRuntime) metaToStatus(meta *deploymentMeta) *DeploymentStatus {
 	if !ds.Ready && ds.Phase != "failed" && ds.Phase != "stopped" {
 		r.ensureNativeStartingStatus(ds, meta.StartTime, alive, meta.Labels)
 	}
-	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 && !processMatches {
-		if alive {
-			ds.Message = "deployment metadata is stale; port is in use by another process"
-		} else {
-			ds.Message = "process exited before readiness"
+	if ds.Phase == "failed" && ds.Message == "" && meta.PID > 0 {
+		switch processState {
+		case processMetaStale:
+			if alive {
+				ds.Message = "deployment metadata is stale; port is in use by another process"
+			} else {
+				ds.Message = "deployment metadata is stale; process identity does not match"
+			}
+		case processMetaExited:
+			if alive {
+				ds.Message = "deployment metadata is stale; port is in use by another process"
+			} else {
+				ds.Message = "process exited before readiness"
+			}
+		default:
+			timeout := meta.HealthCheckTimeout
+			if timeout <= 0 {
+				timeout = 60
+			}
+			ds.Message = fmt.Sprintf("deployment started but not ready within %ds", timeout)
 		}
 	}
 	if healthTimedOut && !ds.Ready {
@@ -922,17 +1119,62 @@ func (r *NativeRuntime) loadAllMeta() []*deploymentMeta {
 	return metas
 }
 
+// findLocalBinary resolves an already-installed native engine without invoking
+// the download resolver. The catalog source can name a nested bundle entry
+// (for example bin/aima-engine) while the startup command intentionally uses a
+// portable bare name. Both forms must remain launchable with --no-pull.
+func (r *NativeRuntime) findLocalBinary(commandName string, source *engine.BinarySource) string {
+	if binarySourcePinned(source) {
+		return ""
+	}
+	if filepath.IsAbs(commandName) || strings.ContainsRune(commandName, os.PathSeparator) {
+		if info, err := os.Stat(commandName); err == nil && !info.IsDir() {
+			return commandName
+		}
+	}
+	if resolved := r.findInDist(commandName); resolved != "" {
+		return resolved
+	}
+	if source != nil {
+		if resolved := r.findInDist(source.Binary); resolved != "" {
+			return resolved
+		}
+		for _, path := range source.ProbePaths {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+	return r.findInEngineDirs(commandName)
+}
+
+func binarySourcePinned(source *engine.BinarySource) bool {
+	if source == nil {
+		return false
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	return strings.TrimSpace(source.SHA256[platform]) != ""
+}
+
 // findInDist checks for a binary in the dist directory.
 // On Windows, also tries with .exe suffix.
 func (r *NativeRuntime) findInDist(name string) string {
-	return findBinaryIn([]string{r.distDir}, name)
+	if resolved, ok := engine.FindBinaryInDir(r.distDir, name); ok {
+		return resolved
+	}
+	return ""
 }
 
 // findInEngineDirs resolves a bare engine binary name against the pre-installed
 // engine dirs (AIMA_ENGINE_DIR). This mirrors how the engine scanner discovers
 // binaries, so an engine that scanning found is also the one that gets launched.
 func (r *NativeRuntime) findInEngineDirs(name string) string {
-	return findBinaryIn(r.engineDirs, name)
+	for _, dir := range r.engineDirs {
+		if resolved, ok := engine.FindBinaryInDir(dir, name); ok {
+			return resolved
+		}
+	}
+	return ""
 }
 
 // findBinaryIn returns the absolute path of name (with .exe on Windows) in the

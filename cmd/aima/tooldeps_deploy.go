@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/model"
 	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/recovery"
 	"github.com/jguan/aima/internal/runtime"
@@ -108,7 +111,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, fmt.Errorf("resolve recovery policy: %w", err)
 			}
 		}
-		upstreamModel := resolvedServedModelName(modelName, resolved.Config)
+		engineSourceDigest := engineSourceSHA256(resolved.Source)
+		upstreamModel := resolvedServedModelName(
+			modelName,
+			resolved.Config,
+			catalogEngineUpstreamModel(cat, resolved.EngineAssetName),
+		)
 
 		modelPath, modelPathErr := resolveLocalModelPathNoPull(modelName, resolved, dataDir)
 		if modelPathErr != nil {
@@ -139,8 +147,31 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 					slog.Info("auto-wired multimodal projector for vision", "model", modelName, "mmproj", mm)
 				}
 			}
+
+			// Hardware-aware context sizing: a high catalog/user ctx_size can exceed
+			// what the detected memory holds — llama-server would OOM at load. Clamp
+			// ctx_size down to fit weights + projector + KV cache (and cap at the
+			// model's trained context), degrading gracefully instead of failing.
+			if clamped, oldCtx, newCtx, reason := fitContextToMemory(modelPath, resolved.Config, hwInfo); clamped {
+				slog.Warn("clamped context window to fit hardware memory",
+					"model", modelName, "ctx_size_requested", oldCtx, "ctx_size_applied", newCtx, "detail", reason)
+			}
 		}
 
+		deploymentLabels := map[string]string{
+			// Label carries the resolved asset metadata.name so the
+			// runtime's findEngineAsset lookup (keyed on metadata.name)
+			// can gate health_check + warmup. Fall through to the type
+			// alias when the resolver has no asset binding.
+			"aima.dev/engine":         firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
+			"aima.dev/model":          modelName,
+			"aima.dev/slot":           resolved.Slot,
+			proxy.LabelServedModel:    upstreamModel,
+			proxy.LabelRequestedModel: strings.TrimSpace(requestedModel),
+		}
+		if engineSourceDigest != "" {
+			deploymentLabels[proxy.LabelEngineSourceSHA256] = engineSourceDigest
+		}
 		req := &runtime.DeployRequest{
 			Name:             modelName,
 			Engine:           resolved.Engine,
@@ -158,17 +189,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			Container:        resolved.Container,
 			GPUResourceName:  resolved.GPUResourceName,
 			ExtraVolumes:     resolved.ExtraVolumes,
-			Labels: map[string]string{
-				// Label carries the resolved asset metadata.name so the
-				// runtime's findEngineAsset lookup (keyed on metadata.name)
-				// can gate health_check + warmup. Fall through to the type
-				// alias when the resolver has no asset binding.
-				"aima.dev/engine":         firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
-				"aima.dev/model":          modelName,
-				"aima.dev/slot":           resolved.Slot,
-				proxy.LabelServedModel:    upstreamModel,
-				proxy.LabelRequestedModel: strings.TrimSpace(requestedModel),
-			},
+			Labels:           deploymentLabels,
 		}
 		if parameterCount := catalogModelParameterCount(cat, modelName); parameterCount != "" {
 			req.Labels[proxy.LabelParameterCount] = parameterCount
@@ -216,10 +237,21 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err := requirePinnedRuntime(pinnedIntent, activeRt); err != nil {
 			return nil, err
 		}
+		if activeRt.Name() == "native" {
+			binaryPath, err := validatedPreinstalledNativeBinary(ctx, db, resolved, engineAsset)
+			if err != nil {
+				return nil, err
+			}
+			if binaryPath != "" && len(req.Command) > 0 {
+				req.Command[0] = binaryPath
+			}
+		}
 		deployName := knowledge.SanitizePodName(modelName + "-" + resolved.Engine)
 		operationNames := deploymentApplyLockNames(cat, modelName, canonicalName, deployName, deploymentIntentName(req, activeRt.Name()), pinnedIntent)
 		var existing *runtime.DeploymentStatus
 		var unlockDeployment func()
+		var suppressRecentlyDeleted func(*runtime.DeploymentStatus) bool
+		var searchRuntimes []runtime.Runtime
 		for {
 			unlockDeployment = deploymentLocks.lock(operationNames...)
 			intents, intentErr := listDeploymentIntents(ctx, db)
@@ -227,12 +259,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				unlockDeployment()
 				return nil, intentErr
 			}
-			suppressRecentlyDeleted := loadDeletedDeploymentSuppressor(ctx, db)
-			searchRuntimes := []runtime.Runtime{activeRt, rt, nativeRt, dockerRt, k3sRt}
+			suppressRecentlyDeleted = loadDeletedDeploymentSuppressor(ctx, db)
+			searchRuntimes = []runtime.Runtime{activeRt, rt, nativeRt, dockerRt, k3sRt}
 			if pinnedIntent != nil {
 				searchRuntimes = []runtime.Runtime{activeRt}
 			}
-			existing, err = findReusableDeployment(ctx, deployName, modelName, engineType, slot, configOverrides, suppressRecentlyDeleted, searchRuntimes...)
+			existing, err = findReusableDeployment(ctx, deployName, modelName, engineType, slot, configOverrides, engineSourceDigest, suppressRecentlyDeleted, searchRuntimes...)
 			if err != nil {
 				unlockDeployment()
 				return nil, err
@@ -307,6 +339,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			}
 			proxyServer.RegisterBackend(modelName, &proxy.Backend{
 				ModelName:           modelName,
+				DeploymentName:      existingName,
 				UpstreamModel:       deploymentUpstreamModel(existing, upstreamModel),
 				EngineType:          resolved.Engine,
 				ModelType:           catalogModelType(cat, modelName),
@@ -339,6 +372,24 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 				return nil, err
 			}
 			return json.Marshal(result)
+		}
+		if err := reconcileMismatchedEngineSourceDeployment(
+			ctx,
+			modelName,
+			firstNonEmpty(resolved.EngineAssetName, resolved.Engine),
+			engineSourceDigest,
+			suppressRecentlyDeleted,
+			searchRuntimes...,
+		); err != nil {
+			return nil, err
+		}
+		if requiresNativeLlamaMemoryPreflight(activeRt.Name(), resolved.ModelFormat, resolved.Engine) {
+			// Reducing ctx_size only reduces KV cache; it cannot make oversized model
+			// weights or a multimodal projector fit in memory. This check runs after
+			// reusable deployments are returned so it cannot reject a healthy service.
+			if err := ensureLlamaMinimumMemoryFit(modelPath, resolved.Config, hwInfo); err != nil {
+				return nil, newDeploymentRunError(deployErrorOutOfMemory, err.Error(), deploymentCleanupResult{})
+			}
 		}
 		// Pre-flight: ensure image is available in containerd for K3S deployments.
 		// Auto-import from Docker or pre-pull from registries if needed.
@@ -476,6 +527,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		proxyServer.RegisterBackend(modelName, &proxy.Backend{
 			ModelName:           modelName,
+			DeploymentName:      req.Name,
 			UpstreamModel:       upstreamModel,
 			EngineType:          resolved.Engine,
 			ModelType:           catalogModelType(cat, modelName),
@@ -562,6 +614,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			"model":                rd.ModelName,
 			"engine":               resolved.Engine,
 			"engine_image":         resolved.EngineImage,
+			"engine_source_sha256": engineSourceSHA256(resolved.Source),
 			"slot":                 resolved.Slot,
 			"runtime":              runtimeName,
 			"config":               resolved.Config,
@@ -1017,6 +1070,55 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	}
 }
 
+func validatedPreinstalledNativeBinary(ctx context.Context, db *state.DB, resolved *knowledge.ResolvedConfig, asset *knowledge.EngineAsset) (string, error) {
+	if db == nil || resolved == nil || asset == nil || asset.Source == nil || asset.Source.Probe == nil || asset.Source.InstallType != "preinstalled" {
+		return "", nil
+	}
+	expected := strings.TrimSpace(asset.Metadata.Version)
+	if expected == "" {
+		return "", nil
+	}
+	entries, err := db.ListEngines(ctx)
+	if err != nil {
+		return "", fmt.Errorf("validate native engine version: %w", err)
+	}
+	var evidence []*state.Engine
+	for _, entry := range entries {
+		if entry == nil || entry.RuntimeType != "native" || !strings.EqualFold(entry.AssetName, asset.Metadata.Name) {
+			continue
+		}
+		evidence = append(evidence, entry)
+		if entry.Available && entry.VersionMatch == "exact" && entry.DetectedVersion == expected && entry.BinaryPath != "" {
+			if info, statErr := os.Stat(entry.BinaryPath); statErr == nil && !info.IsDir() {
+				return entry.BinaryPath, nil
+			}
+		}
+	}
+	if len(evidence) == 0 {
+		return "", fmt.Errorf("native engine %s requires detected version %s; no scan evidence is available (run 'aima engine scan --runtime native')", asset.Metadata.Name, expected)
+	}
+	parts := make([]string, 0, len(evidence))
+	for _, entry := range evidence {
+		detected := entry.DetectedVersion
+		if detected == "" {
+			detected = "unknown"
+		}
+		match := entry.VersionMatch
+		if match == "" {
+			match = "unknown"
+		}
+		detail := detected + " (" + match + ")"
+		if entry.BinaryPath != "" {
+			if info, statErr := os.Stat(entry.BinaryPath); statErr != nil || info.IsDir() {
+				detail += " [binary unavailable]"
+			}
+		}
+		parts = append(parts, detail)
+	}
+	sort.Strings(parts)
+	return "", fmt.Errorf("native engine %s requires catalog version %s; detected %s", asset.Metadata.Name, expected, strings.Join(parts, ", "))
+}
+
 func cloneWarmupRequestBody(source map[string]any) map[string]any {
 	if source == nil {
 		return nil
@@ -1139,6 +1241,21 @@ func canonicalModelAlt(cat *knowledge.Catalog, name string) string {
 		return canonical
 	}
 	return ""
+}
+
+// openclawSetDefaultFromEnv reads AIMA_OPENCLAW_SET_DEFAULT as a tri-state:
+// unset/unparseable → nil (default: AIMA sets the primary chat model); otherwise
+// the parsed bool (false = leave the user's primary model untouched).
+func openclawSetDefaultFromEnv() *bool {
+	v := strings.TrimSpace(os.Getenv("AIMA_OPENCLAW_SET_DEFAULT"))
+	if v == "" {
+		return nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+	return &b
 }
 
 func populateDeploymentOverviewFields(status *runtime.DeploymentStatus) {
@@ -1829,11 +1946,250 @@ func deploymentOverviewFromStatus(status *runtime.DeploymentStatus, cat *knowled
 	}
 }
 
+const (
+	llamaComputeReserveMiB    = 1024
+	llamaMinimumContextTokens = 2048
+	llamaMemorySafetyFraction = 0.90
+	bytesPerMiB               = 1024 * 1024
+)
+
+type llamaMemoryFit struct {
+	Evaluated   bool
+	Fits        bool
+	UsableMiB   int
+	RequiredMiB int
+	BudgetMiB   int
+	KVAtMinMiB  int
+}
+
+var llamaGGUFShardRE = regexp.MustCompile(`(?i)^(.+)-(\d+)-of-(\d+)\.gguf$`)
+
+func requiresNativeLlamaMemoryPreflight(runtimeName, modelFormat, engineName string) bool {
+	return strings.EqualFold(strings.TrimSpace(runtimeName), "native") &&
+		strings.EqualFold(strings.TrimSpace(modelFormat), "gguf") &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(engineName)), "llamacpp")
+}
+
+// minimumLlamaMemoryFit reports whether model weights, llama.cpp compute
+// buffers, and the KV cache at the minimum useful context can fit in the safe
+// fraction of detected usable memory. Unknown memory or architecture leaves the
+// result unevaluated so deployments retain their existing graceful behavior.
+func minimumLlamaMemoryFit(kvPerTok int64, usableMiB, nonKVMiB int) llamaMemoryFit {
+	if kvPerTok <= 0 || usableMiB <= 0 || nonKVMiB < 0 {
+		return llamaMemoryFit{Fits: true}
+	}
+
+	budgetMiB := int(float64(usableMiB) * llamaMemorySafetyFraction)
+	kvAtMinMiB := int((int64(llamaMinimumContextTokens)*kvPerTok + bytesPerMiB - 1) / bytesPerMiB)
+	requiredMiB := nonKVMiB + llamaComputeReserveMiB + kvAtMinMiB
+	return llamaMemoryFit{
+		Evaluated:   true,
+		Fits:        requiredMiB <= budgetMiB,
+		UsableMiB:   usableMiB,
+		RequiredMiB: requiredMiB,
+		BudgetMiB:   budgetMiB,
+		KVAtMinMiB:  kvAtMinMiB,
+	}
+}
+
+// llamaModelWeightMiB sums all shards when modelPath points to the first shard
+// of a split GGUF. llama.cpp loads every matching shard, so checking the first
+// file alone would understate the memory needed to load the model.
+func llamaModelWeightMiB(modelPath string) int {
+	if modelPath == "" {
+		return 0
+	}
+	match := llamaGGUFShardRE.FindStringSubmatch(filepath.Base(modelPath))
+	if match == nil {
+		return fileSizeMiB(modelPath)
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(modelPath))
+	if err != nil {
+		return fileSizeMiB(modelPath)
+	}
+	var totalBytes int64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		part := llamaGGUFShardRE.FindStringSubmatch(entry.Name())
+		if part == nil || !strings.EqualFold(part[1], match[1]) || part[3] != match[3] {
+			continue
+		}
+		if info, err := entry.Info(); err == nil {
+			totalBytes += info.Size()
+		}
+	}
+	if totalBytes == 0 {
+		return fileSizeMiB(modelPath)
+	}
+	return int(totalBytes / bytesPerMiB)
+}
+
+func llamaNonKVMiB(modelPath string, config map[string]any) int {
+	nonKVMiB := llamaModelWeightMiB(modelPath)
+	if mm, _ := config["mmproj"].(string); mm != "" {
+		nonKVMiB += fileSizeMiB(mm)
+	}
+	return nonKVMiB
+}
+
+// ensureLlamaMinimumMemoryFit returns a user-actionable error before spawning
+// llama.cpp when the model cannot fit even at the minimum useful context.
+func ensureLlamaMinimumMemoryFit(modelPath string, config map[string]any, hw knowledge.HardwareInfo) error {
+	if modelPath == "" {
+		return nil
+	}
+	arch, ok := model.ReadKVArch(modelPath)
+	if !ok {
+		return nil
+	}
+
+	nonKVMiB := llamaNonKVMiB(modelPath, config)
+	fit := minimumLlamaMemoryFit(arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
+	if !fit.Evaluated || fit.Fits {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"model requires at least %d MiB (weights+projector %d MiB, compute reserve %d MiB, KV %d MiB at ctx_size %d), but the safe memory budget is %d MiB from %d MiB detected; use a smaller or more-quantized model, or free/increase available memory",
+		fit.RequiredMiB, nonKVMiB, llamaComputeReserveMiB, fit.KVAtMinMiB, llamaMinimumContextTokens, fit.BudgetMiB, fit.UsableMiB,
+	)
+}
+
+// fitContextToMemory shrinks config["ctx_size"] so the llama.cpp KV cache plus
+// model weights and the multimodal projector fit the detected memory, and caps it
+// at the model's trained context. It only ever lowers ctx_size — never raises it.
+// Returns (clamped, requestedCtx, appliedCtx, reason). It is a no-op (clamped=false)
+// when ctx_size is unset, the GGUF architecture can't be read, or memory is unknown,
+// so unsupported models/hardware degrade gracefully instead of erroring.
+func fitContextToMemory(modelPath string, config map[string]any, hw knowledge.HardwareInfo) (bool, int, int, string) {
+	reqCtx := contextWindowFromResolvedConfig(config)
+	if reqCtx <= 0 || modelPath == "" || config == nil {
+		return false, 0, 0, ""
+	}
+	arch, ok := model.ReadKVArch(modelPath)
+	if !ok {
+		return false, 0, 0, "" // can't estimate KV → leave ctx_size untouched
+	}
+
+	nonKVMiB := llamaNonKVMiB(modelPath, config)
+
+	target, reasons := clampContextForMemory(reqCtx, arch.NCtxTrain, arch.KVBytesPerToken(), usableMemoryMiB(hw), nonKVMiB)
+	if target >= reqCtx {
+		return false, reqCtx, reqCtx, ""
+	}
+	config["ctx_size"] = target
+	return true, reqCtx, target, strings.Join(reasons, "; ")
+}
+
+// clampContextForMemory computes the largest context window ≤ reqCtx that fits:
+// (a) the model's trained context (nCtxTrain, 0 = unknown/skip) and (b) the KV
+// budget left after weights+projector in usableMiB (0 = unknown/skip). kvPerTok
+// is the f16 KV bytes per token. It floors at a minimally useful context. Pure
+// (no I/O) for testability.
+func clampContextForMemory(reqCtx, nCtxTrain int, kvPerTok int64, usableMiB, nonKVMiB int) (int, []string) {
+	target := reqCtx
+	var reasons []string
+
+	if nCtxTrain > 0 && target > nCtxTrain {
+		target = nCtxTrain
+		reasons = append(reasons, fmt.Sprintf("capped at trained context %d", nCtxTrain))
+	}
+
+	if usableMiB > 0 && kvPerTok > 0 {
+		kvBudgetMiB := int(float64(usableMiB)*llamaMemorySafetyFraction) - nonKVMiB - llamaComputeReserveMiB
+		if kvBudgetMiB < 0 {
+			kvBudgetMiB = 0
+		}
+		maxCtx := int(int64(kvBudgetMiB) * 1024 * 1024 / kvPerTok)
+		maxCtx -= maxCtx % 256 // clean multiple
+		if maxCtx < target {
+			target = maxCtx
+			reasons = append(reasons, fmt.Sprintf("%d MiB usable, weights+projector %d MiB, KV %d B/token",
+				usableMiB, nonKVMiB, kvPerTok))
+		}
+	}
+
+	if target < llamaMinimumContextTokens {
+		target = llamaMinimumContextTokens
+	}
+	return target, reasons
+}
+
+// usableMemoryMiB returns the memory budget an all-layers-offloaded llama.cpp
+// model can use: GPU VRAM for discrete GPUs, or system RAM minus an OS reserve
+// for unified-memory / CPU hosts. Returns 0 when memory is unknown.
+func usableMemoryMiB(hw knowledge.HardwareInfo) int {
+	ramReserve := func(total int) int {
+		reserve := total / 4
+		if reserve < 2048 {
+			reserve = 2048
+		}
+		if reserve > 16384 {
+			reserve = 16384
+		}
+		return reserve
+	}
+	if hw.UnifiedMemory {
+		dynamicTotal := hw.GPUMemUsedMiB + hw.GPUMemFreeMiB
+		// Linux exposes the Strix Halo fixed VRAM aperture (512 MiB) through
+		// mem_info_vram_* while inference allocations use the much larger GTT pool.
+		// Trust dynamic GPU free space only when it describes the declared pool.
+		if hw.GPUMemFreeMiB > 0 && (hw.GPUVRAMMiB == 0 || dynamicTotal >= hw.GPUVRAMMiB/2) {
+			return hw.GPUMemFreeMiB
+		}
+		if hw.RAMAvailMiB > 0 && hw.GPUVRAMMiB > 0 {
+			return min(hw.RAMAvailMiB, hw.GPUVRAMMiB)
+		}
+		if hw.GPUVRAMMiB > 0 {
+			return hw.GPUVRAMMiB
+		}
+		if hw.RAMAvailMiB > 0 {
+			return hw.RAMAvailMiB
+		}
+	}
+	// An all-layers-offloaded llama.cpp model on a discrete GPU is bounded by
+	// currently free VRAM. CPU-only hosts fall back to system RAM.
+	if hw.GPUMemFreeMiB > 0 {
+		return hw.GPUMemFreeMiB
+	}
+	if hw.GPUVRAMMiB > 0 {
+		return hw.GPUVRAMMiB
+	}
+	if hw.RAMTotalMiB > 0 {
+		return hw.RAMTotalMiB - ramReserve(hw.RAMTotalMiB)
+	}
+	return 0
+}
+
+// fileSizeMiB returns the file's size in MiB, or 0 if it can't be stat'd.
+func fileSizeMiB(path string) int {
+	if path == "" {
+		return 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size() / (1024 * 1024))
+}
+
 func contextWindowFromResolvedConfig(config map[string]any) int {
 	if len(config) == 0 {
 		return 0
 	}
-	switch value := config["ctx_size"].(type) {
+	for _, key := range []string{"ctx_size", "max_model_len", "context_tokens"} {
+		if value := positiveContextWindow(config[key]); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func positiveContextWindow(raw any) int {
+	switch value := raw.(type) {
 	case int:
 		if value > 0 {
 			return value
@@ -1886,10 +2242,36 @@ func firstPositiveInt(values ...int) int {
 	return 0
 }
 
-func resolvedServedModelName(modelName string, config map[string]any) string {
+func catalogEngineUpstreamModel(cat *knowledge.Catalog, engineAssetName string) string {
+	if cat == nil {
+		return ""
+	}
+	for _, engine := range cat.EngineAssets {
+		if strings.EqualFold(strings.TrimSpace(engine.Metadata.Name), strings.TrimSpace(engineAssetName)) {
+			return strings.TrimSpace(engine.API.UpstreamModel)
+		}
+	}
+	return ""
+}
+
+func engineSourceSHA256(source *knowledge.EngineSource) string {
+	if source == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(
+		source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH],
+	))
+}
+
+func resolvedServedModelName(modelName string, config map[string]any, fallbacks ...string) string {
 	if config != nil {
 		if raw, ok := config["served_model_name"].(string); ok {
 			return normalizeServedModelName(modelName, raw)
+		}
+	}
+	for _, fallback := range fallbacks {
+		if normalized := normalizeServedModelName("", fallback); normalized != "" {
+			return normalized
 		}
 	}
 	return modelName

@@ -64,6 +64,9 @@ aima knowledge sync                       # 与中心服务同步知识
 aima knowledge validate                   # 校验预测与实际性能
 aima catalog override <kind> <name> <yaml-file>  # 写入 user-owned catalog patch
 aima catalog validate                     # 校验目录资产
+aima catalog validate-patch <yaml-file>   # 只验证单个 patch，不写盘
+aima catalog effective <kind> <name>      # 查看 factory/central/user 合并后的有效 YAML
+aima catalog diff <kind> <name>           # 查看 factory 到 effective 的差异
 aima catalog status                       # 查看 factory/overlay 状态
 aima benchmark run --model <name>         # 在线基准测试（TTFT/TPOT/吞吐量）
 aima benchmark matrix --model <name>      # 组合矩阵测试
@@ -132,7 +135,7 @@ aima version                              # 查看版本信息
 
 - `aima engine ensure` 默认只输出计划；没有 `--apply` 时不下载、不写数据库、不切换 active。
 - 网络安装要求 Catalog 中存在严格 SHA256/OCI digest。校验失败保持旧 active 不变。
-- `aima engine import` 对 Native 包要求实际版本目录，导入后只登记为 inactive；使用 `ensure --apply` 才激活。
+- `aima engine import` 接受版本目录、完整 bundle root 或 nested binary；只有 `--version` smoke、Catalog 版本、scan 和 resolver 校验全部通过才登记为 inactive，使用 `ensure --apply` 才激活。
 - `aima engine rollback` 必须显式传 `--runtime container|native` 和 `--confirm`，且该运行时组的前一版本必须 verified、available。
 - 激活和回滚不会重启当前部署。部署继续使用持久化 intent 中固定的 Engine Asset/版本，直到操作者显式重新部署。
 - `engine remove --delete-files` 只允许无引用的 `managed`/`imported` Native 资产，且规范路径必须严格位于 `AIMA_DATA_DIR`。preinstalled、legacy、容器镜像层和外部路径不会被物理删除。

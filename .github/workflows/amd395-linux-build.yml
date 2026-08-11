@@ -1,0 +1,82 @@
+name: AMD395 Linux Build
+
+on:
+  pull_request:
+    branches:
+      - amd395-linux
+  push:
+    branches:
+      - amd395-linux
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amd395-linux-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GIT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Check out source commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Packaging and workflow contract tests
+        run: make amd395-linux-build-test
+
+      - name: Build Linux package
+        id: package
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}/dist/amd395-linux
+        run: |
+          bash ./scripts/package-amd395-linux.sh
+          short_sha="${GIT_COMMIT:0:12}"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package metadata and checksum
+        working-directory: dist/amd395-linux
+        run: |
+          sha256sum -c checksums.txt
+          python3 - "$GIT_COMMIT" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          with open("build-metadata.json", encoding="utf-8") as fh:
+              metadata = json.load(fh)
+
+          assert metadata["git_commit"] == sys.argv[1]
+          assert metadata["target_os"] == "linux"
+          assert metadata["target_arch"] == "amd64"
+          assert metadata["hardware"] == "amd-strix-halo"
+          assert pathlib.Path(metadata["filename"]).is_file()
+          PY
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v7
+        with:
+          name: aima-amd395-linux-${{ steps.package.outputs.short_sha }}
+          path: |
+            dist/amd395-linux/aima-linux-amd64-*
+            dist/amd395-linux/checksums.txt
+            dist/amd395-linux/build-metadata.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

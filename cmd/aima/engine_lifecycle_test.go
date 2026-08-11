@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -307,7 +308,7 @@ func TestEngineEnsureFailureKeepsOldActiveAndRemovesStaging(t *testing.T) {
 	}
 }
 
-func TestEngineImportNativeRejectsBundleWithoutCatalogSHA256(t *testing.T) {
+func TestEngineImportNativeRejectsNonRunnableBundleWithoutCatalogSHA256(t *testing.T) {
 	inv := &fakeEngineLifecycleInventory{}
 	asset := testNativeLifecycleAsset("2.0.0", "windows/amd64")
 	asset.Source.SHA256 = nil
@@ -316,11 +317,185 @@ func TestEngineImportNativeRejectsBundleWithoutCatalogSHA256(t *testing.T) {
 	service := newTestEngineLifecycleService(t, inv, asset)
 	service.nativeImportAssets = func() []knowledge.EngineAsset { return []knowledge.EngineAsset{*asset} }
 
-	if _, err := service.ImportNative(context.Background(), bundlePath); err == nil || !strings.Contains(err.Error(), "Catalog SHA256 is required") {
-		t.Fatalf("ImportNative error = %v, want missing trusted SHA256 rejection", err)
+	if _, err := service.ImportNative(context.Background(), bundlePath); err == nil || !strings.Contains(err.Error(), "smoke") {
+		t.Fatalf("ImportNative error = %v, want smoke rejection", err)
 	}
 	if len(inv.events) != 0 || len(inv.engines) != 0 {
 		t.Fatalf("untrusted import reached inventory: events=%#v engines=%+v", inv.events, inv.engines)
+	}
+}
+
+func TestEngineImportNativeAcceptsRunnableNestedBundle(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX launcher")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"bin", "lib", "libexec", "amdgcn"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binary := filepath.Join(root, "bin", "aima-engine")
+	launcher := "#!/bin/sh\necho 'aima-engine-native 1.5.0-native'\n"
+	if err := os.WriteFile(binary, []byte(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"lib/libengine.so", "libexec/loader", "amdgcn/oclc.bc"} {
+		if err := os.WriteFile(filepath.Join(root, file), []byte(file), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	asset := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "aima-engine-native-amd395", Type: "aima-engine-native", Version: "1.5.0"},
+		Runtime:  knowledge.EngineRuntime{Default: "native"},
+		Source: &knowledge.EngineSource{
+			Binary: "aima-engine", Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH}, InstallType: "preinstalled",
+			Probe: &knowledge.EngineSourceProbe{
+				VersionCommand:  []string{"./aima-engine", "--version"},
+				VersionPattern:  `aima-engine-native[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)-native`,
+				FallbackVersion: "unknown",
+			},
+		},
+	}
+	inv := &fakeEngineLifecycleInventory{}
+	dataDir := t.TempDir()
+	service := &engineLifecycleService{
+		inventory: inv, dataDir: dataDir,
+		inventoryPlatform:  goruntime.GOOS + "-" + goruntime.GOARCH,
+		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{*asset} },
+	}
+
+	imported, err := service.ImportNative(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ImportNative: %v", err)
+	}
+	if imported.DetectedVersion != "1.5.0" || imported.VersionMatch != "exact" || !imported.Available {
+		t.Fatalf("imported evidence = %+v", imported)
+	}
+	versionRoot := filepath.Dir(filepath.Dir(imported.BinaryPath))
+	for _, path := range []string{"bin/aima-engine", "lib/libengine.so", "libexec/loader", "amdgcn/oclc.bc"} {
+		if _, err := os.Stat(filepath.Join(versionRoot, filepath.FromSlash(path))); err != nil {
+			t.Fatalf("missing imported bundle path %s: %v", path, err)
+		}
+	}
+}
+
+func TestEngineImportNativeAcceptsCompatibleBuildVersion(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX launcher")
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "llama-server")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'version: 9637 (test)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{
+			Name: "llamacpp-hip-linux", Type: "llamacpp", Version: "b9330", CompatibleVersions: []string{"b9637"},
+		},
+		Runtime: knowledge.EngineRuntime{Default: "native"},
+		Source: &knowledge.EngineSource{
+			Binary: "llama-server", Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH},
+			Probe: &knowledge.EngineSourceProbe{
+				VersionCommand: []string{"./llama-server", "--version"}, VersionPattern: `version:[[:space:]]+([0-9]+)`,
+			},
+		},
+	}
+	inv := &fakeEngineLifecycleInventory{}
+	service := &engineLifecycleService{
+		inventory: inv, dataDir: t.TempDir(), inventoryPlatform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{asset} },
+	}
+
+	imported, err := service.ImportNative(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ImportNative compatible build: %v", err)
+	}
+	if imported.DetectedVersion != "9637" || imported.VersionMatch != "compatible" || !imported.Available {
+		t.Fatalf("imported compatible evidence = %+v", imported)
+	}
+}
+
+func TestEngineImportNativeStandalonePathPreservesRealBundleTopology(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX launcher")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"bin", "lib", "libexec", "amdgcn"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binary := filepath.Join(root, "bin", "aima-engine")
+	launcher := "#!/bin/sh\nroot=$(CDPATH= cd -- \"$(dirname \"$0\")/..\" && pwd)\n" +
+		"if [ ! -f \"$root/libexec/loader\" ]; then echo 'bundled ELF loader is missing' >&2; exit 127; fi\n" +
+		"echo 'aima-engine-native 1.5.0-native'\n"
+	if err := os.WriteFile(binary, []byte(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"lib/libengine.so", "libexec/loader", "amdgcn/oclc.bc"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(file)), []byte(file), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asset := knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "aima-engine-native-amd395", Type: "aima-engine-native", Version: "1.5.0"},
+		Runtime:  knowledge.EngineRuntime{Default: "native"},
+		Source: &knowledge.EngineSource{
+			Binary: "aima-engine", Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH}, InstallType: "preinstalled",
+			Probe: &knowledge.EngineSourceProbe{
+				VersionCommand: []string{"./aima-engine", "--version"},
+				VersionPattern: `aima-engine-native[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)-native`,
+			},
+		},
+	}
+	inv := &fakeEngineLifecycleInventory{}
+	service := &engineLifecycleService{
+		inventory: inv, dataDir: t.TempDir(), inventoryPlatform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{asset} },
+	}
+	imported, err := service.ImportNative(context.Background(), binary)
+	if err != nil {
+		t.Fatalf("ImportNative standalone nested binary: %v", err)
+	}
+	versionRoot := filepath.Dir(filepath.Dir(imported.BinaryPath))
+	for _, path := range []string{"bin/aima-engine", "lib/libengine.so", "libexec/loader", "amdgcn/oclc.bc"} {
+		if _, err := os.Stat(filepath.Join(versionRoot, filepath.FromSlash(path))); err != nil {
+			t.Fatalf("missing imported standalone bundle path %s: %v", path, err)
+		}
+	}
+}
+
+func TestEngineImportNativeRejectsBrokenStandaloneLauncher(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX launcher")
+	}
+	launcher := filepath.Join(t.TempDir(), "aima-engine")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'bundled ELF loader is missing' >&2\nexit 127\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "aima-engine-native-amd395", Type: "aima-engine-native", Version: "1.5.0"},
+		Source: &knowledge.EngineSource{
+			Binary: "aima-engine", Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH}, InstallType: "preinstalled",
+			Probe: &knowledge.EngineSourceProbe{VersionCommand: []string{"./aima-engine", "--version"}, VersionPattern: `([0-9]+\.[0-9]+\.[0-9]+)`},
+		},
+	}
+	inv := &fakeEngineLifecycleInventory{}
+	service := &engineLifecycleService{
+		inventory: inv, dataDir: t.TempDir(), inventoryPlatform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{asset} },
+	}
+	if _, err := service.ImportNative(context.Background(), launcher); err == nil || !strings.Contains(err.Error(), "bundled ELF loader is missing") {
+		t.Fatalf("ImportNative error = %v, want explicit loader failure", err)
+	}
+	if len(inv.engines) != 0 {
+		t.Fatalf("broken launcher reached inventory: %+v", inv.engines)
 	}
 }
 

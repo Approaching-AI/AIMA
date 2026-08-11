@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jguan/aima/internal/engine"
 	"github.com/jguan/aima/internal/knowledge"
 )
 
@@ -299,6 +301,35 @@ func TestNativeLogsReadTail(t *testing.T) {
 	}
 }
 
+func TestLogsFallsBackToDeterministicPathAfterMetadataRemoval(t *testing.T) {
+	rt := newTestRuntime(t)
+	if err := os.MkdirAll(rt.logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rt.logDir, "failed-model.log"), []byte("engine root cause\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := rt.Logs(context.Background(), "failed-model", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "engine root cause" {
+		t.Fatalf("logs = %q", got)
+	}
+}
+
+func TestLogsFallbackRejectsPathTraversal(t *testing.T) {
+	rt := newTestRuntime(t)
+	for _, name := range []string{"", ".", "..", "../secret", `..\secret`} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := rt.Logs(context.Background(), name, 20); err == nil {
+				t.Fatalf("unsafe name %q was accepted", name)
+			}
+		})
+	}
+}
+
 func TestEffectiveHealthTimeout(t *testing.T) {
 	tests := []struct {
 		name string
@@ -551,6 +582,97 @@ func TestMetaToStatusMarksMissingProcessFailed(t *testing.T) {
 	}
 }
 
+func TestClassifyWindowsProcessMetaState(t *testing.T) {
+	tests := []struct {
+		name        string
+		recordedPID int
+		listenerPID int
+		pidAlive    bool
+		want        processMetaState
+	}{
+		{name: "alive before port bind", recordedPID: 101, pidAlive: true, want: processMetaStarting},
+		{name: "owns listener", recordedPID: 101, listenerPID: 101, pidAlive: true, want: processMetaMatching},
+		{name: "different listener", recordedPID: 101, listenerPID: 202, pidAlive: true, want: processMetaStale},
+		{name: "exited before port bind", recordedPID: 101, pidAlive: false, want: processMetaExited},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyWindowsProcessMetaState(tt.recordedPID, tt.listenerPID, tt.pidAlive); got != tt.want {
+				t.Fatalf("state = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectNewProcessPID(t *testing.T) {
+	tests := []struct {
+		name    string
+		before  []int
+		current []int
+		want    int
+	}{
+		{name: "one new process", before: []int{10, 20}, current: []int{10, 20, 30}, want: 30},
+		{name: "reject pre-existing", before: []int{10}, current: []int{10}, want: 0},
+		{name: "reject ambiguity", before: []int{10}, current: []int{10, 20, 30}, want: 0},
+		{name: "ignore invalid PIDs", current: []int{0, -1, 30}, want: 30},
+		{name: "deduplicate current snapshot", before: []int{10}, current: []int{10, 20, 20}, want: 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectNewProcessPID(tt.before, tt.current); got != tt.want {
+				t.Fatalf("pid = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMetaPhaseForProcessState(t *testing.T) {
+	started := time.Now()
+	tests := []struct {
+		name      string
+		state     processMetaState
+		portBound bool
+		startedAt time.Time
+		timeoutS  int
+		want      string
+	}{
+		{name: "alive before port bind", state: processMetaStarting, startedAt: started, timeoutS: 60, want: "starting"},
+		{name: "matching before port bind", state: processMetaMatching, startedAt: started, timeoutS: 60, want: "starting"},
+		{name: "listener bound", state: processMetaMatching, portBound: true, startedAt: started, timeoutS: 60, want: "running"},
+		{name: "different listener", state: processMetaStale, portBound: true, startedAt: started, timeoutS: 60, want: "failed"},
+		{name: "process exited", state: processMetaExited, startedAt: started, timeoutS: 60, want: "failed"},
+		{name: "startup timeout", state: processMetaStarting, startedAt: started.Add(-61 * time.Second), timeoutS: 60, want: "failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := metaPhaseForProcessState(tt.state, tt.portBound, tt.startedAt, tt.timeoutS); got != tt.want {
+				t.Fatalf("phase = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMetaToStatusDoesNotReportPortReuseWhenPortIsUnbound(t *testing.T) {
+	rt := newTestRuntime(t)
+	status := rt.metaToStatus(&deploymentMeta{
+		Name:      "stale-process-identity",
+		PID:       os.Getpid(),
+		Port:      freeTCPPort(t),
+		Command:   []string{"definitely-not-the-current-test-process"},
+		StartTime: time.Now(),
+	})
+
+	if status.Phase != "failed" {
+		t.Fatalf("phase = %q, want failed", status.Phase)
+	}
+	if status.Message != "deployment metadata is stale; process identity does not match" {
+		t.Fatalf("message = %q, want process identity mismatch", status.Message)
+	}
+}
+
 func TestMetaToStatusMarksStalePortReuseFailed(t *testing.T) {
 	rt := newTestRuntime(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -687,6 +809,25 @@ func TestCommandLineMatchesRejectsUnknownLauncherPrefix(t *testing.T) {
 	}
 }
 
+func TestCommandPrefixMatchesPortableELFLoader(t *testing.T) {
+	expected := []string{
+		"/opt/aima/dist/linux-amd64/bin/aima-engine",
+		"serve", "--model-dir", "/models/qwen", "--port", "1024",
+	}
+	actual := []string{
+		"/opt/aima/dist/linux-amd64/lib/ld-linux-x86-64.so.2",
+		"--inhibit-cache",
+		"--library-path", "/opt/aima/dist/linux-amd64/lib",
+		"--argv0", "/opt/aima/dist/linux-amd64/bin/aima-engine",
+		"/opt/aima/dist/linux-amd64/libexec/aima-engine.real",
+		"serve", "--model-dir", "/models/qwen", "--port", "1024",
+	}
+
+	if !commandPrefixMatches(actual, expected) {
+		t.Fatalf("portable ELF loader command should match deployment metadata")
+	}
+}
+
 func TestProcToStatusUsesStartupErrorAsFailure(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "deploy.log")
 	if err := os.WriteFile(logPath, []byte("couldn't bind HTTP server socket: Address already in use\n"), 0o644); err != nil {
@@ -735,6 +876,7 @@ func TestStatusPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 		logPath:   logPath,
 		labels:    map[string]string{"aima.dev/engine": "vllm"},
 		startTime: time.Now(),
+		exited:    true,
 	}
 
 	meta := &deploymentMeta{
@@ -763,6 +905,42 @@ func TestStatusPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 	}
 }
 
+func TestStatusDoesNotOverrideLiveStartingProcessWithPersistedFailure(t *testing.T) {
+	rt := newTestRuntime(t)
+	logPath := filepath.Join(t.TempDir(), "slow-start.log")
+	if err := os.WriteFile(logPath, []byte("INFO still loading\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	proc := &nativeProcess{
+		name:      "slow-start",
+		port:      freeTCPPort(t),
+		startTime: time.Now(),
+		logPath:   logPath,
+	}
+	rt.processes[proc.name] = proc
+	if err := rt.saveMeta(&deploymentMeta{
+		Name:      proc.name,
+		PID:       999999,
+		Port:      proc.port,
+		Command:   []string{"llama-server", "--port", strconv.Itoa(proc.port)},
+		StartTime: proc.startTime,
+		LogPath:   logPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := rt.Status(context.Background(), proc.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "starting" {
+		t.Fatalf("phase = %q, want starting", status.Phase)
+	}
+	if status.Message == "process exited before readiness" {
+		t.Fatalf("live startup inherited false persisted failure: %#v", status)
+	}
+}
+
 func TestListPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 	rt := newTestRuntime(t)
 
@@ -777,6 +955,7 @@ func TestListPrefersPersistedFailureOverInMemoryProcess(t *testing.T) {
 		logPath:   logPath,
 		labels:    map[string]string{"aima.dev/engine": "vllm"},
 		startTime: time.Now(),
+		exited:    true,
 	}
 
 	meta := &deploymentMeta{
@@ -1360,6 +1539,81 @@ func TestDeployAppendsCustomPortFlags(t *testing.T) {
 	}
 }
 
+func TestNativeDeployRestoresPrivateAdapterContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command metadata assertion uses a POSIX shell script")
+	}
+
+	rt := newTestRuntime(t)
+	script := filepath.Join(t.TempDir(), "native-adapter-engine.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	modelPath := filepath.Join(t.TempDir(), "model")
+	if err := os.MkdirAll(modelPath, 0o755); err != nil {
+		t.Fatalf("create model dir: %v", err)
+	}
+
+	if err := rt.Deploy(context.Background(), &DeployRequest{
+		Name:      "native-adapter-context",
+		Engine:    "native-test",
+		Command:   []string{script, "serve", "--model-dir", "{{.ModelPath}}"},
+		ModelPath: modelPath,
+		Port:      freeTCPPort(t),
+		Config:    map[string]any{"context_tokens": 8192},
+	}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Delete(context.Background(), "native-adapter-context") })
+
+	instanceID := ""
+	assertContext := func(t *testing.T, status *DeploymentStatus) {
+		t.Helper()
+		if len(status.AdapterCommand) == 0 || status.AdapterCommand[0] != script {
+			t.Fatalf("AdapterCommand = %q, want resolved executable %q", status.AdapterCommand, script)
+		}
+		if status.AdapterModelPath != modelPath {
+			t.Fatalf("AdapterModelPath = %q, want %q", status.AdapterModelPath, modelPath)
+		}
+		if status.AdapterInstanceID == "" {
+			t.Fatal("AdapterInstanceID is empty")
+		}
+		if instanceID == "" {
+			instanceID = status.AdapterInstanceID
+		} else if status.AdapterInstanceID != instanceID {
+			t.Fatalf("AdapterInstanceID = %q, want persisted %q", status.AdapterInstanceID, instanceID)
+		}
+		encoded, err := json.Marshal(status)
+		if err != nil {
+			t.Fatalf("marshal status: %v", err)
+		}
+		if bytes.Contains(encoded, []byte(script)) || bytes.Contains(encoded, []byte(modelPath)) || bytes.Contains(encoded, []byte("AdapterCommand")) || bytes.Contains(encoded, []byte("AdapterInstanceID")) {
+			t.Fatalf("private adapter context leaked in status JSON: %s", encoded)
+		}
+	}
+
+	status, err := rt.Status(context.Background(), "native-adapter-context")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	assertContext(t, status)
+
+	fresh := NewNativeRuntime(rt.logDir, rt.distDir, rt.deployDir)
+	restored, err := fresh.Status(context.Background(), "native-adapter-context")
+	if err != nil {
+		t.Fatalf("fresh Status: %v", err)
+	}
+	assertContext(t, restored)
+
+	meta, err := fresh.loadMeta("native-adapter-context")
+	if err != nil {
+		t.Fatalf("loadMeta: %v", err)
+	}
+	if meta.ModelPath != modelPath {
+		t.Fatalf("persisted ModelPath = %q, want %q", meta.ModelPath, modelPath)
+	}
+}
+
 func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
 	// A native engine binary discovered by scanning AIMA_ENGINE_DIR must also be
 	// launchable: the native runtime resolves the bare binary name against the same
@@ -1385,5 +1639,138 @@ func TestFindInEngineDirsResolvesScannedBinary(t *testing.T) {
 	}
 	if got := (&NativeRuntime{}).findInEngineDirs("llama-server"); got != "" {
 		t.Errorf("no engine dirs: got %q, want empty", got)
+	}
+}
+
+func TestFindLocalBinaryKeepsValidatedExplicitPath(t *testing.T) {
+	distDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(distDir, "aima-engine"), []byte("wrong"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exactPath := filepath.Join(t.TempDir(), "aima-engine")
+	if err := os.WriteFile(exactPath, []byte("exact"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewNativeRuntime(t.TempDir(), distDir, t.TempDir())
+	got := rt.findLocalBinary(exactPath, &engine.BinarySource{Binary: "aima-engine"})
+	if got != exactPath {
+		t.Fatalf("findLocalBinary = %q, want validated path %q", got, exactPath)
+	}
+}
+
+func TestNativeBundleLaunchEnvironment(t *testing.T) {
+	distDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(distDir); err == nil {
+		distDir = resolved
+	}
+	binDir := filepath.Join(distDir, "bin")
+	libDir := filepath.Join(distDir, "lib")
+	libexecDir := filepath.Join(distDir, "libexec")
+	deviceLibDir := filepath.Join(distDir, "amdgcn")
+	backendDir := filepath.Join(binDir, "backends")
+	engineRoot := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(engineRoot); err == nil {
+		engineRoot = resolved
+	}
+	engineDir := filepath.Join(engineRoot, "configured-engine")
+	engineLibDir := filepath.Join(engineDir, "lib64")
+	for _, dir := range []string{binDir, libDir, libexecDir, deviceLibDir, backendDir, engineLibDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binaryPath := filepath.Join(binDir, "engine-server")
+	if err := os.WriteFile(binaryPath, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := nativeLibraryDirs(binaryPath, distDir, engineDir)
+	wantDirs := []string{binDir, backendDir, distDir, libDir, libexecDir, engineDir, engineLibDir}
+	for _, want := range wantDirs {
+		if !containsString(dirs, want) {
+			t.Fatalf("nativeLibraryDirs(%q) = %v, missing %q", binaryPath, dirs, want)
+		}
+	}
+
+	key := "LD_LIBRARY_PATH"
+	if runtime.GOOS == "darwin" {
+		key = "DYLD_LIBRARY_PATH"
+	}
+	existingA := filepath.Join(t.TempDir(), "catalog-libs")
+	existingB := filepath.Join(t.TempDir(), "parent-libs")
+	env := []string{"KEEP=value", key + "=" + existingB}
+	env = setEnvValue(env, key, existingA+string(os.PathListSeparator)+existingB)
+	env = prependEnvPaths(env, key, dirs)
+	got, ok := envValue(env, key)
+	if !ok {
+		t.Fatalf("%s missing from environment", key)
+	}
+	wantPaths := append(append([]string(nil), dirs...), existingA, existingB)
+	if strings.Join(wantPaths, string(os.PathListSeparator)) != got {
+		t.Fatalf("%s = %q, want %q", key, got, strings.Join(wantPaths, string(os.PathListSeparator)))
+	}
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, key+"=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("%s appears %d times in %v", key, count, env)
+	}
+	if got := nativeWorkDir("/catalog/work", binDir); got != "/catalog/work" {
+		t.Fatalf("explicit work dir = %q", got)
+	}
+	if got := nativeWorkDir("", binDir); got != binDir {
+		t.Fatalf("bundle work dir = %q, want %q", got, binDir)
+	}
+	if got := nativeBundleRoot(binaryPath); got != distDir {
+		t.Fatalf("nativeBundleRoot = %q, want %q", got, distDir)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFindLocalBinaryUsesNestedSourcePath(t *testing.T) {
+	distDir := t.TempDir()
+	want := filepath.Join(distDir, "bin", "aima-engine")
+	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+		t.Fatalf("mkdir nested binary dir: %v", err)
+	}
+	if err := os.WriteFile(want, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write nested binary: %v", err)
+	}
+
+	r := &NativeRuntime{distDir: distDir}
+	source := &engine.BinarySource{Binary: "bin/aima-engine"}
+	if got := r.findLocalBinary("aima-engine", source); got != want {
+		t.Fatalf("findLocalBinary = %q, want %q", got, want)
+	}
+}
+
+func TestFindLocalBinaryDoesNotBypassPinnedSourceProvenance(t *testing.T) {
+	distDir := t.TempDir()
+	legacy := filepath.Join(distDir, "bin", "aima-engine")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("unverified"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	source := &engine.BinarySource{
+		Binary: "bin/aima-engine",
+		SHA256: map[string]string{platform: strings.Repeat("a", 64)},
+	}
+
+	if got := (&NativeRuntime{distDir: distDir}).findLocalBinary("aima-engine", source); got != "" {
+		t.Fatalf("findLocalBinary trusted unverified pinned candidate %q", got)
 	}
 }

@@ -65,6 +65,7 @@ type CommandRunner interface {
 type ScanOptions struct {
 	Assets       []AssetDescriptor
 	Runner       CommandRunner
+	Logger       *slog.Logger
 	DistDir      string            // dist directory for native binaries (~/.aima/dist/{os}-{arch}/)
 	ExtraDirs    []string          // extra dirs to scan for native binaries (from AIMA_ENGINE_DIR); engines installed off-PATH/off-dist
 	Platform     string            // current platform (e.g., "windows-amd64")
@@ -81,12 +82,19 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 		return nil, fmt.Errorf("scan engines: %w", err)
 	}
 
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	var allEngines []*EngineImage
+	var containerCandidates, containerMatches, nativeMatches int
 
 	// Scan container images
 	images, err := listImages(ctx, opts.Runner)
 	if err == nil {
+		containerCandidates = len(images)
 		matched := matchImages(images, opts.Assets)
+		containerMatches = len(matched)
 
 		// Auto-import Docker-only images to containerd (only when explicitly requested)
 		if opts.AutoImport {
@@ -128,19 +136,35 @@ func ScanUnified(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) 
 			img.Platform = opts.Platform
 		}
 		allEngines = append(allEngines, matched...)
+	} else {
+		logger.Warn("engine scan: container discovery unavailable", "error", err)
 	}
 
 	// Scan native binaries
 	if opts.DistDir != "" {
 		native, err := ScanNative(ctx, opts)
 		if err == nil {
+			nativeMatches = len(native)
 			allEngines = append(allEngines, native...)
+		} else if ctx.Err() != nil {
+			return nil, fmt.Errorf("scan native engines: %w", ctx.Err())
+		} else {
+			logger.Warn("engine scan: native discovery failed", "dist_dir", opts.DistDir, "error", err)
 		}
 	}
 
 	// Probe pre-installed engines
 	preinstalled := probePreinstalled(ctx, opts)
 	allEngines = append(allEngines, preinstalled...)
+	logger.Info("engine scan complete",
+		"platform", opts.Platform,
+		"dist_dir", opts.DistDir,
+		"extra_dirs", opts.ExtraDirs,
+		"container_candidates", containerCandidates,
+		"container_matches", containerMatches,
+		"native_matches", nativeMatches,
+		"preinstalled_matches", len(preinstalled),
+		"total", len(allEngines))
 
 	return dedupeEngineImages(allEngines), nil
 }
@@ -180,17 +204,27 @@ func ScanNative(ctx context.Context, opts ScanOptions) ([]*EngineImage, error) {
 	}
 	seenExternal := make(map[string]bool)
 	for _, image := range found {
-		seenExternal[normalizedBinaryName(filepath.Base(image.BinaryPath))] = true
+		seenExternal[filepath.Clean(image.BinaryPath)] = true
 	}
 
-	// External directories and PATH are never treated as AIMA-owned. The first
-	// external match for a binary name wins, preserving the existing scan order.
+	// Configured bundle roots may contain nested bin/<binary> layouts. PATH entries
+	// remain non-recursive so scanning does not unexpectedly traverse large trees.
 	for _, dir := range opts.ExtraDirs {
-		found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
+		matches, err := scanExternalEngineDir(ctx, dir, filenameLookup, assets, seenExternal, opts.Platform, opts.Runner, true)
+		if err != nil {
+			logger := opts.Logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Warn("engine scan: configured engine directory unavailable", "dir", dir, "error", err)
+			continue
+		}
+		found = append(found, matches...)
 	}
 	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
 		for _, dir := range strings.Split(pathEnv, string(os.PathListSeparator)) {
-			found = append(found, scanExternalEngineDir(dir, filenameLookup, assets, seenExternal, opts.Platform)...)
+			matches, _ := scanExternalEngineDir(ctx, dir, filenameLookup, assets, seenExternal, opts.Platform, opts.Runner, false)
+			found = append(found, matches...)
 		}
 	}
 
@@ -284,43 +318,66 @@ func scanManagedEngineBinaries(ctx context.Context, root string, filenameLookup 
 	return found, nil
 }
 
-func scanExternalEngineDir(dir string, filenameLookup map[string]string, assets assetDescriptorIndex, seen map[string]bool, platform string) []*EngineImage {
+func scanExternalEngineDir(ctx context.Context, dir string, filenameLookup map[string]string, assets assetDescriptorIndex, seen map[string]bool, platform string, runner CommandRunner, recursive bool) ([]*EngineImage, error) {
 	if strings.TrimSpace(dir) == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var found []*EngineImage
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
+	visit := func(path string, entry os.DirEntry) {
 		nameKey := normalizedBinaryName(entry.Name())
-		if seen[nameKey] {
-			continue
-		}
 		assetRef, ok := filenameLookup[nameKey]
 		if !ok {
-			continue
+			return
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
 		}
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return
 		}
-		path := filepath.Join(dir, entry.Name())
+		descriptor := assets.resolve(assetRef)
+		detectedVersion := probeDetectedVersion(ctx, path, descriptor.Probe, runner)
 		found = append(found, newNativeEngineImage(
-			binaryHash(entry.Name()+"-"+dir), path, info.Size(), platform,
-			"preinstalled", assets.resolve(assetRef), "",
+			binaryHash("preinstalled-"+path), path, info.Size(), platform,
+			"preinstalled", descriptor, detectedVersion,
 		))
-		seen[nameKey] = true
+		seen[path] = true
 	}
-	return found
+	if !recursive {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				visit(filepath.Join(dir, entry.Name()), entry)
+			}
+		}
+		return found, nil
+	}
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			visit(path, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 func newNativeEngineImage(id, path string, size int64, platform, origin string, descriptor AssetDescriptor, detectedVersion string) *EngineImage {
 	contentDigest := fileContentDigest(path)
+	versionMatch := CompareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
 	return &EngineImage{
 		ID:              id,
 		Type:            descriptor.Type,
@@ -329,13 +386,13 @@ func newNativeEngineImage(id, path string, size int64, platform, origin string, 
 		Platform:        platform,
 		RuntimeType:     "native",
 		BinaryPath:      path,
-		Available:       true,
+		Available:       nativeVersionAvailable(descriptor.CatalogVersion, versionMatch),
 		Origin:          origin,
 		CatalogVersion:  descriptor.CatalogVersion,
 		ContentDigest:   contentDigest,
 		ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
 		DetectedVersion: detectedVersion,
-		VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
+		VersionMatch:    versionMatch,
 	}
 }
 
@@ -361,89 +418,110 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 		if probe == nil {
 			continue
 		}
-		// Search probe.Paths for the binary
-		var binaryPath string
-		for _, p := range probe.Paths {
-			if _, err := os.Stat(p); err == nil {
-				binaryPath = p
-				break
+		for _, binaryPath := range probe.Paths {
+			if _, err := os.Stat(binaryPath); err != nil {
+				continue
 			}
-		}
-		if binaryPath == "" {
-			continue // not installed on this device
-		}
 
-		// Detect version
-		detectedVersion := probe.FallbackVersion
-		if len(probe.VersionCommand) > 0 && opts.Runner != nil {
-			// Execute version command with 5s timeout
-			cmdName, cmdArgs := resolveProbeCommand(binaryPath, probe.VersionCommand)
-			vCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			out, err := opts.Runner.Run(vCtx, cmdName, cmdArgs...)
-			cancel()
-			if err == nil && probe.VersionPattern != "" {
-				re, reErr := regexp.Compile(probe.VersionPattern)
-				if reErr == nil {
-					if matches := re.FindSubmatch(out); len(matches) > 1 {
-						detectedVersion = string(matches[1])
-					}
-				}
+			detectedVersion := probeDetectedVersion(ctx, binaryPath, probe, opts.Runner)
+
+			info, _ := os.Stat(binaryPath)
+			var size int64
+			if info != nil {
+				size = info.Size()
 			}
+			identity := descriptor.AssetName
+			if identity == "" {
+				identity = descriptor.Type
+			}
+			contentDigest := fileContentDigest(binaryPath)
+			versionMatch := CompareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
+			found = append(found, &EngineImage{
+				ID:              binaryHash("preinstalled-" + identity + "-" + filepath.Clean(binaryPath)),
+				Type:            descriptor.Type,
+				AssetName:       descriptor.AssetName,
+				SizeBytes:       size,
+				Platform:        opts.Platform,
+				RuntimeType:     "native",
+				BinaryPath:      binaryPath,
+				Available:       nativeVersionAvailable(descriptor.CatalogVersion, versionMatch),
+				Origin:          "preinstalled",
+				CatalogVersion:  descriptor.CatalogVersion,
+				ContentDigest:   contentDigest,
+				ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
+				DetectedVersion: detectedVersion,
+				VersionMatch:    versionMatch,
+			})
 		}
-
-		info, _ := os.Stat(binaryPath)
-		var size int64
-		if info != nil {
-			size = info.Size()
-		}
-
-		identity := descriptor.AssetName
-		if identity == "" {
-			identity = descriptor.Type
-		}
-		contentDigest := fileContentDigest(binaryPath)
-		found = append(found, &EngineImage{
-			ID:              binaryHash("preinstalled-" + identity),
-			Type:            descriptor.Type,
-			AssetName:       descriptor.AssetName,
-			SizeBytes:       size,
-			Platform:        opts.Platform,
-			RuntimeType:     "native",
-			BinaryPath:      binaryPath,
-			Available:       true,
-			Origin:          "preinstalled",
-			CatalogVersion:  descriptor.CatalogVersion,
-			ContentDigest:   contentDigest,
-			ContentVerified: digestMatches(contentDigest, descriptor.ExpectedSHA256),
-			DetectedVersion: detectedVersion,
-			VersionMatch:    compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions),
-		})
 	}
 	return found
 }
 
-func compareDetectedVersion(detected, catalog string, compatible []string) string {
+func probeDetectedVersion(ctx context.Context, binaryPath string, probe *knowledge.EngineSourceProbe, runner CommandRunner) string {
+	if probe == nil {
+		return ""
+	}
+	detectedVersion := probe.FallbackVersion
+	if len(probe.VersionCommand) == 0 || runner == nil {
+		return detectedVersion
+	}
+	cmdName, cmdArgs := resolveProbeCommand(binaryPath, probe.VersionCommand)
+	vCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	out, err := runner.Run(vCtx, cmdName, cmdArgs...)
+	cancel()
+	if err != nil || probe.VersionPattern == "" {
+		return detectedVersion
+	}
+	re, err := regexp.Compile(probe.VersionPattern)
+	if err != nil {
+		return detectedVersion
+	}
+	if matches := re.FindSubmatch(out); len(matches) > 1 {
+		return string(matches[1])
+	}
+	return detectedVersion
+}
+
+func nativeVersionAvailable(catalogVersion, versionMatch string) bool {
+	if strings.TrimSpace(catalogVersion) == "" {
+		return true
+	}
+	return versionMatch == "exact" || versionMatch == "compatible"
+}
+
+// CompareDetectedVersion compares probed and Catalog versions without changing
+// the original values persisted as scan evidence.
+func CompareDetectedVersion(detected, catalog string, compatible []string) string {
 	detected = strings.TrimSpace(detected)
 	catalog = strings.TrimSpace(catalog)
 	if detected == "" || strings.EqualFold(detected, "unknown") || catalog == "" || strings.EqualFold(catalog, "unknown") {
 		return "unknown"
 	}
-	if detected == catalog {
+	if comparableEngineVersion(detected) == comparableEngineVersion(catalog) {
 		return "exact"
 	}
 	for _, declared := range compatible {
 		declared = strings.TrimSpace(declared)
-		if declared == detected {
+		if comparableEngineVersion(declared) == comparableEngineVersion(detected) {
 			return "compatible"
 		}
 		if strings.HasSuffix(declared, ".x") {
-			prefix := strings.TrimSuffix(declared, "x")
-			if len(detected) > len(prefix) && strings.HasPrefix(detected, prefix) {
+			prefix := strings.TrimSuffix(comparableEngineVersion(declared), "x")
+			version := comparableEngineVersion(detected)
+			if len(version) > len(prefix) && strings.HasPrefix(version, prefix) {
 				return "compatible"
 			}
 		}
 	}
 	return "mismatch"
+}
+
+func comparableEngineVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if len(version) > 1 && (version[0] == 'b' || version[0] == 'B' || version[0] == 'v' || version[0] == 'V') && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
 }
 
 func fileContentDigest(path string) string {
@@ -534,8 +612,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 
 	// Try crictl (K3S containerd)
 	containerdSet := make(map[string]bool)
-	crictlImages, err := listCrictlImages(ctx, runner)
-	if err == nil {
+	crictlImages, crictlErr := listCrictlImages(ctx, runner)
+	if crictlErr == nil {
 		allImages = append(allImages, crictlImages...)
 		for _, img := range crictlImages {
 			containerdSet[img.repo+":"+img.tag] = true
@@ -543,8 +621,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 	}
 
 	// Also try docker (may have additional images)
-	dockerImages, err := listDockerImages(ctx, runner)
-	if err == nil {
+	dockerImages, dockerErr := listDockerImages(ctx, runner)
+	if dockerErr == nil {
 		for _, img := range dockerImages {
 			if containerdSet[img.repo+":"+img.tag] {
 				continue // already in containerd, skip Docker duplicate
@@ -553,8 +631,8 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 		}
 	}
 
-	if len(allImages) == 0 {
-		return nil, fmt.Errorf("neither crictl nor docker available")
+	if crictlErr != nil && dockerErr != nil {
+		return nil, fmt.Errorf("container discovery failed (crictl: %v; docker: %v)", crictlErr, dockerErr)
 	}
 
 	return allImages, nil
@@ -563,11 +641,16 @@ func listImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) 
 // runCrictl tries standalone crictl, then K3S-embedded crictl as fallback.
 // K3S bundles crictl as a subcommand (k3s crictl) — standalone crictl may not exist.
 func runCrictl(ctx context.Context, runner CommandRunner, args ...string) ([]byte, error) {
-	if out, err := runner.Run(ctx, "crictl", args...); err == nil {
+	out, standaloneErr := runner.Run(ctx, "crictl", args...)
+	if standaloneErr == nil {
 		return out, nil
 	}
 	k3sArgs := append([]string{"crictl"}, args...)
-	return runner.Run(ctx, "k3s", k3sArgs...)
+	out, k3sErr := runner.Run(ctx, "k3s", k3sArgs...)
+	if k3sErr != nil {
+		return nil, fmt.Errorf("standalone crictl: %v; k3s crictl: %v", standaloneErr, k3sErr)
+	}
+	return out, nil
 }
 
 func listCrictlImages(ctx context.Context, runner CommandRunner) ([]imageInfo, error) {

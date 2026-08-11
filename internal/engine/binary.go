@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,8 +16,11 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // BinaryManager downloads and caches native engine binaries.
@@ -26,7 +30,9 @@ type BinaryManager struct {
 
 // NewBinaryManager creates a BinaryManager for the given distribution directory.
 func NewBinaryManager(distDir string) *BinaryManager {
-	return &BinaryManager{distDir: distDir}
+	manager := &BinaryManager{distDir: distDir}
+	_ = recoverInterruptedPromotion(distDir)
+	return manager
 }
 
 // BinarySource describes where to download a native binary.
@@ -64,6 +70,22 @@ func (m *BinaryManager) Resolve(ctx context.Context, source *BinarySource) (stri
 	return path, err
 }
 
+// ResolveInstalled resolves only a locally installed, provenance-verified
+// binary. It never downloads and is used to implement --no-pull safely.
+func (m *BinaryManager) ResolveInstalled(source *BinarySource) (string, error) {
+	if source == nil {
+		return "", fmt.Errorf("no binary source configured")
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	if !source.Supports(platform) {
+		return "", fmt.Errorf("platform %s not supported (available: %v)", platform, source.Platforms)
+	}
+	if path, ok := m.findExisting(source); ok {
+		return path, nil
+	}
+	return "", fmt.Errorf("binary %s is not installed with verified provenance", source.Binary)
+}
+
 // Ensure makes a native engine binary available for the current platform.
 // It reuses an existing binary from distDir / probe paths / PATH when possible,
 // and downloads it only when missing.
@@ -87,22 +109,27 @@ func (m *BinaryManager) Ensure(ctx context.Context, source *BinarySource, onProg
 	}
 
 	expectedSHA256 := source.SHA256[platform]
+	var localErr error
 	if installed, err := m.installFromLocalBundles(ctx, source, expectedSHA256, onProgress); installed {
 		if path, ok := m.findExisting(source); ok {
 			return path, true, nil
 		}
 		return "", true, fmt.Errorf("binary %s not found in %s after installing local bundle", name, m.distDir)
 	} else if err != nil {
+		localErr = err
 		slog.Warn("local engine bundle install failed, falling back to download", "binary", name, "error", err)
 	}
 
 	url := source.Download[platform]
 	mirrorURLs := source.Mirror[platform]
 	if url == "" && len(mirrorURLs) == 0 {
+		if localErr != nil {
+			return "", false, localErr
+		}
 		return "", false, fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	if err := m.download(ctx, url, mirrorURLs, m.distDir, name, expectedSHA256, onProgress); err != nil {
+	if err := m.download(ctx, url, mirrorURLs, m.installDir(source), name, expectedSHA256, onProgress); err != nil {
 		return "", true, fmt.Errorf("download %s: %w", name, err)
 	}
 
@@ -130,19 +157,24 @@ func (m *BinaryManager) Download(ctx context.Context, source *BinarySource, onPr
 	}
 
 	expectedSHA256 := source.SHA256[platform]
+	var localErr error
 	if installed, err := m.installFromLocalBundles(ctx, source, expectedSHA256, onProgress); installed {
 		return nil
 	} else if err != nil {
+		localErr = err
 		slog.Warn("local engine bundle install failed, falling back to download", "binary", source.Binary, "error", err)
 	}
 
 	url := source.Download[platform]
 	mirrorURLs := source.Mirror[platform]
 	if url == "" && len(mirrorURLs) == 0 {
+		if localErr != nil {
+			return localErr
+		}
 		return fmt.Errorf("no download URL for platform %s", platform)
 	}
 
-	return m.download(ctx, url, mirrorURLs, m.distDir, source.Binary, expectedSHA256, onProgress)
+	return m.download(ctx, url, mirrorURLs, m.installDir(source), source.Binary, expectedSHA256, onProgress)
 }
 
 func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
@@ -150,12 +182,18 @@ func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
 		return "", false
 	}
 
+	expectedSHA256 := source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]
+	if strings.TrimSpace(expectedSHA256) != "" {
+		installDir := m.installDir(source)
+		if path, ok := FindBinaryInDir(installDir, source.Binary); ok && verifyBundleProvenance(installDir, path, expectedSHA256) == nil {
+			return path, true
+		}
+		return "", false
+	}
+
 	if source.Binary != "" {
-		for _, c := range binaryCandidates(source.Binary) {
-			p := filepath.Join(m.distDir, c)
-			if _, err := os.Stat(p); err == nil {
-				return p, true
-			}
+		if path, ok := FindBinaryInDir(m.distDir, source.Binary); ok {
+			return path, true
 		}
 	}
 
@@ -174,6 +212,18 @@ func (m *BinaryManager) findExisting(source *BinarySource) (string, bool) {
 	return "", false
 }
 
+func (m *BinaryManager) installDir(source *BinarySource) string {
+	if source == nil {
+		return m.distDir
+	}
+	expected := strings.ToLower(strings.TrimSpace(source.SHA256[goruntime.GOOS+"/"+goruntime.GOARCH]))
+	if expected == "" {
+		return m.distDir
+	}
+	key := sha256.Sum256([]byte(filepath.ToSlash(source.Binary)))
+	return filepath.Join(m.distDir, ".aima", "bundles", fmt.Sprintf("%x", key[:8]), expected)
+}
+
 // ImportBundle installs a native engine archive, directory, or single binary into
 // the manager's dist directory. It is used by air-gapped deployments and by
 // `aima engine import` for native runtimes.
@@ -190,10 +240,26 @@ func (m *BinaryManager) ImportBundle(ctx context.Context, bundlePath, binaryName
 	if onProgress != nil {
 		onProgress(ProgressEvent{Phase: "importing", Message: "installing local engine bundle"})
 	}
-	if err := installLocalBundle(bundlePath, m.distDir, binaryName, onProgress); err != nil {
+	stageDir, err := os.MkdirTemp(filepath.Dir(m.distDir), ".aima-import-stage-*")
+	if err != nil {
+		return fmt.Errorf("create import staging directory: %w", err)
+	}
+	defer os.RemoveAll(stageDir)
+	if err := copyDirContents(m.distDir, stageDir); err != nil {
+		return fmt.Errorf("stage current engine distribution: %w", err)
+	}
+	if err := installLocalBundle(bundlePath, stageDir, binaryName, onProgress); err != nil {
 		return err
 	}
-	finalizeNativeDist(m.distDir, binaryName)
+	finalizeNativeDist(stageDir, binaryName)
+	if binaryName != "" {
+		if _, ok := FindBinaryInDir(stageDir, binaryName); !ok {
+			return fmt.Errorf("binary %s not found after staging local bundle", binaryName)
+		}
+	}
+	if err := promoteVersionedBundle(stageDir, m.distDir); err != nil {
+		return fmt.Errorf("promote imported engine bundle: %w", err)
+	}
 	if onProgress != nil {
 		onProgress(ProgressEvent{Phase: "complete", Message: "engine binary ready"})
 	}
@@ -218,10 +284,17 @@ func (m *BinaryManager) installFromLocalBundles(ctx context.Context, source *Bin
 			slog.Warn("local engine bundle verification failed", "path", candidate, "error", err)
 			continue
 		}
-		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", m.distDir)
-		if err := m.ImportBundle(ctx, candidate, source.Binary, onProgress); err != nil {
-			lastErr = err
-			slog.Warn("local engine bundle failed", "path", candidate, "error", err)
+		installDir := m.installDir(source)
+		slog.Info("installing engine binary from local bundle", "path", candidate, "dest", installDir)
+		var installErr error
+		if expectedSHA256 != "" {
+			installErr = installVersionedBundle(candidate, installDir, source.Binary, expectedSHA256, onProgress)
+		} else {
+			installErr = m.ImportBundle(ctx, candidate, source.Binary, onProgress)
+		}
+		if installErr != nil {
+			lastErr = installErr
+			slog.Warn("local engine bundle failed", "path", candidate, "error", installErr)
 			continue
 		}
 		return true, nil
@@ -254,6 +327,151 @@ func verifyLocalBundleSHA256(bundlePath, expectedSHA256 string) error {
 	return nil
 }
 
+type bundleProvenance struct {
+	SourceSHA256 string `json:"source_sha256"`
+	BinaryPath   string `json:"binary_path"`
+	BinarySHA256 string `json:"binary_sha256"`
+}
+
+const bundleProvenanceFile = ".aima-provenance.json"
+
+// FindBinaryInDir resolves a native binary from a bundle root. An explicit
+// relative path wins; otherwise nested bundle layouts such as bin/<binary> are
+// searched recursively and selected deterministically.
+func FindBinaryInDir(dir, binaryName string) (string, bool) {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	binaryName = strings.TrimSpace(binaryName)
+	if dir == "." || binaryName == "" {
+		return "", false
+	}
+	for _, candidate := range binaryCandidates(binaryName) {
+		path := filepath.Join(dir, filepath.FromSlash(candidate))
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	wanted := make(map[string]bool)
+	for _, candidate := range binaryCandidates(binaryName) {
+		wanted[normalizedBinaryName(candidate)] = true
+	}
+	var matches []string
+	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if wanted[normalizedBinaryName(entry.Name())] {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if len(matches) == 0 {
+		return "", false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		leftDepth := len(splitBundlePath(matches[i]))
+		rightDepth := len(splitBundlePath(matches[j]))
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		return matches[i] < matches[j]
+	})
+	return matches[0], true
+}
+
+func splitBundlePath(value string) []string {
+	return strings.FieldsFunc(filepath.Clean(value), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+}
+
+func writeBundleProvenance(dir, binaryName, sourceSHA256 string) error {
+	binaryPath, ok := FindBinaryInDir(dir, binaryName)
+	if !ok {
+		return fmt.Errorf("binary %s not found in staged bundle", binaryName)
+	}
+	binarySHA256, err := fileSHA256(binaryPath)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(dir, binaryPath)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(bundleProvenance{
+		SourceSHA256: strings.ToLower(strings.TrimSpace(sourceSHA256)),
+		BinaryPath:   filepath.ToSlash(rel),
+		BinarySHA256: binarySHA256,
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, bundleProvenanceFile), data, 0o644)
+}
+
+func verifyBundleProvenance(dir, binaryPath, expectedSourceSHA256 string) error {
+	data, err := os.ReadFile(filepath.Join(dir, bundleProvenanceFile))
+	if err != nil {
+		return err
+	}
+	var provenance bundleProvenance
+	if err := json.Unmarshal(data, &provenance); err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(provenance.SourceSHA256), strings.TrimSpace(expectedSourceSHA256)) {
+		return fmt.Errorf("source sha256 provenance mismatch")
+	}
+	rel, err := filepath.Rel(dir, binaryPath)
+	if err != nil || filepath.ToSlash(rel) != provenance.BinaryPath {
+		return fmt.Errorf("binary provenance path mismatch")
+	}
+	actual, err := fileSHA256(binaryPath)
+	if err != nil {
+		return err
+	}
+	return verifySHA256(provenance.BinarySHA256, actual, binaryPath)
+}
+
+func installVersionedBundle(bundlePath, installDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) error {
+	if err := os.MkdirAll(filepath.Dir(installDir), 0o755); err != nil {
+		return err
+	}
+	stageDir, err := os.MkdirTemp(filepath.Dir(installDir), ".stage-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageDir)
+	if err := installLocalBundle(bundlePath, stageDir, binaryName, onProgress); err != nil {
+		return err
+	}
+	finalizeNativeDist(stageDir, binaryName)
+	if err := writeBundleProvenance(stageDir, binaryName, expectedSHA256); err != nil {
+		return err
+	}
+	return promoteVersionedBundle(stageDir, installDir)
+}
+
+func promoteVersionedBundle(stageDir, installDir string) error {
+	backupDir := ""
+	if _, err := os.Stat(installDir); err == nil {
+		backupDir = installDir + fmt.Sprintf(".backup-%d", time.Now().UnixNano())
+		if err := os.Rename(installDir, backupDir); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(stageDir, installDir); err != nil {
+		if backupDir != "" {
+			_ = os.Rename(backupDir, installDir)
+		}
+		return err
+	}
+	if backupDir != "" {
+		_ = os.RemoveAll(backupDir)
+	}
+	return nil
+}
+
 func fileSHA256(filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -275,6 +493,17 @@ func normalizeSHA256(value string) string {
 	return value
 }
 
+func verifySHA256(expected, actual, source string) error {
+	expected = normalizeSHA256(expected)
+	if expected == "" {
+		return nil
+	}
+	if !strings.EqualFold(expected, strings.TrimSpace(actual)) {
+		return fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", source, expected, actual)
+	}
+	return nil
+}
+
 func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(ProgressEvent)) error {
 	info, err := os.Stat(bundlePath)
 	if err != nil {
@@ -290,6 +519,11 @@ func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
 		}
 		return extractTarGz(bundlePath, destDir)
+	case strings.HasSuffix(lower, ".tar.zst") || strings.HasSuffix(lower, ".tzst"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
+		}
+		return extractTarZst(bundlePath, destDir)
 	case strings.HasSuffix(lower, ".zip"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting local engine archive"})
@@ -303,8 +537,213 @@ func installLocalBundle(bundlePath, destDir, binaryName string, onProgress func(
 				destName += ".exe"
 			}
 		}
-		return copyFile(bundlePath, filepath.Join(destDir, destName), info.Mode())
+		return installStandaloneBinary(bundlePath, filepath.Join(destDir, destName), info.Mode())
 	}
+}
+
+func installStandaloneBinary(binaryPath, destPath string, mode os.FileMode) error {
+	realPath, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		return fmt.Errorf("resolve local engine binary %s: %w", binaryPath, err)
+	}
+	if bundleRoot, relativeBinary, ok := matchingRuntimeBundle(binaryPath, realPath, filepath.Base(destPath)); ok {
+		if err := copyFile(realPath, filepath.Join(filepath.Dir(destPath), relativeBinary), mode); err != nil {
+			return err
+		}
+		return copyRuntimeCompanions(bundleRoot, filepath.Dir(destPath))
+	}
+	if err := copyFile(realPath, destPath, mode); err != nil {
+		return err
+	}
+	destDir := filepath.Dir(destPath)
+	sourceDir := filepath.Dir(realPath)
+	if err := copyRuntimeCompanions(sourceDir, destDir); err != nil {
+		return err
+	}
+	for _, dir := range configuredRuntimeDirs() {
+		if samePath(dir, sourceDir) || !hasRuntimeCompanions(dir) {
+			continue
+		}
+		candidate := filepath.Join(dir, filepath.Base(binaryPath))
+		if !sameFileContents(realPath, candidate) {
+			continue
+		}
+		slog.Info("importing native engine runtime companions", "binary", binaryPath, "dir", dir)
+		if err := copyRuntimeCompanions(dir, destDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func matchingRuntimeBundle(importPath, realPath, binaryName string) (string, string, bool) {
+	sourceDir := filepath.Dir(realPath)
+	if strings.EqualFold(filepath.Base(sourceDir), "bin") {
+		root := filepath.Dir(sourceDir)
+		if hasNestedRuntimeBundle(root) {
+			return root, filepath.Join("bin", binaryName), true
+		}
+	}
+	for _, root := range configuredRuntimeDirs() {
+		if !hasRuntimeCompanions(root) {
+			continue
+		}
+		candidate, ok := FindBinaryInDir(root, filepath.Base(importPath))
+		if !ok || !sameFileContents(realPath, candidate) {
+			continue
+		}
+		relative, err := filepath.Rel(root, candidate)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		return root, relative, true
+	}
+	return "", "", false
+}
+
+func hasNestedRuntimeBundle(root string) bool {
+	for _, name := range []string{"libexec", "amdgcn"} {
+		if info, err := os.Stat(filepath.Join(root, name)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func configuredRuntimeDirs() []string {
+	values := []string{os.Getenv("AIMA_ENGINE_DIR")}
+	switch goruntime.GOOS {
+	case "darwin":
+		values = append(values, os.Getenv("DYLD_LIBRARY_PATH"))
+	case "linux":
+		values = append(values, os.Getenv("LD_LIBRARY_PATH"))
+	}
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, value := range values {
+		for _, dir := range filepath.SplitList(value) {
+			if dir = strings.TrimSpace(dir); dir != "" {
+				dir = filepath.Clean(dir)
+				if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+					dir = resolved
+				}
+				if !seen[dir] {
+					seen[dir] = true
+					dirs = append(dirs, dir)
+				}
+			}
+		}
+	}
+	return dirs
+}
+
+func hasRuntimeCompanions(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if isSharedLibraryName(entry.Name()) || entry.IsDir() && isRuntimeCompanionDir(entry.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameFileContents(first, second string) bool {
+	firstInfo, err := os.Stat(first)
+	if err != nil || !firstInfo.Mode().IsRegular() {
+		return false
+	}
+	secondInfo, err := os.Stat(second)
+	if err != nil || !secondInfo.Mode().IsRegular() || firstInfo.Size() != secondInfo.Size() {
+		return false
+	}
+	if os.SameFile(firstInfo, secondInfo) {
+		return true
+	}
+	firstHash, err := fileSHA256(first)
+	if err != nil {
+		return false
+	}
+	secondHash, err := fileSHA256(second)
+	return err == nil && firstHash == secondHash
+}
+
+func samePath(first, second string) bool {
+	firstPath, firstErr := filepath.EvalSymlinks(first)
+	secondPath, secondErr := filepath.EvalSymlinks(second)
+	return firstErr == nil && secondErr == nil && firstPath == secondPath
+}
+
+func copyRuntimeCompanions(srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("read engine binary directory %s: %w", srcDir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		srcPath := filepath.Join(srcDir, name)
+		dstPath := filepath.Join(dstDir, name)
+		if entry.IsDir() {
+			if isRuntimeCompanionDir(name) {
+				if err := copyDirContents(srcPath, dstPath); err != nil {
+					return fmt.Errorf("copy engine runtime directory %s: %w", srcPath, err)
+				}
+			}
+			continue
+		}
+		if !isSharedLibraryName(name) {
+			continue
+		}
+		if err := copyRuntimeCompanionFile(srcPath, dstPath, entry); err != nil {
+			return fmt.Errorf("copy engine runtime library %s: %w", srcPath, err)
+		}
+	}
+	return nil
+}
+
+func isRuntimeCompanionDir(name string) bool {
+	switch strings.ToLower(name) {
+	case "lib", "lib64", "libexec", "amdgcn", "plugins", "backends":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSharedLibraryName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".so") || strings.Contains(lower, ".so.") ||
+		strings.HasSuffix(lower, ".dylib") || strings.HasSuffix(lower, ".dll")
+}
+
+func copyRuntimeCompanionFile(srcPath, dstPath string, entry os.DirEntry) error {
+	if entry.Type()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(dstPath); err == nil {
+			if err := os.Remove(dstPath); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return os.Symlink(target, dstPath)
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("unsupported file type")
+	}
+	return copyFile(srcPath, dstPath, info.Mode())
 }
 
 func finalizeNativeDist(destDir, binaryName string) {
@@ -319,7 +758,12 @@ func finalizeNativeDist(destDir, binaryName string) {
 				break
 			}
 		}
-		createSoSymlinks(destDir)
+		_ = filepath.WalkDir(destDir, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				createSoSymlinks(path)
+			}
+			return nil
+		})
 	}
 }
 
@@ -375,17 +819,59 @@ func copyDirContents(srcDir, dstDir string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dstPath, 0o755)
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(target, dstPath)
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported file type in %s", srcPath)
 		}
 		return copyFile(srcPath, dstPath, info.Mode())
 	})
 }
 
+func recoverInterruptedPromotion(distDir string) error {
+	if strings.TrimSpace(distDir) == "" {
+		return nil
+	}
+	if _, err := os.Stat(distDir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	backups, err := filepath.Glob(distDir + ".backup-*")
+	if err != nil || len(backups) == 0 {
+		return err
+	}
+	newest := backups[0]
+	newestInfo, _ := os.Stat(newest)
+	for _, candidate := range backups[1:] {
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && (newestInfo == nil || info.ModTime().After(newestInfo.ModTime())) {
+			newest = candidate
+			newestInfo = info
+		}
+	}
+	return os.Rename(newest, distDir)
+}
+
 // download tries mirror URLs first, then primary. Extracts zip/tar.gz archives.
 func (m *BinaryManager) download(ctx context.Context, url string, mirrorURLs []string, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) error {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	downloadDir := destDir
+	if strings.TrimSpace(expectedSHA256) != "" {
+		downloadDir = filepath.Dir(destDir)
+	}
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
 		return fmt.Errorf("create dist dir: %w", err)
 	}
 
@@ -536,7 +1022,8 @@ func uniqueNonEmpty(in []string) []string {
 // or renames it. No destination file is created before strict verification.
 // Returns the SHA256 hex digest of the downloaded content.
 func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedSHA256 string, onProgress func(ProgressEvent)) (string, error) {
-	tmpFile, err := os.CreateTemp(destDir, ".download-*")
+	tempParent := filepath.Dir(destDir)
+	tmpFile, err := os.CreateTemp(tempParent, ".download-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
 	}
@@ -591,6 +1078,21 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 		return actualSHA256, fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", url, expectedSHA256, actualSHA256)
 	}
 
+	stageDir, err := os.MkdirTemp(filepath.Dir(destDir), ".aima-engine-stage-*")
+	if err != nil {
+		return actualSHA256, fmt.Errorf("create extraction staging directory: %w", err)
+	}
+	defer os.RemoveAll(stageDir)
+	if strings.TrimSpace(expectedSHA256) == "" {
+		if _, statErr := os.Stat(destDir); statErr == nil {
+			if err := copyDirContents(destDir, stageDir); err != nil {
+				return actualSHA256, fmt.Errorf("stage current engine distribution: %w", err)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return actualSHA256, statErr
+		}
+	}
+
 	// Detect format from URL and extract
 	urlLower := strings.ToLower(downloadFileName(url))
 	switch {
@@ -598,20 +1100,49 @@ func downloadAndExtract(ctx context.Context, url, destDir, binaryName, expectedS
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
-		return actualSHA256, extractTarGz(tmpPath, destDir)
+		err = extractTarGz(tmpPath, stageDir)
+	case strings.HasSuffix(urlLower, ".tar.zst") || strings.HasSuffix(urlLower, ".tzst"):
+		if onProgress != nil {
+			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
+		}
+		err = extractTarZst(tmpPath, stageDir)
 	case strings.HasSuffix(urlLower, ".zip"):
 		if onProgress != nil {
 			onProgress(ProgressEvent{Phase: "extracting", Message: "extracting archive"})
 		}
-		return actualSHA256, extractZip(tmpPath, destDir)
+		err = extractZip(tmpPath, stageDir)
 	default:
-		// Plain binary — rename directly
-		binPath := filepath.Join(destDir, binaryName)
+		// Plain binary — move it into the staging tree.
+		binPath := filepath.Join(stageDir, binaryName)
 		if goruntime.GOOS == "windows" && !strings.HasSuffix(binPath, ".exe") {
 			binPath += ".exe"
 		}
-		return actualSHA256, os.Rename(tmpPath, binPath)
+		if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+			return actualSHA256, fmt.Errorf("create binary directory: %w", err)
+		}
+		if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+			return actualSHA256, fmt.Errorf("replace staged binary: %w", err)
+		}
+		err = os.Rename(tmpPath, binPath)
 	}
+	if err != nil {
+		return actualSHA256, err
+	}
+	if strings.TrimSpace(expectedSHA256) != "" {
+		finalizeNativeDist(stageDir, binaryName)
+		if err := writeBundleProvenance(stageDir, binaryName, expectedSHA256); err != nil {
+			return actualSHA256, err
+		}
+		if err := promoteVersionedBundle(stageDir, destDir); err != nil {
+			return actualSHA256, fmt.Errorf("promote versioned engine bundle: %w", err)
+		}
+		return actualSHA256, nil
+	}
+	finalizeNativeDist(stageDir, binaryName)
+	if err := promoteVersionedBundle(stageDir, destDir); err != nil {
+		return actualSHA256, fmt.Errorf("promote staged engine distribution: %w", err)
+	}
+	return actualSHA256, nil
 }
 
 // extractZip extracts a zip archive to destDir, stripping a common top-level directory.
@@ -681,133 +1212,262 @@ func zipCommonPrefix(files []*zip.File) string {
 	return prefix
 }
 
+type tarStreamOpener func() (io.ReadCloser, error)
+
+type archiveReadCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (r *archiveReadCloser) Close() error {
+	if r == nil || r.close == nil {
+		return nil
+	}
+	return r.close()
+}
+
 // extractTarGz extracts a .tar.gz archive to destDir, stripping a common top-level directory.
 func extractTarGz(archivePath, destDir string) error {
-	// Two passes: first detect common prefix, then extract.
-	prefix, err := tarGzCommonPrefix(archivePath)
+	return extractTarArchive(destDir, func() (io.ReadCloser, error) {
+		file, err := os.Open(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("open tar.gz: %w", err)
+		}
+		reader, err := gzip.NewReader(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		return &archiveReadCloser{
+			Reader: reader,
+			close: func() error {
+				readerErr := reader.Close()
+				fileErr := file.Close()
+				if readerErr != nil {
+					return readerErr
+				}
+				return fileErr
+			},
+		}, nil
+	})
+}
+
+// extractTarZst extracts a .tar.zst/.tzst archive without requiring a system
+// zstd binary or CGO.
+func extractTarZst(archivePath, destDir string) error {
+	return extractTarArchive(destDir, func() (io.ReadCloser, error) {
+		file, err := os.Open(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("open tar.zst: %w", err)
+		}
+		reader, err := zstd.NewReader(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("zstd reader: %w", err)
+		}
+		return &archiveReadCloser{
+			Reader: reader,
+			close: func() error {
+				reader.Close()
+				return file.Close()
+			},
+		}, nil
+	})
+}
+
+func extractTarArchive(destDir string, open tarStreamOpener) error {
+	prefix, err := tarCommonPrefix(open)
 	if err != nil {
 		return fmt.Errorf("detect archive prefix: %w", err)
 	}
-
-	f, err := os.Open(archivePath)
+	reader, err := open()
 	if err != nil {
-		return fmt.Errorf("open tar.gz: %w", err)
+		return err
 	}
-	defer f.Close()
+	defer reader.Close()
 
-	gz, err := gzip.NewReader(f)
+	destRoot, err := filepath.Abs(destDir)
 	if err != nil {
-		return fmt.Errorf("gzip reader: %w", err)
+		return fmt.Errorf("resolve destination: %w", err)
 	}
-	defer gz.Close()
+	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+		return fmt.Errorf("create destination: %w", err)
+	}
 
-	tr := tar.NewReader(gz)
+	tarReader := tar.NewReader(reader)
 	for {
-		hdr, err := tr.Next()
+		header, err := tarReader.Next()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
-
-		name := normalizeTarPath(hdr.Name)
+		name, err := cleanTarEntryName(header.Name)
+		if err != nil {
+			return err
+		}
 		name = strings.TrimPrefix(name, prefix)
 		if name == "" {
 			continue
 		}
-
-		// Prevent path traversal
-		cleaned := filepath.Clean(filepath.FromSlash(name))
-		if strings.HasPrefix(cleaned, "..") {
-			continue
+		name, err = cleanTarEntryName(name)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(destRoot, filepath.FromSlash(name))
+		if !pathWithin(destRoot, destPath) {
+			return fmt.Errorf("tar path traversal rejected: %q", header.Name)
+		}
+		if err := rejectSymlinkParents(destRoot, filepath.Dir(destPath)); err != nil {
+			return fmt.Errorf("extract %q: %w", header.Name, err)
 		}
 
-		destPath := filepath.Join(destDir, cleaned)
-
-		switch hdr.Typeflag {
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(destPath, header.FileInfo().Mode().Perm()); err != nil {
+				return fmt.Errorf("create directory %s: %w", destPath, err)
+			}
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 				return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
 			}
-			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode())
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("replace file %s: %w", destPath, err)
+			}
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, header.FileInfo().Mode().Perm())
 			if err != nil {
 				return fmt.Errorf("create file %s: %w", destPath, err)
 			}
-			_, err = io.Copy(out, tr)
-			out.Close()
-			if err != nil {
-				return fmt.Errorf("extract file %s: %w", cleaned, err)
+			_, copyErr := io.Copy(out, tarReader)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return fmt.Errorf("extract file %s: %w", name, copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close file %s: %w", name, closeErr)
 			}
 		case tar.TypeSymlink:
-			// Validate symlink target: must resolve within destDir
-			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(destPath), hdr.Linkname))
-			if !strings.HasPrefix(resolvedTarget, filepath.Clean(destDir)+string(filepath.Separator)) &&
-				resolvedTarget != filepath.Clean(destDir) {
-				slog.Warn("skipping symlink with target outside destDir", "link", destPath, "target", hdr.Linkname)
-				continue
+			linkTarget, err := safeSymlinkTarget(destRoot, destPath, header.Linkname)
+			if err != nil {
+				return fmt.Errorf("extract symlink %q: %w", header.Name, err)
 			}
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 				return fmt.Errorf("create directory for symlink %s: %w", destPath, err)
 			}
-			os.Remove(destPath) // remove stale symlink or file if present
-			if err := os.Symlink(hdr.Linkname, destPath); err != nil {
-				slog.Warn("create symlink", "link", destPath, "target", hdr.Linkname, "error", err)
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("replace symlink %s: %w", destPath, err)
 			}
+			if err := os.Symlink(linkTarget, destPath); err != nil {
+				return fmt.Errorf("create symlink %s: %w", destPath, err)
+			}
+		case tar.TypeXHeader, tar.TypeXGlobalHeader:
+			continue
+		default:
+			return fmt.Errorf("unsupported tar entry %q (type %d)", header.Name, header.Typeflag)
+		}
+	}
+}
+
+func tarCommonPrefix(open tarStreamOpener) (string, error) {
+	reader, err := open()
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+
+	tarReader := tar.NewReader(reader)
+	prefix := ""
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return prefix, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("read tar header: %w", err)
+		}
+		name, err := cleanTarEntryName(header.Name)
+		if err != nil {
+			return "", err
+		}
+		if name == "" {
+			continue
+		}
+		index := strings.IndexByte(name, '/')
+		if index < 0 {
+			if header.Typeflag != tar.TypeDir {
+				return "", nil
+			}
+			continue
+		}
+		candidate := name[:index+1]
+		if prefix == "" {
+			prefix = candidate
+		} else if candidate != prefix {
+			return "", nil
+		}
+	}
+}
+
+func cleanTarEntryName(name string) (string, error) {
+	name = normalizeTarPath(name)
+	if name == "" || name == "." {
+		return "", nil
+	}
+	if strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	cleaned := path.Clean(name)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	hostPath := filepath.FromSlash(cleaned)
+	if filepath.IsAbs(hostPath) || filepath.VolumeName(hostPath) != "" {
+		return "", fmt.Errorf("tar path traversal rejected: %q", name)
+	}
+	return filepath.ToSlash(hostPath), nil
+}
+
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func rejectSymlinkParents(root, parent string) error {
+	rel, err := filepath.Rel(root, parent)
+	if err != nil || rel == "." {
+		return err
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("parent path %s is a symlink", current)
 		}
 	}
 	return nil
 }
 
-// tarGzCommonPrefix reads archive headers to find a shared top-level directory prefix.
-// It handles archives with or without explicit directory entries, and with leading "./".
-func tarGzCommonPrefix(archivePath string) (string, error) {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return "", fmt.Errorf("open archive %s: %w", archivePath, err)
+func safeSymlinkTarget(root, linkPath, target string) (string, error) {
+	if strings.TrimSpace(target) == "" || strings.HasPrefix(target, "/") {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return "", fmt.Errorf("gzip reader for %s: %w", archivePath, err)
+	hostTarget := filepath.FromSlash(target)
+	if filepath.IsAbs(hostTarget) || filepath.VolumeName(hostTarget) != "" {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	prefix := ""
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("read tar header in %s: %w", archivePath, err)
-		}
-
-		name := normalizeTarPath(hdr.Name)
-		if name == "" {
-			continue // skip "." or empty entries
-		}
-
-		idx := strings.Index(name, "/")
-		if idx < 0 {
-			// Entry is at root level (bare filename or bare dirname with no slash)
-			if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
-				return "", nil // regular file at root: no prefix to strip
-			}
-			continue // root-level directory entry: skip, look at file entries
-		}
-
-		// Entry is inside a subdirectory
-		candidate := name[:idx+1] // e.g. "llama-b8149/"
-		if prefix == "" {
-			prefix = candidate
-		} else if candidate != prefix {
-			return "", nil // multiple top-level dirs: no common prefix
-		}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), hostTarget))
+	if !pathWithin(root, resolved) {
+		return "", fmt.Errorf("symlink target escapes destination: %q", target)
 	}
-	return prefix, nil
+	return hostTarget, nil
 }
 
 // normalizeTarPath strips leading "./" sequences and trailing "/" from a tar entry name.

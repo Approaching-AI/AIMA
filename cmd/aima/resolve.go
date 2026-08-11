@@ -233,22 +233,40 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 // resolveWithFallback tries catalog resolution first; on "not found in catalog",
 // falls back to building a synthetic ModelAsset from the model's DB scan record.
 func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string, opts ...knowledge.ResolveOption) (*knowledge.ResolvedConfig, string, error) {
-	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, opts...)
+	effectiveOpts := append([]knowledge.ResolveOption(nil), opts...)
+	explicitModelPath := ""
+	explicitModelFormat := ""
+	if overrides != nil {
+		if value, ok := overrides["model_path"].(string); ok {
+			explicitModelPath = strings.TrimSpace(value)
+			explicitModelFormat = model.DetectPathFormat(explicitModelPath)
+		}
+	}
+	if explicitModelFormat != "" {
+		effectiveOpts = append(effectiveOpts, knowledge.WithModelFormat(explicitModelFormat))
+	} else if explicitModelPath == "" && db != nil {
+		if localModel, lookupErr := db.FindModelByName(ctx, modelName); lookupErr == nil && localModel.Format != "" {
+			effectiveOpts = append(effectiveOpts, knowledge.WithModelFormat(localModel.Format))
+		}
+	}
+	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, effectiveOpts...)
 	if err == nil {
 		// Catalog hit — prefer the actual scanned path when the catalog default
 		// is empty or no longer matches the files present on this device.
-		if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
-			pathReady := resolved.ModelPath != "" && model.PathLooksCompatible(resolved.ModelPath, resolved.ModelFormat, resolvedQuantizationHint(resolved))
-			if !pathReady {
-				if model.PathLooksCompatible(dbModel.Path, dbModel.Format, resolvedQuantizationHint(resolved)) {
-					resolved.ModelPath = dbModel.Path
-				} else {
-					slog.Warn("ignoring incompatible scanned model path",
-						"model", modelName,
-						"path", dbModel.Path,
-						"format", dbModel.Format,
-						"detected_quantization", dbModel.Quantization,
-						"expected_quantization", resolvedQuantizationHint(resolved))
+		if explicitModelPath == "" && db != nil {
+			if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
+				pathReady := resolved.ModelPath != "" && model.PathLooksCompatible(resolved.ModelPath, resolved.ModelFormat, resolvedQuantizationHint(resolved))
+				if !pathReady {
+					if model.PathLooksCompatible(dbModel.Path, dbModel.Format, resolvedQuantizationHint(resolved)) {
+						resolved.ModelPath = dbModel.Path
+					} else {
+						slog.Warn("ignoring incompatible scanned model path",
+							"model", modelName,
+							"path", dbModel.Path,
+							"format", dbModel.Format,
+							"detected_quantization", dbModel.Quantization,
+							"expected_quantization", resolvedQuantizationHint(resolved))
+					}
 				}
 			}
 		}
@@ -269,6 +287,9 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	}
 
 	// Catalog miss or stale synthetic model — rebuild from the scan database.
+	if db == nil {
+		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (scan database is unavailable)", modelName)
+	}
 	dbModel, dbErr := db.FindModelByName(ctx, modelName)
 	if dbErr != nil {
 		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (also not found in scan database)", modelName)
@@ -290,12 +311,16 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 			"model", dbModel.Name, "format", dbModel.Format)
 	}
 
+	effectiveFormat := dbModel.Format
+	if explicitModelFormat != "" {
+		effectiveFormat = explicitModelFormat
+	}
 	synth := cat.BuildSyntheticModelAsset(knowledge.ScanMetadata{
 		Name:         dbModel.Name,
 		Type:         dbModel.Type,
 		Family:       dbModel.DetectedArch,
 		ParamCount:   dbModel.DetectedParams,
-		Format:       dbModel.Format,
+		Format:       effectiveFormat,
 		SizeBytes:    dbModel.SizeBytes,
 		TotalParams:  dbModel.TotalParams,
 		ActiveParams: dbModel.ActiveParams,
@@ -307,9 +332,13 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	if overrides == nil {
 		overrides = map[string]any{}
 	}
-	overrides["model_path"] = dbModel.Path
+	if explicitModelPath != "" {
+		overrides["model_path"] = explicitModelPath
+	} else {
+		overrides["model_path"] = dbModel.Path
+	}
 
-	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, opts...)
+	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, effectiveOpts...)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve auto-detected config for %s: %w", dbModel.Name, err)
 	}

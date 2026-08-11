@@ -13,15 +13,13 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 	return 0, fmt.Errorf("schtasks launch is only supported on Windows")
 }
 
+// hasInteractiveSession is Windows-only; on other platforms the schtasks path is
+// never taken, so this is a no-op that keeps the shared launch code compiling.
+func hasInteractiveSession() bool { return false }
+
 // findProcessPIDByPort is not implemented on non-Windows platforms.
 // Port-based PID discovery uses Windows netstat; on Unix, the caller uses /proc or ps instead.
 func findProcessPIDByPort(port int) int {
-	return 0
-}
-
-// findProcessPIDByName is not implemented on non-Windows platforms.
-// Process name lookup uses Windows tasklist; on Unix, the caller uses /proc or ps instead.
-func findProcessPIDByName(imageName string) int {
 	return 0
 }
 

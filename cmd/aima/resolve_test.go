@@ -12,6 +12,129 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 )
 
+func TestResolveWithFallbackUsesScannedModelFormat(t *testing.T) {
+	newCatalog := func() *knowledge.Catalog {
+		return &knowledge.Catalog{
+			EngineAssets: []knowledge.EngineAsset{
+				{
+					Metadata: knowledge.EngineMetadata{Name: "native-amd", Type: "native-amd", SupportedFormats: []string{"safetensors"}},
+					Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"},
+					Source:   &knowledge.EngineSource{Binary: "native-server", Platforms: []string{"linux/amd64"}},
+				},
+				{
+					Metadata: knowledge.EngineMetadata{Name: "llamacpp-amd", Type: "llamacpp", SupportedFormats: []string{"gguf"}},
+					Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"},
+					Source:   &knowledge.EngineSource{Binary: "llama-server", Platforms: []string{"linux/amd64"}},
+				},
+			},
+			ModelAssets: []knowledge.ModelAsset{{
+				Metadata: knowledge.ModelMetadata{Name: "dual-format-model", Type: "llm"},
+				Variants: []knowledge.ModelVariant{
+					{Name: "dual-format-native", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "native-amd", Format: "safetensors"},
+					{Name: "dual-format-gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "llamacpp", Format: "gguf", DefaultConfig: map[string]any{"quantization": "int4"}},
+				},
+			}},
+		}
+	}
+	hw := knowledge.HardwareInfo{GPUArch: "RDNA3.5", GPUVRAMMiB: 98304, Platform: "linux/amd64", RuntimeType: "native"}
+
+	for _, tt := range []struct {
+		format     string
+		wantEngine string
+	}{
+		{format: "gguf", wantEngine: "llamacpp"},
+		{format: "safetensors", wantEngine: "native-amd"},
+	} {
+		t.Run(tt.format, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := state.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer db.Close()
+			if err := db.InsertModel(ctx, &state.Model{
+				ID: "local-" + tt.format, Name: "dual-format-model", Type: "llm",
+				Path: "/models/dual-format-model", Format: tt.format, Status: "registered",
+			}); err != nil {
+				t.Fatalf("InsertModel: %v", err)
+			}
+
+			resolved, _, err := resolveWithFallback(ctx, newCatalog(), db, hw, "dual-format-model", "", nil, "")
+			if err != nil {
+				t.Fatalf("resolveWithFallback: %v", err)
+			}
+			if resolved.Engine != tt.wantEngine || resolved.ModelFormat != tt.format {
+				t.Fatalf("resolved engine=%q format=%q, want engine=%q format=%q", resolved.Engine, resolved.ModelFormat, tt.wantEngine, tt.format)
+			}
+		})
+	}
+}
+
+func TestResolveWithFallbackExplicitModelPathOverridesScannedFormat(t *testing.T) {
+	newCatalog := func() *knowledge.Catalog {
+		return &knowledge.Catalog{
+			EngineAssets: []knowledge.EngineAsset{
+				{Metadata: knowledge.EngineMetadata{Name: "native-amd", Type: "native-amd", SupportedFormats: []string{"safetensors"}}, Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"}, Runtime: knowledge.EngineRuntime{Default: "native"}, Source: &knowledge.EngineSource{Binary: "native-server", Platforms: []string{"linux/amd64"}}},
+				{Metadata: knowledge.EngineMetadata{Name: "llamacpp-amd", Type: "llamacpp", SupportedFormats: []string{"gguf"}}, Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"}, Runtime: knowledge.EngineRuntime{Default: "native"}, Source: &knowledge.EngineSource{Binary: "llama-server", Platforms: []string{"linux/amd64"}}},
+			},
+			ModelAssets: []knowledge.ModelAsset{{
+				Metadata: knowledge.ModelMetadata{Name: "dual-format-model", Type: "llm"},
+				Variants: []knowledge.ModelVariant{
+					{Name: "native", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "native-amd", Format: "safetensors"},
+					{Name: "gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "llamacpp", Format: "gguf"},
+				},
+			}},
+		}
+	}
+	hw := knowledge.HardwareInfo{GPUArch: "RDNA3.5", GPUVRAMMiB: 98304, Platform: "linux/amd64", RuntimeType: "native"}
+	safetensorsDir := filepath.Join(t.TempDir(), "bf16")
+	if err := os.MkdirAll(safetensorsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(safetensorsDir, "config.json"), []byte(`{"model_type":"qwen"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(safetensorsDir, "model.safetensors"), []byte("weights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ggufPath := filepath.Join(t.TempDir(), "model.gguf")
+	if err := os.WriteFile(ggufPath, []byte("GGUFweights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name           string
+		dbFormat       string
+		explicitPath   string
+		wantFormat     string
+		wantEngineType string
+	}{
+		{name: "DB GGUF explicit safetensors", dbFormat: "gguf", explicitPath: safetensorsDir, wantFormat: "safetensors", wantEngineType: "native-amd"},
+		{name: "DB safetensors explicit GGUF", dbFormat: "safetensors", explicitPath: ggufPath, wantFormat: "gguf", wantEngineType: "llamacpp"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := state.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err := db.InsertModel(ctx, &state.Model{
+				ID: "db-model", Name: "dual-format-model", Type: "llm", Path: "/db/opposite-format", Format: test.dbFormat, Status: "registered",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			resolved, _, err := resolveWithFallback(ctx, newCatalog(), db, hw, "dual-format-model", "", map[string]any{"model_path": test.explicitPath}, "")
+			if err != nil {
+				t.Fatalf("resolveWithFallback: %v", err)
+			}
+			if resolved.ModelFormat != test.wantFormat || resolved.Engine != test.wantEngineType || resolved.ModelPath != test.explicitPath {
+				t.Fatalf("resolved engine=%q format=%q path=%q, want engine=%q format=%q path=%q", resolved.Engine, resolved.ModelFormat, resolved.ModelPath, test.wantEngineType, test.wantFormat, test.explicitPath)
+			}
+		})
+	}
+}
+
 func TestResolveWithFallbackRefreshesSyntheticModel(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")

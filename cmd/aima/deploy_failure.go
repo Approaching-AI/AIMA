@@ -3,9 +3,138 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
+
+type deploymentErrorCode string
+
+const (
+	deployErrorUnknown              deploymentErrorCode = "UNKNOWN_ERROR"
+	deployErrorOutOfMemory          deploymentErrorCode = "OUT_OF_MEMORY"
+	deployErrorModelNotFound        deploymentErrorCode = "MODEL_NOT_FOUND"
+	deployErrorModelCorrupted       deploymentErrorCode = "MODEL_CORRUPTED"
+	deployErrorModelFormatInvalid   deploymentErrorCode = "MODEL_FORMAT_INVALID"
+	deployErrorPortInUse            deploymentErrorCode = "PORT_IN_USE"
+	deployErrorPermissionDenied     deploymentErrorCode = "PERMISSION_DENIED"
+	deployErrorDownloadFailed       deploymentErrorCode = "DOWNLOAD_FAILED"
+	deployErrorHardwareIncompatible deploymentErrorCode = "HARDWARE_INCOMPATIBLE"
+	deployErrorTimeout              deploymentErrorCode = "TIMEOUT"
+	deployErrorEngineStartFailed    deploymentErrorCode = "ENGINE_START_FAILED"
+)
+
+type deploymentCleanupResult struct {
+	Attempted bool   `json:"attempted"`
+	Succeeded bool   `json:"succeeded"`
+	Message   string `json:"message"`
+}
+
+type deploymentRunError struct {
+	Code    deploymentErrorCode
+	Message string
+	Cleanup deploymentCleanupResult
+}
+
+func (e deploymentRunError) Error() string {
+	msg := fmt.Sprintf("%s: %s", e.Code, e.Message)
+	if e.Cleanup.Message != "" {
+		msg += "; cleanup: " + e.Cleanup.Message
+	}
+	return msg
+}
+
+func newDeploymentRunError(code deploymentErrorCode, message string, cleanup deploymentCleanupResult) error {
+	if code == "" {
+		code = deployErrorUnknown
+	}
+	return deploymentRunError{Code: code, Message: strings.TrimSpace(message), Cleanup: cleanup}
+}
+
+func cleanupFailedDeployment(ctx context.Context, deployName string, deleteFn func(context.Context, string) error) deploymentCleanupResult {
+	deployName = strings.TrimSpace(deployName)
+	if deployName == "" {
+		return deploymentCleanupResult{Message: "deployment name unavailable"}
+	}
+	if deleteFn == nil {
+		return deploymentCleanupResult{Message: "deploy.delete unavailable"}
+	}
+	if err := deleteFn(ctx, deployName); err != nil {
+		return deploymentCleanupResult{
+			Attempted: true,
+			Succeeded: false,
+			Message:   "delete failed deployment " + deployName + ": " + err.Error(),
+		}
+	}
+	return deploymentCleanupResult{
+		Attempted: true,
+		Succeeded: true,
+		Message:   "deleted failed deployment " + deployName,
+	}
+}
+
+func classifyDeploymentFailure(message string) deploymentErrorCode {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case lower == "":
+		return deployErrorUnknown
+	case strings.Contains(lower, "outofmemoryerror"),
+		strings.Contains(lower, "out of memory"),
+		strings.Contains(lower, "oom"),
+		strings.Contains(lower, "cuda error: out of memory"),
+		strings.Contains(lower, "hip out of memory"):
+		return deployErrorOutOfMemory
+	case strings.Contains(lower, "address already in use"),
+		strings.Contains(lower, "bind: address"),
+		strings.Contains(lower, "port is in use"),
+		strings.Contains(lower, "port already allocated"):
+		return deployErrorPortInUse
+	case strings.Contains(lower, "permission denied"),
+		strings.Contains(lower, "operation not permitted"),
+		strings.Contains(lower, "access is denied"):
+		return deployErrorPermissionDenied
+	case strings.Contains(lower, "not ready within"),
+		strings.Contains(lower, "timed out"),
+		strings.Contains(lower, "timeout"):
+		return deployErrorTimeout
+	case strings.Contains(lower, "corrupt"),
+		strings.Contains(lower, "checksum"),
+		strings.Contains(lower, "incomplete"),
+		strings.Contains(lower, "safetensorerror"):
+		return deployErrorModelCorrupted
+	case strings.Contains(lower, "filenotfounderror"),
+		strings.Contains(lower, "no such file"),
+		strings.Contains(lower, "model not found"),
+		strings.Contains(lower, "cannot find model"),
+		strings.Contains(lower, "not found"):
+		return deployErrorModelNotFound
+	case strings.Contains(lower, "invalid model"),
+		strings.Contains(lower, "unsupported model"),
+		strings.Contains(lower, "unknown architecture"),
+		strings.Contains(lower, "invalid file magic"),
+		strings.Contains(lower, "invalid gguf"),
+		strings.Contains(lower, "safetensors header"):
+		return deployErrorModelFormatInvalid
+	case strings.Contains(lower, "download"),
+		strings.Contains(lower, "pull"),
+		strings.Contains(lower, "connection reset"),
+		strings.Contains(lower, "tls handshake"),
+		strings.Contains(lower, "temporary failure in name resolution"):
+		return deployErrorDownloadFailed
+	case strings.Contains(lower, "hardware not compatible"),
+		strings.Contains(lower, "not compatible"),
+		strings.Contains(lower, "compute capability"),
+		strings.Contains(lower, "no suitable device"):
+		return deployErrorHardwareIncompatible
+	case strings.Contains(lower, "process exited"),
+		strings.Contains(lower, "startup"),
+		strings.Contains(lower, "failed core proc"),
+		strings.Contains(lower, "failed"):
+		return deployErrorEngineStartFailed
+	default:
+		return deployErrorUnknown
+	}
+}
 
 type deploymentFailureDetails struct {
 	Message        string
@@ -195,6 +324,8 @@ func isLowSignalErrorLine(line string) bool {
 	case lower == "":
 		return true
 	case strings.HasPrefix(lower, "error in cpuinfo:"):
+		return true
+	case strings.HasPrefix(lower, "hip library path:"):
 		return true
 	default:
 		return false

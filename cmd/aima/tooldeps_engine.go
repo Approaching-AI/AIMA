@@ -80,7 +80,8 @@ func buildEngineDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		installed := make([]*state.Engine, 0)
 		for _, e := range allEngines {
-			if strings.ToLower(e.Type) == nameLower ||
+			if strings.EqualFold(e.AssetName, name) ||
+				strings.ToLower(e.Type) == nameLower ||
 				strings.Contains(strings.ToLower(e.Image), nameLower) ||
 				strings.HasPrefix(e.ID, name) {
 				installed = append(installed, e)
@@ -482,8 +483,13 @@ func removeAuthorizedEnginePath(path string) error {
 
 func looksLikeNativeEngineBundle(path string) bool {
 	info, err := os.Stat(path)
-	if err == nil && info.IsDir() {
-		return true
+	if err == nil {
+		if info.IsDir() {
+			return true
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return true
+		}
 	}
 	lower := strings.ToLower(path)
 	switch {

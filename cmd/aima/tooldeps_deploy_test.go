@@ -244,12 +244,111 @@ func seedRecoveryIntent(t *testing.T, ctx context.Context, db *state.DB, name, r
 	return *stored
 }
 
+func TestEngineSourceSHA256UsesCurrentPlatform(t *testing.T) {
+	want := "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	source := &knowledge.EngineSource{SHA256: map[string]string{
+		goruntime.GOOS + "/" + goruntime.GOARCH: want,
+	}}
+	if got := engineSourceSHA256(source); got != want {
+		t.Fatalf("engineSourceSHA256 = %q, want %q", got, want)
+	}
+}
+
+func TestValidatedPreinstalledNativeBinaryBlocksMismatchAndSelectsExact(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	asset := &knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{Name: "aima-engine-native-amd395", Type: "aima-engine-native", Version: "1.5.0"},
+		Source:   &knowledge.EngineSource{Binary: "aima-engine", InstallType: "preinstalled", Probe: &knowledge.EngineSourceProbe{}},
+	}
+	oldPath := filepath.Join(t.TempDir(), "aima-engine-1.4.1")
+	if err := db.InsertEngine(ctx, &state.Engine{
+		ID: "old", Type: asset.Metadata.Type, AssetName: asset.Metadata.Name, RuntimeType: "native",
+		BinaryPath: oldPath, Platform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		Version: "1.4.1", CatalogVersion: "1.5.0", DetectedVersion: "1.4.1", VersionMatch: "mismatch", Available: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset); err == nil || !strings.Contains(err.Error(), "1.4.1 (mismatch)") {
+		t.Fatalf("mismatch validation error = %v", err)
+	}
+	exactPath := filepath.Join(t.TempDir(), "aima-engine-1.5.0")
+	if err := os.WriteFile(exactPath, []byte("exact"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, &state.Engine{
+		ID: "exact", Type: asset.Metadata.Type, AssetName: asset.Metadata.Name, RuntimeType: "native",
+		BinaryPath: exactPath, Platform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		Version: "1.5.0", CatalogVersion: "1.5.0", DetectedVersion: "1.5.0", VersionMatch: "exact", Available: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset)
+	if err != nil || got != exactPath {
+		t.Fatalf("exact validation = %q, %v, want %q", got, err, exactPath)
+	}
+	if err := os.Remove(exactPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatedPreinstalledNativeBinary(ctx, db, &knowledge.ResolvedConfig{}, asset); err == nil || !strings.Contains(err.Error(), "binary unavailable") {
+		t.Fatalf("stale exact validation error = %v, want unavailable binary rejection", err)
+	}
+}
+
+func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
+	tests := []struct {
+		value any
+		want  int
+	}{
+		{value: 8192, want: 8192},
+		{value: float64(16384), want: 16384},
+		{value: json.Number("32768"), want: 32768},
+		{value: "65536", want: 65536},
+	}
+	for _, test := range tests {
+		if got := contextWindowFromResolvedConfig(map[string]any{"context_tokens": test.value}); got != test.want {
+			t.Errorf("contextWindowFromResolvedConfig(%T(%v)) = %d, want %d", test.value, test.value, got, test.want)
+		}
+	}
+}
+
 func TestResolvedServedModelNameExpandsModelTemplate(t *testing.T) {
 	got := resolvedServedModelName("GLM-4.1V-9B-Thinking-FP4", map[string]any{
 		"served_model_name": "{{.ModelName}}",
 	})
 	if got != "GLM-4.1V-9B-Thinking-FP4" {
 		t.Fatalf("resolvedServedModelName = %q, want model name", got)
+	}
+}
+
+func TestCatalogEngineUpstreamModel(t *testing.T) {
+	cat := &knowledge.Catalog{EngineAssets: []knowledge.EngineAsset{
+		{
+			Metadata: knowledge.EngineMetadata{Name: "native-test"},
+			API:      knowledge.EngineAPI{UpstreamModel: "native-model"},
+		},
+	}}
+	if got := catalogEngineUpstreamModel(cat, "NATIVE-TEST"); got != "native-model" {
+		t.Fatalf("catalogEngineUpstreamModel = %q, want native-model", got)
+	}
+}
+
+func TestResolvedServedModelNameUsesCatalogFallback(t *testing.T) {
+	if got := resolvedServedModelName("public-model", nil, "native-model"); got != "native-model" {
+		t.Fatalf("resolvedServedModelName = %q, want native-model", got)
+	}
+}
+
+func TestResolvedServedModelNameConfigOverridesCatalogFallback(t *testing.T) {
+	got := resolvedServedModelName("public-model", map[string]any{
+		"served_model_name": "configured-model",
+	}, "native-model")
+	if got != "configured-model" {
+		t.Fatalf("resolvedServedModelName = %q, want configured-model", got)
 	}
 }
 
@@ -425,6 +524,7 @@ func TestDeployApplyReconcilerUsesPinnedInventoryAfterCatalogVersionChanges(t *t
 	}
 	if err := db.InsertEngine(ctx, &state.Engine{
 		ID: "vllm-old", Type: "vllm", AssetName: "vllm-test", Version: "1.2.2", CatalogVersion: "1.2.2",
+		DetectedVersion: "1.2.2", VersionMatch: "exact",
 		Platform: goruntime.GOOS + "-" + goruntime.GOARCH, RuntimeType: "native", BinaryPath: binaryPath,
 		Available: true, LifecycleStatus: "verified", VerificationStatus: "verified", Origin: "managed",
 	}); err != nil {

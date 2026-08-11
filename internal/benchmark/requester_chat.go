@@ -105,7 +105,7 @@ func (r *ChatRequester) sendStreamingRequest(ctx context.Context, endpoint strin
 		maxTokens = 256
 	}
 	temperature := r.Temperature
-	if temperature <= 0 {
+	if temperature < 0 {
 		temperature = 0.01
 	}
 

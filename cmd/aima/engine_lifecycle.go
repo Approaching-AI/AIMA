@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"time"
 
 	state "github.com/jguan/aima/internal"
 	"github.com/jguan/aima/internal/engine"
@@ -256,7 +259,7 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 	if err := manager.ImportBundle(ctx, bundlePath, "", nil); err != nil {
 		return nil, fmt.Errorf("stage native Engine bundle %s: %w", bundlePath, err)
 	}
-	candidate, err := discoverStagedNativeImport(stagingDir, s.catalogPlatform, s.nativeImportAssets())
+	candidate, err := discoverStagedNativeImport(ctx, stagingDir, s.catalogPlatform, s.nativeImportAssets())
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +307,56 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 		return nil, err
 	}
 	finalBinary := filepath.Join(destination, relativeBinary)
+	if detected, err := smokeImportedNativeBinary(ctx, finalBinary, destination, candidate.Asset.Source); err != nil {
+		if !destinationExisted {
+			_ = os.RemoveAll(destination)
+		}
+		return nil, fmt.Errorf("validate promoted native Engine: %w", err)
+	} else if detected != "" && detected != candidate.Version {
+		if !destinationExisted {
+			_ = os.RemoveAll(destination)
+		}
+		return nil, fmt.Errorf("promoted native Engine reports version %s, want %s", detected, candidate.Version)
+	}
+	distRoot := filepath.Join(s.dataDir, "dist", s.inventoryPlatform)
+	descriptor := engine.AssetDescriptor{
+		AssetName:          candidate.Asset.Metadata.Name,
+		Type:               candidate.Asset.Metadata.Type,
+		CatalogVersion:     candidate.Asset.Metadata.Version,
+		CompatibleVersions: append([]string(nil), candidate.Asset.Metadata.CompatibleVersions...),
+	}
+	scanned, scanErr := engine.ScanNative(ctx, engine.ScanOptions{
+		Assets:       []engine.AssetDescriptor{descriptor},
+		DistDir:      distRoot,
+		Platform:     s.inventoryPlatform,
+		BinaryAssets: map[string]string{candidate.Asset.Source.Binary: candidate.Asset.Metadata.Name},
+	})
+	if scanErr != nil {
+		if !destinationExisted {
+			_ = os.RemoveAll(destination)
+		}
+		return nil, fmt.Errorf("scan imported native Engine: %w", scanErr)
+	}
+	var scanMatch *engine.EngineImage
+	for _, image := range scanned {
+		if image != nil && sameFilesystemPath(image.BinaryPath, finalBinary) {
+			scanMatch = image
+			break
+		}
+	}
+	if scanMatch == nil || !scanMatch.Available || (scanMatch.VersionMatch != "exact" && scanMatch.VersionMatch != "compatible") {
+		if !destinationExisted {
+			_ = os.RemoveAll(destination)
+		}
+		return nil, fmt.Errorf("imported native Engine is not scan-resolvable as catalog version %s", candidate.Asset.Metadata.Version)
+	}
+	resolvedBinary, resolved := engine.FindBinaryInDir(destination, candidate.Asset.Source.Binary)
+	if !resolved || !sameFilesystemPath(resolvedBinary, finalBinary) {
+		if !destinationExisted {
+			_ = os.RemoveAll(destination)
+		}
+		return nil, fmt.Errorf("imported native Engine binary %s is not resolver-visible from %s", finalBinary, destination)
+	}
 	relativeFromDist := filepath.Join(candidate.Asset.Metadata.Name, candidate.Version, relativeBinary)
 	entry := &state.Engine{
 		ID:                 engine.ManagedNativeEngineID(candidate.Asset.Metadata.Name, candidate.Version, relativeFromDist),
@@ -315,6 +368,8 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 		Available:          true,
 		AssetName:          candidate.Asset.Metadata.Name,
 		Version:            candidate.Version,
+		DetectedVersion:    scanMatch.DetectedVersion,
+		VersionMatch:       scanMatch.VersionMatch,
 		CatalogVersion:     candidate.Asset.Metadata.Version,
 		Origin:             "imported",
 		ContentDigest:      contentDigest,
@@ -331,7 +386,7 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 	return entry, nil
 }
 
-func discoverStagedNativeImport(stagingDir, catalogPlatform string, assets []knowledge.EngineAsset) (stagedNativeImport, error) {
+func discoverStagedNativeImport(ctx context.Context, stagingDir, catalogPlatform string, assets []knowledge.EngineAsset) (stagedNativeImport, error) {
 	byBinary := make(map[string][]knowledge.EngineAsset)
 	for i := range assets {
 		asset := assets[i]
@@ -342,6 +397,7 @@ func discoverStagedNativeImport(stagingDir, catalogPlatform string, assets []kno
 		byBinary[key] = append(byBinary[key], asset)
 	}
 	var candidates []stagedNativeImport
+	var candidateErr error
 	err := filepath.WalkDir(stagingDir, func(filePath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -363,8 +419,26 @@ func discoverStagedNativeImport(stagingDir, catalogPlatform string, assets []kno
 		}
 		for i := range matches {
 			asset := matches[i]
-			version, versionRoot, relativeBinary, ok := stagedNativeImportLayout(stagingDir, relative, asset.Metadata.Name)
-			if !ok || !catalogAcceptsImportedVersion(asset.Metadata, version) {
+			version, versionRoot, relativeBinary, layoutOK := stagedNativeImportLayout(stagingDir, relative, asset.Metadata.Name)
+			if layoutOK && !catalogAcceptsImportedVersion(asset.Metadata, version) {
+				layoutOK = false
+			}
+			detected, smokeErr := smokeImportedNativeBinary(ctx, filePath, stagingDir, asset.Source)
+			if smokeErr != nil {
+				candidateErr = smokeErr
+				continue
+			}
+			if layoutOK && detected != "" && detected != version {
+				candidateErr = fmt.Errorf("native Engine binary %s reports version %s but bundle layout declares %s", filePath, detected, version)
+				continue
+			}
+			if !layoutOK {
+				version = detected
+				versionRoot = stagingDir
+				relativeBinary = relative
+			}
+			if !catalogAcceptsImportedVersion(asset.Metadata, version) {
+				candidateErr = fmt.Errorf("native Engine binary %s reports version %q, incompatible with Catalog version %s", filePath, version, asset.Metadata.Version)
 				continue
 			}
 			candidates = append(candidates, stagedNativeImport{
@@ -377,6 +451,9 @@ func discoverStagedNativeImport(stagingDir, catalogPlatform string, assets []kno
 		return stagedNativeImport{}, fmt.Errorf("inspect staged native Engine bundle: %w", err)
 	}
 	if len(candidates) == 0 {
+		if candidateErr != nil {
+			return stagedNativeImport{}, candidateErr
+		}
 		return stagedNativeImport{}, fmt.Errorf("native Engine bundle contains no unique Catalog-compatible <asset>/<version>/<binary> layout")
 	}
 	if len(candidates) != 1 {
@@ -388,6 +465,90 @@ func discoverStagedNativeImport(stagingDir, catalogPlatform string, assets []kno
 		return stagedNativeImport{}, fmt.Errorf("native Engine bundle is ambiguous: found %d Catalog-compatible binaries", len(candidates))
 	}
 	return candidates[0], nil
+}
+
+func smokeImportedNativeBinary(ctx context.Context, binaryPath, bundleRoot string, source *knowledge.EngineSource) (string, error) {
+	if source == nil {
+		return "", fmt.Errorf("native Engine import has no Catalog source")
+	}
+	args := []string{"--version"}
+	probe := source.Probe
+	if probe != nil && len(probe.VersionCommand) > 1 {
+		args = append([]string(nil), probe.VersionCommand[1:]...)
+	}
+	smokeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(smokeCtx, binaryPath, args...)
+	cmd.Dir = filepath.Dir(binaryPath)
+	cmd.Env = nativeBundleSmokeEnv(os.Environ(), bundleRoot, binaryPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("native Engine smoke %s %s failed: %s", binaryPath, strings.Join(args, " "), detail)
+	}
+	if probe == nil || strings.TrimSpace(probe.VersionPattern) == "" {
+		return "", nil
+	}
+	re, err := regexp.Compile(probe.VersionPattern)
+	if err != nil {
+		return "", fmt.Errorf("compile native Engine version pattern: %w", err)
+	}
+	matches := re.FindSubmatch(output)
+	if len(matches) < 2 {
+		return "", fmt.Errorf("native Engine smoke output %q does not match Catalog version pattern", strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(matches[1])), nil
+}
+
+func nativeBundleSmokeEnv(env []string, bundleRoot, binaryPath string) []string {
+	root := filepath.Clean(bundleRoot)
+	libraryDirs := []string{filepath.Dir(binaryPath), root, filepath.Join(root, "lib"), filepath.Join(root, "lib64"), filepath.Join(root, "libexec")}
+	var existing string
+	for _, value := range env {
+		if strings.HasPrefix(value, "LD_LIBRARY_PATH=") {
+			existing = strings.TrimPrefix(value, "LD_LIBRARY_PATH=")
+			break
+		}
+	}
+	paths := make([]string, 0, len(libraryDirs)+1)
+	for _, dir := range libraryDirs {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			paths = append(paths, dir)
+		}
+	}
+	if existing != "" {
+		paths = append(paths, existing)
+	}
+	env = setProcessEnv(env, "LD_LIBRARY_PATH", strings.Join(paths, string(os.PathListSeparator)))
+	if deviceLib := filepath.Join(root, "amdgcn"); pathIsDir(deviceLib) {
+		env = setProcessEnv(env, "HIP_DEVICE_LIB_PATH", deviceLib)
+	}
+	return env
+}
+
+func setProcessEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if strings.HasPrefix(env[i], prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func pathIsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func sameFilesystemPath(left, right string) bool {
+	leftResolved, leftErr := filepath.EvalSymlinks(left)
+	rightResolved, rightErr := filepath.EvalSymlinks(right)
+	return leftErr == nil && rightErr == nil && leftResolved == rightResolved
 }
 
 func stagedNativeImportLayout(stagingDir, relativePath, assetName string) (string, string, string, bool) {
@@ -420,26 +581,8 @@ func normalizedNativeImportBinary(value string) string {
 }
 
 func catalogAcceptsImportedVersion(metadata knowledge.EngineMetadata, version string) bool {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return false
-	}
-	if version == strings.TrimSpace(metadata.Version) {
-		return true
-	}
-	for _, declared := range metadata.CompatibleVersions {
-		declared = strings.TrimSpace(declared)
-		if version == declared {
-			return true
-		}
-		if strings.HasSuffix(declared, ".x") {
-			prefix := strings.TrimSuffix(declared, "x")
-			if len(version) > len(prefix) && strings.HasPrefix(version, prefix) {
-				return true
-			}
-		}
-	}
-	return false
+	match := engine.CompareDetectedVersion(version, metadata.Version, metadata.CompatibleVersions)
+	return match == "exact" || match == "compatible"
 }
 
 func verifyNativeImportBundle(bundlePath string, source *knowledge.EngineSource, catalogPlatform string) error {
@@ -448,7 +591,7 @@ func verifyNativeImportBundle(bundlePath string, source *knowledge.EngineSource,
 	}
 	expected := strings.TrimSpace(source.SHA256[catalogPlatform])
 	if expected == "" {
-		return fmt.Errorf("verify native Engine bundle %s: Catalog SHA256 is required", bundlePath)
+		return nil
 	}
 	info, err := os.Stat(bundlePath)
 	if err != nil {
@@ -528,6 +671,8 @@ func (s *engineLifecycleService) applyNative(ctx context.Context, req engine.Ens
 		AssetName:          asset.Metadata.Name,
 		Version:            req.Version,
 		CatalogVersion:     asset.Metadata.Version,
+		DetectedVersion:    req.Version,
+		VersionMatch:       "exact",
 		Origin:             "managed",
 		ContentDigest:      artifact.ContentDigest,
 		Location:           finalBinary,

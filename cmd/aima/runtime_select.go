@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jguan/aima/internal/proxy"
 	"github.com/jguan/aima/internal/recovery"
 	"github.com/jguan/aima/internal/runtime"
 
@@ -393,7 +394,19 @@ func filterDeploymentStatuses(statuses []*runtime.DeploymentStatus, suppress fun
 	return filtered
 }
 
-func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineType, slot string, configOverrides map[string]any) bool {
+func deploymentEngineSourceMatches(existing *runtime.DeploymentStatus, expectedSHA256 string) bool {
+	expected := strings.ToLower(strings.TrimSpace(expectedSHA256))
+	if expected == "" {
+		return true
+	}
+	if existing == nil {
+		return false
+	}
+	actual := strings.ToLower(strings.TrimSpace(existing.Labels[proxy.LabelEngineSourceSHA256]))
+	return actual != "" && actual == expected
+}
+
+func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineType, slot string, configOverrides map[string]any, expectedSourceSHA256 string) bool {
 	if existing == nil {
 		return false
 	}
@@ -408,14 +421,14 @@ func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineTyp
 	if strings.TrimSpace(slot) != "" {
 		return false
 	}
-	return len(configOverrides) == 0
+	return len(configOverrides) == 0 && deploymentEngineSourceMatches(existing, expectedSourceSHA256)
 }
 
-func findReusableDeployment(ctx context.Context, deployName, modelName, engineType, slot string, configOverrides map[string]any, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) (*runtime.DeploymentStatus, error) {
+func findReusableDeployment(ctx context.Context, deployName, modelName, engineType, slot string, configOverrides map[string]any, expectedSourceSHA256 string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) (*runtime.DeploymentStatus, error) {
 	matches := findMatchingDeployments(ctx, modelName, suppress, rts...)
 	reusable := make([]matchedDeployment, 0, len(matches))
 	for _, match := range matches {
-		if shouldReuseExistingDeployment(match.Status, engineType, slot, configOverrides) {
+		if shouldReuseExistingDeployment(match.Status, engineType, slot, configOverrides, expectedSourceSHA256) {
 			reusable = append(reusable, match)
 		}
 	}
@@ -427,8 +440,43 @@ func findReusableDeployment(ctx context.Context, deployName, modelName, engineTy
 	}
 
 	existing, err := findDeploymentStatus(ctx, deployName, suppress, rts...)
-	if err != nil || !shouldReuseExistingDeployment(existing, engineType, slot, configOverrides) {
+	if err != nil || !shouldReuseExistingDeployment(existing, engineType, slot, configOverrides, expectedSourceSHA256) {
 		return nil, nil
 	}
 	return existing, nil
+}
+
+func reconcileMismatchedEngineSourceDeployment(ctx context.Context, modelName, engineName, expectedSourceSHA256 string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) error {
+	if strings.TrimSpace(expectedSourceSHA256) == "" {
+		return nil
+	}
+	candidates := make([]matchedDeployment, 0, 1)
+	for _, match := range findMatchingDeployments(ctx, modelName, suppress, rts...) {
+		if match.Runtime == nil || match.Status == nil {
+			continue
+		}
+		status := match.Status
+		if !(status.Ready || status.Phase == "running" || status.Phase == "starting") {
+			continue
+		}
+		existingEngine := strings.TrimSpace(status.Engine)
+		if existingEngine == "" {
+			existingEngine = strings.TrimSpace(status.Labels["aima.dev/engine"])
+		}
+		if !strings.EqualFold(existingEngine, strings.TrimSpace(engineName)) || deploymentEngineSourceMatches(status, expectedSourceSHA256) {
+			continue
+		}
+		candidates = append(candidates, match)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	if len(candidates) > 1 {
+		return fmt.Errorf("model %q has multiple stale deployments for engine %q; undeploy them explicitly before upgrading", modelName, engineName)
+	}
+	stale := candidates[0]
+	if err := stale.Runtime.Delete(ctx, stale.Status.Name); err != nil {
+		return fmt.Errorf("replace stale engine deployment %q on %s: %w", stale.Status.Name, stale.Runtime.Name(), err)
+	}
+	return nil
 }

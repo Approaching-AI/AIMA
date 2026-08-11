@@ -54,6 +54,9 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 	if b.UpstreamModel != "musachat_local" {
 		t.Errorf("upstreamModel = %q, want %q", b.UpstreamModel, "musachat_local")
 	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
+	}
 }
 
 func TestSyncBackends_RegistersTheRequestedCatalogAlias(t *testing.T) {
@@ -164,6 +167,9 @@ func TestSyncBackends_NotReadyPreservesExistingRouteFields(t *testing.T) {
 	}
 	if b.ContextWindowTokens != 8192 {
 		t.Errorf("context_window_tokens = %d, want 8192", b.ContextWindowTokens)
+	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
 	}
 }
 

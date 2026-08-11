@@ -30,13 +30,76 @@ import (
 )
 
 type fakeRuntime struct {
-	name   string
-	status map[string]*aimaRuntime.DeploymentStatus
-	list   []*aimaRuntime.DeploymentStatus
+	name    string
+	status  map[string]*aimaRuntime.DeploymentStatus
+	list    []*aimaRuntime.DeploymentStatus
+	deleted []string
+}
+
+func TestCatalogAdapterMapsEngineRequestAdapter(t *testing.T) {
+	cat := &knowledge.Catalog{EngineAssets: []knowledge.EngineAsset{{
+		Metadata: knowledge.EngineMetadata{Name: "native-test"},
+		API: knowledge.EngineAPI{RequestAdapter: &knowledge.EngineRequestAdapter{
+			Kind:             "exact_context",
+			Path:             "/v1/chat/completions",
+			ContextConfigKey: "context_tokens",
+			ProbeSubcommand:  "chat-template-probe",
+			DisableThinking:  true,
+			PaddingRole:      "system",
+			PaddingPrefix:    "Ignore padding.",
+			PaddingUnit:      " ·",
+			UpstreamModel:    "native-model",
+			MaxAttempts:      8,
+		}},
+	}}}
+
+	got := (catalogAdapter{cat: cat}).RequestAdapter("NATIVE-TEST")
+	if got == nil {
+		t.Fatal("RequestAdapter returned nil")
+	}
+	if got.Kind != "exact_context" || got.ContextConfigKey != "context_tokens" || got.UpstreamModel != "native-model" {
+		t.Fatalf("RequestAdapter = %#v", got)
+	}
+	got.PaddingPrefix = "mutated"
+	if cat.EngineAssets[0].API.RequestAdapter.PaddingPrefix == "mutated" {
+		t.Fatal("RequestAdapter returned catalog-owned pointer")
+	}
+}
+
+func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
+	rt := &fakeRuntime{
+		name: "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{
+			"deployment-native": {
+				Name:              "deployment-native",
+				Runtime:           "native",
+				Config:            map[string]any{"context_tokens": 8192},
+				AdapterCommand:    []string{"/opt/aima/bin/aima-engine", "serve"},
+				AdapterModelPath:  "/models/qwen",
+				AdapterInstanceID: "15147:1785835112742496328",
+			},
+		},
+	}
+
+	resolver := nativeRequestAdapterContextResolver(rt)
+	got, err := resolver(context.Background(), "deployment-native")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Command) != 2 || got.Command[0] != "/opt/aima/bin/aima-engine" || got.ModelPath != "/models/qwen" || got.InstanceID != "15147:1785835112742496328" {
+		t.Fatalf("adapter context = %#v", got)
+	}
+	got.Command[0] = "mutated"
+	if rt.status["deployment-native"].AdapterCommand[0] == "mutated" {
+		t.Fatal("resolver returned runtime-owned command slice")
+	}
 }
 
 func (r *fakeRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
-func (r *fakeRuntime) Delete(context.Context, string) error                     { return nil }
+func (r *fakeRuntime) Delete(_ context.Context, name string) error {
+	r.deleted = append(r.deleted, name)
+	return nil
+}
 func (r *fakeRuntime) Status(_ context.Context, name string) (*aimaRuntime.DeploymentStatus, error) {
 	if s, ok := r.status[name]; ok {
 		return s, nil
@@ -497,6 +560,7 @@ func TestScanEngineOriginEvidenceMapping(t *testing.T) {
 	got := stateEngineFromScan(scanned)
 	if got.ID != scanned.ID || got.AssetName != scanned.AssetName || got.Version != scanned.DetectedVersion ||
 		got.CatalogVersion != scanned.CatalogVersion || got.Origin != scanned.Origin ||
+		got.DetectedVersion != scanned.DetectedVersion || got.VersionMatch != scanned.VersionMatch ||
 		got.ContentDigest != scanned.ContentDigest || got.Location != "example/engine-a:v1" {
 		t.Fatalf("state Engine evidence = %+v", got)
 	}
@@ -840,6 +904,12 @@ func TestSummarizeDeploymentFailure(t *testing.T) {
 			want: "process exited before readiness",
 		},
 		{
+			name:       "ignore normal HIP library path",
+			message:    "process exited before readiness",
+			errorLines: `HIP Library Path: C:\Windows\SYSTEM32\amdhip64_7.dll`,
+			want:       "process exited before readiness",
+		},
+		{
 			name:       "fallback to unknown",
 			errorLines: "\n\n",
 			want:       "unknown startup failure",
@@ -921,17 +991,64 @@ func TestDeploymentMatchesQuery(t *testing.T) {
 
 func TestShouldReuseExistingDeployment(t *testing.T) {
 	existing := &aimaRuntime.DeploymentStatus{Name: "qwen3-tts-0-6b-qwen-tts-fastapi-cuda-blackwell", Phase: "running", Ready: true}
-	if !shouldReuseExistingDeployment(existing, "", "", nil) {
+	if !shouldReuseExistingDeployment(existing, "", "", nil, "") {
 		t.Fatal("expected plain deploy query to reuse existing deployment")
 	}
-	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}) {
+	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}, "") {
 		t.Fatal("expected config override to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil) {
+	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil, "") {
 		t.Fatal("expected explicit engine selection to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "", "slot-a", nil) {
+	if shouldReuseExistingDeployment(existing, "", "slot-a", nil, "") {
 		t.Fatal("expected explicit slot selection to force runtime reconciliation")
+	}
+}
+
+func TestShouldReuseExistingDeploymentRequiresMatchingPinnedEngineSource(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	existing := &aimaRuntime.DeploymentStatus{
+		Name:   "qwen3.6-35b-a3b",
+		Phase:  "running",
+		Ready:  true,
+		Labels: map[string]string{},
+	}
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected legacy deployment without a source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = "old-digest"
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with a different source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = expected
+	if !shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with the same source digest to be reused")
+	}
+}
+
+func TestReconcileMismatchedEngineSourceDeploymentDeletesLegacyProcess(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	rt := &fakeRuntime{name: "native", list: []*aimaRuntime.DeploymentStatus{{
+		Name:  "qwen3.6-35b-a3b",
+		Phase: "running",
+		Ready: true,
+		Labels: map[string]string{
+			"aima.dev/model":  "qwen3.6-35b-a3b",
+			"aima.dev/engine": "aima-amd395-qwen36-native",
+		},
+	}}}
+	if err := reconcileMismatchedEngineSourceDeployment(
+		context.Background(),
+		"qwen3.6-35b-a3b",
+		"aima-amd395-qwen36-native",
+		expected,
+		nil,
+		rt,
+	); err != nil {
+		t.Fatalf("reconcileMismatchedEngineSourceDeployment: %v", err)
+	}
+	if len(rt.deleted) != 1 || rt.deleted[0] != "qwen3.6-35b-a3b" {
+		t.Fatalf("deleted = %v, want legacy deployment", rt.deleted)
 	}
 }
 
@@ -1335,6 +1452,48 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 	if resp.Deployments[2].Model != "openclaw_sync" || resp.Deployments[2].Status != "skipped" {
 		t.Fatalf("post-deploy result = %#v, want skipped openclaw_sync", resp.Deployments[2])
+	}
+}
+
+func TestClassifyDeploymentFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want deploymentErrorCode
+	}{
+		{name: "out of memory", msg: "RuntimeError: HIP out of memory while loading weights", want: deployErrorOutOfMemory},
+		{name: "model corrupted", msg: "safetensors_rust.SafetensorError: Error while deserializing header: incomplete metadata", want: deployErrorModelCorrupted},
+		{name: "model not found", msg: "FileNotFoundError: no such file or directory: /models/demo/config.json", want: deployErrorModelNotFound},
+		{name: "port occupied", msg: "bind: address already in use on 0.0.0.0:8000", want: deployErrorPortInUse},
+		{name: "permission", msg: "permission denied opening /dev/kfd", want: deployErrorPermissionDenied},
+		{name: "timeout", msg: "deployment started but not ready within 30s", want: deployErrorTimeout},
+		{name: "generic startup", msg: "process exited before readiness", want: deployErrorEngineStartFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyDeploymentFailure(tt.msg); got != tt.want {
+				t.Fatalf("classifyDeploymentFailure(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupFailedDeploymentReportsResult(t *testing.T) {
+	var deleted string
+	result := cleanupFailedDeployment(context.Background(), "demo", func(ctx context.Context, name string) error {
+		deleted = name
+		return nil
+	})
+	if deleted != "demo" {
+		t.Fatalf("deleted deployment = %q, want demo", deleted)
+	}
+	if !result.Attempted || !result.Succeeded || result.Message != "deleted failed deployment demo" {
+		t.Fatalf("cleanup result = %#v, want successful deletion", result)
+	}
+
+	skipped := cleanupFailedDeployment(context.Background(), "demo", nil)
+	if skipped.Attempted || skipped.Succeeded || !strings.Contains(skipped.Message, "unavailable") {
+		t.Fatalf("skipped cleanup result = %#v, want unavailable message", skipped)
 	}
 }
 

@@ -29,6 +29,12 @@ runtime:
   platform_recommendations:
     windows/amd64: "native"
 startup:
+  health_check:
+    # A cold HIP/ROCm start can occasionally spend more than the profile's
+    # default 60s in llama.cpp's device-memory fitting step (especially on the
+    # first load). Keep this below the partner launcher's 5-minute command
+    # timeout while leaving enough headroom for a slow 35B load and warmup.
+    timeout_s: 180
   env:
     # Radeon 3679's amd_comgr_3.dll uses an ANSI disk-space API while pruning
     # its compiler cache. A cache path containing characters outside the active

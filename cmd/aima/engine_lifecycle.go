@@ -743,10 +743,11 @@ func (s *engineLifecycleService) applyContainer(ctx context.Context, req engine.
 func (s *engineLifecycleService) resolveCandidate(asset *knowledge.EngineAsset, requestedVersion string, entries []*state.Engine) resolvedEnsureCandidate {
 	runtimeType := preferredEngineRuntimeType(asset, s.catalogPlatform)
 	candidate := engine.EnsureCandidate{
-		AssetName:   strings.TrimSpace(asset.Metadata.Name),
-		Version:     strings.TrimSpace(asset.Metadata.Version),
-		RuntimeType: runtimeType,
-		Origin:      "managed",
+		AssetName:          strings.TrimSpace(asset.Metadata.Name),
+		Version:            strings.TrimSpace(asset.Metadata.Version),
+		CompatibleVersions: append([]string(nil), asset.Metadata.CompatibleVersions...),
+		RuntimeType:        runtimeType,
+		Origin:             "managed",
 	}
 	if candidate.Version != "" && requestedVersion != "" && candidate.Version != requestedVersion {
 		candidate.BlockReason = fmt.Sprintf("requested version %s is not available from Catalog asset %s at version %s", requestedVersion, candidate.AssetName, candidate.Version)
@@ -961,6 +962,8 @@ func installedEngineProjection(entry *state.Engine) engine.InstalledEngine {
 		AssetName:          entry.AssetName,
 		Version:            entry.Version,
 		CatalogVersion:     entry.CatalogVersion,
+		DetectedVersion:    entry.DetectedVersion,
+		VersionMatch:       entry.VersionMatch,
 		Platform:           entry.Platform,
 		RuntimeType:        entry.RuntimeType,
 		Origin:             entry.Origin,

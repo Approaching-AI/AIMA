@@ -1083,16 +1083,33 @@ func validatedPreinstalledNativeBinary(ctx context.Context, db *state.DB, resolv
 		return "", fmt.Errorf("validate native engine version: %w", err)
 	}
 	var evidence []*state.Engine
+	var inactiveMatch string
 	for _, entry := range entries {
 		if entry == nil || entry.RuntimeType != "native" || !strings.EqualFold(entry.AssetName, asset.Metadata.Name) {
 			continue
 		}
 		evidence = append(evidence, entry)
-		if entry.Available && entry.VersionMatch == "exact" && entry.DetectedVersion == expected && entry.BinaryPath != "" {
-			if info, statErr := os.Stat(entry.BinaryPath); statErr == nil && !info.IsDir() {
-				return entry.BinaryPath, nil
-			}
+		detected := strings.TrimSpace(entry.DetectedVersion)
+		if detected == "" {
+			detected = strings.TrimSpace(entry.Version)
 		}
+		currentMatch := engine.CompareDetectedVersion(detected, expected, asset.Metadata.CompatibleVersions)
+		verifiedMatch := entry.VersionMatch == "exact" || entry.VersionMatch == "compatible"
+		if !entry.Available || !verifiedMatch || (currentMatch != "exact" && currentMatch != "compatible") || entry.BinaryPath == "" {
+			continue
+		}
+		if info, statErr := os.Stat(entry.BinaryPath); statErr != nil || info.IsDir() {
+			continue
+		}
+		if entry.Active {
+			return entry.BinaryPath, nil
+		}
+		if inactiveMatch == "" {
+			inactiveMatch = entry.BinaryPath
+		}
+	}
+	if inactiveMatch != "" {
+		return inactiveMatch, nil
 	}
 	if len(evidence) == 0 {
 		return "", fmt.Errorf("native engine %s requires detected version %s; no scan evidence is available (run 'aima engine scan --runtime native')", asset.Metadata.Name, expected)

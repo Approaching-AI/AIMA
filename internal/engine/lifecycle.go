@@ -25,6 +25,8 @@ type InstalledEngine struct {
 	AssetName          string
 	Version            string
 	CatalogVersion     string
+	DetectedVersion    string
+	VersionMatch       string
 	Platform           string
 	RuntimeType        string
 	Origin             string
@@ -40,6 +42,7 @@ type EnsureCandidate struct {
 	ID                   string
 	AssetName            string
 	Version              string
+	CompatibleVersions   []string
 	RuntimeType          string
 	Origin               string
 	Source               string
@@ -105,6 +108,7 @@ func BuildEnsurePlan(req EnsureRequest, candidate EnsureCandidate, installed []I
 
 	var current *InstalledEngine
 	var exact *InstalledEngine
+	var compatible *InstalledEngine
 	for i := range versions {
 		entry := &versions[i]
 		if !entry.Available || !sameEnsureGroup(*entry, assetName, req.Platform) {
@@ -113,9 +117,16 @@ func BuildEnsurePlan(req EnsureRequest, candidate EnsureCandidate, installed []I
 		if entry.Active && current == nil {
 			current = entry
 		}
-		if exact == nil && installedVersionMatches(*entry, requestedVersion) {
+		if exact == nil && strings.TrimSpace(entry.Version) == requestedVersion {
 			exact = entry
+			continue
 		}
+		if compatible == nil && installedVersionMatches(*entry, requestedVersion, candidate.CompatibleVersions) {
+			compatible = entry
+		}
+	}
+	if exact == nil {
+		exact = compatible
 	}
 	if current != nil {
 		plan.CurrentEngineID = current.ID
@@ -178,8 +189,17 @@ func sameEnsureGroup(entry InstalledEngine, assetName, platform string) bool {
 	return platform == "" || strings.EqualFold(strings.TrimSpace(entry.Platform), platform)
 }
 
-func installedVersionMatches(entry InstalledEngine, requestedVersion string) bool {
-	return strings.TrimSpace(entry.Version) == requestedVersion
+func installedVersionMatches(entry InstalledEngine, requestedVersion string, compatibleVersions []string) bool {
+	installedVersion := strings.TrimSpace(entry.Version)
+	if strings.TrimSpace(entry.VersionMatch) != "compatible" ||
+		CompareDetectedVersion(entry.CatalogVersion, requestedVersion, nil) != "exact" {
+		return false
+	}
+	detectedVersion := strings.TrimSpace(entry.DetectedVersion)
+	if detectedVersion == "" {
+		detectedVersion = installedVersion
+	}
+	return CompareDetectedVersion(detectedVersion, requestedVersion, compatibleVersions) == "compatible"
 }
 
 func blockEnsurePlan(plan EnsurePlan, reason string) EnsurePlan {

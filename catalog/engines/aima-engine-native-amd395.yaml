@@ -2,7 +2,7 @@ kind: engine_asset
 metadata:
   name: aima-engine-native-amd395
   type: aima-engine-native
-  version: "1.5.0"
+  version: "1.5.1"
   supported_formats: [safetensors]
   supported_model_types: [llm]
 hardware:
@@ -24,15 +24,13 @@ startup:
   default_args:
     port: 8000
     context_tokens: 8192
+    cache_capacity: 9216
   internal_args: [port]
   health_check:
     path: /health
     timeout_s: 120
   warmup:
-    enabled: true
-    prompt: "Hello"
-    max_tokens: 1
-    timeout_s: 120
+    enabled: false
 api:
   protocol: openai
   base_path: /v1
@@ -42,8 +40,10 @@ amplifier:
     - native_rocm
     - safetensors
     - prefix_cache
+    - variable_length_prefill
+    - composed_aot_prefill
     - function_calling
-  performance_gain: "Native gfx1151 engine with bundled ROCm userspace for Qwen3.6 BF16 inference"
+  performance_gain: "Native gfx1151 engine with bundled ROCm userspace and fast variable-length AOT prefill for Qwen3.6 BF16 inference"
 partition_hints:
   min_gpu_memory_mib: 0
   recommended_gpu_cores_percent: 100

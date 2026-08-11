@@ -612,7 +612,7 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if engine == nil {
 		t.Fatal("aima-engine-native-amd395 engine not found")
 	}
-	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.0" {
+	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.1" {
 		t.Fatalf("metadata = %+v", engine.Metadata)
 	}
 	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "preinstalled" {
@@ -624,8 +624,8 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if engine.Source.Probe == nil {
 		t.Fatal("source.probe is nil")
 	}
-	versionMatch := regexp.MustCompile(engine.Source.Probe.VersionPattern).FindStringSubmatch("aima-engine-native 1.5.0-native")
-	if len(versionMatch) != 2 || versionMatch[1] != "1.5.0" {
+	versionMatch := regexp.MustCompile(engine.Source.Probe.VersionPattern).FindStringSubmatch("aima-engine-native 1.5.1-native")
+	if len(versionMatch) != 2 || versionMatch[1] != "1.5.1" {
 		t.Fatalf("version pattern match = %v", versionMatch)
 	}
 	wantCommand := []string{"aima-engine", "serve", "--model-dir", "{{.ModelPath}}", "--host", "127.0.0.1"}

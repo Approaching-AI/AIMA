@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -116,6 +117,40 @@ func TestChatRequester_UsesCustomPrompt(t *testing.T) {
 	}
 	if !strings.Contains(requestBody, "Summarize the deployment logs") {
 		t.Fatalf("request body missing custom prompt: %s", requestBody)
+	}
+}
+
+func TestChatRequester_PreservesZeroTemperature(t *testing.T) {
+	var temperature *float64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Temperature *float64 `json:"temperature"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		temperature = payload.Temperature
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":1}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	req := &ChatRequester{
+		Model:       "test",
+		Temperature: 0,
+		Timeout:     10 * time.Second,
+	}
+	sample, _ := req.Do(context.Background(), ts.URL, 0)
+	if sample.Error != nil {
+		t.Fatalf("unexpected sample error: %v", sample.Error)
+	}
+	if temperature == nil {
+		t.Fatal("request body missing temperature")
+	}
+	if *temperature != 0 {
+		t.Fatalf("temperature = %v, want 0", *temperature)
 	}
 }
 
@@ -587,6 +622,14 @@ func TestApplyDefaults_MinOutputRatioAutoRetries(t *testing.T) {
 	cfg2.applyDefaults()
 	if cfg2.MaxRetries != 5 {
 		t.Errorf("expected MaxRetries=5 (explicit), got %d", cfg2.MaxRetries)
+	}
+}
+
+func TestApplyDefaults_PreservesZeroTemperature(t *testing.T) {
+	cfg := RunConfig{Temperature: 0}
+	cfg.applyDefaults()
+	if cfg.Temperature != 0 {
+		t.Fatalf("Temperature = %v, want 0", cfg.Temperature)
 	}
 }
 

@@ -2132,11 +2132,26 @@ func usableMemoryMiB(hw knowledge.HardwareInfo) int {
 		}
 		return reserve
 	}
-	// An all-layers-offloaded llama.cpp model is bounded by GPU memory. For a
-	// unified-memory APU this is the carved iGPU pool (read via ROCm), which is the
-	// correct budget — NOT the OS-visible system RAM, which Win32 under-reports on
-	// such APUs (e.g. Strix Halo shows ~32 GB OS RAM but ~110 GB iGPU VRAM). Prefer
-	// GPU memory whenever it's known; fall back to system RAM only for CPU-only hosts.
+	if hw.UnifiedMemory {
+		dynamicTotal := hw.GPUMemUsedMiB + hw.GPUMemFreeMiB
+		// Linux exposes the Strix Halo fixed VRAM aperture (512 MiB) through
+		// mem_info_vram_* while inference allocations use the much larger GTT pool.
+		// Trust dynamic GPU free space only when it describes the declared pool.
+		if hw.GPUMemFreeMiB > 0 && (hw.GPUVRAMMiB == 0 || dynamicTotal >= hw.GPUVRAMMiB/2) {
+			return hw.GPUMemFreeMiB
+		}
+		if hw.RAMAvailMiB > 0 && hw.GPUVRAMMiB > 0 {
+			return min(hw.RAMAvailMiB, hw.GPUVRAMMiB)
+		}
+		if hw.GPUVRAMMiB > 0 {
+			return hw.GPUVRAMMiB
+		}
+		if hw.RAMAvailMiB > 0 {
+			return hw.RAMAvailMiB
+		}
+	}
+	// An all-layers-offloaded llama.cpp model on a discrete GPU is bounded by
+	// currently free VRAM. CPU-only hosts fall back to system RAM.
 	if hw.GPUMemFreeMiB > 0 {
 		return hw.GPUMemFreeMiB
 	}

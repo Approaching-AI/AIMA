@@ -158,6 +158,96 @@ func TestBuildEnsurePlanPrefersExactPreinstalled(t *testing.T) {
 	}
 }
 
+func TestBuildEnsurePlanReusesCatalogCompatibleInstalledVersion(t *testing.T) {
+	plan := BuildEnsurePlan(
+		EnsureRequest{Name: "llamacpp-hip-linux", Platform: "linux-amd64"},
+		EnsureCandidate{
+			AssetName:            "llamacpp-hip-linux",
+			Version:              "b9330",
+			CompatibleVersions:   []string{"b9637"},
+			RuntimeType:          "native",
+			Origin:               "managed",
+			Source:               "https://catalog.example/llama.tar.gz",
+			NetworkRequired:      true,
+			VerificationEvidence: "sha256:catalog",
+		},
+		[]InstalledEngine{{
+			ID:                 "imported-b9637",
+			AssetName:          "llamacpp-hip-linux",
+			Version:            "9637",
+			CatalogVersion:     "b9330",
+			DetectedVersion:    "9637",
+			VersionMatch:       "compatible",
+			Platform:           "linux-amd64",
+			RuntimeType:        "native",
+			Origin:             "imported",
+			Available:          true,
+			VerificationStatus: "verified",
+		}},
+		nil,
+	)
+	if plan.Blocked || plan.Action != "reuse" || plan.CandidateEngineID != "imported-b9637" || plan.NetworkRequired {
+		t.Fatalf("plan = %+v, want compatible local reuse", plan)
+	}
+}
+
+func TestBuildEnsurePlanPrefersExactVersionOverActiveCompatibleVersion(t *testing.T) {
+	plan := BuildEnsurePlan(
+		EnsureRequest{Name: "engine-a", Version: "2.0.0", Platform: "linux-amd64"},
+		EnsureCandidate{
+			AssetName: "engine-a", Version: "2.0.0", CompatibleVersions: []string{"1.0.0"}, RuntimeType: "native",
+		},
+		[]InstalledEngine{
+			{
+				ID: "active-compatible", AssetName: "engine-a", Version: "1.0.0", CatalogVersion: "2.0.0",
+				DetectedVersion: "1.0.0", VersionMatch: "compatible", Platform: "linux-amd64", RuntimeType: "native",
+				Available: true, Active: true, VerificationStatus: "verified",
+			},
+			{
+				ID: "inactive-exact", AssetName: "engine-a", Version: "2.0.0", CatalogVersion: "2.0.0",
+				DetectedVersion: "2.0.0", VersionMatch: "exact", Platform: "linux-amd64", RuntimeType: "native",
+				Available: true, VerificationStatus: "verified",
+			},
+		},
+		nil,
+	)
+	if plan.Blocked || plan.Action != "reuse" || plan.CandidateEngineID != "inactive-exact" {
+		t.Fatalf("plan = %+v, want exact version reuse", plan)
+	}
+}
+
+func TestBuildEnsurePlanDoesNotReuseCompatibilityRemovedFromCatalog(t *testing.T) {
+	plan := BuildEnsurePlan(
+		EnsureRequest{Name: "llamacpp-hip-linux", Platform: "linux-amd64"},
+		EnsureCandidate{
+			AssetName:            "llamacpp-hip-linux",
+			Version:              "b9330",
+			RuntimeType:          "native",
+			Origin:               "managed",
+			Source:               "https://catalog.example/llama.tar.gz",
+			NetworkRequired:      true,
+			VerificationEvidence: "sha256:catalog",
+		},
+		[]InstalledEngine{{
+			ID:                 "formerly-compatible-b9637",
+			AssetName:          "llamacpp-hip-linux",
+			Version:            "9637",
+			CatalogVersion:     "b9330",
+			DetectedVersion:    "9637",
+			VersionMatch:       "compatible",
+			Platform:           "linux-amd64",
+			RuntimeType:        "native",
+			Origin:             "imported",
+			Available:          true,
+			VerificationStatus: "verified",
+		}},
+		nil,
+	)
+	if plan.Action != "install" || plan.CandidateEngineID == "formerly-compatible-b9637" {
+		t.Fatalf("plan = %+v, removed compatibility must not be reused", plan)
+	}
+}
+
 func TestBuildEnsurePlanBlocksNetworkInstallWithoutDigest(t *testing.T) {
 	plan := BuildEnsurePlan(
 		EnsureRequest{Name: "engine-a", Version: "2.0.0", Platform: "linux-amd64"},

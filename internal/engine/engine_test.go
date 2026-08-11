@@ -1638,7 +1638,7 @@ func TestCompareDetectedVersion(t *testing.T) {
 		{name: "missing catalog", detected: "1.2.3", catalog: "", compatible: compatible, want: "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := compareDetectedVersion(tc.detected, tc.catalog, tc.compatible); got != tc.want {
+			if got := CompareDetectedVersion(tc.detected, tc.catalog, tc.compatible); got != tc.want {
 				t.Fatalf("compareDetectedVersion(%q, %q, %v) = %q, want %q", tc.detected, tc.catalog, tc.compatible, got, tc.want)
 			}
 		})
@@ -1823,6 +1823,15 @@ func TestScanManagedVersionedOriginEvidence(t *testing.T) {
 	}
 	if byVersion["2.0.0"] == nil || byVersion["2.0.0"].VersionMatch != "exact" {
 		t.Fatalf("v2 evidence = %+v", byVersion["2.0.0"])
+	}
+}
+
+func TestCompareDetectedVersionNormalizesBuildPrefix(t *testing.T) {
+	if got := CompareDetectedVersion("9330", "b9330", nil); got != "exact" {
+		t.Fatalf("exact build version match = %q, want exact", got)
+	}
+	if got := CompareDetectedVersion("9637", "b9330", []string{"b9637"}); got != "compatible" {
+		t.Fatalf("compatible build version match = %q, want compatible", got)
 	}
 }
 

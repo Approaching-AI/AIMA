@@ -382,6 +382,43 @@ func TestEngineImportNativeAcceptsRunnableNestedBundle(t *testing.T) {
 	}
 }
 
+func TestEngineImportNativeAcceptsCompatibleBuildVersion(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX launcher")
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "llama-server")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'version: 9637 (test)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := knowledge.EngineAsset{
+		Metadata: knowledge.EngineMetadata{
+			Name: "llamacpp-hip-linux", Type: "llamacpp", Version: "b9330", CompatibleVersions: []string{"b9637"},
+		},
+		Runtime: knowledge.EngineRuntime{Default: "native"},
+		Source: &knowledge.EngineSource{
+			Binary: "llama-server", Platforms: []string{goruntime.GOOS + "/" + goruntime.GOARCH},
+			Probe: &knowledge.EngineSourceProbe{
+				VersionCommand: []string{"./llama-server", "--version"}, VersionPattern: `version:[[:space:]]+([0-9]+)`,
+			},
+		},
+	}
+	inv := &fakeEngineLifecycleInventory{}
+	service := &engineLifecycleService{
+		inventory: inv, dataDir: t.TempDir(), inventoryPlatform: goruntime.GOOS + "-" + goruntime.GOARCH,
+		catalogPlatform:    goruntime.GOOS + "/" + goruntime.GOARCH,
+		nativeImportAssets: func() []knowledge.EngineAsset { return []knowledge.EngineAsset{asset} },
+	}
+
+	imported, err := service.ImportNative(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ImportNative compatible build: %v", err)
+	}
+	if imported.DetectedVersion != "9637" || imported.VersionMatch != "compatible" || !imported.Available {
+		t.Fatalf("imported compatible evidence = %+v", imported)
+	}
+}
+
 func TestEngineImportNativeStandalonePathPreservesRealBundleTopology(t *testing.T) {
 	if goruntime.GOOS == "windows" {
 		t.Skip("fixture uses a POSIX launcher")

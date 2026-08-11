@@ -344,7 +344,7 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 			break
 		}
 	}
-	if scanMatch == nil || !scanMatch.Available || scanMatch.VersionMatch != "exact" {
+	if scanMatch == nil || !scanMatch.Available || (scanMatch.VersionMatch != "exact" && scanMatch.VersionMatch != "compatible") {
 		if !destinationExisted {
 			_ = os.RemoveAll(destination)
 		}
@@ -368,8 +368,8 @@ func (s *engineLifecycleService) ImportNative(ctx context.Context, bundlePath st
 		Available:          true,
 		AssetName:          candidate.Asset.Metadata.Name,
 		Version:            candidate.Version,
-		DetectedVersion:    candidate.Version,
-		VersionMatch:       "exact",
+		DetectedVersion:    scanMatch.DetectedVersion,
+		VersionMatch:       scanMatch.VersionMatch,
 		CatalogVersion:     candidate.Asset.Metadata.Version,
 		Origin:             "imported",
 		ContentDigest:      contentDigest,
@@ -581,26 +581,8 @@ func normalizedNativeImportBinary(value string) string {
 }
 
 func catalogAcceptsImportedVersion(metadata knowledge.EngineMetadata, version string) bool {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return false
-	}
-	if version == strings.TrimSpace(metadata.Version) {
-		return true
-	}
-	for _, declared := range metadata.CompatibleVersions {
-		declared = strings.TrimSpace(declared)
-		if version == declared {
-			return true
-		}
-		if strings.HasSuffix(declared, ".x") {
-			prefix := strings.TrimSuffix(declared, "x")
-			if len(version) > len(prefix) && strings.HasPrefix(version, prefix) {
-				return true
-			}
-		}
-	}
-	return false
+	match := engine.CompareDetectedVersion(version, metadata.Version, metadata.CompatibleVersions)
+	return match == "exact" || match == "compatible"
 }
 
 func verifyNativeImportBundle(bundlePath string, source *knowledge.EngineSource, catalogPlatform string) error {

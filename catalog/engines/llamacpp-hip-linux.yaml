@@ -4,6 +4,7 @@ metadata:
   name: llamacpp-hip-linux
   type: llamacpp
   version: "b9330"
+  compatible_versions: ["b9637"]
   supported_model_types: [llm, vlm, embedding]
 hardware:
   # AMD Ryzen AI Max+ 395 "Strix Halo" Radeon 8060S iGPU (gfx1151).
@@ -36,3 +37,7 @@ source:
     - "https://ghfast.top/{url}"
     - "https://cf.ghproxy.cc/{url}"
     - "https://gh-proxy.com/{url}"
+  probe:
+    version_command: ["./llama-server", "--version"]
+    version_pattern: "version:[[:space:]]+([0-9]+)"
+    fallback_version: "unknown"

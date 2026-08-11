@@ -377,7 +377,7 @@ func scanExternalEngineDir(ctx context.Context, dir string, filenameLookup map[s
 
 func newNativeEngineImage(id, path string, size int64, platform, origin string, descriptor AssetDescriptor, detectedVersion string) *EngineImage {
 	contentDigest := fileContentDigest(path)
-	versionMatch := compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
+	versionMatch := CompareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
 	return &EngineImage{
 		ID:              id,
 		Type:            descriptor.Type,
@@ -435,7 +435,7 @@ func probePreinstalled(ctx context.Context, opts ScanOptions) []*EngineImage {
 				identity = descriptor.Type
 			}
 			contentDigest := fileContentDigest(binaryPath)
-			versionMatch := compareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
+			versionMatch := CompareDetectedVersion(detectedVersion, descriptor.CatalogVersion, descriptor.CompatibleVersions)
 			found = append(found, &EngineImage{
 				ID:              binaryHash("preinstalled-" + identity + "-" + filepath.Clean(binaryPath)),
 				Type:            descriptor.Type,
@@ -489,28 +489,39 @@ func nativeVersionAvailable(catalogVersion, versionMatch string) bool {
 	return versionMatch == "exact" || versionMatch == "compatible"
 }
 
-func compareDetectedVersion(detected, catalog string, compatible []string) string {
+// CompareDetectedVersion compares probed and Catalog versions without changing
+// the original values persisted as scan evidence.
+func CompareDetectedVersion(detected, catalog string, compatible []string) string {
 	detected = strings.TrimSpace(detected)
 	catalog = strings.TrimSpace(catalog)
 	if detected == "" || strings.EqualFold(detected, "unknown") || catalog == "" || strings.EqualFold(catalog, "unknown") {
 		return "unknown"
 	}
-	if detected == catalog {
+	if comparableEngineVersion(detected) == comparableEngineVersion(catalog) {
 		return "exact"
 	}
 	for _, declared := range compatible {
 		declared = strings.TrimSpace(declared)
-		if declared == detected {
+		if comparableEngineVersion(declared) == comparableEngineVersion(detected) {
 			return "compatible"
 		}
 		if strings.HasSuffix(declared, ".x") {
-			prefix := strings.TrimSuffix(declared, "x")
-			if len(detected) > len(prefix) && strings.HasPrefix(detected, prefix) {
+			prefix := strings.TrimSuffix(comparableEngineVersion(declared), "x")
+			version := comparableEngineVersion(detected)
+			if len(version) > len(prefix) && strings.HasPrefix(version, prefix) {
 				return "compatible"
 			}
 		}
 	}
 	return "mismatch"
+}
+
+func comparableEngineVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if len(version) > 1 && (version[0] == 'b' || version[0] == 'B' || version[0] == 'v' || version[0] == 'V') && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
 }
 
 func fileContentDigest(path string) string {

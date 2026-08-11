@@ -542,6 +542,9 @@ func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
 	if got := engine.Startup.Env["AMD_COMGR_CACHE_POLICY"]; got != want {
 		t.Fatalf("AMD_COMGR_CACHE_POLICY = %q, want %q", got, want)
 	}
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.HealthCheck.TimeoutS != 180 {
+		t.Fatalf("health check = %+v, want /health with 180s timeout", engine.Startup.HealthCheck)
+	}
 }
 
 func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
@@ -575,6 +578,9 @@ func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
 	if engine.Source.Probe == nil || engine.Source.Probe.VersionPattern != "version:[[:space:]]+([0-9]+)" {
 		t.Fatalf("version probe = %+v", engine.Source.Probe)
 	}
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.HealthCheck.TimeoutS != 180 {
+		t.Fatalf("health check = %+v, want /health with 180s timeout", engine.Startup.HealthCheck)
+	}
 	wantURL := "https://github.com/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-ubuntu-rocm-7.2-x64.tar.gz"
 	if got := engine.Source.Download["linux/amd64"]; got != wantURL {
 		t.Fatalf("download URL = %q, want %q", got, wantURL)
@@ -597,6 +603,67 @@ func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
 	}
 	if resolved.EngineAssetName != "llamacpp-hip-linux" {
 		t.Fatalf("engine asset = %q, want llamacpp-hip-linux", resolved.EngineAssetName)
+	}
+}
+
+func TestAMD395HIPLlamaLocalModelParity(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	platforms := []struct {
+		platform   string
+		engineName string
+	}{
+		{platform: "windows/amd64", engineName: "llamacpp-hip-windows"},
+		{platform: "linux/amd64", engineName: "llamacpp-hip-linux"},
+	}
+	modelTypes := map[string]bool{}
+	modelCount := 0
+	for _, asset := range cat.ModelAssets {
+		hasGGUF := false
+		for _, variant := range asset.Variants {
+			if strings.EqualFold(variant.Engine, "llamacpp") && strings.EqualFold(variant.Format, "gguf") {
+				hasGGUF = true
+				break
+			}
+		}
+		if !hasGGUF {
+			continue
+		}
+		modelCount++
+		modelTypes[asset.Metadata.Type] = true
+		for _, platform := range platforms {
+			t.Run(platform.platform+"/"+asset.Metadata.Name, func(t *testing.T) {
+				resolved, err := cat.Resolve(HardwareInfo{
+					GPUArch:       "RDNA3.5",
+					GPUVRAMMiB:    98304,
+					GPUCount:      1,
+					UnifiedMemory: true,
+					CPUArch:       "amd64",
+					CPUCores:      16,
+					RAMTotalMiB:   131072,
+					Platform:      platform.platform,
+					RuntimeType:   "native",
+				}, asset.Metadata.Name, "llamacpp", nil, WithModelFormat("gguf"))
+				if err != nil {
+					t.Fatalf("resolve: %v", err)
+				}
+				if resolved.EngineAssetName != platform.engineName || resolved.ModelFormat != "gguf" {
+					t.Fatalf("engine/format = %q/%q, want %q/gguf", resolved.EngineAssetName, resolved.ModelFormat, platform.engineName)
+				}
+			})
+		}
+	}
+
+	if modelCount == 0 {
+		t.Fatal("catalog has no llama.cpp GGUF local models")
+	}
+	for _, modelType := range []string{"llm", "vlm", "embedding"} {
+		if !modelTypes[modelType] {
+			t.Errorf("GGUF parity matrix does not cover model type %q", modelType)
+		}
 	}
 }
 

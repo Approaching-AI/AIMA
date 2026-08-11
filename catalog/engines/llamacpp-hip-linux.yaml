@@ -25,6 +25,11 @@ runtime:
   default: "native"
   platform_recommendations:
     linux/amd64: "native"
+startup:
+  health_check:
+    # A cold HIP/ROCm start can spend more than the profile's default 60s in
+    # device-memory fitting, especially on the first 35B model load.
+    timeout_s: 180
 source:
   binary: "llama-server"
   # Official llama.cpp ROCm 7.2 package. The target AMD395 Linux image ships

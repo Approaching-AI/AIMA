@@ -9170,6 +9170,10 @@ function aimaApp() {
         steps[2].progress = 100;
         if (data.endpoint) this.onboardingDeployEndpoint = data.endpoint;
         this.onboardingPhase = 'done';
+        // The deployment changes the local proxy route and llm.model. Refresh
+        // immediately instead of leaving the Agent availability badge stale
+        // until its normal 30-second polling interval.
+        this.pollAgentInfo();
       } else if (event === 'error') {
         var msg = data.message || this.t('wiz_deploy_error');
         // Make GPU memory errors actionable
@@ -9201,6 +9205,7 @@ function aimaApp() {
       this.onboardingPhase = 'complete';
       // Refresh deployments
       this.pollDeployments();
+      this.pollAgentInfo();
       this.$nextTick(function() {
         if (this.$refs && this.$refs.chatInput) this.$refs.chatInput.focus();
       }.bind(this));
@@ -11028,7 +11033,10 @@ function aimaApp() {
         delete next[modelName];
         this.modelDeploying = next;
         this.deployDetailSubmitting = false;
-        await this.pollDeployments();
+        await Promise.all([
+          this.pollDeployments(),
+          this.pollAgentInfo()
+        ]);
         this.scrollChat();
       }
     },

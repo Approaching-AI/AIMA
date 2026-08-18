@@ -129,3 +129,26 @@ func TestConfigToFlagsHonorsAcceptedConfigKeys(t *testing.T) {
 		t.Fatalf("reserved port key should not be emitted by configToFlags, got %q", got)
 	}
 }
+
+func TestBuildWarmupRequestBodyDisablesPromptCache(t *testing.T) {
+	body, err := BuildWarmupRequestBody("served-model", WarmupConfig{
+		RequestBody: map[string]any{
+			"model":        "catalog-model",
+			"cache_prompt": true,
+			"messages":     []any{map[string]any{"role": "user", "content": "Hello"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildWarmupRequestBody: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal warmup body: %v", err)
+	}
+	if payload["model"] != "served-model" {
+		t.Fatalf("model = %v, want served-model", payload["model"])
+	}
+	if payload["cache_prompt"] != false {
+		t.Fatalf("cache_prompt = %v, want false", payload["cache_prompt"])
+	}
+}

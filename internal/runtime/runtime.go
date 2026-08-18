@@ -362,5 +362,9 @@ func BuildWarmupRequestBody(model string, cfg WarmupConfig) ([]byte, error) {
 		body["max_tokens"] = maxTokens
 	}
 	body["model"] = model
+	// Do not populate or reuse a llama.cpp slot's prompt cache during readiness
+	// probes. Two identical warmups can otherwise trigger a recurrent-model
+	// seq_rm crash on older llama.cpp builds. Normal inference remains cached.
+	body["cache_prompt"] = false
 	return json.Marshal(body)
 }

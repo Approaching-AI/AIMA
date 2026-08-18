@@ -483,6 +483,13 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 				asset.Source.InstallType = "preinstalled"
 				changed = true
 			}
+			// A locally discovered binary is executable on this host even when the
+			// catalog's downloadable release list does not include this platform.
+			// Preserve the catalog platforms and add the verified local platform.
+			if !asset.Source.Supports(hwInfo.Platform) && hwInfo.Platform != "" {
+				asset.Source.Platforms = append(asset.Source.Platforms, hwInfo.Platform)
+				changed = true
+			}
 			before := 0
 			if asset.Source.Probe != nil {
 				before = len(asset.Source.Probe.Paths)

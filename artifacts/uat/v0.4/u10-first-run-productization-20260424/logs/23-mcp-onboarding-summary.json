@@ -1,0 +1,7 @@
+{
+  "needs_init": false,
+  "next_command": "aima run qwen3-4b",
+  "next_model": "qwen3-4b",
+  "top_model": "qwen3-4b",
+  "top_score": 62
+}

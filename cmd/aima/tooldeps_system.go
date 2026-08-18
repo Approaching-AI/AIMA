@@ -39,7 +39,6 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 		return json.Marshal(m)
 	}
 
-
 	// Stack management
 	deps.StackPreflight = func(ctx context.Context, tier string) (json.RawMessage, error) {
 		installer := stack.NewInstaller(&execRunner{}, dataDir).
@@ -86,6 +85,9 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 	deps.SetConfig = func(ctx context.Context, key, value string) error {
 		return db.SetConfig(ctx, key, value)
 	}
+	deps.DiagnosticsExport = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		return exportDiagnostics(ctx, ac, deps, params)
+	}
 	// SystemStatus reads deps.OpenClawStatus which is set after this builder
 	// runs. This is safe because SystemStatus is a closure — it captures the
 	// deps pointer and dereferences it at call time, not at definition time.
@@ -129,6 +131,9 @@ func buildSystemDeps(ac *appContext, deps *mcp.ToolDeps) {
 		}
 		if b, e := json.Marshal(ac.support.Status(ctx)); e == nil {
 			status["support"] = b
+		}
+		if b, e := json.Marshal(serviceContextStatus(ac)); e == nil {
+			status["service_context"] = b
 		}
 		if deps.OpenClawStatus != nil {
 			if b, e := deps.OpenClawStatus(ctx); e == nil {

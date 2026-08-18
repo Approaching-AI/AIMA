@@ -37,20 +37,13 @@ func collectOSProfile(ctx context.Context) (profile map[string]any, fingerprint,
 	}
 	hostname = strings.TrimSpace(hostname)
 	machineID := strings.TrimSpace(readMachineID(ctx))
-	if machineID == "" {
-		machineID = hostname
-	}
-	hardwareID = hashString(machineID)
-
-	// Collect multiple hardware ID candidates for robust dedup across reinstalls.
-	seen := map[string]bool{hardwareID: true}
-	for _, raw := range collectHardwareIDCandidates(ctx) {
-		h := hashString(raw)
-		if !seen[h] {
-			candidates = append(candidates, h)
-			seen[h] = true
-		}
-	}
+	hardwareID, candidates = deriveHardwareIDs(
+		runtime.GOOS,
+		runtime.GOARCH,
+		hostname,
+		machineID,
+		collectHardwareIDCandidates(ctx),
+	)
 
 	profile = map[string]any{
 		"os_type":          runtime.GOOS,
@@ -70,6 +63,174 @@ func collectOSProfile(ctx context.Context) (profile map[string]any, fingerprint,
 	}
 	fingerprint = fmt.Sprintf("%s|%s|%s", runtime.GOOS, runtime.GOARCH, hostname)
 	return profile, fingerprint, hardwareID, candidates, nil
+}
+
+func deriveHardwareIDs(goos, goarch, hostname, machineID string, rawCandidates []string) (string, []string) {
+	primarySignal := primaryHardwareSignal(goos, goarch, hostname, machineID, rawCandidates)
+	if primarySignal == "" {
+		return "", nil
+	}
+	hardwareID := hashString(primarySignal)
+
+	// Keep the v1 machine-id-only hash as a candidate so existing devices can
+	// be recovered and upgraded to the v2 primary identity with a recovery code.
+	seen := map[string]bool{hardwareID: true}
+	var candidates []string
+	addCandidate := func(raw string) {
+		raw = normalizeHardwareIDCandidate(raw)
+		if raw == "" {
+			return
+		}
+		h := hashString(raw)
+		if seen[h] {
+			return
+		}
+		candidates = append(candidates, h)
+		seen[h] = true
+	}
+	if strings.TrimSpace(machineID) != "" {
+		addCandidate(machineID)
+	} else {
+		addCandidate(hostname)
+	}
+	for _, raw := range rawCandidates {
+		addCandidate(raw)
+	}
+	return hardwareID, candidates
+}
+
+func primaryHardwareSignal(goos, goarch, hostname, machineID string, rawCandidates []string) string {
+	goos = strings.TrimSpace(goos)
+	goarch = strings.TrimSpace(goarch)
+	hostname = strings.TrimSpace(hostname)
+	machineID = strings.TrimSpace(machineID)
+	hardwareComponent := strongestHardwareComponent(rawCandidates)
+	if hostname == "" && machineID == "" && hardwareComponent == "" {
+		return ""
+	}
+	hostComponent := hostname
+	if hardwareComponent != "" {
+		hostComponent = hardwareComponent
+	}
+	return strings.Join([]string{
+		"aima:device-hardware:v2",
+		goos,
+		goarch,
+		machineID,
+		hostComponent,
+	}, "\x00")
+}
+
+func strongestHardwareComponent(rawCandidates []string) string {
+	for _, raw := range rawCandidates {
+		raw = normalizeHardwareIDCandidate(raw)
+		if strings.HasPrefix(raw, "serial:") {
+			return raw
+		}
+	}
+	for _, raw := range rawCandidates {
+		raw = normalizeHardwareIDCandidate(raw)
+		if strings.HasPrefix(raw, "mac:") {
+			return raw
+		}
+	}
+	for _, raw := range rawCandidates {
+		if raw = normalizeHardwareIDCandidate(raw); raw != "" {
+			return raw
+		}
+	}
+	return ""
+}
+
+func normalizeHardwareIDCandidate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.HasPrefix(lower, "serial:"):
+		value := strings.TrimSpace(raw[len("serial:"):])
+		if !usableHardwareValue(value) {
+			return ""
+		}
+		return "serial:" + value
+	case strings.HasPrefix(lower, "mac:"):
+		value := strings.TrimSpace(raw[len("mac:"):])
+		mac, err := net.ParseMAC(value)
+		if err != nil || !usableMAC(mac) {
+			return ""
+		}
+		return "mac:" + mac.String()
+	default:
+		if !usableHardwareValue(raw) {
+			return ""
+		}
+		return raw
+	}
+}
+
+func usableHardwareValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	normalized := strings.ToLower(value)
+	normalized = strings.Trim(normalized, " \t\r\n\"'")
+	switch normalized {
+	case "none", "default string", "to be filled by o.e.m.", "to be filled by oem",
+		"unknown", "system serial number", "serial number", "not specified",
+		"not applicable", "n/a", "na", "null", "undefined", "0":
+		return false
+	}
+	stripped := strings.NewReplacer("-", "", "_", "", " ", "", ":", "").Replace(normalized)
+	if stripped == "" {
+		return false
+	}
+	allZero := true
+	for _, ch := range stripped {
+		if ch != '0' {
+			allZero = false
+			break
+		}
+	}
+	return !allZero
+}
+
+func usableMAC(mac net.HardwareAddr) bool {
+	if len(mac) == 0 {
+		return false
+	}
+	allZero := true
+	allFF := true
+	for _, b := range mac {
+		if b != 0 {
+			allZero = false
+		}
+		if b != 0xff {
+			allFF = false
+		}
+	}
+	if allZero || allFF {
+		return false
+	}
+	return mac[0]&1 == 0
+}
+
+func virtualNetworkInterfaceName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"br-", "cni", "docker", "flannel", "kube", "lo", "podman",
+		"tap", "tailscale", "tun", "utun", "veth", "virbr", "wg",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectHardwareIDCandidates gathers additional hardware identifiers
@@ -93,8 +254,8 @@ func collectHardwareIDCandidates(ctx context.Context) []string {
 		for _, path := range []string{"/sys/class/dmi/id/board_serial", "/sys/class/dmi/id/product_serial"} {
 			if data, err := os.ReadFile(path); err == nil {
 				v := strings.TrimSpace(string(data))
-				if v != "" && v != "None" && v != "Default string" {
-					ids = append(ids, "serial:"+v)
+				if candidate := normalizeHardwareIDCandidate("serial:" + v); candidate != "" {
+					ids = append(ids, candidate)
 				}
 			}
 		}
@@ -102,11 +263,13 @@ func collectHardwareIDCandidates(ctx context.Context) []string {
 	// Primary MAC address as fallback candidate.
 	if ifaces, err := net.Interfaces(); err == nil {
 		for _, iface := range ifaces {
-			if iface.Flags&net.FlagLoopback != 0 || len(iface.HardwareAddr) == 0 {
+			if iface.Flags&net.FlagLoopback != 0 || len(iface.HardwareAddr) == 0 || virtualNetworkInterfaceName(iface.Name) {
 				continue
 			}
-			ids = append(ids, "mac:"+iface.HardwareAddr.String())
-			break
+			if candidate := normalizeHardwareIDCandidate("mac:" + iface.HardwareAddr.String()); candidate != "" {
+				ids = append(ids, candidate)
+				break
+			}
 		}
 	}
 	return ids

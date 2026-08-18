@@ -11,25 +11,15 @@ import (
 	"time"
 )
 
-// SyncRemoteBackends discovers remote aima instances and registers their models.
-// Local backends (Remote==false) always take priority — remote models with the
-// same name are skipped. localPort is the proxy's own listen port; services
-// on a local IP with the same port are skipped to prevent self-discovery loops.
-// The proxy's API key is forwarded to remote /v1/models queries so that
-// authenticated peers respond correctly.
+var directHTTPClient = &http.Client{Transport: newDirectTransport()}
+
+// SyncRemoteBackends observes remote AIMA advertisements without making them
+// inference routes. An mDNS advertisement is not a trust relationship: querying
+// it with credentials or registering it as Ready would disclose either the AIMA
+// client key or inference data to any LAN broadcaster. Operators can configure a
+// trusted peer explicitly with --backend and upstream_api_key_env.
 func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredService, localPort int) {
-	apiKey := s.APIKey()
-	// Collect local model names (Remote==false)
-	localModels := make(map[string]bool)
-	for name, b := range s.ListBackends() {
-		if !b.Remote {
-			localModels[strings.ToLower(name)] = true
-		}
-	}
-
-	// Track which remote models are still alive this round
-	alive := make(map[string]bool)
-
+	_ = ctx
 	for _, svc := range services {
 		addr := svc.AddrV4
 		if addr == "" {
@@ -40,41 +30,21 @@ func SyncRemoteBackends(ctx context.Context, s *Server, services []DiscoveredSer
 			continue
 		}
 
-		slog.Debug("remote: processing service", "name", svc.Name, "addr", addr, "port", svc.Port)
-
 		// Skip self: same port on a local interface address
 		if svc.Port == localPort && isLocalIP(addr) {
 			slog.Debug("remote: skipping self", "addr", addr, "port", svc.Port)
 			continue
 		}
 
-		models := QueryRemoteStatus(ctx, addr, svc.Port, apiKey)
-		for _, model := range models {
-			// Local always wins
-			if localModels[strings.ToLower(model.ID)] {
-				slog.Debug("remote: skipping model (local exists)", "model", model.ID, "remote", addr)
-				continue
-			}
-
-			alive[strings.ToLower(model.ID)] = true
-			address := fmt.Sprintf("%s:%d", addr, svc.Port)
-			s.RegisterBackend(model.ID, &Backend{
-				ModelName:           model.ID,
-				EngineType:          "remote",
-				Address:             address,
-				Ready:               true,
-				Remote:              true,
-				ParameterCount:      model.ParameterCount,
-				ContextWindowTokens: model.ContextWindowTokens,
-			})
-			slog.Info("remote: registered model", "model", model.ID, "address", address)
-		}
+		slog.Info("remote: discovered untrusted service; not routable",
+			"name", svc.Name, "addr", addr, "port", svc.Port)
 	}
 
-	// Clean stale remote backends not seen this round
+	// Remove routes created by versions that trusted mDNS implicitly. Explicit
+	// static remote backends have Discovered=false and remain configured.
 	for name, b := range s.ListBackends() {
-		if b.Remote && !alive[strings.ToLower(name)] {
-			slog.Info("remote: removing stale backend", "model", name)
+		if b.Discovered {
+			slog.Info("remote: removing untrusted discovered backend", "model", name)
 			s.RemoveBackend(name)
 		}
 	}
@@ -112,8 +82,8 @@ func StartRemoteDiscoveryLoop(ctx context.Context, s *Server, interval time.Dura
 }
 
 // QueryRemoteStatus fetches /status from a remote aima instance and returns
-// ready models with ranking metadata. Falls back to /v1/models when /status is
-// unavailable or returns an unexpected payload.
+// ready models with ranking metadata. Falls back to /v1/models only when
+// /status is unavailable or does not look like an AIMA status payload.
 func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string) []AdvertisedModel {
 	url := fmt.Sprintf("http://%s:%d/status", addr, port)
 
@@ -128,7 +98,7 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := directHTTPClient.Do(req)
 	if err != nil {
 		slog.Debug("remote: failed to query status", "url", url, "error", err)
 		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
@@ -140,8 +110,10 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 	}
 
 	var result struct {
-		Models []struct {
+		Models *[]struct {
 			ModelName           string `json:"model_name"`
+			ModelType           string `json:"model_type"`
+			EngineType          string `json:"engine_type"`
 			Ready               *bool  `json:"ready"`
 			Remote              bool   `json:"remote"`
 			ParameterCount      string `json:"parameter_count"`
@@ -152,26 +124,33 @@ func QueryRemoteStatus(ctx context.Context, addr string, port int, apiKey string
 		slog.Debug("remote: failed to parse status response", "url", url, "error", err)
 		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
 	}
+	if result.Models == nil {
+		slog.Debug("remote: status response missing models", "url", url)
+		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
+	}
 
-	models := make([]AdvertisedModel, 0, len(result.Models))
-	for _, m := range result.Models {
+	models := make([]AdvertisedModel, 0, len(*result.Models))
+	for _, m := range *result.Models {
 		if m.Ready != nil && !*m.Ready {
 			continue
 		}
 		if strings.TrimSpace(m.ModelName) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{
+		advertised := AdvertisedModel{
 			ID:                  m.ModelName,
+			ModelType:           m.ModelType,
+			EngineType:          m.EngineType,
 			ParameterCount:      m.ParameterCount,
 			ContextWindowTokens: m.ContextWindowTokens,
 			Remote:              m.Remote,
-		})
+		}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
-	if len(models) == 0 {
-		return advertisedModelsFromIDs(QueryRemoteModels(ctx, addr, port, apiKey))
-	}
 	return models
 }
 
@@ -192,7 +171,7 @@ func QueryRemoteModels(ctx context.Context, addr string, port int, apiKey string
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := directHTTPClient.Do(req)
 	if err != nil {
 		slog.Debug("remote: failed to query models", "url", url, "error", err)
 		return nil
@@ -229,7 +208,11 @@ func advertisedModelsFromIDs(ids []string) []AdvertisedModel {
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		models = append(models, AdvertisedModel{ID: id})
+		advertised := AdvertisedModel{ID: id}
+		if !IsChatCapableAdvertisedModel(advertised) {
+			continue
+		}
+		models = append(models, advertised)
 	}
 	SortAdvertisedModels(models)
 	return models

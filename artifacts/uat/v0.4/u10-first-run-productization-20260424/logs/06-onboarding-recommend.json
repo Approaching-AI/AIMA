@@ -1,0 +1,507 @@
+{
+  "gpu_arch": "",
+  "gpu_count": 0,
+  "gpu_vram_mib": 0,
+  "hardware_profile": "",
+  "recommendations": [
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 62,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-4b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-4B",
+        "download_source": "huggingface",
+        "local_available": true
+      },
+      "model_type": "llm",
+      "parameter_count": "4B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          15,
+          50
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~50 tok/s expected",
+      "released_at": "2025-04",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-4b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 55,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-8b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-8B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "8B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          10,
+          40
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~40 tok/s expected",
+      "released_at": "2025-04",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-8b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 47,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-14b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-14B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "14B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          5,
+          25
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~25 tok/s expected",
+      "released_at": "2025-04",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-14b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 46,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3.5-9b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3.5-9B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "vlm",
+      "parameter_count": "9B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          10,
+          40
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~40 tok/s expected",
+      "released_at": "2025-09",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3.5-9b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          15,
+          30
+        ],
+        "name": "litetts",
+        "type": "litetts"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "litetts",
+      "fit_score": 26,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "litetts-mnn",
+      "model_status": {
+        "local_available": false
+      },
+      "model_type": "tts",
+      "parameter_count": "~50M",
+      "performance": {
+        "source": "unknown",
+        "tokens_per_second": [
+          0,
+          0
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU",
+      "released_at": "2024-12",
+      "variant": {
+        "format": "mnn",
+        "name": "litetts-mnn-cpu-arm64",
+        "precision_label": "MNN",
+        "quantization": "MNN"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          8,
+          15
+        ],
+        "name": "funasr-onnx",
+        "type": "funasr"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "funasr",
+      "fit_score": 25,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "funasr-paraformer-onnx",
+      "model_status": {
+        "download_repo": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx",
+        "download_source": "modelscope",
+        "local_available": false
+      },
+      "model_type": "asr",
+      "parameter_count": "220M",
+      "performance": {
+        "source": "unknown",
+        "tokens_per_second": [
+          0,
+          0
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU",
+      "released_at": "2024-09",
+      "variant": {
+        "format": "onnx",
+        "name": "funasr-paraformer-onnx-cpu-arm64",
+        "precision_label": "ONNX",
+        "quantization": "ONNX"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 16,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-coder-next-fp8",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-Coder-Next-FP8",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "80B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          3,
+          15
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~15 tok/s expected",
+      "released_at": "2026-01",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-coder-next-fp8-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "active_params": "3B",
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 10,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3.5-35b-a3b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3.5-35B-A3B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "35B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          3,
+          15
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "MoE architecture, only 3B active params, fits in single GPU, ~15 tok/s expected",
+      "released_at": "2025-12",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3.5-35b-a3b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 8,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-32b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-32B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "32B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          3,
+          15
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "fits in single GPU, ~15 tok/s expected",
+      "released_at": "2025-04",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-32b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    },
+    {
+      "active_params": "3B",
+      "engine": {
+        "cold_start_s": [
+          3,
+          10
+        ],
+        "image": "ghcr.io/ggml-org/llama.cpp:server",
+        "name": "llamacpp-universal",
+        "type": "llamacpp"
+      },
+      "engine_status": {
+        "available": true,
+        "installed": false,
+        "needs_build": false,
+        "needs_download": true
+      },
+      "family": "qwen",
+      "fit_score": 8,
+      "golden_config": {
+        "exists": false
+      },
+      "hardware_fit": true,
+      "model_name": "qwen3-30b-a3b",
+      "model_status": {
+        "download_repo": "Qwen/Qwen3-30B-A3B",
+        "download_source": "huggingface",
+        "local_available": false
+      },
+      "model_type": "llm",
+      "parameter_count": "30B",
+      "performance": {
+        "source": "catalog_estimate",
+        "tokens_per_second": [
+          8,
+          30
+        ],
+        "ttft_ms": [
+          0,
+          0
+        ]
+      },
+      "recommendation_reason": "MoE architecture, only 3B active params, fits in single GPU, ~30 tok/s expected",
+      "released_at": "2025-04",
+      "variant": {
+        "format": "gguf",
+        "name": "qwen3-30b-a3b-universal-llamacpp-q4",
+        "precision_label": "INT4",
+        "quantization": "INT4"
+      }
+    }
+  ],
+  "total_models_evaluated": 28
+}

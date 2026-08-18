@@ -96,6 +96,7 @@ func gatherExplorerLocalEngines(
 			Notes:               asset.Amplifier.PerformanceGain,
 			TunableParams:       asset.Startup.DefaultArgs,
 			InternalArgs:        asset.Startup.InternalArgs,
+			SupportedFormats:    asset.Metadata.SupportedFormats,
 			SupportedModelTypes: asset.Metadata.SupportedModelTypes,
 			HealthCheckPath:     asset.Startup.HealthCheck.Path,
 		})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,25 +24,55 @@ import (
 // DefaultPort is the default listen port for the AIMA proxy server.
 const DefaultPort = 6188
 
+// newDirectTransport returns an HTTP transport that never consults
+// HTTP_PROXY/HTTPS_PROXY. Model backends are infrastructure endpoints selected
+// by AIMA, so silently routing credentials or inference traffic through a
+// process-environment proxy would cross the configured trust boundary.
+func newDirectTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return transport
+}
+
 // LabelServedModel stores the upstream model identifier expected by the backend.
 // The proxy keeps routing by AIMA's canonical model name, but rewrites forwarded
 // requests to this model when the engine expects a different served name.
 const LabelServedModel = "aima.dev/served-model"
 
+// LabelRequestedModel stores the catalog name or alias supplied by the deploy
+// caller. The proxy exposes it as an additional route while retaining the
+// canonical catalog model route.
+const LabelRequestedModel = "aima.dev/requested-model"
+
+// LabelEngineSourceSHA256 binds a deployment to the pinned native engine
+// artifact that created it. Deploy reconciliation uses it to prevent an older
+// live process from being reused after a catalog engine upgrade.
+const LabelEngineSourceSHA256 = "aima.dev/engine-source-sha256"
+
 // LabelParameterCount stores the model parameter count used for agent ranking.
 const LabelParameterCount = "aima.dev/parameter_count"
 
+// LabelModelType stores the catalog modality for agent/OpenClaw routing.
+const LabelModelType = "aima.dev/model_type"
+
 // Backend represents a running inference engine.
 type Backend struct {
-	ModelName           string `json:"model_name"`
-	UpstreamModel       string `json:"upstream_model,omitempty"`
-	EngineType          string `json:"engine_type"`
-	Address             string `json:"address"`
-	BasePath            string `json:"base_path"`
-	Ready               bool   `json:"ready"`
-	Remote              bool   `json:"remote"` // true = discovered via mDNS, not a local deployment
-	ParameterCount      string `json:"parameter_count,omitempty"`
-	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+	ModelName           string            `json:"model_name"`
+	DeploymentName      string            `json:"-"`
+	UpstreamModel       string            `json:"upstream_model,omitempty"`
+	EngineType          string            `json:"engine_type"`
+	ModelType           string            `json:"model_type,omitempty"`
+	Scheme              string            `json:"scheme,omitempty"`
+	Address             string            `json:"address"`
+	BasePath            string            `json:"base_path"`
+	Ready               bool              `json:"ready"`
+	Remote              bool              `json:"remote"` // true = discovered via mDNS, not a local deployment
+	Discovered          bool              `json:"discovered,omitempty"`
+	External            bool              `json:"external"`
+	UpstreamAPIKey      string            `json:"-"`
+	PathOverrides       map[string]string `json:"path_overrides,omitempty"`
+	ParameterCount      string            `json:"parameter_count,omitempty"`
+	ContextWindowTokens int               `json:"context_window_tokens,omitempty"`
 }
 
 func cloneBackend(b *Backend) *Backend {
@@ -49,6 +80,12 @@ func cloneBackend(b *Backend) *Backend {
 		return nil
 	}
 	cp := *b
+	if b.PathOverrides != nil {
+		cp.PathOverrides = make(map[string]string, len(b.PathOverrides))
+		for k, v := range b.PathOverrides {
+			cp.PathOverrides[k] = v
+		}
+	}
 	return &cp
 }
 
@@ -62,6 +99,17 @@ func backendUpstreamModel(b *Backend) string {
 	return strings.TrimSpace(b.ModelName)
 }
 
+func backendScheme(b *Backend) string {
+	if b == nil {
+		return "http"
+	}
+	scheme := strings.TrimSpace(strings.ToLower(b.Scheme))
+	if scheme == "https" {
+		return "https"
+	}
+	return "http"
+}
+
 // Server is the HTTP inference proxy.
 type Server struct {
 	addr            string
@@ -71,8 +119,26 @@ type Server struct {
 	server          *http.Server
 	extraRoutes     func(*http.ServeMux)
 	requestRewriter func(path, contentType, model, engineType string, body []byte) []byte
+	requestPreparer RequestPreparer
 	onReady         func(addr string)
+	transport       http.RoundTripper
 }
+
+type PreparedRequest struct {
+	Body   []byte
+	Finish func(success bool)
+}
+
+type RequestPreparer func(
+	ctx context.Context,
+	path string,
+	contentType string,
+	model string,
+	upstreamModel string,
+	engineType string,
+	deploymentName string,
+	body []byte,
+) (PreparedRequest, error)
 
 // Option configures Server.
 type Option func(*Server)
@@ -91,6 +157,14 @@ func WithExtraRoutes(fn func(*http.ServeMux)) Option {
 
 func WithRequestRewriter(fn func(path, contentType, model, engineType string, body []byte) []byte) Option {
 	return func(s *Server) { s.requestRewriter = fn }
+}
+
+func WithRequestPreparer(fn RequestPreparer) Option {
+	return func(s *Server) { s.requestPreparer = fn }
+}
+
+func WithTransport(transport http.RoundTripper) Option {
+	return func(s *Server) { s.transport = transport }
 }
 
 // SetAddr configures the listen address. Must be called before Start.
@@ -129,6 +203,14 @@ func (s *Server) SetRequestRewriter(fn func(path, contentType, model, engineType
 	s.requestRewriter = fn
 }
 
+// SetRequestPreparer installs an error-aware request hook whose Finish callback
+// remains active until the complete upstream response (including SSE) ends.
+func (s *Server) SetRequestPreparer(fn RequestPreparer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestPreparer = fn
+}
+
 // SetOnReady registers a callback invoked once the server is listening.
 // The callback receives the resolved listen address (e.g. "127.0.0.1:6188").
 // Must be called before Start.
@@ -140,8 +222,9 @@ func (s *Server) SetOnReady(fn func(addr string)) {
 
 func NewServer(opts ...Option) *Server {
 	s := &Server{
-		addr:   fmt.Sprintf(":%d", DefaultPort),
-		routes: make(map[string]*Backend),
+		addr:      fmt.Sprintf(":%d", DefaultPort),
+		routes:    make(map[string]*Backend),
+		transport: newDirectTransport(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -341,8 +424,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		models = append(models, map[string]any{
 			"model_name":            b.ModelName,
 			"engine_type":           b.EngineType,
+			"model_type":            b.ModelType,
 			"ready":                 b.Ready,
 			"remote":                b.Remote,
+			"external":              b.External,
 			"parameter_count":       b.ParameterCount,
 			"context_window_tokens": b.ContextWindowTokens,
 		})
@@ -383,12 +468,16 @@ func rankedBackends(backends map[string]*Backend, readyOnly bool) []*Backend {
 		return BetterAdvertisedModel(
 			AdvertisedModel{
 				ID:                  items[i].ModelName,
+				ModelType:           items[i].ModelType,
+				EngineType:          items[i].EngineType,
 				ParameterCount:      items[i].ParameterCount,
 				ContextWindowTokens: items[i].ContextWindowTokens,
 				Remote:              items[i].Remote,
 			},
 			AdvertisedModel{
 				ID:                  items[j].ModelName,
+				ModelType:           items[j].ModelType,
+				EngineType:          items[j].EngineType,
 				ParameterCount:      items[j].ParameterCount,
 				ContextWindowTokens: items[j].ContextWindowTokens,
 				Remote:              items[j].Remote,
@@ -441,24 +530,55 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	requestRewriter := s.requestRewriter
+	requestPreparer := s.requestPreparer
+	transport := s.transport
 	s.mu.RUnlock()
-	if requestRewriter != nil {
+	finish := func(bool) {}
+	preparationSucceeded := false
+	if requestPreparer != nil {
+		prepared, prepareErr := requestPreparer(
+			r.Context(),
+			r.URL.Path,
+			r.Header.Get("Content-Type"),
+			model,
+			backendUpstreamModel(backend),
+			backend.EngineType,
+			backend.DeploymentName,
+			body,
+		)
+		if prepareErr != nil {
+			status, errorType := requestPreparationErrorFields(prepareErr)
+			WriteJSONError(w, status, errorType, prepareErr.Error())
+			return
+		}
+		body = prepared.Body
+		if prepared.Finish != nil {
+			finish = prepared.Finish
+		}
+	} else if requestRewriter != nil {
 		body = requestRewriter(r.URL.Path, r.Header.Get("Content-Type"), model, backend.EngineType, body)
-	}
-	if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
+		if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
+			body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
+		}
+	} else if upstreamModel := backendUpstreamModel(backend); upstreamModel != "" && model != upstreamModel {
 		body = rewriteModelInBody(r.Header.Get("Content-Type"), body, upstreamModel)
 	}
+	defer func() { finish(preparationSucceeded) }()
 
 	// Determine the target path: basePath + suffix from original request
 	// e.g., request to /v1/chat/completions with basePath=/v1 → forward to /v1/chat/completions
 	targetPath := s.buildTargetPath(backend.BasePath, r.URL.Path)
+	if override := strings.TrimSpace(backend.PathOverrides[r.URL.Path]); override != "" {
+		targetPath = override
+	}
 
 	target := &url.URL{
-		Scheme: "http",
+		Scheme: backendScheme(backend),
 		Host:   backend.Address,
 	}
 
 	proxy := &httputil.ReverseProxy{
+		Transport: transport,
 		Director: func(outReq *http.Request) {
 			outReq.URL.Scheme = target.Scheme
 			outReq.URL.Host = target.Host
@@ -466,9 +586,18 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 			outReq.Host = target.Host
 			outReq.Body = io.NopCloser(bytes.NewReader(body))
 			outReq.ContentLength = int64(len(body))
+			// The bearer token authenticates the client to AIMA. It is never an
+			// upstream credential and must not cross any backend boundary. Remote
+			// peers and external services require separately configured trust and
+			// credentials rather than reusing a client-supplied header.
+			outReq.Header.Del("Authorization")
+			if backend.UpstreamAPIKey != "" {
+				outReq.Header.Set("Authorization", "Bearer "+backend.UpstreamAPIKey)
+			}
 		},
 		FlushInterval: -1, // flush immediately for SSE
 		ModifyResponse: func(resp *http.Response) error {
+			preparationSucceeded = resp.StatusCode >= 200 && resp.StatusCode < 400
 			resp.Header.Set("X-Aima-Model", backend.ModelName)
 			resp.Header.Set("X-Aima-Engine", backend.EngineType)
 			return nil
@@ -489,6 +618,27 @@ func (s *Server) handleInference(w http.ResponseWriter, r *http.Request) {
 		"backend", backend.Address,
 		"latency", time.Since(start),
 	)
+}
+
+type requestPreparationError interface {
+	error
+	HTTPStatus() int
+	ErrorType() string
+}
+
+func requestPreparationErrorFields(err error) (int, string) {
+	status := http.StatusBadGateway
+	errorType := "backend_adapter_error"
+	var typed requestPreparationError
+	if errors.As(err, &typed) {
+		if value := typed.HTTPStatus(); value >= 400 && value <= 599 {
+			status = value
+		}
+		if value := strings.TrimSpace(typed.ErrorType()); value != "" {
+			errorType = value
+		}
+	}
+	return status, errorType
 }
 
 func extractModelFromRequest(contentType string, body []byte) (string, error) {

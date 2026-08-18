@@ -696,8 +696,8 @@ func (w *ExplorerWorkspace) generateAvailableCombos(input PlanInput, now string,
 
 			// Check incompatibility
 			var incompat string
-			if !engineFormatCompatible(e.Type, m.Format) {
-				incompat = fmt.Sprintf("format mismatch (%s vs %s)", e.Type, m.Format)
+			if !engineFormatCompatible(e.SupportedFormats, m.Format) {
+				incompat = fmt.Sprintf("format mismatch (%s supports %v, model is %s)", e.Type, e.SupportedFormats, m.Format)
 			} else if !engineSupportsModelTypeFromList(e.SupportedModelTypes, m.Type) {
 				incompat = fmt.Sprintf("type mismatch (%s does not support %s)", e.Type, m.Type)
 			} else if !modelFitsVRAM(m.Name, input.LocalModels, totalVRAM) {

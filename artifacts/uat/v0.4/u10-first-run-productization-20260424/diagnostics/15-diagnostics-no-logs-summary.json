@@ -1,0 +1,19 @@
+{
+  "privacy": {
+    "collection_scope": "local_only_no_health_probes",
+    "secrets_redacted": true,
+    "sent_to_network": false,
+    "telemetry_free": true
+  },
+  "included_logs": false,
+  "sections": [
+    "catalog_status",
+    "config",
+    "deployments",
+    "hardware",
+    "knowledge_summary",
+    "metrics",
+    "omitted_sections",
+    "stack_status"
+  ]
+}

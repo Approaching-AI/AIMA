@@ -1,0 +1,65 @@
+{
+  "deployments": [
+    {
+      "data": {
+        "amplifier_score": 1,
+        "cold_start_s": {
+          "max": 10,
+          "min": 3
+        },
+        "config": {
+          "ctx_size": 8192,
+          "max_model_len": 2048,
+          "n_gpu_layers": 0,
+          "port": 8080,
+          "quantization": "int4"
+        },
+        "engine": "llamacpp",
+        "engine_image": "ghcr.io/ggml-org/llama.cpp:server",
+        "engine_power_watts": {
+          "max": 60,
+          "min": 20
+        },
+        "fit_report": {
+          "adjustments": {},
+          "fit": true,
+          "reason": "",
+          "warnings": null
+        },
+        "model": "qwen3-4b",
+        "performance_reference": {
+          "power_watts": 40,
+          "source": "yaml_estimate"
+        },
+        "ports": [
+          {
+            "config_key": "port",
+            "flag": "--port",
+            "name": "http",
+            "port": 8080,
+            "primary": true
+          }
+        ],
+        "provenance": {
+          "ctx_size": "L0",
+          "max_model_len": "L1",
+          "n_gpu_layers": "L1",
+          "port": "L0",
+          "quantization": "L0"
+        },
+        "resource_estimate": {
+          "cpu_cores": 4,
+          "power_watts": 40,
+          "ram_mib": 2048
+        },
+        "runtime": "docker",
+        "slot": "primary"
+      },
+      "engine": "llamacpp",
+      "model": "qwen3-4b",
+      "status": "dry_run"
+    }
+  ],
+  "dry_run": true,
+  "scenario": "uat-approval-flow"
+}

@@ -1,0 +1,104 @@
+kind: engine_asset
+_profile: sglang
+metadata:
+  name: qwen36-gb10-structured-bf16
+  type: qwen36-gb10-structured-bf16
+  version: "ab356bc-bf16"
+  supported_model_types: [llm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 70000
+image:
+  name: qwen36-gb10
+  tag: local-nvfp4
+  size_approx_mb: 28547
+  platforms: [linux/arm64]
+  distribution: local
+patterns:
+  - "^qwen36-gb10-structured-bf16$"
+startup:
+  command:
+    - /opt/nvidia/nvidia_entrypoint.sh
+    - python3
+    - -m
+    - sglang.launch_server
+    - --model-path
+    - "{{.ModelPath}}"
+    - --host
+    - 0.0.0.0
+    - --served-model-name
+    - "{{.ModelName}}"
+    - --trust-remote-code
+    - --dtype
+    - bfloat16
+    - --context-length
+    - "131072"
+    - --reasoning-parser
+    - qwen3
+    - --tool-call-parser
+    - qwen3_coder
+    - --mem-fraction-static
+    - "0.80"
+    - --max-running-requests
+    - "4"
+    - --chunked-prefill-size
+    - "32768"
+    - --max-prefill-tokens
+    - "32768"
+    - --attention-backend
+    - flashinfer
+    - --enable-cache-report
+    - --moe-runner-backend
+    - triton_kernel
+    - --prefill-attention-backend
+    - flashinfer
+    - --decode-attention-backend
+    - flashinfer
+    - --mamba-scheduler-strategy
+    - extra_buffer
+    - --cuda-graph-bs
+    - "1"
+    - "2"
+    - "4"
+  env:
+    SGLANG_FORCE_SHARED_EXPERT_FUSION: "1"
+    SGLANG_MOE_CONFIG_DIR: /opt/qwen36/moe-config
+    SGLANG_TORCH_NATIVE_SDPA_BACKEND: flash
+    SGLANG_TORCH_NATIVE_SDPA_LOWER_RIGHT: "1"
+    SGLANG_TRITON_KERNELS_CORRECT_SHARED_FUSION: "1"
+    SGLANG_TRITON_KERNELS_FAST_SHARED_APPEND: "1"
+    SGLANG_TRITON_KERNELS_FUSED_SWIGLU: "1"
+    SGLANG_TRITON_KERNELS_NATIVE_SHARED_FUSION: "1"
+    SGLANG_TRITON_KERNELS_OPT_FLAGS: '{"is_persistent":false,"block_m":64,"block_k":32,"num_stages":3}'
+    SGLANG_TRITON_KERNELS_PREALLOC_SECOND_OUTPUT: "1"
+    TRITON_KERNELS_MATMUL_OGS_W2_FUSED_REDUCE: "1"
+  health_check:
+    path: /health
+    timeout_s: 900
+  warmup:
+    enabled: true
+    timeout_s: 120
+    request_body:
+      messages:
+        - role: user
+          content: Return one JSON object with key ok and boolean true.
+      temperature: 0
+      max_tokens: 64
+      response_format:
+        type: json_object
+      chat_template_kwargs:
+        enable_thinking: false
+amplifier:
+  features:
+    - continuous_batching
+    - bf16
+    - grammar_constrained_decoding
+    - flashinfer_attention
+  performance_gain: "GB10 BF16 path for schema-constrained alarm inference"
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container
+time_constraints:
+  cold_start_s: [120, 900]
+  model_switch_s: [120, 900]

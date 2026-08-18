@@ -25,9 +25,9 @@ const (
 // Strings ending with "." are prefix matches; others are exact matches.
 var profileIncludes = map[Profile][]string{
 	ProfileOperator: {
-		"hardware.", "model.", "engine.", "deploy.",
+		"hardware.", "model.", "engine.", "external.", "deploy.",
 		"system.", "fleet.", "scenario.",
-		"catalog.list",
+		"catalog.list", "catalog.effective", "catalog.diff", "catalog.validate_patch",
 		"benchmark.run", "benchmark.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.promote",
 		"agent.ask", "agent.status", "agent.rollback",
@@ -45,7 +45,8 @@ var profileIncludes = map[Profile][]string{
 		"hardware.detect", "hardware.metrics",
 		"deploy.apply", "deploy.approve", "deploy.dry_run", "deploy.status",
 		"deploy.list", "deploy.logs", "deploy.delete",
-		"benchmark.run", "benchmark.record", "benchmark.list", "benchmark.ensure_assets",
+		"external.list", "external.scan",
+		"benchmark.run", "benchmark.record", "benchmark.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.promote", "knowledge.save",
 		"explore", "tuning", "explorer",
 		"central.advise",
@@ -94,6 +95,7 @@ var supportedConfigKeys = []string{
 	"support.endpoint",
 	"support.invite_code",
 	"support.worker_code",
+	"openclaw.sync",
 }
 
 var validConfigKeys = func() map[string]bool {
@@ -149,6 +151,7 @@ func RegisterAllTools(s *Server, deps *ToolDeps) {
 	registerHardwareTools(s, deps)
 	registerModelTools(s, deps)
 	registerEngineTools(s, deps)
+	registerExternalTools(s, deps)
 	registerDeployTools(s, deps)
 	registerKnowledgeTools(s, deps)
 	registerBenchmarkTools(s, deps)

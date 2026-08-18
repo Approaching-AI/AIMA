@@ -4,7 +4,14 @@ metadata:
   type: asr
   family: funasr
   parameter_count: "220M"
+  model_class: pipeline
   released_at: "2024-09"
+ui:
+  role: deployable
+  display_note: "Speech recognition pipeline (FunASR)"
+  display_note_zh: "语音识别流水线（FunASR）"
+capabilities:
+  standalone_deploy: true
 storage:
   formats: [onnx]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
@@ -13,8 +20,8 @@ storage:
       repo: iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx
       format: onnx
     - type: local_path
-      path: "/opt/mt-ai/asr/models"
-      notes: "AIBook M1000 SoC pre-loaded: Paraformer-large (offline+online) + FSMN-VAD + CT-Punctuation"
+      path: "/opt/mt-ai/asr/models/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx"
+      notes: "AIBook M1000 SoC pre-loaded offline Paraformer model. Companion online/VAD/punctuation ONNX assets are expected alongside it under /opt/mt-ai/asr/models."
 variants:
   # --- CPU-only (ARM64, ONNX Runtime) ---
   # Paraformer-large ~220M params, ONNX quantized (~200MB total)

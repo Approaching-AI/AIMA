@@ -290,7 +290,6 @@ function resolveConfiguredTTSRoute(cfg) {
     model,
     baseUrl,
     apiKey: asString(provider.apiKey) || defaultLocalAPIKey,
-    voice: asString(provider.voice) || "default",
   };
 }
 
@@ -338,14 +337,19 @@ function buildTTSRequest(route, params, referenceAudioValue, referenceText) {
   if (!allowedResponseFormats.has(responseFormat)) {
     throw new Error(`unsupported response format: ${responseFormat}`);
   }
+  const mode = asString(record.mode);
+  const explicitVoice = readStringParam(record, ["voice"]);
+  const wantsClone = mode === "voice_clone" || asOptionalBoolean(record.xVectorOnlyMode ?? record.x_vector_only_mode, false);
+  if (wantsClone && !referenceAudioValue) {
+    throw new Error("voice cloning requires referenceAudioPath");
+  }
 
   const payload = {
     model: route.model,
     text: readStringParam(record, ["text", "input"]),
-    voice: readStringParam(record, ["voice"]) || route.voice || "default",
     response_format: responseFormat,
-    use_default_reference: asOptionalBoolean(record.useDefaultReference ?? record.use_default_reference, true),
   };
+  if (explicitVoice) payload.voice = explicitVoice;
 
   for (const [source, target] of [
     ["mode", "mode"],
@@ -438,10 +442,6 @@ export default function register(api) {
         xVectorOnlyMode: {
           type: "boolean",
           description: "Force x-vector-only voice cloning when true.",
-        },
-        useDefaultReference: {
-          type: "boolean",
-          description: "Allow the backend to use its configured default reference voice when no reference audio path is supplied.",
         },
         language: {
           type: "string",

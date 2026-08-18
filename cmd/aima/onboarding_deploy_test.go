@@ -44,3 +44,26 @@ func TestHandleOnboardingDeploy_DoesNotCompleteOnTimeout(t *testing.T) {
 		t.Fatalf("expected error event in response: %s", body)
 	}
 }
+
+func TestHandleOnboardingDeployPassesNoPull(t *testing.T) {
+	var gotNoPull bool
+	deps := &mcp.ToolDeps{
+		DeployRun: func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool,
+			onPhase func(string, string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(int64, int64),
+		) (json.RawMessage, error) {
+			gotNoPull = noPull
+			return json.RawMessage(`{"status":"ok","endpoint":"http://127.0.0.1:8000/v1"}`), nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/ui/api/onboarding-deploy", strings.NewReader(`{"model":"qwen3-8b","engine":"sglang","no_pull":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://example.com")
+	rr := httptest.NewRecorder()
+
+	handleOnboardingDeploy(&appContext{}, deps).ServeHTTP(rr, req)
+
+	if !gotNoPull {
+		t.Fatal("expected no_pull=true to be passed to deploy run")
+	}
+}

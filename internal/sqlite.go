@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -8,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jguan/aima/internal/recovery"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,35 +37,96 @@ func (d *DB) RawDB() *sql.DB {
 }
 
 type Model struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Type             string    `json:"type"`
-	Path             string    `json:"path"`
-	Format           string    `json:"format"`
-	SizeBytes        int64     `json:"size_bytes"`
-	DetectedArch     string    `json:"detected_arch"`
-	DetectedParams   string    `json:"detected_params"`
-	ModelClass       string    `json:"model_class"`
-	TotalParams      int64     `json:"total_params"`
-	ActiveParams     int64     `json:"active_params"`
-	Quantization     string    `json:"quantization"`
-	QuantSrc         string    `json:"quant_src"`
-	Status           string    `json:"status"`
-	DownloadProgress float64   `json:"download_progress"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Type               string    `json:"type"`
+	Path               string    `json:"path"`
+	Format             string    `json:"format"`
+	SizeBytes          int64     `json:"size_bytes"`
+	DetectedArch       string    `json:"detected_arch"`
+	DetectedParams     string    `json:"detected_params"`
+	ModelClass         string    `json:"model_class"`
+	UIRole             string    `json:"ui_role"`
+	UIDisplayNote      string    `json:"ui_display_note"`
+	UIDisplayNoteZh    string    `json:"ui_display_note_zh"`
+	StandaloneDeploy   *bool     `json:"standalone_deploy,omitempty"`
+	DeploymentScenario string    `json:"deployment_scenario,omitempty"`
+	TotalParams        int64     `json:"total_params"`
+	ActiveParams       int64     `json:"active_params"`
+	Quantization       string    `json:"quantization"`
+	QuantSrc           string    `json:"quant_src"`
+	Status             string    `json:"status"`
+	DownloadProgress   float64   `json:"download_progress"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+func boolPtrToNullBool(value *bool) sql.NullBool {
+	if value == nil {
+		return sql.NullBool{}
+	}
+	return sql.NullBool{Bool: *value, Valid: true}
+}
+
+func nullBoolPtrScanner(target **bool) interface{} {
+	var value sql.NullBool
+	return scanFunc(func(src interface{}) error {
+		if err := value.Scan(src); err != nil {
+			return err
+		}
+		if value.Valid {
+			copied := value.Bool
+			*target = &copied
+		} else {
+			*target = nil
+		}
+		return nil
+	})
+}
+
+type scanFunc func(src interface{}) error
+
+func (fn scanFunc) Scan(src interface{}) error {
+	return fn(src)
 }
 
 type Engine struct {
-	ID          string    `json:"id"`
-	Type        string    `json:"type"`
-	Image       string    `json:"image"` // container image name (container engines) or empty (native)
-	Tag         string    `json:"tag"`   // container image tag (container engines) or empty (native)
-	SizeBytes   int64     `json:"size_bytes"`
-	Platform    string    `json:"platform"`
-	RuntimeType string    `json:"runtime_type"` // "container" or "native"
-	BinaryPath  string    `json:"binary_path"`  // path to native binary (native engines only)
-	Available   bool      `json:"available"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Type               string    `json:"type"`
+	Image              string    `json:"image"` // container image name (container engines) or empty (native)
+	Tag                string    `json:"tag"`   // container image tag (container engines) or empty (native)
+	SizeBytes          int64     `json:"size_bytes"`
+	Platform           string    `json:"platform"`
+	RuntimeType        string    `json:"runtime_type"` // "container" or "native"
+	BinaryPath         string    `json:"binary_path"`  // path to native binary (native engines only)
+	Available          bool      `json:"available"`
+	AssetName          string    `json:"asset_name"`
+	Version            string    `json:"version"`
+	CatalogVersion     string    `json:"catalog_version"`
+	DetectedVersion    string    `json:"detected_version"`
+	VersionMatch       string    `json:"version_match"`
+	Origin             string    `json:"origin"`
+	ContentDigest      string    `json:"content_digest"`
+	Location           string    `json:"location"`
+	Active             bool      `json:"active"`
+	LifecycleStatus    string    `json:"lifecycle_status"`
+	VerificationStatus string    `json:"verification_status"`
+	PreviousEngineID   string    `json:"previous_engine_id"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type ExternalService struct {
+	ID                 string    `json:"id"`
+	BaseURL            string    `json:"base_url"`
+	Kind               string    `json:"kind"`
+	Status             string    `json:"status"`
+	Source             string    `json:"source"`
+	ModelsJSON         string    `json:"models_json"`
+	MetadataJSON       string    `json:"metadata_json"`
+	LastError          string    `json:"last_error"`
+	Imported           bool      `json:"imported"`
+	ImportedModelsJSON string    `json:"imported_models_json"`
+	FirstSeenAt        time.Time `json:"first_seen_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
 }
 
 type KnowledgeNote struct {
@@ -390,6 +455,34 @@ func (d *DB) migrate(ctx context.Context) error {
 	// v15: benchmark_results.advisory_id links validation benches to central advisory
 	if err := d.migrateV15(ctx); err != nil {
 		return fmt.Errorf("migrate v15: %w", err)
+	}
+	// v16: model UI/capability hints for catalog-driven local asset display
+	if err := d.migrateV16(ctx); err != nil {
+		return fmt.Errorf("migrate v16: %w", err)
+	}
+	// v17: external service discovery inventory for unmanaged local APIs
+	if err := d.migrateV17(ctx); err != nil {
+		return fmt.Errorf("migrate v17: %w", err)
+	}
+	// v18: imported flag for externally discovered services routed via proxy
+	if err := d.migrateV18(ctx); err != nil {
+		return fmt.Errorf("migrate v18: %w", err)
+	}
+	// v19: selected imported model subset for external OpenAI services
+	if err := d.migrateV19(ctx); err != nil {
+		return fmt.Errorf("migrate v19: %w", err)
+	}
+	// v20: durable desired state and recovery state for deployments
+	if err := d.migrateV20(ctx); err != nil {
+		return fmt.Errorf("migrate v20: %w", err)
+	}
+	// v21: versioned engine inventory with verification and activation state
+	if err := d.migrateV21(ctx); err != nil {
+		return fmt.Errorf("migrate v21: %w", err)
+	}
+	// v22: persist native engine probe version evidence
+	if err := d.migrateV22(ctx); err != nil {
+		return fmt.Errorf("migrate v22: %w", err)
 	}
 	if _, err := d.db.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
@@ -1218,6 +1311,532 @@ func (d *DB) migrateV15(ctx context.Context) error {
 	return nil
 }
 
+func (d *DB) addModelDisplayColumns(ctx context.Context) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "ui_role", ddl: `ALTER TABLE models ADD COLUMN ui_role TEXT DEFAULT ''`},
+		{name: "ui_display_note", ddl: `ALTER TABLE models ADD COLUMN ui_display_note TEXT DEFAULT ''`},
+		{name: "ui_display_note_zh", ddl: `ALTER TABLE models ADD COLUMN ui_display_note_zh TEXT DEFAULT ''`},
+		{name: "standalone_deploy", ddl: `ALTER TABLE models ADD COLUMN standalone_deploy BOOLEAN`},
+	} {
+		var count int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('models') WHERE name=?`, column.name).Scan(&count); err != nil {
+			return fmt.Errorf("check models.%s column: %w", column.name, err)
+		}
+		if count == 0 {
+			if _, err := d.db.ExecContext(ctx, column.ddl); err != nil {
+				return fmt.Errorf("add models.%s: %w", column.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (d *DB) migrateV16(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 16 {
+		return nil
+	}
+	if err := d.addModelDisplayColumns(ctx); err != nil {
+		return err
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 16"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV17(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 17 {
+		return nil
+	}
+	ddl := `CREATE TABLE IF NOT EXISTS external_services (
+	id TEXT PRIMARY KEY,
+	base_url TEXT NOT NULL UNIQUE,
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT DEFAULT '[]',
+	metadata_json TEXT DEFAULT '{}',
+	last_error TEXT DEFAULT '',
+	imported INTEGER DEFAULT 0,
+	first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_external_services_status ON external_services(status);
+CREATE INDEX IF NOT EXISTS idx_external_services_last_seen ON external_services(last_seen_at);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate v17 schema: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 17"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV18(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 18 {
+		return nil
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('external_services') WHERE name='imported'`).Scan(&count); err != nil {
+		return fmt.Errorf("check external_services.imported column: %w", err)
+	}
+	if count == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE external_services ADD COLUMN imported INTEGER DEFAULT 0`); err != nil {
+			return fmt.Errorf("add external_services.imported: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 18"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV19(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 19 {
+		return nil
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('external_services') WHERE name='imported_models_json'`).Scan(&count); err != nil {
+		return fmt.Errorf("check external_services.imported_models_json column: %w", err)
+	}
+	if count == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE external_services ADD COLUMN imported_models_json TEXT DEFAULT '[]'`); err != nil {
+			return fmt.Errorf("add external_services.imported_models_json: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx,
+		`UPDATE external_services
+		    SET imported_models_json = COALESCE(NULLIF(models_json, ''), '[]')
+		  WHERE COALESCE(imported, 0) = 1
+		    AND (imported_models_json IS NULL OR imported_models_json = '' OR imported_models_json = '[]')`); err != nil {
+		return fmt.Errorf("backfill external_services.imported_models_json: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 19"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV20(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 20 {
+		return nil
+	}
+
+	ddl := `
+CREATE TABLE IF NOT EXISTS deployment_intents (
+    name TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    engine_asset TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    config_json TEXT NOT NULL,
+    desired_state TEXT NOT NULL,
+    recovery_state TEXT NOT NULL,
+    recovery_policy_json TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    consecutive_failure_count INTEGER NOT NULL,
+    observed_restart_count INTEGER NOT NULL,
+    window_started_at TEXT,
+    next_attempt_at TEXT,
+    healthy_since TEXT,
+    last_exit_code INTEGER,
+    last_error TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_intents_desired_recovery
+    ON deployment_intents(desired_state, recovery_state);
+CREATE INDEX IF NOT EXISTS idx_deployment_intents_next_attempt_at
+    ON deployment_intents(next_attempt_at);`
+	if _, err := d.db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate v20 schema: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 20"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV21(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 21 {
+		return nil
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"asset_name", "TEXT NOT NULL DEFAULT ''"},
+		{"version", "TEXT NOT NULL DEFAULT ''"},
+		{"catalog_version", "TEXT NOT NULL DEFAULT ''"},
+		{"origin", "TEXT NOT NULL DEFAULT 'legacy'"},
+		{"content_digest", "TEXT NOT NULL DEFAULT ''"},
+		{"location", "TEXT NOT NULL DEFAULT ''"},
+		{"active", "BOOLEAN NOT NULL DEFAULT FALSE"},
+		{"lifecycle_status", "TEXT NOT NULL DEFAULT 'discovered'"},
+		{"verification_status", "TEXT NOT NULL DEFAULT 'unverified'"},
+		{"previous_engine_id", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		var count int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name = ?`, column.name).Scan(&count); err != nil {
+			return fmt.Errorf("check engines.%s column: %w", column.name, err)
+		}
+		if count == 0 {
+			statement := fmt.Sprintf("ALTER TABLE engines ADD COLUMN %s %s", column.name, column.definition)
+			if _, err := d.db.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("add engines.%s column: %w", column.name, err)
+			}
+		}
+	}
+
+	if _, err := d.db.ExecContext(ctx, `
+UPDATE engines
+   SET location = CASE
+       WHEN COALESCE(binary_path, '') <> '' THEN binary_path
+       WHEN COALESCE(image, '') = '' THEN ''
+       WHEN COALESCE(tag, '') = '' THEN image
+       ELSE image || ':' || tag
+   END
+ WHERE COALESCE(location, '') = ''`); err != nil {
+		return fmt.Errorf("backfill engine locations: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_engines_one_active_version
+    ON engines(asset_name, platform, runtime_type)
+ WHERE active = 1 AND asset_name <> ''`); err != nil {
+		return fmt.Errorf("create active engine version index: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 21"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) migrateV22(ctx context.Context) error {
+	var version int
+	_ = d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 22 {
+		return nil
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"detected_version", "TEXT NOT NULL DEFAULT ''"},
+		{"version_match", "TEXT NOT NULL DEFAULT 'unknown'"},
+	} {
+		var count int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name = ?`, column.name).Scan(&count); err != nil {
+			return fmt.Errorf("check engines.%s column: %w", column.name, err)
+		}
+		if count == 0 {
+			statement := fmt.Sprintf("ALTER TABLE engines ADD COLUMN %s %s", column.name, column.definition)
+			if _, err := d.db.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("add engines.%s column: %w", column.name, err)
+			}
+		}
+	}
+	if _, err := d.db.ExecContext(ctx, `
+UPDATE engines
+   SET detected_version = version
+ WHERE detected_version = '' AND version <> ''`); err != nil {
+		return fmt.Errorf("backfill engine detected versions: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, "PRAGMA user_version = 22"); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) UpsertDeploymentIntent(ctx context.Context, intent *recovery.Intent) error {
+	if intent == nil {
+		return fmt.Errorf("deployment intent is nil")
+	}
+	configJSON, policyJSON, err := marshalDeploymentIntentJSON(intent)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	createdAt := intent.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := intent.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	if _, err := d.db.ExecContext(ctx, `
+INSERT INTO deployment_intents (
+    name, model, engine_asset, engine_version, slot, runtime, revision,
+    config_json, desired_state, recovery_state, recovery_policy_json,
+    attempt_count, consecutive_failure_count, observed_restart_count,
+    window_started_at, next_attempt_at, healthy_since, last_exit_code, last_error,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+    model = excluded.model,
+    engine_asset = excluded.engine_asset,
+    engine_version = excluded.engine_version,
+    slot = excluded.slot,
+    runtime = excluded.runtime,
+    revision = excluded.revision,
+    config_json = excluded.config_json,
+    desired_state = excluded.desired_state,
+    recovery_state = excluded.recovery_state,
+    recovery_policy_json = excluded.recovery_policy_json,
+    attempt_count = excluded.attempt_count,
+    consecutive_failure_count = excluded.consecutive_failure_count,
+    observed_restart_count = excluded.observed_restart_count,
+    window_started_at = excluded.window_started_at,
+    next_attempt_at = excluded.next_attempt_at,
+    healthy_since = excluded.healthy_since,
+    last_exit_code = excluded.last_exit_code,
+    last_error = excluded.last_error,
+    updated_at = excluded.updated_at`,
+		intent.Name, intent.Model, intent.EngineAsset, intent.EngineVersion, intent.Slot, intent.Runtime, intent.Revision,
+		configJSON, intent.DesiredState, intent.RecoveryState, policyJSON,
+		intent.AttemptCount, intent.ConsecutiveFailureCount, intent.ObservedRestartCount,
+		deploymentIntentTime(intent.WindowStartedAt), deploymentIntentTime(intent.NextAttemptAt), deploymentIntentTime(intent.HealthySince), intent.LastExitCode, recovery.SanitizeText(intent.LastError),
+		deploymentIntentTime(createdAt), deploymentIntentTime(updatedAt)); err != nil {
+		return fmt.Errorf("upsert deployment intent %s: %w", intent.Name, err)
+	}
+	return nil
+}
+
+func (d *DB) GetDeploymentIntent(ctx context.Context, name string) (*recovery.Intent, error) {
+	intent, err := scanDeploymentIntent(d.db.QueryRowContext(ctx, deploymentIntentSelect+` WHERE name = ?`, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("deployment intent %s not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get deployment intent %s: %w", name, err)
+	}
+	return intent, nil
+}
+
+func (d *DB) ListRunnableDeploymentIntents(ctx context.Context) ([]*recovery.Intent, error) {
+	rows, err := d.db.QueryContext(ctx, deploymentIntentSelect+`
+ WHERE desired_state = ?
+   AND (recovery_state != ? OR
+        (recovery_state = ? AND runtime IN (?, ?) AND next_attempt_at IS NOT NULL))
+ ORDER BY name ASC`, recovery.DesiredRunning, recovery.StateQuarantined,
+		recovery.StateQuarantined, "docker", "k3s")
+	if err != nil {
+		return nil, fmt.Errorf("list runnable deployment intents: %w", err)
+	}
+	defer rows.Close()
+
+	intents := make([]*recovery.Intent, 0)
+	for rows.Next() {
+		intent, err := scanDeploymentIntent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan runnable deployment intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runnable deployment intents: %w", err)
+	}
+	return intents, nil
+}
+
+func (d *DB) ListDeploymentIntents(ctx context.Context) ([]*recovery.Intent, error) {
+	rows, err := d.db.QueryContext(ctx, deploymentIntentSelect+` ORDER BY name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list deployment intents: %w", err)
+	}
+	defer rows.Close()
+
+	intents := make([]*recovery.Intent, 0)
+	for rows.Next() {
+		intent, err := scanDeploymentIntent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan deployment intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deployment intents: %w", err)
+	}
+	return intents, nil
+}
+
+func (d *DB) CompareAndSwapDeploymentIntent(ctx context.Context, intent *recovery.Intent, expectedRevision int64) (bool, error) {
+	if intent == nil {
+		return false, fmt.Errorf("deployment intent is nil")
+	}
+	configJSON, policyJSON, err := marshalDeploymentIntentJSON(intent)
+	if err != nil {
+		return false, err
+	}
+	updatedAt := time.Now().UTC().Truncate(time.Second)
+	result, err := d.db.ExecContext(ctx, `
+UPDATE deployment_intents SET
+    model = ?, engine_asset = ?, engine_version = ?, slot = ?, runtime = ?,
+    revision = revision + 1, config_json = ?, desired_state = ?, recovery_state = ?, recovery_policy_json = ?,
+    attempt_count = ?, consecutive_failure_count = ?, observed_restart_count = ?,
+    window_started_at = ?, next_attempt_at = ?, healthy_since = ?, last_exit_code = ?, last_error = ?, updated_at = ?
+WHERE name = ? AND revision = ?`,
+		intent.Model, intent.EngineAsset, intent.EngineVersion, intent.Slot, intent.Runtime,
+		configJSON, intent.DesiredState, intent.RecoveryState, policyJSON,
+		intent.AttemptCount, intent.ConsecutiveFailureCount, intent.ObservedRestartCount,
+		deploymentIntentTime(intent.WindowStartedAt), deploymentIntentTime(intent.NextAttemptAt), deploymentIntentTime(intent.HealthySince), intent.LastExitCode, recovery.SanitizeText(intent.LastError), deploymentIntentTime(updatedAt),
+		intent.Name, expectedRevision)
+	if err != nil {
+		return false, fmt.Errorf("compare and swap deployment intent %s: %w", intent.Name, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("compare and swap deployment intent %s rows affected: %w", intent.Name, err)
+	}
+	if updated == 1 {
+		intent.Revision = expectedRevision + 1
+		intent.UpdatedAt = updatedAt
+	}
+	return updated == 1, nil
+}
+
+func (d *DB) StopDeploymentIntent(ctx context.Context, name string) error {
+	if _, err := d.db.ExecContext(ctx, `
+UPDATE deployment_intents
+SET desired_state = ?, next_attempt_at = NULL, revision = revision + 1, updated_at = ?
+WHERE name = ?`, recovery.DesiredStopped, deploymentIntentTime(time.Now().UTC()), name); err != nil {
+		return fmt.Errorf("stop deployment intent %s: %w", name, err)
+	}
+	return nil
+}
+
+const deploymentIntentSelect = `
+SELECT name, model, engine_asset, engine_version, slot, runtime, revision,
+       config_json, desired_state, recovery_state, recovery_policy_json,
+       attempt_count, consecutive_failure_count, observed_restart_count,
+       window_started_at, next_attempt_at, healthy_since, last_exit_code, last_error,
+       created_at, updated_at
+FROM deployment_intents`
+
+type deploymentIntentScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDeploymentIntent(row deploymentIntentScanner) (*recovery.Intent, error) {
+	var (
+		intent                             recovery.Intent
+		configJSON, policyJSON             string
+		windowStartedAt, nextAttemptAt     sql.NullString
+		healthySince, createdAt, updatedAt sql.NullString
+		lastExitCode                       sql.NullInt64
+	)
+	if err := row.Scan(
+		&intent.Name, &intent.Model, &intent.EngineAsset, &intent.EngineVersion, &intent.Slot, &intent.Runtime, &intent.Revision,
+		&configJSON, &intent.DesiredState, &intent.RecoveryState, &policyJSON,
+		&intent.AttemptCount, &intent.ConsecutiveFailureCount, &intent.ObservedRestartCount,
+		&windowStartedAt, &nextAttemptAt, &healthySince, &lastExitCode, &intent.LastError, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	config, err := decodeDeploymentIntentConfigJSON(configJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode config JSON: %w", err)
+	}
+	intent.Config = config
+	if err := json.Unmarshal([]byte(policyJSON), &intent.Policy); err != nil {
+		return nil, fmt.Errorf("decode recovery policy JSON: %w", err)
+	}
+	var parseErr error
+	if intent.WindowStartedAt, parseErr = parseDeploymentIntentTime(windowStartedAt); parseErr != nil {
+		return nil, fmt.Errorf("decode window_started_at: %w", parseErr)
+	}
+	if intent.NextAttemptAt, parseErr = parseDeploymentIntentTime(nextAttemptAt); parseErr != nil {
+		return nil, fmt.Errorf("decode next_attempt_at: %w", parseErr)
+	}
+	if intent.HealthySince, parseErr = parseDeploymentIntentTime(healthySince); parseErr != nil {
+		return nil, fmt.Errorf("decode healthy_since: %w", parseErr)
+	}
+	if intent.CreatedAt, parseErr = parseDeploymentIntentTime(createdAt); parseErr != nil {
+		return nil, fmt.Errorf("decode created_at: %w", parseErr)
+	}
+	if intent.UpdatedAt, parseErr = parseDeploymentIntentTime(updatedAt); parseErr != nil {
+		return nil, fmt.Errorf("decode updated_at: %w", parseErr)
+	}
+	if lastExitCode.Valid {
+		value := int(lastExitCode.Int64)
+		intent.LastExitCode = &value
+	}
+	return &intent, nil
+}
+
+func marshalDeploymentIntentJSON(intent *recovery.Intent) (string, string, error) {
+	sanitizedConfig, err := recovery.SanitizeConfigChecked(intent.Config)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent config: %w", err)
+	}
+	configJSON, err := json.Marshal(sanitizedConfig)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent config: %w", err)
+	}
+	policyJSON, err := json.Marshal(intent.Policy)
+	if err != nil {
+		return "", "", fmt.Errorf("encode deployment intent recovery policy: %w", err)
+	}
+	return string(configJSON), string(policyJSON), nil
+}
+
+func decodeDeploymentIntentConfigJSON(value string) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(value))
+	decoder.UseNumber()
+	var config map[string]any
+	if err := decoder.Decode(&config); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("unexpected trailing JSON value")
+		}
+		return nil, err
+	}
+	return config, nil
+}
+
+func deploymentIntentTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseDeploymentIntentTime(value sql.NullString) (time.Time, error) {
+	if !value.Valid || value.String == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, value.String)
+}
+
 func (d *DB) InsertExplorationPlan(ctx context.Context, plan *ExplorationPlanRow) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO exploration_plans (id, tier, trigger, status, plan_json, progress, total, created_at)
@@ -1532,10 +2151,12 @@ func (d *DB) Analyze(ctx context.Context) error {
 func (d *DB) InsertModel(ctx context.Context, m *Model) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params,
-		                    model_class, total_params, active_params, quantization, quant_src, status, download_progress)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                    model_class, ui_role, ui_display_note, ui_display_note_zh, standalone_deploy,
+		                    total_params, active_params, quantization, quant_src, status, download_progress)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams,
-		m.ModelClass, m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status, m.DownloadProgress)
+		m.ModelClass, m.UIRole, m.UIDisplayNote, m.UIDisplayNoteZh, boolPtrToNullBool(m.StandaloneDeploy),
+		m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status, m.DownloadProgress)
 	if err != nil {
 		return fmt.Errorf("insert model %s: %w", m.ID, err)
 	}
@@ -1569,17 +2190,21 @@ func (d *DB) UpsertScannedModel(ctx context.Context, m *Model) error {
 
 	_, err = d.db.ExecContext(ctx,
 		`INSERT INTO models (id, name, type, path, format, size_bytes, detected_arch, detected_params,
-		                    model_class, total_params, active_params, quantization, quant_src, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                    model_class, ui_role, ui_display_note, ui_display_note_zh, standalone_deploy,
+		                    total_params, active_params, quantization, quant_src, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, type=excluded.type, path=excluded.path,
 		   format=excluded.format, size_bytes=excluded.size_bytes,
 		   detected_arch=excluded.detected_arch, detected_params=excluded.detected_params,
-		   model_class=excluded.model_class, total_params=excluded.total_params,
+		   model_class=excluded.model_class, ui_role=excluded.ui_role,
+		   ui_display_note=excluded.ui_display_note, ui_display_note_zh=excluded.ui_display_note_zh,
+		   standalone_deploy=excluded.standalone_deploy, total_params=excluded.total_params,
 		   active_params=excluded.active_params, quantization=excluded.quantization,
 		   quant_src=excluded.quant_src, status=excluded.status`,
 		m.ID, m.Name, m.Type, m.Path, m.Format, m.SizeBytes, m.DetectedArch, m.DetectedParams,
-		m.ModelClass, m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status)
+		m.ModelClass, m.UIRole, m.UIDisplayNote, m.UIDisplayNoteZh, boolPtrToNullBool(m.StandaloneDeploy),
+		m.TotalParams, m.ActiveParams, m.Quantization, m.QuantSrc, m.Status)
 	if err != nil {
 		return fmt.Errorf("upsert scanned model %s: %w", m.ID, err)
 	}
@@ -1591,14 +2216,17 @@ func (d *DB) GetModel(ctx context.Context, id string) (*Model, error) {
 	err := d.db.QueryRowContext(ctx,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
-		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(model_class,''), COALESCE(ui_role,''), COALESCE(ui_display_note,''),
+		        COALESCE(ui_display_note_zh,''), standalone_deploy,
+		        COALESCE(total_params,0), COALESCE(active_params,0),
 		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE id = ? OR name = ?
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
 		 LIMIT 1`, id, id, id).Scan(
 		&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-		&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+		&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.UIRole, &m.UIDisplayNote,
+		&m.UIDisplayNoteZh, nullBoolPtrScanner(&m.StandaloneDeploy), &m.TotalParams, &m.ActiveParams,
 		&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("model %s not found", id)
@@ -1613,7 +2241,9 @@ func (d *DB) ListModels(ctx context.Context) ([]*Model, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
-		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(model_class,''), COALESCE(ui_role,''), COALESCE(ui_display_note,''),
+		        COALESCE(ui_display_note_zh,''), standalone_deploy,
+		        COALESCE(total_params,0), COALESCE(active_params,0),
 		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models ORDER BY created_at DESC`)
@@ -1625,7 +2255,8 @@ func (d *DB) ListModels(ctx context.Context) ([]*Model, error) {
 	for rows.Next() {
 		m := &Model{}
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.UIRole, &m.UIDisplayNote,
+			&m.UIDisplayNoteZh, nullBoolPtrScanner(&m.StandaloneDeploy), &m.TotalParams, &m.ActiveParams,
 			&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan model row: %w", err)
 		}
@@ -1652,13 +2283,17 @@ func (d *DB) FindModelByName(ctx context.Context, name string) (*Model, error) {
 	queries := []string{
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
-		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(model_class,''), COALESCE(ui_role,''), COALESCE(ui_display_note,''),
+		        COALESCE(ui_display_note_zh,''), standalone_deploy,
+		        COALESCE(total_params,0), COALESCE(active_params,0),
 		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE LOWER(name) = LOWER(?) ORDER BY created_at DESC LIMIT 1`,
 		`SELECT id, name, type, path, COALESCE(format,''), COALESCE(size_bytes,0),
 		        COALESCE(detected_arch,''), COALESCE(detected_params,''),
-		        COALESCE(model_class,''), COALESCE(total_params,0), COALESCE(active_params,0),
+		        COALESCE(model_class,''), COALESCE(ui_role,''), COALESCE(ui_display_note,''),
+		        COALESCE(ui_display_note_zh,''), standalone_deploy,
+		        COALESCE(total_params,0), COALESCE(active_params,0),
 		        COALESCE(quantization,''), COALESCE(quant_src,''),
 		        COALESCE(status,'registered'), COALESCE(download_progress,0), created_at
 		 FROM models WHERE LOWER(name) LIKE '%' || LOWER(?) || '%' ORDER BY created_at DESC LIMIT 1`,
@@ -1667,7 +2302,8 @@ func (d *DB) FindModelByName(ctx context.Context, name string) (*Model, error) {
 		m := &Model{}
 		err := d.db.QueryRowContext(ctx, q, name).Scan(
 			&m.ID, &m.Name, &m.Type, &m.Path, &m.Format, &m.SizeBytes,
-			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.TotalParams, &m.ActiveParams,
+			&m.DetectedArch, &m.DetectedParams, &m.ModelClass, &m.UIRole, &m.UIDisplayNote,
+			&m.UIDisplayNoteZh, nullBoolPtrScanner(&m.StandaloneDeploy), &m.TotalParams, &m.ActiveParams,
 			&m.Quantization, &m.QuantSrc, &m.Status, &m.DownloadProgress, &m.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
@@ -1694,43 +2330,142 @@ func (d *DB) DeleteModel(ctx context.Context, id string) error {
 
 // Engines CRUD
 
-func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
-	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
+const engineSelectColumns = `
+id, type, image, tag, COALESCE(size_bytes, 0), COALESCE(platform, ''),
+COALESCE(runtime_type, 'container'), COALESCE(binary_path, ''), COALESCE(available, 0),
+COALESCE(asset_name, ''), COALESCE(version, ''), COALESCE(catalog_version, ''),
+COALESCE(detected_version, ''), COALESCE(version_match, 'unknown'),
+COALESCE(origin, 'legacy'), COALESCE(content_digest, ''), COALESCE(location, ''),
+COALESCE(active, 0), COALESCE(lifecycle_status, 'discovered'),
+COALESCE(verification_status, 'unverified'), COALESCE(previous_engine_id, ''), created_at`
+
+type engineRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEngineRow(scanner engineRowScanner) (*Engine, error) {
+	e := &Engine{}
+	err := scanner.Scan(
+		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform,
+		&e.RuntimeType, &e.BinaryPath, &e.Available, &e.AssetName,
+		&e.Version, &e.CatalogVersion, &e.DetectedVersion, &e.VersionMatch, &e.Origin, &e.ContentDigest,
+		&e.Location, &e.Active, &e.LifecycleStatus, &e.VerificationStatus,
+		&e.PreviousEngineID, &e.CreatedAt,
+	)
 	if err != nil {
-		return fmt.Errorf("insert engine %s: %w", e.ID, err)
+		return nil, err
+	}
+	return e, nil
+}
+
+func normalizeEngineForStorage(e *Engine) (Engine, error) {
+	if e == nil {
+		return Engine{}, fmt.Errorf("engine is nil")
+	}
+	stored := *e
+	if stored.Origin == "" {
+		stored.Origin = "legacy"
+	}
+	if stored.Location == "" {
+		stored.Location = stored.BinaryPath
+		if stored.Location == "" && stored.Image != "" {
+			stored.Location = stored.Image
+			if stored.Tag != "" {
+				stored.Location += ":" + stored.Tag
+			}
+		}
+	}
+	if stored.LifecycleStatus == "" {
+		stored.LifecycleStatus = "discovered"
+		if stored.Active {
+			stored.LifecycleStatus = "active"
+		}
+	}
+	if stored.VerificationStatus == "" {
+		stored.VerificationStatus = "unverified"
+	}
+	if stored.VersionMatch == "" {
+		stored.VersionMatch = "unknown"
+	}
+	return stored, nil
+}
+
+func (d *DB) InsertEngine(ctx context.Context, e *Engine) error {
+	stored, err := normalizeEngineForStorage(e)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.ExecContext(ctx,
+		`INSERT INTO engines (
+			id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available,
+			asset_name, version, catalog_version, detected_version, version_match, origin, content_digest, location, active,
+			lifecycle_status, verification_status, previous_engine_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stored.ID, stored.Type, stored.Image, stored.Tag, stored.SizeBytes, stored.Platform,
+		stored.RuntimeType, stored.BinaryPath, stored.Available, stored.AssetName, stored.Version,
+		stored.CatalogVersion, stored.DetectedVersion, stored.VersionMatch, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
+		stored.LifecycleStatus, stored.VerificationStatus, stored.PreviousEngineID)
+	if err != nil {
+		return fmt.Errorf("insert engine %s: %w", stored.ID, err)
 	}
 	return nil
 }
 
 // UpsertScannedEngine inserts a new engine or updates an existing one.
 func (d *DB) UpsertScannedEngine(ctx context.Context, e *Engine) error {
-	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO engines (id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	stored, err := normalizeEngineForStorage(e)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.ExecContext(ctx,
+		`INSERT INTO engines (
+			id, type, image, tag, size_bytes, platform, runtime_type, binary_path, available,
+			asset_name, version, catalog_version, detected_version, version_match, origin, content_digest, location, active,
+			lifecycle_status, verification_status, previous_engine_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   type=excluded.type, image=excluded.image, tag=excluded.tag,
 		   size_bytes=excluded.size_bytes, platform=excluded.platform,
 		   runtime_type=excluded.runtime_type, binary_path=excluded.binary_path,
-		   available=excluded.available`,
-		e.ID, e.Type, e.Image, e.Tag, e.SizeBytes, e.Platform, e.RuntimeType, e.BinaryPath, e.Available)
+		   available=excluded.available,
+		   asset_name=COALESCE(NULLIF(excluded.asset_name, ''), engines.asset_name),
+		   version=COALESCE(NULLIF(excluded.version, ''), engines.version),
+		   catalog_version=COALESCE(NULLIF(excluded.catalog_version, ''), engines.catalog_version),
+		   detected_version=COALESCE(NULLIF(excluded.detected_version, ''), engines.detected_version),
+		   version_match=COALESCE(NULLIF(excluded.version_match, ''), engines.version_match),
+		   origin=CASE
+		     WHEN engines.origin IN ('managed', 'imported') THEN engines.origin
+		     WHEN excluded.origin = 'legacy' AND engines.origin <> 'legacy' THEN engines.origin
+		     ELSE excluded.origin
+		   END,
+		   content_digest=COALESCE(NULLIF(excluded.content_digest, ''), engines.content_digest),
+		   location=COALESCE(NULLIF(excluded.location, ''), engines.location),
+		   active=engines.active,
+		   lifecycle_status=CASE
+		     WHEN engines.active = 1 THEN 'active'
+		     WHEN engines.lifecycle_status IN ('staged', 'verified')
+		          AND excluded.lifecycle_status = 'discovered' THEN engines.lifecycle_status
+		     ELSE excluded.lifecycle_status
+		   END,
+		   verification_status=CASE
+		     WHEN engines.verification_status = 'verified'
+		          AND excluded.verification_status = 'unverified' THEN engines.verification_status
+		     ELSE excluded.verification_status
+		   END,
+		   previous_engine_id=engines.previous_engine_id`,
+		stored.ID, stored.Type, stored.Image, stored.Tag, stored.SizeBytes, stored.Platform,
+		stored.RuntimeType, stored.BinaryPath, stored.Available, stored.AssetName, stored.Version,
+		stored.CatalogVersion, stored.DetectedVersion, stored.VersionMatch, stored.Origin, stored.ContentDigest, stored.Location, stored.Active,
+		stored.LifecycleStatus, stored.VerificationStatus, stored.PreviousEngineID)
 	if err != nil {
-		return fmt.Errorf("upsert scanned engine %s: %w", e.ID, err)
+		return fmt.Errorf("upsert scanned engine %s: %w", stored.ID, err)
 	}
 	return nil
 }
 
 func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
-	e := &Engine{}
-	err := d.db.QueryRowContext(ctx,
-		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
-		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
-		        available, created_at
-		 FROM engines WHERE id = ?`, id).Scan(
-		&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes, &e.Platform,
-		&e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt)
+	e, err := scanEngineRow(d.db.QueryRowContext(ctx,
+		`SELECT `+engineSelectColumns+` FROM engines WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("engine %s not found", id)
 	}
@@ -1742,24 +2477,378 @@ func (d *DB) GetEngine(ctx context.Context, id string) (*Engine, error) {
 
 func (d *DB) ListEngines(ctx context.Context) ([]*Engine, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, type, image, tag, COALESCE(size_bytes,0), COALESCE(platform,''),
-		        COALESCE(runtime_type,'container'), COALESCE(binary_path,''),
-		        available, created_at
-		 FROM engines WHERE available = 1 ORDER BY created_at DESC`)
+		`SELECT `+engineSelectColumns+`
+		 FROM engines ORDER BY available DESC, created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list engines: %w", err)
 	}
 	defer rows.Close()
 	engines := make([]*Engine, 0)
 	for rows.Next() {
-		e := &Engine{}
-		if err := rows.Scan(&e.ID, &e.Type, &e.Image, &e.Tag, &e.SizeBytes,
-			&e.Platform, &e.RuntimeType, &e.BinaryPath, &e.Available, &e.CreatedAt); err != nil {
+		e, err := scanEngineRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan engine row: %w", err)
 		}
 		engines = append(engines, e)
 	}
 	return engines, rows.Err()
+}
+
+func (d *DB) ListEngineVersions(ctx context.Context, assetName, platform, runtimeType string) ([]*Engine, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT `+engineSelectColumns+`
+		   FROM engines
+		  WHERE asset_name = ? AND platform = ? AND runtime_type = ?
+		  ORDER BY active DESC, created_at DESC, id`, assetName, platform, runtimeType)
+	if err != nil {
+		return nil, fmt.Errorf("list versions for engine asset %s: %w", assetName, err)
+	}
+	defer rows.Close()
+
+	engines := make([]*Engine, 0)
+	for rows.Next() {
+		e, err := scanEngineRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan engine version row: %w", err)
+		}
+		engines = append(engines, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list versions for engine asset %s: %w", assetName, err)
+	}
+	return engines, nil
+}
+
+func (d *DB) ActivateEngineVersion(ctx context.Context, id string) (string, error) {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin engine activation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	candidate, err := scanEngineRow(tx.QueryRowContext(ctx,
+		`SELECT `+engineSelectColumns+` FROM engines WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("engine %s not found", id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read engine %s for activation: %w", id, err)
+	}
+	if !candidate.Available {
+		return "", fmt.Errorf("engine %s is unavailable", id)
+	}
+	if candidate.VerificationStatus != "verified" {
+		return "", fmt.Errorf("engine %s verification status is %q, want verified", id, candidate.VerificationStatus)
+	}
+	if candidate.LifecycleStatus != "verified" && candidate.LifecycleStatus != "active" {
+		return "", fmt.Errorf("engine %s lifecycle status %q cannot be activated", id, candidate.LifecycleStatus)
+	}
+	if candidate.AssetName == "" {
+		return "", fmt.Errorf("engine %s has no asset name", id)
+	}
+
+	current, err := scanEngineRow(tx.QueryRowContext(ctx,
+		`SELECT `+engineSelectColumns+`
+		   FROM engines
+		  WHERE asset_name = ? AND platform = ? AND runtime_type = ? AND active = 1`,
+		candidate.AssetName, candidate.Platform, candidate.RuntimeType))
+	if errors.Is(err, sql.ErrNoRows) {
+		current = nil
+	} else if err != nil {
+		return "", fmt.Errorf("read active version for engine asset %s: %w", candidate.AssetName, err)
+	}
+	if current != nil && current.ID == candidate.ID {
+		if err := tx.Commit(); err != nil {
+			return "", fmt.Errorf("commit engine activation: %w", err)
+		}
+		return candidate.PreviousEngineID, nil
+	}
+
+	previousID := ""
+	if current != nil {
+		previousID = current.ID
+		result, err := tx.ExecContext(ctx,
+			`UPDATE engines SET active = 0, lifecycle_status = 'verified' WHERE id = ? AND active = 1`,
+			current.ID)
+		if err != nil {
+			return "", fmt.Errorf("deactivate engine %s: %w", current.ID, err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return "", fmt.Errorf("confirm deactivation of engine %s: %w", current.ID, err)
+			}
+			return "", fmt.Errorf("engine %s changed during activation", current.ID)
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, `
+UPDATE engines
+   SET active = 1, lifecycle_status = 'active', previous_engine_id = ?
+ WHERE id = ? AND active = 0 AND available = 1
+   AND verification_status = 'verified'
+   AND lifecycle_status IN ('verified', 'active')`, previousID, candidate.ID)
+	if err != nil {
+		return "", fmt.Errorf("activate engine %s: %w", candidate.ID, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return "", fmt.Errorf("confirm activation of engine %s: %w", candidate.ID, err)
+		}
+		return "", fmt.Errorf("engine %s changed during activation", candidate.ID)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit engine activation: %w", err)
+	}
+	return previousID, nil
+}
+
+func (d *DB) RollbackEngineVersion(ctx context.Context, activeID string) (string, error) {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin engine rollback: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanEngineRow(tx.QueryRowContext(ctx,
+		`SELECT `+engineSelectColumns+` FROM engines WHERE id = ?`, activeID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("engine %s not found", activeID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read engine %s for rollback: %w", activeID, err)
+	}
+	if !current.Active {
+		return "", fmt.Errorf("engine %s is not active", activeID)
+	}
+	if current.PreviousEngineID == "" {
+		return "", fmt.Errorf("engine %s has no previous version", activeID)
+	}
+
+	previous, err := scanEngineRow(tx.QueryRowContext(ctx,
+		`SELECT `+engineSelectColumns+` FROM engines WHERE id = ?`, current.PreviousEngineID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("previous engine %s not found", current.PreviousEngineID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read previous engine %s: %w", current.PreviousEngineID, err)
+	}
+	if previous.ID == current.ID {
+		return "", fmt.Errorf("engine %s references itself as the previous version", activeID)
+	}
+	if !previous.Available {
+		return "", fmt.Errorf("previous engine %s is unavailable", previous.ID)
+	}
+	if previous.VerificationStatus != "verified" {
+		return "", fmt.Errorf("previous engine %s verification status is %q, want verified", previous.ID, previous.VerificationStatus)
+	}
+	if previous.LifecycleStatus != "verified" && previous.LifecycleStatus != "active" {
+		return "", fmt.Errorf("previous engine %s lifecycle status %q is not verified", previous.ID, previous.LifecycleStatus)
+	}
+	if previous.AssetName != current.AssetName || previous.Platform != current.Platform || previous.RuntimeType != current.RuntimeType {
+		return "", fmt.Errorf("previous engine %s does not match active engine asset, platform, and runtime", previous.ID)
+	}
+
+	result, err := tx.ExecContext(ctx,
+		`UPDATE engines SET active = 0, lifecycle_status = 'verified' WHERE id = ? AND active = 1`,
+		current.ID)
+	if err != nil {
+		return "", fmt.Errorf("deactivate engine %s for rollback: %w", current.ID, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return "", fmt.Errorf("confirm rollback deactivation of engine %s: %w", current.ID, err)
+		}
+		return "", fmt.Errorf("engine %s changed during rollback", current.ID)
+	}
+
+	result, err = tx.ExecContext(ctx, `
+UPDATE engines
+   SET active = 1, lifecycle_status = 'active', previous_engine_id = ?
+ WHERE id = ? AND active = 0 AND available = 1
+   AND verification_status = 'verified'
+   AND lifecycle_status IN ('verified', 'active')`, current.ID, previous.ID)
+	if err != nil {
+		return "", fmt.Errorf("activate previous engine %s: %w", previous.ID, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return "", fmt.Errorf("confirm rollback activation of engine %s: %w", previous.ID, err)
+		}
+		return "", fmt.Errorf("previous engine %s changed during rollback", previous.ID)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit engine rollback: %w", err)
+	}
+	return previous.ID, nil
+}
+
+func (d *DB) EngineHasReferences(ctx context.Context, id string) (bool, error) {
+	var exists, active, rollbackLink, deployment bool
+	err := d.db.QueryRowContext(ctx, `
+SELECT
+    EXISTS(SELECT 1 FROM engines WHERE id = ?),
+    EXISTS(SELECT 1 FROM engines WHERE id = ? AND active = 1),
+    EXISTS(SELECT 1 FROM engines WHERE previous_engine_id = ?),
+    EXISTS(
+        SELECT 1
+          FROM deployment_intents AS intent
+          JOIN engines AS target
+            ON target.id = ?
+           AND intent.engine_asset = target.asset_name
+           AND intent.engine_version = target.version
+    )`, id, id, id, id).Scan(&exists, &active, &rollbackLink, &deployment)
+	if err != nil {
+		return false, fmt.Errorf("check engine %s references: %w", id, err)
+	}
+	if !exists {
+		return false, fmt.Errorf("engine %s not found", id)
+	}
+	return active || rollbackLink || deployment, nil
+}
+
+func (d *DB) UpsertExternalService(ctx context.Context, s *ExternalService) error {
+	if s == nil {
+		return fmt.Errorf("external service is nil")
+	}
+	now := time.Now().UTC()
+	if s.Status == "" {
+		s.Status = "reachable"
+	}
+	if s.Source == "" {
+		s.Source = "scan"
+	}
+	if s.ModelsJSON == "" {
+		s.ModelsJSON = "[]"
+	}
+	if s.ImportedModelsJSON == "" {
+		s.ImportedModelsJSON = "[]"
+	}
+	if s.MetadataJSON == "" {
+		s.MetadataJSON = "{}"
+	}
+	imported := 0
+	if s.Imported {
+		imported = 1
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO external_services
+		   (id, base_url, kind, status, source, models_json, metadata_json, last_error, imported, imported_models_json, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(base_url) DO UPDATE SET
+		   id=excluded.id,
+		   kind=excluded.kind,
+		   status=excluded.status,
+		   source=excluded.source,
+		   models_json=excluded.models_json,
+		   metadata_json=excluded.metadata_json,
+		   last_error=excluded.last_error,
+		   last_seen_at=excluded.last_seen_at`,
+		s.ID, s.BaseURL, s.Kind, s.Status, s.Source, s.ModelsJSON, s.MetadataJSON, s.LastError, imported, s.ImportedModelsJSON, now, now)
+	if err != nil {
+		return fmt.Errorf("upsert external service %s: %w", s.BaseURL, err)
+	}
+	return nil
+}
+
+func (d *DB) SetExternalServiceImported(ctx context.Context, idOrBaseURL string, imported bool) error {
+	value := 0
+	if imported {
+		value = 1
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE external_services SET imported = ? WHERE id = ? OR base_url = ?`,
+		value, idOrBaseURL, idOrBaseURL)
+	if err != nil {
+		return fmt.Errorf("set external service imported %s: %w", idOrBaseURL, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("external service %s not found", idOrBaseURL)
+	}
+	return nil
+}
+
+func (d *DB) SetExternalServiceImportedModels(ctx context.Context, idOrBaseURL string, imported bool, models []string) error {
+	value := 0
+	if imported {
+		value = 1
+	}
+	modelsJSON, err := marshalStringList(models)
+	if err != nil {
+		return fmt.Errorf("marshal imported models for %s: %w", idOrBaseURL, err)
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE external_services SET imported = ?, imported_models_json = ? WHERE id = ? OR base_url = ?`,
+		value, modelsJSON, idOrBaseURL, idOrBaseURL)
+	if err != nil {
+		return fmt.Errorf("set external service imported models %s: %w", idOrBaseURL, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("external service %s not found", idOrBaseURL)
+	}
+	return nil
+}
+
+func marshalStringList(values []string) (string, error) {
+	cleaned := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	data, err := json.Marshal(cleaned)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (d *DB) SetExternalServiceStatus(ctx context.Context, idOrBaseURL, status, lastError string) error {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return fmt.Errorf("external service status is required")
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE external_services SET status = ?, last_error = ? WHERE id = ? OR base_url = ?`,
+		status, strings.TrimSpace(lastError), idOrBaseURL, idOrBaseURL)
+	if err != nil {
+		return fmt.Errorf("set external service status %s: %w", idOrBaseURL, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("external service %s not found", idOrBaseURL)
+	}
+	return nil
+}
+
+func (d *DB) ListExternalServices(ctx context.Context) ([]*ExternalService, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, base_url, kind, status, source,
+		        COALESCE(models_json,'[]'), COALESCE(metadata_json,'{}'), COALESCE(last_error,''), COALESCE(imported,0),
+		        COALESCE(imported_models_json,'[]'),
+		        first_seen_at, last_seen_at
+		   FROM external_services
+		  ORDER BY last_seen_at DESC, base_url ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list external services: %w", err)
+	}
+	defer rows.Close()
+	services := make([]*ExternalService, 0)
+	for rows.Next() {
+		s := &ExternalService{}
+		if err := rows.Scan(&s.ID, &s.BaseURL, &s.Kind, &s.Status, &s.Source,
+			&s.ModelsJSON, &s.MetadataJSON, &s.LastError, &s.Imported, &s.ImportedModelsJSON, &s.FirstSeenAt, &s.LastSeenAt); err != nil {
+			return nil, fmt.Errorf("scan external service row: %w", err)
+		}
+		services = append(services, s)
+	}
+	return services, rows.Err()
 }
 
 // LookupEngineAssetMetadata resolves version/image for an engine reference.
@@ -2481,6 +3570,38 @@ func (d *DB) LogAction(ctx context.Context, entry *AuditEntry) error {
 		return fmt.Errorf("log action %s: %w", entry.ToolName, err)
 	}
 	return nil
+}
+
+// LogRecoveryEvent stores a redacted recovery-controller event in the shared
+// audit stream. The event payload is JSON so callers can query lifecycle
+// metadata without adding a recovery-specific table or schema migration.
+func (d *DB) LogRecoveryEvent(ctx context.Context, event recovery.AuditEvent) error {
+	event.Source = strings.TrimSpace(event.Source)
+	if event.Source == "" {
+		event.Source = recovery.AuditSourceReconciler
+	}
+	event.Type = strings.TrimSpace(event.Type)
+	if event.Type == "" {
+		return fmt.Errorf("recovery audit event type is empty")
+	}
+	event.Reason = recovery.SanitizeText(event.Reason)
+	arguments, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal recovery audit event %s: %w", event.Type, err)
+	}
+	resultSummary := recovery.SanitizeText(strings.TrimSpace(event.Result))
+	if event.Reason != "" {
+		if resultSummary != "" {
+			resultSummary += ": "
+		}
+		resultSummary += event.Reason
+	}
+	return d.LogAction(ctx, &AuditEntry{
+		AgentType:     event.Source,
+		ToolName:      "deployment.recovery." + event.Type,
+		Arguments:     string(arguments),
+		ResultSummary: resultSummary,
+	})
 }
 
 // ListConfigurations returns configurations matching optional filters.

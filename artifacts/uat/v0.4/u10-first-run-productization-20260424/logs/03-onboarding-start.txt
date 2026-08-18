@@ -1,0 +1,20 @@
+AIMA first-run guide
+Hardware: darwin / arm64, RAM=16384 MiB, profile=(none)
+GPU: (none)
+Stack: docker=skipped k3s=skipped needs_init=false
+Scan: engines=0 models=6 central_connected=false configs=0 benchmarks=0
+Recommendations: 10 of 28 models evaluated
+
+[1] qwen3-4b (qwen, 4B, llm) score=62 local=true engine=llamacpp/llamacpp-universal
+    reason: fits in single GPU, ~50 tok/s expected
+[2] qwen3-8b (qwen, 8B, llm) score=55 local=false engine=llamacpp/llamacpp-universal
+    reason: fits in single GPU, ~40 tok/s expected
+[3] qwen3-14b (qwen, 14B, llm) score=47 local=false engine=llamacpp/llamacpp-universal
+    reason: fits in single GPU, ~25 tok/s expected
+[4] qwen3.5-9b (qwen, 9B, vlm) score=46 local=false engine=llamacpp/llamacpp-universal
+    reason: fits in single GPU, ~40 tok/s expected
+[5] litetts-mnn (litetts, ~50M, tts) score=26 local=false engine=litetts/litetts
+    reason: fits in single GPU
+
+Next: aima run qwen3-4b
+Keep the local API/UI open with: aima serve

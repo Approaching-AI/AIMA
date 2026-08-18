@@ -16,8 +16,50 @@ func newOpenClawCmd(app *App) *cobra.Command {
 		newOpenClawSyncCmd(app),
 		newOpenClawStatusCmd(app),
 		newOpenClawClaimCmd(app),
+		newOpenClawExcludeCmd(app),
+		newOpenClawIncludeCmd(app),
 	)
 	return cmd
+}
+
+func newOpenClawExcludeCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "exclude <model>",
+		Short: "Revoke a model from OpenClaw sync (persistent, reversible)",
+		Long: "Removes the model from openclaw.json and marks it so future syncs (including the auto-sync loop) skip it. " +
+			"The model keeps serving in AIMA; only its OpenClaw exposure is revoked. Reversible with 'aima openclaw include <model>'.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps == nil || app.ToolDeps.OpenClawExclude == nil {
+				return fmt.Errorf("openclaw integration not available")
+			}
+			data, err := app.ToolDeps.OpenClawExclude(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			cmd.Println(formatJSON(data))
+			return nil
+		},
+	}
+}
+
+func newOpenClawIncludeCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "include <model>",
+		Short: "Restore a previously revoked model so sync re-adds it to OpenClaw",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps == nil || app.ToolDeps.OpenClawInclude == nil {
+				return fmt.Errorf("openclaw integration not available")
+			}
+			data, err := app.ToolDeps.OpenClawInclude(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			cmd.Println(formatJSON(data))
+			return nil
+		},
+	}
 }
 
 func newOpenClawSyncCmd(app *App) *cobra.Command {

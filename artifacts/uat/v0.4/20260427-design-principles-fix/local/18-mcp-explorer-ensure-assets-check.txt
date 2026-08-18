@@ -1,0 +1,1 @@
+PASS benchmark.ensure_assets absent

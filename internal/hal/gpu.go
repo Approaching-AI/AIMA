@@ -128,6 +128,15 @@ func detectGPU(ctx context.Context, runner CommandRunner) *GPUInfo {
 			return gpu
 		}
 	}
+	// Platform fallback (Windows CIM) for hosts without a vendor SMI tool on PATH.
+	if gpu := detectPlatformGPU(ctx, runner); gpu != nil {
+		enrichGPU(ctx, runner, gpu)
+		return gpu
+	}
+	if gpu := detectAMDDRM(ctx, runner); gpu != nil {
+		enrichGPU(ctx, runner, gpu)
+		return gpu
+	}
 	return nil
 }
 
@@ -358,6 +367,32 @@ func enrichNvidiaGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 
 // enrichAMDGPU supplements GPUInfo with SDK and driver version from system tools.
 func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	// rocm-smi reports only the small dedicated VRAM carve-out on some AMD
+	// unified-memory APUs (for example 512 MiB on Strix Halo), while the usable
+	// GPU-addressable pool is exposed as GTT in DRM sysfs. Merge the sysfs
+	// identity/memory view even when rocm-smi was the successful primary probe.
+	if sysfsGPU := detectAMDDRM(ctx, runner); sysfsGPU != nil {
+		genericName := strings.EqualFold(strings.TrimSpace(gpu.Name), "AMD Radeon Graphics") ||
+			strings.EqualFold(strings.TrimSpace(gpu.Name), "AMD GPU")
+		if strings.TrimSpace(gpu.Name) == "" || genericName {
+			gpu.Name = sysfsGPU.Name
+		}
+		if gpu.ComputeID == "" {
+			gpu.ComputeID = sysfsGPU.ComputeID
+		}
+		if gpu.Arch == "" || gpu.Arch == "unknown" {
+			gpu.Arch = sysfsGPU.Arch
+		}
+		if sysfsGPU.UnifiedMemory {
+			gpu.UnifiedMemory = true
+			if sysfsGPU.VRAMMiB > gpu.VRAMMiB {
+				gpu.VRAMMiB = sysfsGPU.VRAMMiB
+			}
+		}
+		if sysfsGPU.Count > gpu.Count {
+			gpu.Count = sysfsGPU.Count
+		}
+	}
 	if gpu.SDKVersion == "" {
 		if out, err := runner.Run(ctx, "cat", "/opt/rocm/.info/version"); err == nil {
 			if ver := strings.TrimSpace(string(out)); ver != "" {
@@ -643,6 +678,177 @@ func gfxVersionToArch(gfxVer string) string {
 	default:
 		return ""
 	}
+}
+
+// detectAMDDRM detects AMD GPUs via Linux DRM sysfs when ROCm user-space tools
+// (rocm-smi/rocminfo) are not installed. This keeps APU hosts deployable with
+// only the kernel amdgpu driver and /dev/kfd available.
+func detectAMDDRM(ctx context.Context, runner CommandRunner) *GPUInfo {
+	lspci := ""
+	if out, err := runner.Run(ctx, "lspci", "-nn", "-D"); err == nil {
+		lspci = string(out)
+	}
+
+	var count int
+	var name, computeID, arch string
+	var vramMiB int
+	var unified bool
+
+	for i := 0; i < 32; i++ {
+		card := "card" + strconv.Itoa(i)
+		base := "/sys/class/drm/" + card + "/device"
+
+		vendorOut, err := runner.Run(ctx, "cat", base+"/vendor")
+		if err != nil || normalizePCIHex(string(vendorOut)) != "1002" {
+			continue
+		}
+
+		uevent := ""
+		if out, err := runner.Run(ctx, "cat", base+"/uevent"); err == nil {
+			uevent = string(out)
+			if !strings.Contains(uevent, "DRIVER=amdgpu") && !strings.Contains(uevent, "PCI_ID=1002:") {
+				continue
+			}
+		}
+
+		deviceID := ""
+		if out, err := runner.Run(ctx, "cat", base+"/device"); err == nil {
+			deviceID = normalizePCIHex(string(out))
+		}
+		if deviceID == "" {
+			deviceID = amdDeviceIDFromUevent(uevent)
+		}
+
+		count++
+		if name == "" {
+			info := amdPCIToInfo(deviceID)
+			name = firstNonEmptyString(info.name, amdNameFromLspci(lspci, deviceID), "AMD GPU")
+			computeID = firstNonEmptyString(readAMDGFXID(ctx, runner, base), info.computeID)
+			arch = firstNonEmptyString(gfxVersionToArch(computeID), amdGPUToArch(name), "unknown")
+			unified = info.unified || amdSysfsLooksUnified(ctx, runner, base)
+			if unified {
+				vramMiB = readSysfsBytesMiB(ctx, runner, base+"/mem_info_gtt_total")
+			} else {
+				vramMiB = readSysfsBytesMiB(ctx, runner, base+"/mem_info_vram_total")
+			}
+		}
+	}
+
+	if count == 0 {
+		return nil
+	}
+
+	return &GPUInfo{
+		Vendor:        "amd",
+		Name:          name,
+		Arch:          arch,
+		ComputeID:     computeID,
+		VRAMMiB:       vramMiB,
+		UnifiedMemory: unified,
+		Count:         count,
+	}
+}
+
+type amdPCIInfo struct {
+	name      string
+	computeID string
+	unified   bool
+}
+
+func amdPCIToInfo(deviceID string) amdPCIInfo {
+	switch normalizePCIHex(deviceID) {
+	case "1586":
+		return amdPCIInfo{name: "AMD Radeon 8060S Graphics", computeID: "gfx1151", unified: true}
+	default:
+		return amdPCIInfo{}
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func normalizePCIHex(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.ToLower(s), "0x")
+	return strings.ToUpper(s)
+}
+
+func amdDeviceIDFromUevent(uevent string) string {
+	for _, line := range strings.Split(uevent, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "PCI_ID=") {
+			continue
+		}
+		_, device, ok := strings.Cut(strings.TrimPrefix(line, "PCI_ID="), ":")
+		if ok {
+			return normalizePCIHex(device)
+		}
+	}
+	return ""
+}
+
+func amdNameFromLspci(output, deviceID string) string {
+	deviceID = normalizePCIHex(deviceID)
+	if output == "" || deviceID == "" {
+		return ""
+	}
+	needle := "[1002:" + deviceID + "]"
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(strings.ToUpper(line), needle) {
+			continue
+		}
+		if idx := strings.Index(line, ": Advanced Micro Devices"); idx >= 0 {
+			return strings.TrimSpace(line[idx+2:])
+		}
+		return strings.TrimSpace(line)
+	}
+	return ""
+}
+
+func readAMDGFXID(ctx context.Context, runner CommandRunner, base string) string {
+	major, okMajor := readSysfsInt(ctx, runner, base+"/ip_discovery/die/0/GC/0/major")
+	minor, okMinor := readSysfsInt(ctx, runner, base+"/ip_discovery/die/0/GC/0/minor")
+	revision, okRevision := readSysfsInt(ctx, runner, base+"/ip_discovery/die/0/GC/0/revision")
+	if !okMajor || !okMinor || !okRevision {
+		return ""
+	}
+	return "gfx" + strconv.Itoa(major) + strconv.Itoa(minor) + strconv.Itoa(revision)
+}
+
+func amdSysfsLooksUnified(ctx context.Context, runner CommandRunner, base string) bool {
+	vram := readSysfsBytesMiB(ctx, runner, base+"/mem_info_vram_total")
+	gtt := readSysfsBytesMiB(ctx, runner, base+"/mem_info_gtt_total")
+	return vram > 0 && vram <= 1024 && gtt >= 16384
+}
+
+func readSysfsBytesMiB(ctx context.Context, runner CommandRunner, path string) int {
+	out, err := runner.Run(ctx, "cat", path)
+	if err != nil {
+		return 0
+	}
+	bytes, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil || bytes <= 0 {
+		return 0
+	}
+	return bytesToMiB(bytes)
+}
+
+func readSysfsInt(ctx context.Context, runner CommandRunner, path string) (int, bool) {
+	out, err := runner.Run(ctx, "cat", path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // --- Intel ---

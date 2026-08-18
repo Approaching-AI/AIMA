@@ -682,6 +682,18 @@ func TestPathLooksCompatibleRejectsQuantizationMismatch(t *testing.T) {
 	}
 }
 
+func TestDetectQuantizationUsesNestedTextConfigDtype(t *testing.T) {
+	quant, src := detectQuantization(map[string]any{
+		"model_type": "qwen3_5_moe",
+		"text_config": map[string]any{
+			"dtype": "bfloat16",
+		},
+	}, "model-00001-of-00001.safetensors", "safetensors")
+	if quant != "bf16" || src != "config" {
+		t.Fatalf("expected nested text_config dtype to detect bf16 from config, got quant=%q src=%q", quant, src)
+	}
+}
+
 func TestPathLooksCompatibleAcceptsGGUFQuantization(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "Qwen3-4B-Q4_K_M.gguf")
 	if err := os.WriteFile(filePath, []byte("gguf"), 0o644); err != nil {

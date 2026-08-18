@@ -22,6 +22,7 @@ func TestConfigSetMasksSecrets(t *testing.T) {
 		{"llm.endpoint", "http://localhost:8080/v1", "llm.endpoint = http://localhost:8080/v1"},
 		{"llm.model", "qwen3-8b", "llm.model = qwen3-8b"},
 		{"support.endpoint", "https://support.example.com", "support.endpoint = https://support.example.com"},
+		{"openclaw.sync", "manual", "openclaw.sync = manual"},
 	}
 
 	for _, tt := range tests {
@@ -69,6 +70,7 @@ func TestConfigGetMasksSecrets(t *testing.T) {
 		{"llm.endpoint", "http://localhost:8080/v1", "http://localhost:8080/v1", ""},
 		{"llm.model", "qwen3-8b", "qwen3-8b", ""},
 		{"support.endpoint", "https://support.example.com", "https://support.example.com", ""},
+		{"openclaw.sync", "manual", "manual", ""},
 	}
 
 	for _, tt := range tests {

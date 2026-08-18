@@ -1,0 +1,10 @@
+=== RUN   TestMCPToolAdapter_ScenarioApplyApprovalFlow
+--- PASS: TestMCPToolAdapter_ScenarioApplyApprovalFlow (0.00s)
+=== RUN   TestMCPToolAdapter_FleetExecApprovalFlow
+--- PASS: TestMCPToolAdapter_FleetExecApprovalFlow (0.00s)
+=== RUN   TestV040ReleaseGateAdvisoryLoop_EndToEnd
+--- PASS: TestV040ReleaseGateAdvisoryLoop_EndToEnd (0.13s)
+=== RUN   TestV040ReleaseGateScenarioSync_EndToEnd
+--- PASS: TestV040ReleaseGateScenarioSync_EndToEnd (0.09s)
+PASS
+ok  	github.com/jguan/aima/cmd/aima	1.426s

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	state "github.com/jguan/aima/internal"
@@ -28,6 +30,8 @@ type App struct {
 	OpenBrowser   bool                // When true, the default (no-subcommand) invocation opens the UI in a browser.
 	RemoteClient  *RemoteMCPClient    // Captures root --remote/--api-key so every subcommand can dispatch to a remote MCP endpoint.
 	InviteCode    string              // Captures root --invite-code; persisted to support.invite_code on PersistentPreRun for the aima-service registration worker.
+
+	ServeBackground func(context.Context) // Optional background lifecycle owned by a valid `aima serve` invocation.
 }
 
 // NewRootCmd creates the root aima command with all subcommands.
@@ -77,6 +81,7 @@ func NewRootCmd(app *App) *cobra.Command {
 		newDeviceCmd(app),
 		newAgentCmd(app),
 		newConfigCmd(app),
+		newDiagnosticsCmd(app),
 		newServeCmd(app),
 		newMCPCmd(app),
 		newFleetCmd(app),

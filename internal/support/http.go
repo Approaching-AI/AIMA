@@ -18,6 +18,7 @@ type httpStatusError struct {
 	StatusCode int
 	Detail     string
 	Body       string
+	Payload    map[string]any
 }
 
 func (e *httpStatusError) Error() string {
@@ -38,6 +39,7 @@ func newHTTPStatusError(statusCode int, body []byte) error {
 		StatusCode: statusCode,
 		Detail:     detail,
 		Body:       strings.TrimSpace(string(body)),
+		Payload:    payload,
 	}
 }
 
@@ -92,6 +94,22 @@ func classifyRegistrationError(err error) error {
 	}
 	detail := strings.ToLower(strings.TrimSpace(statusErr.Detail))
 	switch {
+	case isBrowserConfirmation(statusErr):
+		return &BrowserConfirmationError{
+			Detail:                  statusErr.Detail,
+			DeviceID:                payloadString(statusErr.Payload, "device_id"),
+			UserCode:                payloadString(statusErr.Payload, "user_code"),
+			DeviceCode:              payloadString(statusErr.Payload, "device_code"),
+			VerificationURI:         payloadString(statusErr.Payload, "verification_uri"),
+			VerificationURIComplete: payloadString(statusErr.Payload, "verification_uri_complete"),
+			ExpiresIn:               payloadInt(statusErr.Payload, "expires_in"),
+			Interval:                payloadInt(statusErr.Payload, "interval"),
+		}
+	case isHardwareIdentityConflict(statusErr):
+		return &RegistrationPromptError{
+			Kind:   RegistrationPromptHardwareIdentity,
+			Detail: statusErr.Detail,
+		}
 	case needsRecoveryPrompt(detail):
 		return &RegistrationPromptError{
 			Kind:   RegistrationPromptRecovery,
@@ -104,6 +122,44 @@ func classifyRegistrationError(err error) error {
 		}
 	default:
 		return err
+	}
+}
+
+func isBrowserConfirmation(err *httpStatusError) bool {
+	if err == nil || err.Payload == nil {
+		return false
+	}
+	method := strings.ToLower(strings.TrimSpace(payloadString(err.Payload, "reauth_method")))
+	return err.StatusCode == http.StatusConflict && method == "browser_confirmation"
+}
+
+func isHardwareIdentityConflict(err *httpStatusError) bool {
+	if err == nil || err.Payload == nil {
+		return false
+	}
+	method := strings.ToLower(strings.TrimSpace(payloadString(err.Payload, "reauth_method")))
+	return err.StatusCode == http.StatusConflict && method == "hardware_identity_conflict"
+}
+
+func payloadString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func payloadInt(payload map[string]any, key string) int {
+	if payload == nil {
+		return 0
+	}
+	switch value := payload[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
 	}
 }
 

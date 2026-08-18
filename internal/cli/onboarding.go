@@ -39,17 +39,193 @@ func onboardingCall(
 // Web UI / MCP) or, when root --remote is set, the remote `aima serve --mcp`
 // endpoint.
 func newOnboardingCmd(app *App) *cobra.Command {
+	var (
+		locale string
+		asJSON bool
+	)
 	cmd := &cobra.Command{
 		Use:   "onboarding",
 		Short: "Manage edge device onboarding (cold-start wizard)",
 		Long:  "Manage edge device onboarding. Same code path as the Web UI wizard and MCP onboarding tool.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOnboardingStart(cmd.Context(), app, cmd.OutOrStdout(), locale, asJSON)
+		},
 	}
+	cmd.Flags().StringVar(&locale, "locale", "en", "Locale for recommendation reasons (en|zh)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Output raw JSON")
+	cmd.AddCommand(newOnboardingStartCmd(app))
 	cmd.AddCommand(newOnboardingStatusCmd(app))
 	cmd.AddCommand(newOnboardingScanCmd(app))
 	cmd.AddCommand(newOnboardingRecommendCmd(app))
 	cmd.AddCommand(newOnboardingInitCmd(app))
 	cmd.AddCommand(newOnboardingDeployCmd(app))
 	return cmd
+}
+
+func newOnboardingStartCmd(app *App) *cobra.Command {
+	var (
+		locale string
+		asJSON bool
+	)
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "Run the guided first-run checks",
+		Long:  "Run status, scan, and recommendation checks, then print the next command for a safe first model run.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOnboardingStart(cmd.Context(), app, cmd.OutOrStdout(), locale, asJSON)
+		},
+	}
+	cmd.Flags().StringVar(&locale, "locale", "en", "Locale for recommendation reasons (en|zh)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Output raw JSON")
+	return cmd
+}
+
+type onboardingStartStatus struct {
+	OnboardingCompleted bool `json:"onboarding_completed"`
+	Hardware            struct {
+		ProfileMatch string `json:"profile_match"`
+		OS           string `json:"os"`
+		Arch         string `json:"arch"`
+		RAMMiB       int    `json:"ram_mib"`
+		GPU          []struct {
+			Name    string `json:"name"`
+			VRAMMiB int    `json:"vram_mib"`
+			Count   int    `json:"count"`
+			Arch    string `json:"arch"`
+		} `json:"gpu"`
+	} `json:"hardware"`
+	StackStatus struct {
+		Docker                 string `json:"docker"`
+		K3S                    string `json:"k3s"`
+		NeedsInit              bool   `json:"needs_init"`
+		InitTierRecommendation string `json:"init_tier_recommendation"`
+		CanAutoInit            bool   `json:"can_auto_init"`
+		InitBlockedReason      string `json:"init_blocked_reason,omitempty"`
+	} `json:"stack_status"`
+}
+
+type onboardingStartScanResult struct {
+	Engines []struct {
+		Type    string `json:"type"`
+		Runtime string `json:"runtime"`
+	} `json:"engines"`
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
+	CentralConnected bool `json:"central_connected"`
+	ConfigsPulled    int  `json:"configs_pulled,omitempty"`
+	BenchmarksPulled int  `json:"benchmarks_pulled,omitempty"`
+}
+
+type onboardingStartRecommendResult struct {
+	HardwareProfile string `json:"hardware_profile"`
+	GPUArch         string `json:"gpu_arch"`
+	GPUVRAMMiB      int    `json:"gpu_vram_mib"`
+	GPUCount        int    `json:"gpu_count"`
+	TotalModels     int    `json:"total_models_evaluated"`
+	Recommendations []struct {
+		ModelName   string `json:"model_name"`
+		ModelType   string `json:"model_type"`
+		Family      string `json:"family"`
+		ParamCount  string `json:"parameter_count"`
+		FitScore    int    `json:"fit_score"`
+		Reason      string `json:"recommendation_reason"`
+		HardwareFit bool   `json:"hardware_fit"`
+		Engine      *struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"engine,omitempty"`
+		ModelStatus struct {
+			LocalAvailable bool `json:"local_available"`
+		} `json:"model_status"`
+	} `json:"recommendations"`
+}
+
+type onboardingStartResult struct {
+	Status      onboardingStartStatus          `json:"status"`
+	Scan        onboardingStartScanResult      `json:"scan"`
+	Recommend   onboardingStartRecommendResult `json:"recommend"`
+	NextModel   string                         `json:"next_model,omitempty"`
+	NextCommand string                         `json:"next_command,omitempty"`
+}
+
+func runOnboardingStart(ctx context.Context, app *App, w io.Writer, locale string, asJSON bool) error {
+	data, err := onboardingCall(ctx, app, "start", map[string]any{"locale": locale}, func(ctx context.Context) (json.RawMessage, error) {
+		if app.ToolDeps.OnboardingStart == nil {
+			return nil, fmt.Errorf("onboarding.start not available")
+		}
+		return app.ToolDeps.OnboardingStart(ctx, locale)
+	})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(w, data)
+	}
+
+	var result onboardingStartResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return printJSON(w, data)
+	}
+
+	fmt.Fprintln(w, "AIMA first-run guide")
+	fmt.Fprintf(w, "Hardware: %s / %s, RAM=%d MiB, profile=%s\n",
+		fallback(result.Status.Hardware.OS, "-"),
+		fallback(result.Status.Hardware.Arch, "-"),
+		result.Status.Hardware.RAMMiB,
+		fallback(result.Status.Hardware.ProfileMatch, "(none)"))
+	if len(result.Status.Hardware.GPU) == 0 {
+		fmt.Fprintln(w, "GPU: (none)")
+	} else {
+		for i, g := range result.Status.Hardware.GPU {
+			fmt.Fprintf(w, "GPU[%d]: %s x%d, %d MiB, arch=%s\n", i, g.Name, g.Count, g.VRAMMiB, fallback(g.Arch, "-"))
+		}
+	}
+	fmt.Fprintf(w, "Stack: docker=%s k3s=%s needs_init=%v\n",
+		fallback(result.Status.StackStatus.Docker, "-"),
+		fallback(result.Status.StackStatus.K3S, "-"),
+		result.Status.StackStatus.NeedsInit)
+	if result.Status.StackStatus.NeedsInit {
+		tier := fallback(result.Status.StackStatus.InitTierRecommendation, "auto")
+		if result.Status.StackStatus.CanAutoInit {
+			fmt.Fprintf(w, "Init suggestion: aima onboarding init --tier %s --yes\n", tier)
+		} else {
+			if result.Status.StackStatus.InitBlockedReason != "" {
+				fmt.Fprintf(w, "Init blocked: %s\n", result.Status.StackStatus.InitBlockedReason)
+			}
+			fmt.Fprintf(w, "Manual init: sudo aima onboarding init --tier %s --yes\n", tier)
+		}
+	}
+	fmt.Fprintf(w, "Scan: engines=%d models=%d central_connected=%v configs=%d benchmarks=%d\n",
+		len(result.Scan.Engines), len(result.Scan.Models), result.Scan.CentralConnected, result.Scan.ConfigsPulled, result.Scan.BenchmarksPulled)
+	fmt.Fprintf(w, "Recommendations: %d of %d models evaluated\n\n", len(result.Recommend.Recommendations), result.Recommend.TotalModels)
+
+	limit := len(result.Recommend.Recommendations)
+	if limit > 5 {
+		limit = 5
+	}
+	for i := 0; i < limit; i++ {
+		r := result.Recommend.Recommendations[i]
+		engine := "(auto)"
+		if r.Engine != nil {
+			engine = r.Engine.Type + "/" + r.Engine.Name
+		}
+		fmt.Fprintf(w, "[%d] %s (%s, %s, %s) score=%d local=%v engine=%s\n",
+			i+1, r.ModelName, r.Family, r.ParamCount, r.ModelType, r.FitScore, r.ModelStatus.LocalAvailable, engine)
+		if r.Reason != "" {
+			fmt.Fprintf(w, "    reason: %s\n", r.Reason)
+		}
+	}
+
+	if result.NextCommand == "" {
+		fmt.Fprintln(w, "\nNext: no deployable recommendation found; run `aima onboarding recommend --json` for details.")
+		return nil
+	}
+	fmt.Fprintf(w, "\nNext: %s\n", result.NextCommand)
+	fmt.Fprintln(w, "Keep the local API/UI open with: aima serve")
+	return nil
 }
 
 func newOnboardingStatusCmd(app *App) *cobra.Command {

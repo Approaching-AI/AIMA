@@ -1,0 +1,4 @@
+ok  	github.com/jguan/aima/cmd/aima	3.825s
+ok  	github.com/jguan/aima/internal/cli	(cached)
+ok  	github.com/jguan/aima/internal/mcp	(cached)
+ok  	github.com/jguan/aima/internal/onboarding	(cached)

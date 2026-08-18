@@ -1,8 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -27,46 +28,56 @@ type Runtime interface {
 
 // DeployRequest describes what to deploy, independent of how.
 type DeployRequest struct {
-	Name             string
-	Engine           string
-	Image            string   // container image (K3S, Docker)
-	Command          []string // startup command with {{.ModelPath}} placeholder
-	PortSpecs        []knowledge.StartupPort
-	InitCommands     []string // pre-commands to run before main server (K3S, Docker)
-	ModelPath        string   // host path to model files
-	Port             int      // legacy fallback; prefer Config + PortSpecs
-	Config           map[string]any
-	Partition        *PartitionRequest // resource limits (K3S+HAMi); native ignores
-	RuntimeClassName string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
-	HealthCheck      *HealthCheckConfig
-	Labels           map[string]string
-	BinarySource     *engine.BinarySource        // native: where to download the engine binary if missing
-	Warmup           *WarmupConfig               // post-healthcheck warmup (send dummy inference request)
-	CPUArch          string                      // "arm64", "amd64" -- for platform-specific paths in Pod spec
-	Env              map[string]string           // extra env vars (engine YAML + hardware YAML merged)
-	WorkDir          string                      // working directory for native process (from engine YAML)
-	Container        *knowledge.ContainerAccess  // vendor-specific container access (K3S, Docker)
-	GPUResourceName  string                      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
-	ExtraVolumes     []knowledge.ContainerVolume // additional host volumes to mount (K3S, Docker)
+	Name               string
+	Engine             string
+	Image              string   // container image (K3S, Docker)
+	Command            []string // startup command with {{.ModelPath}} placeholder
+	PortSpecs          []knowledge.StartupPort
+	InitCommands       []string // pre-commands to run before main server (K3S, Docker)
+	ModelPath          string   // host path to model files
+	ModelType          string   // catalog model type (llm, asr, tts, image_gen, ...)
+	Port               int      // legacy fallback; prefer Config + PortSpecs
+	Config             map[string]any
+	AcceptedConfigKeys []string
+	Partition          *PartitionRequest // resource limits (K3S+HAMi); native ignores
+	RuntimeClassName   string            // K8s runtimeClassName, e.g. "nvidia" (K3S only; from hardware profile)
+	HealthCheck        *HealthCheckConfig
+	Labels             map[string]string
+	BinarySource       *engine.BinarySource        // native: where to download the engine binary if missing
+	Warmup             *WarmupConfig               // post-healthcheck warmup (send dummy inference request)
+	CPUArch            string                      // "arm64", "amd64" -- for platform-specific paths in Pod spec
+	Env                map[string]string           // extra env vars (engine YAML + hardware YAML merged)
+	WorkDir            string                      // working directory for native process (from engine YAML)
+	Container          *knowledge.ContainerAccess  // vendor-specific container access (K3S, Docker)
+	GPUResourceName    string                      // K8s GPU resource name, e.g. "nvidia.com/gpu", "amd.com/gpu"
+	ExtraVolumes       []knowledge.ContainerVolume // additional host volumes to mount (K3S, Docker)
 }
 
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
-	Name          string            `json:"name"`
-	Model         string            `json:"model,omitempty"`
-	Engine        string            `json:"engine,omitempty"`
-	Slot          string            `json:"slot,omitempty"`
-	Phase         string            `json:"phase"` // running / starting / stopped / failed
-	Ready         bool              `json:"ready"`
-	Address       string            `json:"address"` // host:port
-	Config        map[string]any    `json:"config,omitempty"`
-	Labels        map[string]string `json:"labels"`
-	StartTime     string            `json:"start_time"`
-	StartedAtUnix int64             `json:"started_at_unix,omitempty"`
-	Message       string            `json:"message,omitempty"`
-	Runtime       string            `json:"runtime"` // "k3s", "docker", or "native"
-	Restarts      int               `json:"restarts,omitempty"`
-	ExitCode      *int              `json:"exit_code,omitempty"`
+	Name             string            `json:"name"`
+	Model            string            `json:"model,omitempty"`
+	Engine           string            `json:"engine,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	Slot             string            `json:"slot,omitempty"`
+	Phase            string            `json:"phase"` // running / starting / stopped / failed
+	Ready            bool              `json:"ready"`
+	Address          string            `json:"address"` // host:port
+	Config           map[string]any    `json:"config,omitempty"`
+	Labels           map[string]string `json:"labels"`
+	StartTime        string            `json:"start_time"`
+	StartedAtUnix    int64             `json:"started_at_unix,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	Runtime          string            `json:"runtime"` // "k3s", "docker", or "native"
+	Restarts         int               `json:"restarts,omitempty"`
+	ExitCode         *int              `json:"exit_code,omitempty"`
+	GPUMemoryMiB     int               `json:"gpu_memory_mib,omitempty"`
+	GPUMemorySource  string            `json:"gpu_memory_source,omitempty"`
+	DesiredState     string            `json:"desired_state,omitempty"`
+	RecoveryState    string            `json:"recovery_state,omitempty"`
+	RecoveryAttempts int               `json:"recovery_attempts,omitempty"`
+	NextRecoveryAt   string            `json:"next_recovery_at,omitempty"`
+	QuarantineReason string            `json:"quarantine_reason,omitempty"`
 
 	StartupPhase    string `json:"startup_phase,omitempty"`    // scheduling/pulling_image/initializing/loading_weights/cuda_graphs/ready
 	StartupProgress int    `json:"startup_progress,omitempty"` // 0-100
@@ -75,6 +86,13 @@ type DeploymentStatus struct {
 	ErrorLines      string `json:"error_lines,omitempty"`      // last few log lines on failure
 	Stalled         bool   `json:"stalled,omitempty"`          // progress stalled
 	LastProgressAt  int64  `json:"last_progress_at,omitempty"` // unix seconds
+
+	// AdapterCommand, AdapterModelPath, and AdapterInstanceID are native-runtime details used by
+	// in-process request adapters. They must never be exposed by public status
+	// APIs, logs, or persisted proxy payloads.
+	AdapterCommand    []string `json:"-"`
+	AdapterModelPath  string   `json:"-"`
+	AdapterInstanceID string   `json:"-"`
 }
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.
@@ -92,11 +110,7 @@ type HealthCheckConfig struct {
 }
 
 // WarmupConfig defines how to warm up an engine after health check passes.
-type WarmupConfig struct {
-	Prompt    string
-	MaxTokens int
-	TimeoutS  int
-}
+type WarmupConfig = knowledge.WarmupConfig
 
 const servedModelLabel = "aima.dev/served-model"
 
@@ -142,11 +156,15 @@ func isPortFlag(s string) bool {
 	return strings.HasPrefix(s, "--") && strings.Contains(s, "port")
 }
 
-// configToFlags converts a Config map into CLI flags.
-// Keys are underscore-separated (e.g. "mem_fraction_static") → "--mem-fraction-static".
-// "port" is excluded (handled separately by each runtime).
-// Bool true → flag only (no value); bool false → omitted.
+// configToFlags converts a Config map into CLI flags via knowledge.FormatConfigFlag.
+// "port" and other reserved keys are skipped; quantization is filtered via
+// ShouldIncludeConfigFlag. Serialization rules (bool/map/scalar) live in
+// FormatConfigFlag so K3S podgen and Docker/Native runtime stay consistent.
 func configToFlags(config map[string]any, command []string, modelPath string, reservedKeys map[string]struct{}) []string {
+	return configToFlagsFor(config, knowledge.ConfigFlagContext{Command: command, ModelPath: modelPath}, reservedKeys)
+}
+
+func configToFlagsFor(config map[string]any, flagCtx knowledge.ConfigFlagContext, reservedKeys map[string]struct{}) []string {
 	if len(config) == 0 {
 		return nil
 	}
@@ -155,7 +173,7 @@ func configToFlags(config map[string]any, command []string, modelPath string, re
 		if _, reserved := reservedKeys[k]; reserved {
 			continue
 		}
-		if !knowledge.ShouldIncludeConfigFlag(command, modelPath, k, config[k]) {
+		if !knowledge.ShouldIncludeConfigFlagFor(flagCtx, k, config[k]) {
 			continue
 		}
 		keys = append(keys, k)
@@ -163,15 +181,7 @@ func configToFlags(config map[string]any, command []string, modelPath string, re
 	sort.Strings(keys)
 	var flags []string
 	for _, k := range keys {
-		flag := "--" + strings.ReplaceAll(k, "_", "-")
-		switch v := config[k].(type) {
-		case bool:
-			if v {
-				flags = append(flags, flag)
-			}
-		default:
-			flags = append(flags, flag, fmt.Sprintf("%v", v))
-		}
+		flags = append(flags, knowledge.FormatConfigFlag(k, config[k])...)
 	}
 	return flags
 }
@@ -306,20 +316,15 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
 		address = "http://" + address
 	}
-	prompt := strings.TrimSpace(cfg.Prompt)
-	if prompt == "" {
-		prompt = "Hello"
-	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 1
-	}
 	timeout := time.Duration(cfg.TimeoutS) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, model, prompt, maxTokens)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", strings.NewReader(body))
+	body, err := BuildWarmupRequestBody(model, cfg)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -330,4 +335,36 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// BuildWarmupRequestBody returns an isolated OpenAI-compatible warmup body.
+// The deployment's served model always wins over a catalog-supplied value.
+func BuildWarmupRequestBody(model string, cfg WarmupConfig) ([]byte, error) {
+	body := make(map[string]any)
+	if len(cfg.RequestBody) > 0 {
+		raw, err := json.Marshal(cfg.RequestBody)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return nil, err
+		}
+	} else {
+		prompt := strings.TrimSpace(cfg.Prompt)
+		if prompt == "" {
+			prompt = "Hello"
+		}
+		maxTokens := cfg.MaxTokens
+		if maxTokens <= 0 {
+			maxTokens = 1
+		}
+		body["messages"] = []any{map[string]any{"role": "user", "content": prompt}}
+		body["max_tokens"] = maxTokens
+	}
+	body["model"] = model
+	// Do not populate or reuse a llama.cpp slot's prompt cache during readiness
+	// probes. Two identical warmups can otherwise trigger a recurrent-model
+	// seq_rm crash on older llama.cpp builds. Normal inference remains cached.
+	body["cache_prompt"] = false
+	return json.Marshal(body)
 }

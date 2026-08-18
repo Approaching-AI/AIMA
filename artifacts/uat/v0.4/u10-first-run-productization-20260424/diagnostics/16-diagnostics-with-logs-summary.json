@@ -1,0 +1,10 @@
+{
+  "privacy": {
+    "collection_scope": "local_only_no_health_probes",
+    "secrets_redacted": true,
+    "sent_to_network": false,
+    "telemetry_free": true
+  },
+  "included_logs": true,
+  "deploy_logs": []
+}

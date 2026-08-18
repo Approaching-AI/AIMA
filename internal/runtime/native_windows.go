@@ -10,7 +10,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+// hasInteractiveSession reports whether AIMA itself runs in an interactive
+// desktop session (Session >= 1). Windows Session 0 is reserved for services and
+// is non-interactive; SSH / headless invocations land there. schtasks /it can
+// only launch a process when the invoking user has such a session, so this gates
+// the schtasks path — the caller falls back to a direct start otherwise.
+func hasInteractiveSession() bool {
+	var sid uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &sid); err != nil {
+		return false
+	}
+	return sid != 0
+}
 
 // launchViaSchtasks launches a process via Windows Task Scheduler to ensure it
 // runs in the interactive desktop session (Session 1). This is required for GPU
@@ -44,20 +59,37 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 		return 0, fmt.Errorf("write launcher script: %w", err)
 	}
 
+	// Wrap the bat in a hidden-window VBS launcher so no cmd.exe console flashes
+	// on the interactive desktop. The bat's cmd is the engine process's parent
+	// and would otherwise stay visible for the whole life of the deployment.
+	// WScript.Shell.Run(cmd, 0, False) => window style 0 = hidden, no wait.
+	vbsPath := filepath.Join(r.logDir, name+"-launcher.vbs")
+	vbs := fmt.Sprintf("CreateObject(\"WScript.Shell\").Run \"\"\"%s\"\"\", 0, False\r\n", batPath)
+	if err := os.WriteFile(vbsPath, []byte(vbs), 0o644); err != nil {
+		os.Remove(batPath)
+		return 0, fmt.Errorf("write launcher vbs: %w", err)
+	}
+
 	// Create a one-time scheduled task with /it (interactive token).
 	taskName := "AIMA-deploy-" + name
+	trCmd := fmt.Sprintf("wscript.exe //B //Nologo \"%s\"", vbsPath)
 	createOut, err := exec.Command("schtasks", "/create", "/tn", taskName,
-		"/tr", batPath, "/sc", "once", "/st", "00:00", "/it", "/f").CombinedOutput()
+		"/tr", trCmd, "/sc", "once", "/st", "00:00", "/it", "/f").CombinedOutput()
 	if err != nil {
 		os.Remove(batPath)
+		os.Remove(vbsPath)
 		return 0, fmt.Errorf("schtasks create: %w (output: %s)", err, string(createOut))
 	}
+
+	binaryName := filepath.Base(command[0])
+	preLaunchPIDs := findProcessPIDsByName(binaryName)
 
 	// Run the task.
 	runOut, err := exec.Command("schtasks", "/run", "/tn", taskName).CombinedOutput()
 	if err != nil {
 		exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
 		os.Remove(batPath)
+		os.Remove(vbsPath)
 		return 0, fmt.Errorf("schtasks run: %w (output: %s)", err, string(runOut))
 	}
 
@@ -74,7 +106,6 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 		}
 	}
 
-	binaryName := filepath.Base(command[0])
 	var pid int
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
@@ -82,7 +113,7 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 			pid = findProcessPIDByPort(port)
 		}
 		if pid == 0 {
-			pid = findProcessPIDByName(binaryName)
+			pid = selectNewProcessPID(preLaunchPIDs, findProcessPIDsByName(binaryName))
 		}
 		if pid > 0 {
 			break
@@ -92,6 +123,7 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 	// Clean up scheduled task definition (engine process continues running).
 	exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
 	os.Remove(batPath)
+	os.Remove(vbsPath)
 
 	if pid == 0 {
 		return 0, fmt.Errorf("discover PID after schtasks launch: binary=%s port=%d", binaryName, port)
@@ -126,14 +158,14 @@ func findProcessPIDByPort(port int) int {
 	return 0
 }
 
-// findProcessPIDByName returns the PID of a running process by its image name.
-// Uses Windows tasklist command. Returns 0 if not found.
-func findProcessPIDByName(imageName string) int {
+// findProcessPIDsByName returns all running processes with the given image name.
+func findProcessPIDsByName(imageName string) []int {
 	out, err := exec.Command("tasklist", "/fi",
 		fmt.Sprintf("IMAGENAME eq %s", imageName), "/fo", "csv", "/nh").Output()
 	if err != nil {
-		return 0
+		return nil
 	}
+	var pids []int
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "INFO:") {
@@ -144,11 +176,11 @@ func findProcessPIDByName(imageName string) int {
 		if len(fields) >= 2 {
 			pidStr := strings.Trim(fields[1], "\" \r")
 			if pid, err := strconv.Atoi(pidStr); err == nil {
-				return pid
+				pids = append(pids, pid)
 			}
 		}
 	}
-	return 0
+	return pids
 }
 
 // pidAlive checks if a process with the given PID exists using tasklist.

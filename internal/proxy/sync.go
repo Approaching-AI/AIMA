@@ -19,6 +19,7 @@ type DeploymentInfo struct {
 	Address             string            `json:"address"`
 	Runtime             string            `json:"runtime"`
 	ServedModel         string            `json:"served_model,omitempty"`
+	ModelType           string            `json:"model_type,omitempty"`
 	ParameterCount      string            `json:"parameter_count,omitempty"`
 	ContextWindowTokens int               `json:"context_window_tokens,omitempty"`
 	Labels              map[string]string `json:"labels,omitempty"`
@@ -48,65 +49,91 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		if upstreamModel == "" {
 			upstreamModel = model
 		}
-		modelKey := strings.ToLower(model)
-		active[modelKey] = true
-
-		if d.Ready && d.Address != "" {
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineTypeFromDeployment(d),
-				Address:             d.Address,
-				Ready:               true,
-				ParameterCount:      parameterCountFromDeployment(d),
-				ContextWindowTokens: contextWindowFromDeployment(d),
-			})
-			readySeen[modelKey] = true
-			continue
-		}
-		if readySeen[modelKey] {
-			slog.Debug("sync: ignoring not-ready duplicate for ready backend",
-				"model", model, "deployment", d.Name, "phase", d.Phase, "status", d.Status)
-			continue
-		}
-
-		// Deployment exists but not ready: preserve existing route metadata
-		// (address/basePath/remote), but mark it not ready.
-		existing := s.ListBackends()
-		if b, ok := existing[modelKey]; ok {
-			engineType := engineTypeFromDeployment(d)
-			if engineType == "" {
-				engineType = b.EngineType
+		routeNames := []string{model}
+		for _, alias := range []string{
+			strings.TrimSpace(d.Labels[LabelRequestedModel]),
+			upstreamModel,
+		} {
+			duplicate := alias == ""
+			for _, routeName := range routeNames {
+				duplicate = duplicate || strings.EqualFold(alias, routeName)
 			}
-			if strings.TrimSpace(d.ServedModel) == "" && strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
-				upstreamModel = backendUpstreamModel(b)
+			if !duplicate {
+				routeNames = append(routeNames, alias)
 			}
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineType,
-				Address:             b.Address,
-				BasePath:            b.BasePath,
-				Ready:               false,
-				Remote:              b.Remote,
-				ParameterCount:      preserveParameterCount(b.ParameterCount, d),
-				ContextWindowTokens: preserveContextWindow(b.ContextWindowTokens, d),
-			})
-		} else {
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineTypeFromDeployment(d),
-				Ready:               false,
-				ParameterCount:      parameterCountFromDeployment(d),
-				ContextWindowTokens: contextWindowFromDeployment(d),
-			})
+		}
+		for _, routeName := range routeNames {
+			routeKey := strings.ToLower(routeName)
+			active[routeKey] = true
+
+			if d.Ready && d.Address != "" {
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineTypeFromDeployment(d),
+					ModelType:           modelTypeFromDeployment(d),
+					Address:             d.Address,
+					Ready:               true,
+					ParameterCount:      parameterCountFromDeployment(d),
+					ContextWindowTokens: contextWindowFromDeployment(d),
+				})
+				readySeen[routeKey] = true
+				continue
+			}
+			if readySeen[routeKey] {
+				slog.Debug("sync: ignoring not-ready duplicate for ready backend",
+					"model", routeName, "deployment", d.Name, "phase", d.Phase, "status", d.Status)
+				continue
+			}
+
+			// Deployment exists but not ready: preserve existing route metadata
+			// (address/basePath/remote), but mark it not ready.
+			existing := s.ListBackends()
+			if b, ok := existing[routeKey]; ok {
+				engineType := engineTypeFromDeployment(d)
+				if engineType == "" {
+					engineType = b.EngineType
+				}
+				modelType := modelTypeFromDeployment(d)
+				if modelType == "" {
+					modelType = b.ModelType
+				}
+				if strings.TrimSpace(d.ServedModel) == "" && strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
+					upstreamModel = backendUpstreamModel(b)
+				}
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineType,
+					ModelType:           modelType,
+					Address:             b.Address,
+					BasePath:            b.BasePath,
+					Ready:               false,
+					Remote:              b.Remote,
+					ParameterCount:      preserveParameterCount(b.ParameterCount, d),
+					ContextWindowTokens: preserveContextWindow(b.ContextWindowTokens, d),
+				})
+			} else {
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineTypeFromDeployment(d),
+					ModelType:           modelTypeFromDeployment(d),
+					Ready:               false,
+					ParameterCount:      parameterCountFromDeployment(d),
+					ContextWindowTokens: contextWindowFromDeployment(d),
+				})
+			}
 		}
 	}
 
-	// Remove local backends that no longer have a deployment (skip remote backends)
+	// Remove deployment-owned local backends that no longer have a deployment.
+	// Remote and external backends are reconciled by their own discovery paths.
 	for name, b := range s.ListBackends() {
-		if !active[strings.ToLower(name)] && !b.Remote {
+		if !active[strings.ToLower(name)] && !b.Remote && !b.External {
 			slog.Info("sync: removing stale backend", "model", name)
 			s.RemoveBackend(name)
 		}
@@ -177,6 +204,16 @@ func engineTypeFromDeployment(d *DeploymentInfo) string {
 		return value
 	}
 	return strings.TrimSpace(d.Labels["aima.dev/engine"])
+}
+
+func modelTypeFromDeployment(d *DeploymentInfo) string {
+	if d == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(d.ModelType); value != "" {
+		return value
+	}
+	return strings.TrimSpace(d.Labels[LabelModelType])
 }
 
 // StartSyncLoop runs SyncBackends immediately and then every interval until ctx is cancelled.

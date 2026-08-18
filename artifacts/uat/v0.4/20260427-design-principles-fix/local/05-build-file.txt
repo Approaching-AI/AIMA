@@ -1,0 +1,2 @@
+build/uat/aima-uat-local:       Mach-O 64-bit executable arm64
+build/uat/aima-uat-linux-amd64: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=MI16xi0Yu_8M8r-GPQ3v/UDvwEcR94WHMzZF_ZvDV/FfUdCfmqHbX5J5-QVR1U/KetKVydOraVS7JPVJZJl, BuildID[sha1]=d9664da3e003df44b33efd2ef0627c609cbe75f6, with debug_info, not stripped

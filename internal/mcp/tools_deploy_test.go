@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/recovery"
 )
 
 func TestDeployRunPassesConfigOverrides(t *testing.T) {
@@ -64,7 +66,7 @@ func TestDeployRunPassesConfigOverrides(t *testing.T) {
 	}
 }
 
-func TestDeployApplyPassesNoPull(t *testing.T) {
+func TestDeployDryRunPassesConfigOverrides(t *testing.T) {
 	s := NewServer()
 
 	var (
@@ -72,15 +74,149 @@ func TestDeployApplyPassesNoPull(t *testing.T) {
 		gotEngine string
 		gotSlot   string
 		gotConfig map[string]any
-		gotNoPull bool
 	)
 	registerDeployTools(s, &ToolDeps{
-		DeployApply: func(ctx context.Context, engineType, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployDryRun: func(ctx context.Context, engineType, model, slot string, configOverrides map[string]any) (json.RawMessage, error) {
+			gotModel = model
+			gotEngine = engineType
+			gotSlot = slot
+			gotConfig = configOverrides
+			return json.RawMessage(`{"status":"preview"}`), nil
+		},
+	})
+
+	result, err := s.ExecuteTool(context.Background(), "deploy.dry_run", json.RawMessage(`{
+		"model":"qwen3-8b",
+		"engine":"vllm",
+		"slot":"slot-1",
+		"config":{"gpu_memory_utilization":0.8,"kv_cache_dtype":"fp8"},
+		"max_cold_start_s":12
+	}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+
+	if gotModel != "qwen3-8b" {
+		t.Fatalf("model = %q, want qwen3-8b", gotModel)
+	}
+	if gotEngine != "vllm" {
+		t.Fatalf("engine = %q, want vllm", gotEngine)
+	}
+	if gotSlot != "slot-1" {
+		t.Fatalf("slot = %q, want slot-1", gotSlot)
+	}
+	if gotConfig["gpu_memory_utilization"] != 0.8 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.8", gotConfig["gpu_memory_utilization"])
+	}
+	if gotConfig["kv_cache_dtype"] != "fp8" {
+		t.Fatalf("kv_cache_dtype = %#v, want fp8", gotConfig["kv_cache_dtype"])
+	}
+	if gotConfig["max_cold_start_s"] != float64(12) && gotConfig["max_cold_start_s"] != 12 {
+		t.Fatalf("max_cold_start_s = %#v, want 12", gotConfig["max_cold_start_s"])
+	}
+	if len(result.Content) == 0 || result.IsError {
+		t.Fatalf("unexpected result = %+v", result)
+	}
+}
+
+func TestDeployDefaultsStoresDeviceLocalSettings(t *testing.T) {
+	s := NewServer()
+	store := map[string]string{}
+	registerDeployTools(s, &ToolDeps{
+		GetConfig: func(ctx context.Context, key string) (string, error) {
+			value, ok := store[key]
+			if !ok {
+				return "", context.Canceled
+			}
+			return value, nil
+		},
+		SetConfig: func(ctx context.Context, key, value string) error {
+			store[key] = value
+			return nil
+		},
+	})
+
+	setResult, err := s.ExecuteTool(context.Background(), "deploy.defaults", json.RawMessage(`{
+		"action":"set",
+		"model":"Qwen3-8B",
+		"engine":"vllm",
+		"slot":"slot-1",
+		"no_pull":true,
+		"port":"8003",
+		"config":{"gpu_memory_utilization":0.7,"max_model_len":8192}
+	}`))
+	if err != nil {
+		t.Fatalf("set ExecuteTool: %v", err)
+	}
+	if setResult.IsError {
+		t.Fatalf("set returned error: %+v", setResult)
+	}
+
+	getResult, err := s.ExecuteTool(context.Background(), "deploy.defaults", json.RawMessage(`{"action":"get","model":"qwen3-8b"}`))
+	if err != nil {
+		t.Fatalf("get ExecuteTool: %v", err)
+	}
+	if getResult.IsError {
+		t.Fatalf("get returned error: %+v", getResult)
+	}
+	var got struct {
+		Exists   bool `json:"exists"`
+		Defaults struct {
+			Engine string         `json:"engine"`
+			Slot   string         `json:"slot"`
+			NoPull bool           `json:"no_pull"`
+			Port   string         `json:"port"`
+			Config map[string]any `json:"config"`
+		} `json:"defaults"`
+	}
+	if err := json.Unmarshal([]byte(getResult.Content[0].Text), &got); err != nil {
+		t.Fatalf("unmarshal get result: %v", err)
+	}
+	if !got.Exists {
+		t.Fatal("defaults should exist")
+	}
+	if got.Defaults.Engine != "vllm" || got.Defaults.Slot != "slot-1" || !got.Defaults.NoPull || got.Defaults.Port != "8003" {
+		t.Fatalf("defaults = %+v", got.Defaults)
+	}
+	if got.Defaults.Config["gpu_memory_utilization"] != float64(0.7) {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.7", got.Defaults.Config["gpu_memory_utilization"])
+	}
+
+	clearResult, err := s.ExecuteTool(context.Background(), "deploy.defaults", json.RawMessage(`{"action":"clear","model":"qwen3-8b"}`))
+	if err != nil {
+		t.Fatalf("clear ExecuteTool: %v", err)
+	}
+	if clearResult.IsError {
+		t.Fatalf("clear returned error: %+v", clearResult)
+	}
+	getResult, err = s.ExecuteTool(context.Background(), "deploy.defaults", json.RawMessage(`{"action":"get","model":"qwen3-8b"}`))
+	if err != nil {
+		t.Fatalf("get after clear ExecuteTool: %v", err)
+	}
+	if !strings.Contains(getResult.Content[0].Text, `"exists":false`) {
+		t.Fatalf("get after clear = %s, want exists=false", getResult.Content[0].Text)
+	}
+}
+
+func TestDeployApplyPassesRecoveryPolicy(t *testing.T) {
+	s := NewServer()
+
+	var (
+		gotModel          string
+		gotEngine         string
+		gotSlot           string
+		gotConfig         map[string]any
+		gotNoPull         bool
+		gotRecoveryPolicy recovery.PolicyPatch
+	)
+	registerDeployTools(s, &ToolDeps{
+		DeployApply: func(ctx context.Context, engineType, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			gotModel = model
 			gotEngine = engineType
 			gotSlot = slot
 			gotConfig = configOverrides
 			gotNoPull = noPull
+			gotRecoveryPolicy = recoveryPolicy
 			return json.RawMessage(`{"status":"deploying","name":"demo"}`), nil
 		},
 	})
@@ -90,7 +226,8 @@ func TestDeployApplyPassesNoPull(t *testing.T) {
 		"engine":"vllm",
 		"slot":"slot-1",
 		"config":{"gpu_memory_utilization":0.9},
-		"no_pull":true
+		"no_pull":true,
+		"recovery_policy":{"max_attempts":5,"backoff_s":[1,3,9]}
 	}`))
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
@@ -110,7 +247,52 @@ func TestDeployApplyPassesNoPull(t *testing.T) {
 	if gotConfig["gpu_memory_utilization"] != 0.9 {
 		t.Fatalf("gpu_memory_utilization = %#v, want 0.9", gotConfig["gpu_memory_utilization"])
 	}
+	if gotRecoveryPolicy.MaxAttempts == nil || *gotRecoveryPolicy.MaxAttempts != 5 {
+		t.Fatalf("max_attempts = %#v, want 5", gotRecoveryPolicy.MaxAttempts)
+	}
+	if len(gotRecoveryPolicy.BackoffS) != 3 || gotRecoveryPolicy.BackoffS[0] != 1 || gotRecoveryPolicy.BackoffS[1] != 3 || gotRecoveryPolicy.BackoffS[2] != 9 {
+		t.Fatalf("backoff_s = %v, want [1 3 9]", gotRecoveryPolicy.BackoffS)
+	}
 	if len(result.Content) == 0 || result.IsError {
 		t.Fatalf("unexpected result = %+v", result)
+	}
+
+	var applySchema string
+	for _, def := range s.ListTools() {
+		if def.Name == "deploy.apply" {
+			applySchema = string(def.InputSchema)
+			break
+		}
+	}
+	if !strings.Contains(applySchema, `"recovery_policy"`) {
+		t.Fatalf("deploy.apply schema missing recovery_policy: %s", applySchema)
+	}
+	if strings.Contains(applySchema, `"source"`) {
+		t.Fatalf("deploy.apply schema exposes trusted source marker: %s", applySchema)
+	}
+}
+
+func TestDeployApplyRejectsInvalidRecoveryPolicyBeforeBusinessLogic(t *testing.T) {
+	s := NewServer()
+	called := false
+	registerDeployTools(s, &ToolDeps{
+		DeployApply: func(context.Context, string, string, string, map[string]any, bool, recovery.PolicyPatch) (json.RawMessage, error) {
+			called = true
+			return json.RawMessage(`{"status":"deploying"}`), nil
+		},
+	})
+
+	result, err := s.ExecuteTool(context.Background(), "deploy.apply", json.RawMessage(`{
+		"model":"qwen3-4b",
+		"recovery_policy":{"max_attempts":0}
+	}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if !result.IsError || len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "max_attempts") {
+		t.Fatalf("invalid recovery policy result = %+v", result)
+	}
+	if called {
+		t.Fatal("DeployApply called for invalid public recovery policy")
 	}
 }

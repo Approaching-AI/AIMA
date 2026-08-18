@@ -4,7 +4,20 @@ metadata:
   type: asr
   family: mooer
   parameter_count: "1.5B"
+  model_class: pipeline
   released_at: "2024-10"
+ui:
+  role: deployable
+  display_note: "MoOER ASR/translation pipeline"
+  display_note_zh: "MoOER 语音识别/翻译流水线"
+capabilities:
+  standalone_deploy: true
+openclaw:
+  chat_provider: false
+http:
+  adapters:
+    - path: /v1/audio/transcriptions
+      kind: mooer_grpc
 storage:
   formats: [safetensors]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

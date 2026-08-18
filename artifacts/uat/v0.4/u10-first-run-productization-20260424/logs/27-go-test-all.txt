@@ -1,0 +1,27 @@
+?   	github.com/jguan/aima/catalog	[no test files]
+ok  	github.com/jguan/aima/cmd/aima	4.541s
+?   	github.com/jguan/aima/cmd/central	[no test files]
+ok  	github.com/jguan/aima/internal	(cached)
+ok  	github.com/jguan/aima/internal/agent	(cached)
+ok  	github.com/jguan/aima/internal/benchmark	(cached)
+?   	github.com/jguan/aima/internal/buildinfo	[no test files]
+ok  	github.com/jguan/aima/internal/central	(cached)
+ok  	github.com/jguan/aima/internal/cli	(cached)
+ok  	github.com/jguan/aima/internal/cloud	(cached)
+ok  	github.com/jguan/aima/internal/engine	(cached)
+ok  	github.com/jguan/aima/internal/fleet	(cached)
+ok  	github.com/jguan/aima/internal/hal	(cached)
+ok  	github.com/jguan/aima/internal/k3s	(cached)
+ok  	github.com/jguan/aima/internal/knowledge	5.868s
+ok  	github.com/jguan/aima/internal/mcp	(cached)
+ok  	github.com/jguan/aima/internal/model	7.271s
+ok  	github.com/jguan/aima/internal/onboarding	(cached)
+ok  	github.com/jguan/aima/internal/openclaw	(cached)
+?   	github.com/jguan/aima/internal/openclaw/plugins	[no test files]
+?   	github.com/jguan/aima/internal/openclaw/skills	[no test files]
+ok  	github.com/jguan/aima/internal/proxy	(cached)
+ok  	github.com/jguan/aima/internal/runtime	(cached)
+ok  	github.com/jguan/aima/internal/stack	(cached)
+ok  	github.com/jguan/aima/internal/support	(cached)
+?   	github.com/jguan/aima/internal/tui	[no test files]
+ok  	github.com/jguan/aima/internal/ui	(cached)

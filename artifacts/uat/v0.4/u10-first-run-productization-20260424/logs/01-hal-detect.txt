@@ -1,0 +1,30 @@
+{
+  "cpu": {
+    "arch": "arm64",
+    "model": "Apple M4",
+    "cores": 10,
+    "threads": 10,
+    "freq_ghz": 0
+  },
+  "ram": {
+    "total_mib": 16384,
+    "available_mib": 10486,
+    "swap_total_mib": 3072
+  },
+  "storage": {
+    "data_dir_path": "/Users/jguan/projects/aima-dev-agent/ref/aima/artifacts/uat/v0.4/u10-first-run-productization-20260424/data",
+    "free_mib": 162512,
+    "total_mib": 471482,
+    "volumes": [
+      {
+        "mount_point": "/",
+        "total_mib": 471482,
+        "free_mib": 162512
+      }
+    ]
+  },
+  "os": {
+    "os": "darwin",
+    "arch": "arm64"
+  }
+}

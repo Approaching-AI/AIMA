@@ -1,0 +1,41 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-dflash-blackwell
+  type: vllm
+  version: "dflash-fa2-gb10"
+  supported_model_types: [llm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  # Custom GB10 ARM64 build with DFlash speculative decoding + FA2 GDN patches.
+  # Private registry; pre-pull on target device.
+  name: qujing/vllm-gb10-dflash-fa2
+  tag: "latest"
+  platforms: [linux/arm64]
+patterns:
+  - "vllm-gb10-dflash"
+startup:
+  env:
+    VLLM_KV_CACHE_LAYOUT: NHD
+    VLLM_SKIP_GDN_PREFILL_WARMUP: "1"
+    FLA_GDN_FIX_BT: "1"
+    VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "1"
+  default_args:
+    gpu_memory_utilization: 0.92
+    max_model_len: 131072
+  health_check:
+    timeout_s: 600
+amplifier:
+  features:
+    - dflash
+time_constraints:
+  cold_start_s: [300, 420]
+  model_switch_s: [300, 420]
+power_constraints:
+  typical_draw_watts: [40, 80]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

@@ -1,0 +1,460 @@
+kind: model_asset
+metadata:
+  name: qwen3.6-35b-a3b
+  type: llm
+  family: qwen
+  parameter_count: "35B"
+  released_at: "2026-04"
+  aliases:
+    - Qwen3.6-35B-A3B
+    - qwen3.6-35b-a3b-bf16
+    - Qwen3.6-35B-A3B-UD-Q4_K_M
+    - qwen3.6-35b-a3b-q4_k_m
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3.6-35B-A3B
+      format: safetensors
+    - type: huggingface
+      repo: unsloth/Qwen3.6-35B-A3B-GGUF
+      format: gguf
+    - type: local_path
+      path: ""
+variants:
+  # --- GB10 structured-output path for governed alarm inference ---
+  - name: qwen3.6-35b-a3b-blackwell-sglang-structured-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 70000
+      unified_memory: true
+    engine: qwen36-gb10-structured-bf16
+    format: safetensors
+    default_config:
+      served_model_name: qwen3.6-35b-a3b-bf16
+    expected_performance:
+      startup_time_s: 300
+      cold_start_time_s: 900
+      tokens_per_second: [17, 75]
+      max_context_tokens: 131072
+      notes: "Schema-constrained BF16 profile for PlanABC; speculative decoding is intentionally disabled."
+
+  # --- AMD Ryzen AI Max+ 395 native BF16 engine (Linux/gfx1151) ---
+  - name: qwen3.6-35b-a3b-amd395-native-bf16
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 65536
+      ram_min_mib: 65536
+      unified_memory: true
+    engine: aima-engine-native
+    format: safetensors
+    default_config:
+      context_tokens: 8192
+    expected_performance:
+      startup_time_s: 20
+      cold_start_time_s: 60
+      vram_mib: 73728
+      notes: "Validated AMD395 Linux path using AIMA native engine 1.5.1 and the full BF16 checkpoint. Random cold prompts from 502 to 8212 tokens use padded or composed AOT prefill with zero serial cold-prompt decode tokens."
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Qwen3.6-35B-A3B MoE, UD-Q4_K_M ~21GB, all layers offloaded. Native context 262144.
+  - name: qwen3.6-35b-a3b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 24576
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      # Full trained context (262144 / 256K). Deploy auto-clamps it down to fit
+      # hardware memory on smaller machines, so this large default is safe.
+      ctx_size: 262144
+      # Strix Halo long-context HIP runs are most stable with one slot and no
+      # llama.cpp prompt cache; auto parallelism otherwise selects 4 slots and
+      # can push ROCm compute/prompt-cache buffers over the allocation limit.
+      parallel: 1
+      cache_ram: 0
+      # ENGINE REQUIREMENT: use llama.cpp >= b9330. Qwen3.6-A3B is a hybrid
+      # Gated-DeltaNet (recurrent) MoE; on b9180/b9196 the engine hard-ABORTs on
+      # this model's recurrent partial seq_rm during prefix-cache reuse
+      # (common.cpp "failed to remove sequence ... p0=10", e.g. the deploy warmup's
+      # 2nd identical request) -> deploy fails. Upstream fixed it by b9330; verified
+      # same-machine A/B (Strix Halo HIP): b9196 CRASHES, b9330 SURVIVES, identical
+      # command. AIMA auto-downloads b9330 (llamacpp-hip-windows on Windows or
+      # llamacpp-hip-linux on Linux); if you pin AIMA_ENGINE_DIR to your own
+      # build, it MUST be b9330+. No --no-cache-prompt
+      # workaround is needed on b9330 (keeps prompt cache = full speed).
+    expected_performance:
+      startup_time_s: 30
+      cold_start_time_s: 60
+      tokens_per_second: [55, 70]
+      latency_first_token_ms: [30, 250]
+      notes: "Context verified 2026-06-16 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, UD-Q4_K_M all 999 layers offloaded: llama-server loads & serves n_ctx=262144 (full trained context)."
+  # --- GB10 (Blackwell, 128GB unified, Docker/K3S) ---
+  # 实测稳定路径是 text-only vLLM:
+  # - language_model_only=true
+  # - attention_backend=TRITON_ATTN
+  # - mm_encoder_attn_backend=TORCH_SDPA
+  # - skip_mm_profiling=true
+  # 该配置在 gb10-4t 上验证到 262144 max_model_len，可完成接近 256K prompt tokens。
+  - name: qwen3.6-35b-a3b-blackwell-vllm-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    # qwen3.6 (qwen3_5_moe arch) needs the qwen3_5-capable vLLM build shipped by
+    # the vllm-nightly engine. The stock `vllm` engine (nvcr.io/nvidia/vllm:26.01,
+    # vLLM 0.13) cannot load Qwen3_5MoeForConditionalGeneration and fails the
+    # deploy compatibility check, so this text-only path runs on vllm-nightly.
+    engine: vllm-nightly
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.80
+      max_model_len: 262144
+      dtype: bfloat16
+      enforce_eager: true
+      trust_remote_code: true
+      language_model_only: true
+      reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
+      attention_backend: TRITON_ATTN
+      mm_encoder_attn_backend: TORCH_SDPA
+      skip_mm_profiling: true
+    expected_performance:
+      startup_time_s: 175
+      cold_start_time_s: 300
+      tokens_per_second: [17, 27]
+      tpot_ms: [37, 58]
+      vram_mib: 66250
+      notes: "Validated 2026-04-21 on gb10-4t (Blackwell, 128GB unified). Official Qwen3.6 native context is 262144, and this AIMA path was validated up to actual_prompt_tokens=256024. Current stable GB10 baseline path is text-only vLLM with explicit TRITON_ATTN/TORCH_SDPA backends. For long-context analysis, use TTFT, prefill_tok_s, and decode_tps=1000/tpot_ms before interpreting benchmark throughput_tps; throughput_tps is end-to-end output_tokens/total_duration and is heavily dominated by TTFT at 128K+. Baseline evidence is split across /home/qujing/aima-codex-qwen36/aima.db and /home/qujing/.aima/aima.db on gb10-4t: the current YAML context_scaling keeps exact prompt-token points, while baseline_measurements preserves the fuller DB records including short-context matrix rows and the 512-output 1K/32K smoke. On 2026-04-22/23, speculative MTP and DFlash were additionally validated on the same host with AIMA benchmark.run under single-stream; see the dedicated speculative variants below."
+      context_scaling:
+        # actual_prompt_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        # Direct 512-output baseline points from /home/qujing/.aima/aima.db.
+        933:    [0.337, 28.5, 2765]
+        29149:  [9.047, 26.6, 3222]
+        # Calibrated long-context probes from /home/qujing/aima-codex-qwen36/aima.db.
+        32791:  [10.378, 26.6, 3159]
+        65558:  [27.822, 24.7, 2356]
+        128024: [82.288, 21.5, 1556]
+        160024: [120.431, 20.3, 1329]
+        192024: [165.922, 19.3, 1157]
+        224024: [218.974, 18.2, 1023]
+        256024: [282.643, 17.4, 906]
+      baseline_measurements:
+        host: gb10-4t
+        measured_at: "2026-04-21"
+        sources:
+          - db: /home/qujing/aima-codex-qwen36/aima.db
+            description: "baseline matrix and calibrated long-context probes"
+          - db: /home/qujing/.aima/aima.db
+            description: "baseline 512-output smoke points"
+        caveats:
+          - "No 4K baseline row was found in the checked AIMA DBs or artifacts."
+          - "The fuller baseline matrix is mostly output_tokens=128; do not compare it as a strict same-batch 512-output sweep against MTP/DFlash."
+          - "Rows with actual_prompt_tokens omitted only preserved AIMA's input_len_bucket label, not tokenizer-exact avg_input_tokens."
+        output_512:
+          # workload: [actual_prompt_tokens, ttft_s, tpot_ms, decode_tok_s, end_to_end_tps, sample_count]
+          1k-512:  [933,   0.337, 35.061, 28.5, 28.051, 4]
+          32k-512: [29149, 9.047, 37.624, 26.6, 18.107, 3]
+        matrix_128:
+          # input_target_tokens: [actual_prompt_bucket, ttft_s, tpot_ms, decode_tok_s, end_to_end_tps, sample_count]
+          128:    [136, 0.204, 34.979, 28.6, 27.367, 4]
+          1024:   [935, 0.338, 35.157, 28.4, 26.666, 4]
+          2048:   ["1K", 0.488, 35.191, 28.4, 25.822, 4]
+          8192:   ["7K", 1.877, 35.435, 28.2, 20.069, 1]
+          16384:  ["8K", 3.989, 36.052, 27.7, 14.939, 1]
+          32768:  ["8K", 9.137, 37.584, 26.6, 9.201, 1]
+          65536:  ["32K", 23.796, 40.049, 25.0, 4.432, 1]
+          131072: ["32K", 70.227, 44.923, 22.3, 1.686, 1]
+        calibrated_128:
+          # actual_prompt_tokens: [target_input_tokens, max_model_len, ttft_s, tpot_ms, decode_tok_s, end_to_end_tps]
+          32791:  [36864, 262144, 10.378, 37.577, 26.6, 8.448]
+          65558:  [73728, 262144, 27.822, 40.472, 24.7, 3.883]
+          128024: [144000, 262144, 82.288, 46.497, 21.5, 1.451]
+          160024: [180000, 262144, 120.431, 49.178, 20.3, 1.010]
+          192024: [216000, 262144, 165.922, 51.789, 19.3, 0.742]
+          224024: [252000, 262144, 218.974, 54.914, 18.2, 0.566]
+          256024: [288000, 262144, 282.643, 57.363, 17.4, 0.441]
+
+  # --- GB10 speculative path: native MTP on patched GB10 vLLM image ---
+  # Measured with AIMA benchmark.run, concurrency=1, num_requests=1,
+  # warmup_count=2, output_tokens=512. actual_prompt_tokens are taken from
+  # response usage rather than the requested target bucket.
+  - name: qwen3.6-35b-a3b-blackwell-vllm-mtp
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-mtp-blackwell
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.92
+      max_model_len: 262144
+      dtype: bfloat16
+      enforce_eager: true
+      trust_remote_code: true
+      language_model_only: true
+      reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
+      attention_backend: TRITON_ATTN
+      mm_encoder_attn_backend: TORCH_SDPA
+      skip_mm_profiling: true
+      max_num_batched_tokens: 8192
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 1
+    expected_performance:
+      startup_time_s: 190
+      cold_start_time_s: 300
+      tokens_per_second: [15, 39]
+      tpot_ms: [25, 65]
+      max_context_tokens: 116532
+      notes: "Validated 2026-04-22 on gb10-4t with AIMA benchmark.run, single_stream=true, output_tokens=512. Service boots at max_model_len=262144, but the 262144 target bucket ended with read SSE stream: unexpected EOF before a stable 512-token sample was recorded. Treat 116532 actual_prompt_tokens as the highest stable long-context point under this exact benchmark shape."
+      context_scaling:
+        # actual_prompt_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        935:    [0.874, 39.1, 1070]
+        1844:   [0.695, 39.0, 2653]
+        3665:   [1.090, 39.2, 3364]
+        7304:   [1.770, 37.2, 4126]
+        14586:  [3.827, 33.3, 3811]
+        29150:  [8.689, 28.3, 3355]
+        58277:  [23.672, 15.7, 2462]
+        116532: [72.017, 15.5, 1618]
+
+  # --- GB10 speculative path: DFlash on FA2-injected GB10 vLLM image ---
+  - name: qwen3.6-35b-a3b-blackwell-vllm-dflash
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-dflash-blackwell
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.92
+      max_model_len: 262144
+      block_size: 1280
+      dtype: bfloat16
+      enforce_eager: false
+      trust_remote_code: true
+      language_model_only: true
+      reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
+      attention_backend: FLASH_ATTN
+      mm_encoder_attn_backend: TORCH_SDPA
+      skip_mm_profiling: true
+      max_num_batched_tokens: 8192
+      max_num_seqs: 1
+      async_scheduling: false
+      speculative_config:
+        method: dflash
+        model: /models/Qwen3.6-35B-A3B-DFlash
+        num_speculative_tokens: 10
+    expected_performance:
+      startup_time_s: 376
+      cold_start_time_s: 420
+      tokens_per_second: [13, 45]
+      tpot_ms: [22, 75]
+      max_context_tokens: 233039
+      notes: "Validated 2026-04-22/23 on gb10-4t with AIMA benchmark.run. Current working GB10 runtime also needs VLLM_KV_CACHE_LAYOUT=NHD, VLLM_SKIP_GDN_PREFILL_WARMUP=1, FLA_GDN_FIX_BT=1, and VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1. The context_scaling table below is the final retained 2026-04-23 sweep with output_tokens=512, concurrency=1, rounds=3, warmup=2, block_size=1280, max_num_batched_tokens=8192, max_num_seqs=1, no_async_scheduling, and num_speculative_tokens=10. Raw results are stored at artifacts/knowledge/qwen3.6-gb10-dflash-final-context-sweep-results.json. For the practical single-stream business path at 32K/64K input + 1K output, the retained recommendation is non-eager + block_size=1280 + max_num_batched_tokens=8192 + max_num_seqs=1 + no_async_scheduling + num_speculative_tokens=10; keep scheduler_reserve_full_isl enabled. Runtime logs confirm chunked prefill is enabled and prefix caching is disabled. Concurrent partial prefill, block_size=1536/2048, num_speculative_tokens=11/12, GDN FlashInfer prefill, DBO, FlashInfer TRTLLM MoE, FlashInfer CUTLASS MoE, cudagraph_capture_size=1, GB10 fused MoE tuned config safe-v1, GB10 targeted MoE autotune-v1, and round16 large-bucket-only MoE guided variants did not produce a stronger practical default or are unavailable/invalid for this current image/config. The raw H100 same-shape fused MoE config must not be used on GB10 because it fails fused_moe Triton compilation with shared memory Required=147456, Hardware limit=101376. Targeted MoE autotune-v1 is runnable and slightly improves 64K end-to-end TPS (+0.35%) but regresses 32K (-3.23%) and worsens TPOT in both buckets, so keep it as an experiment-only candidate. Round16 large-bucket-only variants were worse than both retained config and autotune-v1 at 64K/1K."
+      final_context_sweep_512:
+        benchmark: "AIMA benchmark.run"
+        host: gb10-4t
+        measured_at: "2026-04-23"
+        image: qujing/vllm-gb10-dflash-fa2:latest
+        concurrency: 1
+        requests: 1
+        rounds: 3
+        warmup: 2
+        output_tokens: 512
+        ready_s: 376.4
+        config:
+          gpu_memory_utilization: 0.92
+          max_model_len: 262144
+          block_size: 1280
+          max_num_batched_tokens: 8192
+          max_num_seqs: 1
+          async_scheduling: false
+          moe_tuned_config: false
+          speculative_config:
+            method: dflash
+            model: /models/Qwen3.6-35B-A3B-DFlash
+            num_speculative_tokens: 10
+        runtime_env:
+          VLLM_KV_CACHE_LAYOUT: NHD
+          VLLM_SKIP_GDN_PREFILL_WARMUP: "1"
+          FLA_GDN_FIX_BT: "1"
+          VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "1"
+        results:
+          # input_target_tokens: [actual_prompt_tokens, ttft_s, tpot_ms, decode_tok_s, end_to_end_tps, draft_acceptance_rate, mean_acceptance_length]
+          1024:   [934, 0.353, 23.976, 41.7, 39.785, 0.244, 2.44]
+          2048:   [1844, 0.494, 24.353, 41.1, 38.856, 0.235, 2.35]
+          4096:   [3664, 0.771, 24.821, 40.3, 38.324, 0.254, 2.54]
+          8192:   [7304, 1.317, 22.112, 45.2, 40.543, 0.274, 2.74]
+          16384:  [14586, 2.744, 27.768, 36.0, 30.555, 0.243, 2.43]
+          32768:  [29149, 5.932, 29.363, 34.1, 24.679, 0.263, 2.63]
+          65536:  [58277, 13.749, 38.113, 26.2, 15.220, 0.233, 2.33]
+          131072: [116532, 35.169, 50.205, 19.9, 8.380, 0.234, 2.34]
+          262144: [233039, 109.196, 74.197, 13.5, 3.482, 0.250, 2.50]
+      business_long_context_1k:
+        benchmark: "AIMA benchmark.run"
+        host: gb10-4t
+        measured_at: "2026-04-23"
+        concurrency: 1
+        requests: 1
+        rounds: 3
+        warmup: 2
+        output_tokens: 1024
+        prompt: "business long-context prompt"
+        recommended_flags:
+          max_num_seqs: 1
+          async_scheduling: false
+          scheduler_reserve_full_isl: true
+          max_num_batched_tokens: 8192
+          block_size: 1280
+          num_speculative_tokens: 10
+        results:
+          # input_target_tokens: [actual_prompt_tokens, ttft_s, tpot_ms, end_to_end_tps, draft_acceptance_rate, mean_acceptance_length]
+          32768: [29173, 5.955, 30.644, 27.324, 0.231, 2.31]
+          65536: [58314, 13.807, 37.139, 19.746, 0.222, 2.22]
+        moe_tuned_config_trials:
+          - name: h100_same_shape_seed
+            tuned_config_folder: /home/qujing/aima-codex-qwen36/moe-configs/qwen36-gb10-seed
+            config_file: E=256,N=512,device_name=NVIDIA_GB10.json
+            status: invalid
+            reason: "Fails before ready in fused_moe Triton kernel: shared memory Required=147456, Hardware limit=101376."
+          - name: gb10_safe_v1
+            tuned_config_folder: /home/qujing/aima-codex-qwen36/moe-configs/qwen36-gb10-safe-v1
+            config_file: E=256,N=512,device_name=NVIDIA_GB10.json
+            status: runnable_not_recommended
+            input_target_tokens: 65536
+            actual_prompt_tokens: 58314
+            output_tokens: 1024
+            ttft_s: 13.970
+            tpot_ms: 39.896
+            end_to_end_tps: 18.712
+            draft_acceptance_rate: 0.221
+            mean_acceptance_length: 2.21
+            delta_vs_retained_64k:
+              ttft_pct: 1.18
+              tpot_pct: 7.42
+              end_to_end_tps_pct: -5.24
+          - name: gb10_targeted_autotune_v1
+            tuned_config_folder: /home/qujing/aima-codex-qwen36/moe-configs/qwen36-gb10-autotune-v1
+            config_file: E=256,N=512,device_name=NVIDIA_GB10.json
+            status: runnable_experiment_only
+            autotune:
+              script: artifacts/knowledge/qwen3.6-gb10-moe-autotune-targeted.py
+              elapsed_s: 292
+              batch_buckets: [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096, 8192]
+            results:
+              # input_target_tokens: [actual_prompt_tokens, ttft_s, tpot_ms, end_to_end_tps, draft_acceptance_rate, mean_acceptance_length]
+              32768: [29173, 6.025, 32.098, 26.443, 0.224, 2.24]
+              65536: [58314, 13.712, 37.810, 19.815, 0.224, 2.24]
+            delta_vs_retained:
+              32768:
+                ttft_pct: 1.17
+                tpot_pct: 4.74
+                end_to_end_tps_pct: -3.23
+              65536:
+                ttft_pct: -0.68
+                tpot_pct: 1.81
+                end_to_end_tps_pct: 0.35
+          - name: gb10_e2e_guided_large_bucket_variants
+            status: rejected
+            benchmark_shape: "64K input / 1K output / concurrency=1 / rounds=2 / warmup=1"
+            variants:
+              - name: moe_e2e_big512plus
+                overridden_buckets: [512, 1024, 2048, 4096, 8192]
+                ttft_s: 13.839
+                tpot_ms: 40.382
+                end_to_end_tps: 18.567
+                draft_acceptance_rate: 0.208
+              - name: moe_e2e_big1024plus
+                overridden_buckets: [1024, 2048, 4096, 8192]
+                ttft_s: 13.830
+                tpot_ms: 39.067
+                end_to_end_tps: 19.035
+                draft_acceptance_rate: 0.225
+              - name: moe_e2e_big4096plus
+                overridden_buckets: [4096, 8192]
+                ttft_s: 14.071
+                tpot_ms: 38.211
+                end_to_end_tps: 19.262
+                draft_acceptance_rate: 0.219
+            conclusion: "No variant beat round12 retained 64K/1K TPS=19.746 or round15 autotune-v1 TPS=19.815."
+      context_scaling:
+        # actual_prompt_tokens: [ttft_s, decode_tok_s, prefill_tok_s]
+        934:    [0.353, 41.7, 2644]
+        1844:   [0.494, 41.1, 3735]
+        3664:   [0.771, 40.3, 4751]
+        7304:   [1.317, 45.2, 5546]
+        14586:  [2.744, 36.0, 5316]
+        29149:  [5.932, 34.1, 4914]
+        58277:  [13.749, 26.2, 4239]
+        116532: [35.169, 19.9, 3313]
+        233039: [109.196, 13.5, 2134]
+
+  # --- GB10 MTP + VLM: image input enabled. Same engine as MTP text-only,
+  # but without language_model_only. See expected_performance.notes for the
+  # FA2/PTX background and why DFlash+VLM is not viable on SM121.
+  - name: qwen3.6-35b-a3b-blackwell-vllm-mtp-vlm
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 40960
+      unified_memory: true
+    engine: vllm-mtp-blackwell
+    format: safetensors
+    default_config:
+      gpu_memory_utilization: 0.80
+      max_model_len: 131072
+      dtype: bfloat16
+      enforce_eager: true
+      trust_remote_code: true
+      reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_xml
+      attention_backend: TRITON_ATTN
+      mm_encoder_attn_backend: TORCH_SDPA
+      skip_mm_profiling: true
+      max_num_batched_tokens: 8192
+      max_num_seqs: 4
+      async_scheduling: false
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 1
+    expected_performance:
+      startup_time_s: 212
+      cold_start_time_s: 300
+      tokens_per_second: [27, 41]
+      tpot_ms: [24, 37]
+      vram_mib: 68710
+      notes: |
+        Validated 2026-05-13 on gb10-4t. Text decode ~40 tok/s, VLM (image+text) ~37 tok/s,
+        first request has ~10s JIT Triton warmup. Boot ~212s (main model 174s + MTP drafter
+        16s + KV cache profiling). MTP acceptance gives ~80% speedup over baseline 22 tok/s.
+        Backend choices: attention_backend=TRITON_ATTN because the MTP image's FA2
+        (_vllm_fa2_C) is broken; mm_encoder_attn_backend=TORCH_SDPA because TRITON_ATTN
+        cannot handle the vision encoder's non-causal cross-attention; skip_mm_profiling
+        avoids the VLM encoder memory-profile crash.
+        Image patch required for VLM: qujing/vllm-gb10-mtp's vllm_flash_attn/ ships without
+        the layers/ subdir, so vision rotary embedding (forward_cuda) raises ModuleNotFoundError
+        on the first image request. Bridge it to the standalone flash_attn package via a
+        host-side shim and an extra_volumes mount in a runtime overlay:
+          mkdir -p /opt/aima/vllm_flash_attn_layers
+          echo 'from flash_attn.layers import *' > /opt/aima/vllm_flash_attn_layers/__init__.py
+          echo 'from flash_attn.layers.rotary import *' > /opt/aima/vllm_flash_attn_layers/rotary.py
+        Then in ~/.aima/catalog/engines/vllm-mtp-blackwell.yaml (overlay) add:
+          startup:
+            extra_volumes:
+              - name: flash-attn-layers-patch
+                host_path: /opt/aima/vllm_flash_attn_layers
+                mount_path: /usr/local/lib/python3.12/dist-packages/vllm/vllm_flash_attn/layers
+                read_only: true
+        Without the shim, text-only (language_model_only: true) still works.
+        DFlash+VLM is NOT viable on GB10 SM121: FA2 non-causal kernels lack SM121 PTX, and
+        TRITON_ATTN does not support non-causal attention required by DFlash spec decoding.

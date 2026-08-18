@@ -52,12 +52,33 @@ variants:
       tokens_per_second: [20, 40]
       latency_first_token_ms: [30, 100]
 
-  # --- AMD395 (RDNA3.5, 64GB unified) --- AIMA 当前仍不默认启用 vLLM:
-  # AMD 最新文档已列出 gfx1151 的 vLLM 支持, 但本地 AIMA 只有失败记录
-  # FP8: ROCm vLLM TheRock 仍缺少可用的 FP8 MoE kernels (gfx1151)
-  # BF16: 58GiB 权重 + ~5GiB PyTorch overhead > 64GiB UMA 可映射空间 → OOM
-  # CPU offload 无效: unified memory 下 CPU/GPU 共享物理内存池
-  # 此设备当前稳定路径仍是 llamacpp + GGUF 量化 (走下方 universal variant)
+  # --- AMD395 Radeon 8060S iGPU (RDNA3.5 gfx1151, 128GB LPDDR5X unified) ---
+  # vLLM 路径当前仍不可用:
+  # - FP8: ROCm vLLM TheRock 缺少 gfx1151 可用的 FP8 MoE kernels
+  # - BF16: 58GiB 权重 + ~5GiB PyTorch overhead > 64GiB UMA 可映射空间 → OOM
+  # - CPU offload 无效: unified memory 下 CPU/GPU 共享物理内存池
+  # - ROCm/HIP llama.cpp: kernel 6.8 + amdgpu-dkms 6.16.13 有 Strix Halo 统一内存
+  #   HIP runtime bug, tensor load 阶段 device-side page fault, 应用层无法绕过
+  # 当前稳定方案: llamacpp-vulkan + Q4_K_M GGUF (验证配置见下方专用 variant)
+  - name: qwen3-30b-a3b-rdna35-llamacpp-vulkan-q4
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 20480
+      unified_memory: true
+    engine: llamacpp
+    format: gguf
+    source:
+      type: huggingface
+      repo: unsloth/Qwen3-30B-A3B-GGUF
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      ctx_size: 32768
+    expected_performance:
+      tokens_per_second: [70, 80]
+      latency_first_token_ms: [280, 320]
+      vram_mib: 22000
+      notes: "Validated 2026-04-22 on AMD Ryzen AI MAX+ 395 + Radeon 8060S iGPU (gfx1151, RDNA3.5, 40 CU, 128GB LPDDR5X unified, ~64GB available VRAM). llama.cpp Vulkan (ghcr.io/ggml-org/llama.cpp:server-vulkan, b8840), Qwen3-30B-A3B-Q4_K_M.gguf 18.56GB. Tuned config: -b 4096 -ub 512 -fa on, KV cache f16, --parallel 1, ctx 32768. Measured: short prompt (in=128/out=256, C=1) decode 76.4 tok/s, TTFT 291ms, TPOT 12.0ms, stable. Long context (in=25000/out=512, C=1) TTFT 43.5s, decode 43.5 tok/s, stable. Matrix C=4 short: aggregate peak 122.6 tok/s (1.6x scaling). Tuning sweep: v1 (ub256 b2048 KVq8) 75.8 tps / TTFT 51.5s; v2 (ub512 b4096 KVf16) ⭐ chosen; v3 (ub512 b4096 KVq8) 74.4 tps / TTFT 63s fluctuating. KV f16 beats q8 at 25K context despite higher memory. iGPU decode matches AMD W7900D discrete workstation card (71-75 tok/s) at unified-memory cost profile."
 
   # --- Moore Threads MUSA (M1000 Dev Kit, 62GB unified, GPTQ-Int4) ---
   # GPTQ-Int4 权重 ~16GB, M1000 unified memory 62GB

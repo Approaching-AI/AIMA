@@ -5,17 +5,46 @@ metadata:
   family: qwen
   parameter_count: "27B"
   released_at: "2025-09"
+  # Scan-name alias: on-disk GGUF name so the local scanner matches this asset.
+  aliases:
+    - Qwen3.5-27B-Q4_K_M
 storage:
-  formats: [safetensors]
+  formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
       repo: Qwen/Qwen3.5-27B
       format: safetensors
+    - type: huggingface
+      repo: unsloth/Qwen3.5-27B-GGUF
+      format: gguf
     - type: modelscope
       repo: Qwen/Qwen3.5-27B
       format: safetensors
+    - type: local_path
+      path: ""
 variants:
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Q4_K_M ~16.5GB, all layers offloaded. gpu_arch "*" so it matches even when
+  # HAL cannot resolve a specific arch (e.g. Windows AMD APU reports no arch).
+  - name: qwen3.5-27b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 18432
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      ctx_size: 8192
+    expected_performance:
+      startup_time_s: 25
+      cold_start_time_s: 45
+      tokens_per_second: [11, 13]
+      latency_first_token_ms: [40, 250]
+      notes: "Verified 2026-06-08 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q4_K_M all 999 layers offloaded: 11.7 tok/s decode, 57 tok/s prompt."
+
   # --- generic vllm-nightly qwen3_5 image is not a validated runtime for this model ---
   - name: qwen3.5-27b-vllm-nightly-unsupported
     hardware:

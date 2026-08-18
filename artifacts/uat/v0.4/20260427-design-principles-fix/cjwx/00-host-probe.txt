@@ -1,0 +1,11 @@
+host=qujing24
+user=cjwx
+Linux qujing24 5.15.0-140-generic #150-Ubuntu SMP Sat Apr 12 06:00:09 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+ 11:41:25 up 4 days,  1:00,  0 users,  load average: 18.40, 18.38, 18.36
+0, NVIDIA GeForce RTX 4090, 1, 49140, 0
+1, NVIDIA GeForce RTX 4090, 1, 49140, 0
+2221 /usr/local/bin/aima-serve serve --addr=0.0.0.0:6188 --mdns --allow-insecure-no-auth
+2236 /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+2326 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+863883 bash -c set -e; echo host=$(hostname); echo user=$(whoami); uname -a; uptime; if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits; else echo no-nvidia-smi; fi; pgrep -af "aima|vllm|sglang|llama|python" | head -40 || true
+2736820 python /app/afs_exporter.py

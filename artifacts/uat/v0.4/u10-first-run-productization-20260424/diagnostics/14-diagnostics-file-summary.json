@@ -1,0 +1,8 @@
+{
+  "bytes": 3369,
+  "included_logs": false,
+  "log_lines": 80,
+  "path": "/Users/jguan/projects/aima-dev-agent/ref/aima/artifacts/uat/v0.4/u10-first-run-productization-20260424/data/diagnostics/aima-diagnostics-20260424-085530.json",
+  "secrets_redacted": true,
+  "telemetry_free": true
+}

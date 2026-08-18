@@ -1,0 +1,7 @@
+{
+  "action": "created",
+  "kind": "model_asset_patch",
+  "note": "user patch shadows factory asset, _base_digest injected",
+  "ownership": "user",
+  "path": "artifacts/uat/v0.4/20260427-design-principles-fix/local/aima-data/catalog/user/models/qwen3-4b.patch.yaml"
+}

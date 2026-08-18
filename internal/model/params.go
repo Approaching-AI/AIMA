@@ -455,7 +455,18 @@ func quantFromFilename(filename, format string) string {
 
 // quantFromTorchDtype extracts quantization from torch_dtype field.
 func quantFromTorchDtype(config map[string]any) string {
-	dtype := jsonStr(config, "torch_dtype", "")
+	for _, candidate := range []map[string]any{config, resolveArchConfig(config)} {
+		if q := quantFromDtypeValue(jsonStr(candidate, "torch_dtype", "")); q != "" {
+			return q
+		}
+		if q := quantFromDtypeValue(jsonStr(candidate, "dtype", "")); q != "" {
+			return q
+		}
+	}
+	return ""
+}
+
+func quantFromDtypeValue(dtype string) string {
 	switch strings.ToLower(dtype) {
 	case "float16", "half":
 		return "fp16"

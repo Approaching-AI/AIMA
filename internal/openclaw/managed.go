@@ -14,6 +14,8 @@ const managedStateVersion = 1
 type ManagedState struct {
 	Version                 int      `json:"version"`
 	LLMProvider             string   `json:"llm_provider,omitempty"`
+	ChatModelProvider       string   `json:"chat_model_provider,omitempty"`
+	ChatModelModels         []string `json:"chat_model_models,omitempty"`
 	MediaProvider           string   `json:"media_provider,omitempty"`
 	AudioModels             []string `json:"audio_models,omitempty"`
 	VisionModels            []string `json:"vision_models,omitempty"`
@@ -25,6 +27,24 @@ type ManagedState struct {
 	AudioAuthProvider       string   `json:"audio_auth_provider,omitempty"`
 	PluginAllow             []string `json:"plugin_allow,omitempty"`
 	MCPServerName           string   `json:"mcp_server_name,omitempty"`
+	// ExcludedModels are models the user has revoked from OpenClaw sync. Sync
+	// skips them (removed from the config and never re-added) until Include
+	// clears the mark. Persistent + reversible: this is user intent, not "what
+	// AIMA wrote", so it survives the reconcile that rewrites the rest.
+	ExcludedModels []string `json:"excluded_models,omitempty"`
+}
+
+// IsExcluded reports whether the model has been revoked from OpenClaw sync.
+func (s *ManagedState) IsExcluded(model string) bool {
+	if s == nil {
+		return false
+	}
+	for _, m := range s.ExcludedModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
 }
 
 func ManagedStatePath(configPath string) string {
@@ -62,10 +82,7 @@ func WriteManagedState(configPath string, state *ManagedState) error {
 		return fmt.Errorf("marshal openclaw managed state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create openclaw managed state dir: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := writeFileAtomic(path, data, 0644); err != nil {
 		return fmt.Errorf("write openclaw managed state: %w", err)
 	}
 	return nil
@@ -76,6 +93,8 @@ func (s *ManagedState) Empty() bool {
 		return true
 	}
 	return s.LLMProvider == "" &&
+		s.ChatModelProvider == "" &&
+		len(s.ChatModelModels) == 0 &&
 		s.MediaProvider == "" &&
 		len(s.AudioModels) == 0 &&
 		len(s.VisionModels) == 0 &&
@@ -86,7 +105,8 @@ func (s *ManagedState) Empty() bool {
 		len(s.ImageGenerationModels) == 0 &&
 		s.AudioAuthProvider == "" &&
 		len(s.PluginAllow) == 0 &&
-		s.MCPServerName == ""
+		s.MCPServerName == "" &&
+		len(s.ExcludedModels) == 0
 }
 
 func normalizeManagedState(state *ManagedState) {
@@ -94,13 +114,20 @@ func normalizeManagedState(state *ManagedState) {
 		return
 	}
 	state.Version = managedStateVersion
+	state.ChatModelModels = uniqueSorted(state.ChatModelModels)
 	state.AudioModels = uniqueSorted(state.AudioModels)
 	state.VisionModels = uniqueSorted(state.VisionModels)
 	state.ImageModelModels = uniqueSorted(state.ImageModelModels)
 	state.ImageGenerationModels = uniqueSorted(state.ImageGenerationModels)
 	state.PluginAllow = uniqueSorted(state.PluginAllow)
+	state.ExcludedModels = uniqueSorted(state.ExcludedModels)
 	if state.MediaProvider != "" && len(state.AudioModels) == 0 && len(state.VisionModels) == 0 {
 		state.MediaProvider = ""
+	}
+	if state.ChatModelProvider == "" {
+		state.ChatModelModels = nil
+	} else if len(state.ChatModelModels) == 0 {
+		state.ChatModelProvider = ""
 	}
 	if state.ImageModelProvider != "" && len(state.ImageModelModels) == 0 {
 		state.ImageModelProvider = ""
@@ -132,6 +159,10 @@ func managedOwnsTTS(state *ManagedState) bool {
 
 func managedOwnsMediaProvider(state *ManagedState) bool {
 	return state != nil && state.MediaProvider != ""
+}
+
+func managedOwnsChatModel(state *ManagedState) bool {
+	return state != nil && state.ChatModelProvider != ""
 }
 
 func managedOwnsImageGeneration(state *ManagedState) bool {

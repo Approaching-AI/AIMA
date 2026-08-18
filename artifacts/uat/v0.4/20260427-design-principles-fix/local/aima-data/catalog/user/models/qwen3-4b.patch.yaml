@@ -1,0 +1,6 @@
+_base_digest: sha256:e945942dc886c7d96b1944f041bc75dd4b3f7353779998d86238605f96843562
+kind: model_asset_patch
+metadata:
+    aliases:
+        - qwen3-4b-uat-20260427
+    name: qwen3-4b

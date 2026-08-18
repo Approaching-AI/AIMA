@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/jguan/aima/internal/engine"
+	"github.com/jguan/aima/internal/recovery"
 )
 
 // ToolDeps collects all dependencies that tool handlers need.
@@ -23,21 +24,34 @@ type ToolDeps struct {
 	RemoveModel  func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Engine management
-	ScanEngines   func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
-	ListEngines   func(ctx context.Context) (json.RawMessage, error)
-	GetEngineInfo func(ctx context.Context, name string) (json.RawMessage, error)
-	PullEngine    func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
-	ImportEngine  func(ctx context.Context, path string) error
-	RemoveEngine  func(ctx context.Context, name string, deleteFiles bool) error
+	ScanEngines    func(ctx context.Context, runtime string, autoImport bool) (json.RawMessage, error) // runtime: "auto" | "container" | "native"
+	ListEngines    func(ctx context.Context) (json.RawMessage, error)
+	GetEngineInfo  func(ctx context.Context, name string) (json.RawMessage, error)
+	EnsureEngine   func(ctx context.Context, name, version string, apply bool) (json.RawMessage, error)
+	RollbackEngine func(ctx context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error)
+	PullEngine     func(ctx context.Context, name string, onProgress func(engine.ProgressEvent)) error
+	ImportEngine   func(ctx context.Context, path string) error
+	RemoveEngine   func(ctx context.Context, name string, deleteFiles bool) error
 
 	// Deployment (runtime package)
-	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error)
+	DeployApply  func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error)
 	DeployDryRun func(ctx context.Context, engine, model, slot string, configOverrides map[string]any) (json.RawMessage, error)
 	DeployRun    func(ctx context.Context, model, engineType, slot string, configOverrides map[string]any, noPull bool, onPhase func(phase, msg string), onEngineProgress func(engine.ProgressEvent), onModelProgress func(downloaded, total int64)) (json.RawMessage, error)
 	DeployDelete func(ctx context.Context, name string) error
 	DeployStatus func(ctx context.Context, name string) (json.RawMessage, error)
 	DeployList   func(ctx context.Context) (json.RawMessage, error)
 	DeployLogs   func(ctx context.Context, name string, tailLines int) (string, error)
+
+	// Recovery controller adapters are process-internal and are not exposed in
+	// any MCP schema. Their implementations share deploy.apply/delete locking.
+	RecoveryObserve recovery.ObserveFunc
+	RecoveryApply   recovery.ApplyFunc
+	RecoveryDelete  recovery.DeleteFunc
+
+	// External service discovery
+	ScanExternalServices  func(ctx context.Context) (json.RawMessage, error)
+	ListExternalServices  func(ctx context.Context) (json.RawMessage, error)
+	ImportExternalService func(ctx context.Context, idOrBaseURL string, models []string) (json.RawMessage, error)
 
 	// Knowledge
 	ResolveConfig           func(ctx context.Context, model, engine string, overrides map[string]any) (json.RawMessage, error)
@@ -70,9 +84,12 @@ type ToolDeps struct {
 	StackStatus    func(ctx context.Context) (json.RawMessage, error)
 
 	// Catalog overlay
-	CatalogOverride func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
-	CatalogStatus   func(ctx context.Context) (json.RawMessage, error)
-	CatalogValidate func(ctx context.Context) (json.RawMessage, error)
+	CatalogOverride      func(ctx context.Context, kind, name, content string) (json.RawMessage, error)
+	CatalogStatus        func(ctx context.Context) (json.RawMessage, error)
+	CatalogValidate      func(ctx context.Context) (json.RawMessage, error)
+	CatalogEffective     func(ctx context.Context, kind, name string) (json.RawMessage, error)
+	CatalogDiff          func(ctx context.Context, kind, name string) (json.RawMessage, error)
+	CatalogValidatePatch func(ctx context.Context, content string) (json.RawMessage, error)
 
 	// Deploy approval
 	DeployApprove func(ctx context.Context, id int64) (json.RawMessage, error)
@@ -94,9 +111,10 @@ type ToolDeps struct {
 	DeviceReset    func(ctx context.Context, confirm bool) (json.RawMessage, error)
 
 	// System
-	SystemStatus func(ctx context.Context) (json.RawMessage, error)
-	GetConfig    func(ctx context.Context, key string) (string, error)
-	SetConfig    func(ctx context.Context, key, value string) error
+	SystemStatus      func(ctx context.Context) (json.RawMessage, error)
+	DiagnosticsExport func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+	GetConfig         func(ctx context.Context, key string) (string, error)
+	SetConfig         func(ctx context.Context, key, value string) error
 
 	// Knowledge (summary)
 	ListKnowledgeSummary func(ctx context.Context) (json.RawMessage, error)
@@ -150,11 +168,14 @@ type ToolDeps struct {
 	SyncStatus func(ctx context.Context) (json.RawMessage, error)
 
 	// OpenClaw integration
-	OpenClawSync   func(ctx context.Context, dryRun bool) (json.RawMessage, error)
-	OpenClawStatus func(ctx context.Context) (json.RawMessage, error)
-	OpenClawClaim  func(ctx context.Context, sections []string, dryRun bool) (json.RawMessage, error)
+	OpenClawSync    func(ctx context.Context, dryRun bool) (json.RawMessage, error)
+	OpenClawStatus  func(ctx context.Context) (json.RawMessage, error)
+	OpenClawClaim   func(ctx context.Context, sections []string, dryRun bool) (json.RawMessage, error)
+	OpenClawExclude func(ctx context.Context, model string) (json.RawMessage, error)
+	OpenClawInclude func(ctx context.Context, model string) (json.RawMessage, error)
 
 	// Onboarding wizard (multi-action)
+	OnboardingStart     func(ctx context.Context, locale string) (json.RawMessage, error)
 	OnboardingStatus    func(ctx context.Context) (json.RawMessage, error)
 	OnboardingScan      func(ctx context.Context) (json.RawMessage, error)
 	OnboardingRecommend func(ctx context.Context, locale string) (json.RawMessage, error)
@@ -164,7 +185,7 @@ type ToolDeps struct {
 	// Scenario
 	ScenarioList  func(ctx context.Context) (json.RawMessage, error)
 	ScenarioShow  func(ctx context.Context, name string) (json.RawMessage, error)
-	ScenarioApply func(ctx context.Context, name string, dryRun bool) (json.RawMessage, error)
+	ScenarioApply func(ctx context.Context, name string, dryRun bool, bindings map[string]string) (json.RawMessage, error)
 
 	// Explorer
 	ExplorerStatus   func(ctx context.Context) (json.RawMessage, error)

@@ -24,6 +24,7 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 			Labels: map[string]string{
 				"aima.dev/model":          "qwen3-8b",
 				"aima.dev/engine":         "vllm",
+				"aima.dev/model_type":     "llm",
 				"aima.dev/context_window": "16384",
 				LabelServedModel:          "musachat_local",
 			},
@@ -47,8 +48,60 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 	if b.ContextWindowTokens != 16384 {
 		t.Errorf("context_window_tokens = %d, want 16384", b.ContextWindowTokens)
 	}
+	if b.ModelType != "llm" {
+		t.Errorf("model type = %q, want llm", b.ModelType)
+	}
 	if b.UpstreamModel != "musachat_local" {
 		t.Errorf("upstreamModel = %q, want %q", b.UpstreamModel, "musachat_local")
+	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
+	}
+}
+
+func TestSyncBackends_RegistersTheRequestedCatalogAlias(t *testing.T) {
+	s := NewServer()
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:        "qwen3-6-35b-a3b-structured",
+			Model:       "qwen3.6-35b-a3b",
+			ServedModel: "qwen-upstream",
+			Ready:       true,
+			Address:     "127.0.0.1:30000",
+			Labels: map[string]string{
+				LabelRequestedModel: "qwen3.6-35b-a3b-bf16",
+			},
+		},
+	})
+
+	backends := s.ListBackends()
+	alias := backends["qwen3.6-35b-a3b-bf16"]
+	if alias == nil {
+		t.Fatal("requested catalog alias is not routable")
+	}
+	if alias.ModelName != "qwen3.6-35b-a3b-bf16" || alias.UpstreamModel != "qwen-upstream" {
+		t.Fatalf("alias backend = %+v", alias)
+	}
+	if backends["qwen3.6-35b-a3b"] == nil {
+		t.Fatal("canonical catalog route was removed")
+	}
+}
+
+func TestSyncBackends_RegistersServedModelAliasAfterRecovery(t *testing.T) {
+	s := NewServer()
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:        "recovered-qwen",
+			Model:       "qwen3.6-35b-a3b",
+			ServedModel: "qwen3.6-35b-a3b-bf16",
+			Ready:       true,
+			Address:     "127.0.0.1:30000",
+		},
+	})
+
+	alias := s.ListBackends()["qwen3.6-35b-a3b-bf16"]
+	if alias == nil || alias.UpstreamModel != "qwen3.6-35b-a3b-bf16" {
+		t.Fatalf("recovered served-model alias = %+v", alias)
 	}
 }
 
@@ -152,12 +205,16 @@ func TestSyncBackends_NotReadyPreservesExistingRouteFields(t *testing.T) {
 	if b.ContextWindowTokens != 8192 {
 		t.Errorf("context_window_tokens = %d, want 8192", b.ContextWindowTokens)
 	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
+	}
 }
 
 func TestSyncBackends_Removed(t *testing.T) {
 	s := NewServer()
 	s.RegisterBackend("old-model", &Backend{ModelName: "old-model", Address: "1.2.3.4:8000", Ready: true})
 	s.RegisterBackend("keep-model", &Backend{ModelName: "keep-model", Address: "1.2.3.5:8000", Ready: true})
+	s.RegisterBackend("external-model", &Backend{ModelName: "external-model", Address: "127.0.0.1:8004", Ready: true, External: true})
 
 	SyncBackends(s, []*DeploymentInfo{
 		{
@@ -175,6 +232,9 @@ func TestSyncBackends_Removed(t *testing.T) {
 	}
 	if _, ok := backends["keep-model"]; !ok {
 		t.Error("keep-model should still exist")
+	}
+	if _, ok := backends["external-model"]; !ok {
+		t.Error("external-model should be preserved")
 	}
 }
 

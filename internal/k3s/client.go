@@ -41,6 +41,7 @@ type PodStatus struct {
 	DeletionTimestamp string            `json:"deletion_timestamp,omitempty"`
 	Message           string            `json:"message,omitempty"`
 	ContainerPort     int               `json:"container_port,omitempty"`
+	ContainerImage    string            `json:"container_image,omitempty"`
 	RestartCount      int               `json:"restart_count,omitempty"`
 	ExitCode          *int              `json:"exit_code,omitempty"`         // from Terminated state
 	ContainerStarted  string            `json:"container_started,omitempty"` // when the current container instance started
@@ -270,6 +271,7 @@ type kubePod struct {
 	} `json:"metadata"`
 	Spec struct {
 		Containers []struct {
+			Image string `json:"image"`
 			Ports []struct {
 				ContainerPort int `json:"containerPort"`
 			} `json:"ports"`
@@ -357,8 +359,12 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 	}
 
 	containerPort := 0
+	containerImage := ""
 	if len(kp.Spec.Containers) > 0 && len(kp.Spec.Containers[0].Ports) > 0 {
+		containerImage = kp.Spec.Containers[0].Image
 		containerPort = kp.Spec.Containers[0].Ports[0].ContainerPort
+	} else if len(kp.Spec.Containers) > 0 {
+		containerImage = kp.Spec.Containers[0].Image
 	}
 
 	var conditions []PodCondition
@@ -376,6 +382,7 @@ func parsePodJSON(data []byte) (*PodStatus, error) {
 		DeletionTimestamp: kp.Metadata.DeletionTimestamp,
 		Message:           msg,
 		ContainerPort:     containerPort,
+		ContainerImage:    containerImage,
 		RestartCount:      restartCount,
 		ExitCode:          exitCode,
 		ContainerStarted:  containerStarted,

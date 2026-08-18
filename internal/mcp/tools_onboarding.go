@@ -7,7 +7,8 @@ import (
 )
 
 // registerOnboardingTools registers the single "onboarding" MCP tool which
-// exposes the cold-start wizard flow to AI agents via 5 actions:
+// exposes the cold-start wizard flow to AI agents via 6 actions:
+//   - start     (read-only)   : status + scan + recommend + next command
 //   - status    (read-only)   : hardware/stack/version/onboarding_completed
 //   - scan      (read-only)   : parallel engines/models/central_sync
 //   - recommend (read-only)   : model recommendations
@@ -22,9 +23,9 @@ func registerOnboardingTools(s *Server, deps *ToolDeps) {
 	s.RegisterTool(&Tool{
 		Name: "onboarding",
 		Description: "Manage edge device onboarding (cold-start wizard) — used by both human UI and AI agents. " +
-			"Actions: status (read-only), scan (read-only), recommend (read-only), init (destructive — installs docker/k3s stack), deploy (destructive — applies a deployment).",
+			"Actions: start (read-only first-run guide), status (read-only), scan (read-only), recommend (read-only), init (destructive — installs docker/k3s stack), deploy (destructive — applies a deployment).",
 		InputSchema: schema(
-			`"action":{"type":"string","enum":["status","scan","recommend","init","deploy"],"description":"Which onboarding sub-action to run"},`+
+			`"action":{"type":"string","enum":["start","status","scan","recommend","init","deploy"],"description":"Which onboarding sub-action to run"},`+
 				`"locale":{"type":"string","description":"Locale for recommend action (e.g. \"en\", \"zh\"). Optional."},`+
 				`"tier":{"type":"string","enum":["auto","docker","k3s"],"description":"Init action: which stack tier to install. Default: auto."},`+
 				`"allow_download":{"type":"boolean","description":"Init action: allow internet download. Default: false."},`+
@@ -53,6 +54,15 @@ func registerOnboardingTools(s *Server, deps *ToolDeps) {
 			}
 
 			switch req.Action {
+			case "start":
+				if deps.OnboardingStart == nil {
+					return ErrorResult("onboarding action=start not implemented"), nil
+				}
+				raw, err := deps.OnboardingStart(ctx, req.Locale)
+				if err != nil {
+					return nil, fmt.Errorf("onboarding start: %w", err)
+				}
+				return TextResult(string(raw)), nil
 			case "status":
 				if deps.OnboardingStatus == nil {
 					return ErrorResult("onboarding action=status not implemented"), nil
@@ -99,7 +109,7 @@ func registerOnboardingTools(s *Server, deps *ToolDeps) {
 				}
 				return TextResult(string(raw)), nil
 			default:
-				return ErrorResult(fmt.Sprintf("unknown action %q; supported: status, scan, recommend, init, deploy", req.Action)), nil
+				return ErrorResult(fmt.Sprintf("unknown action %q; supported: start, status, scan, recommend, init, deploy", req.Action)), nil
 			}
 		},
 	})

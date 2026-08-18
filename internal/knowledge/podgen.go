@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -14,6 +15,7 @@ import (
 var podTemplate = template.Must(template.New("pod").Funcs(template.FuncMap{
 	"deviceVolName":     deviceVolName,
 	"containerPortName": containerPortName,
+	"yamlQuote":         strconv.Quote,
 }).Parse(`apiVersion: v1
 kind: Pod
 metadata:
@@ -35,6 +37,10 @@ metadata:
 spec:
   schedulerName: default-scheduler
   restartPolicy: Always
+  {{- if .HostNetwork }}
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  {{- end }}
   {{- if .RuntimeClassName }}
   runtimeClassName: {{ .RuntimeClassName }}
   {{- end }}
@@ -54,7 +60,7 @@ spec:
       {{- if .Args }}
       command:
         {{- range .Args }}
-        - "{{ . }}"
+        - {{ yamlQuote . }}
         {{- end }}
       {{- end }}
       {{- if .Ports }}
@@ -68,7 +74,7 @@ spec:
       env:
         {{- range $k, $v := .ExtraEnv }}
         - name: {{ $k }}
-          value: "{{ $v }}"
+          value: {{ yamlQuote $v }}
         {{- end }}
       {{- end }}
       {{- if .HasContainerSecurity }}
@@ -187,6 +193,7 @@ type podData struct {
 	Devices                 []string           // device paths to mount, e.g. ["/dev/kfd", "/dev/dri"]
 	ExtraVolumes            []ContainerVolume  // additional host mounts
 	Security                *ContainerSecurity // pod-level securityContext
+	HostNetwork             bool
 }
 
 func (d podData) HasAnnotations() bool {
@@ -283,7 +290,13 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 			if _, reserved := portKeys[k]; reserved {
 				continue
 			}
-			if !ShouldIncludeConfigFlag(resolved.Command, resolved.ModelPath, k, resolved.Config[k]) {
+			if !ShouldIncludeConfigFlagFor(ConfigFlagContext{
+				Command:            resolved.Command,
+				ModelPath:          resolved.ModelPath,
+				Engine:             resolved.Engine,
+				ModelType:          resolved.ModelType,
+				AcceptedConfigKeys: resolved.AcceptedConfigKeys,
+			}, k, resolved.Config[k]) {
 				continue
 			}
 			flagName := "--" + strings.ReplaceAll(k, "_", "-")
@@ -294,21 +307,15 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		}
 		sort.Strings(keys) // deterministic ordering for reproducible pod specs
 		for _, k := range keys {
-			flagName := strings.ReplaceAll(k, "_", "-")
-			switch v := resolved.Config[k].(type) {
-			case bool:
-				if v {
-					args = append(args, "--"+flagName)
-				} else {
-					args = append(args, "--no-"+flagName)
-				}
-			case string:
-				expanded := strings.ReplaceAll(v, "{{.ModelName}}", resolved.ModelName)
+			// String values need template expansion before formatting;
+			// other types delegate to FormatConfigFlag (shared with Docker/Native runtime).
+			if s, ok := resolved.Config[k].(string); ok {
+				expanded := strings.ReplaceAll(s, "{{.ModelName}}", resolved.ModelName)
 				expanded = strings.ReplaceAll(expanded, "{{.ModelPath}}", containerModelPath)
-				args = append(args, "--"+flagName, expanded)
-			default:
-				args = append(args, "--"+flagName, fmt.Sprintf("%v", v))
+				args = append(args, "--"+strings.ReplaceAll(k, "_", "-"), expanded)
+				continue
 			}
+			args = append(args, FormatConfigFlag(k, resolved.Config[k])...)
 		}
 	}
 
@@ -365,6 +372,7 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.Devices = resolved.Container.Devices
 		data.ExtraVolumes = resolved.Container.Volumes
 		data.Security = resolved.Container.Security
+		data.HostNetwork = resolved.Container.NetworkMode == "host"
 	}
 
 	// Merge engine extra_volumes (e.g. patch scripts) into pod volumes.
@@ -375,6 +383,13 @@ func GeneratePod(resolved *ResolvedConfig) ([]byte, error) {
 		data.GPUCoresPercent = resolved.Partition.GPUCoresPercent
 		data.CPUCores = resolved.Partition.CPUCores
 		data.RAMMiB = resolved.Partition.RAMMiB
+	}
+
+	// Fall back to the resolver's memory guardrail when no partition pins a RAM
+	// limit, so unified-memory inference pods always carry a memory ceiling and
+	// a runaway container is OOM-killed instead of hard-hanging the host.
+	if data.RAMMiB == 0 && resolved.MemLimitMiB > 0 {
+		data.RAMMiB = resolved.MemLimitMiB
 	}
 
 	if resolved.HealthCheck != nil {

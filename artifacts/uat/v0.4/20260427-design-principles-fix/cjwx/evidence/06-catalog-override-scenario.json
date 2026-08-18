@@ -1,0 +1,6 @@
+{
+  "action": "created",
+  "kind": "deployment_scenario_patch",
+  "ownership": "user",
+  "path": "/tmp/aima-uat-20260427-design-fix/data/catalog/user/scenarios/uat-approval-flow.patch.yaml"
+}

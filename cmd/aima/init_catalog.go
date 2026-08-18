@@ -23,31 +23,37 @@ func initCatalog(ctx context.Context, db *state.DB, dataDir string) (*knowledge.
 		return nil, nil, fmt.Errorf("load catalog: %w", err)
 	}
 
-	// 3b. Merge overlay catalog from disk (if present) with staleness detection
+	// 3b. Merge runtime catalog patches from disk. Layers are ordered by
+	// ownership: central distillation first, user overrides last.
 	overlayDir := filepath.Join(dataDir, "catalog")
 	factoryDigests := knowledge.ComputeDigests(catalog.FS)
-	if info, e := os.Stat(overlayDir); e == nil && info.IsDir() {
-		overlayFS := os.DirFS(overlayDir)
-		overlayCat, parseWarnings := knowledge.LoadCatalogLenient(overlayFS)
+	for _, layer := range []string{"central", "user"} {
+		layerDir := filepath.Join(overlayDir, layer)
+		if info, e := os.Stat(layerDir); e != nil || !info.IsDir() {
+			continue
+		}
+		overlayCat, parseWarnings := knowledge.LoadCatalogPatchesLenient(os.DirFS(layerDir), cat)
 		for _, w := range parseWarnings {
-			slog.Warn("overlay file skipped", "reason", w)
+			slog.Warn("catalog patch skipped", "layer", layer, "reason", w)
 		}
 		before := catalogSize(cat)
-		cat, staleWarnings := knowledge.MergeCatalogWithDigests(cat, overlayCat, factoryDigests, overlayFS)
+		cat, staleWarnings := knowledge.MergeCatalogWithDigests(cat, overlayCat, factoryDigests, os.DirFS(layerDir))
 		// UAT noise reduction: per-file stale warnings spammed startup logs on
 		// machines with large overlays. Aggregate to a single summary line and
 		// emit individual warnings at Debug level for diagnostics.
 		for _, w := range staleWarnings {
-			slog.Debug("overlay stale detail", "detail", w)
+			slog.Debug("catalog patch stale detail", "layer", layer, "detail", w)
 		}
 		if len(staleWarnings) > 0 {
-			slog.Info("catalog overlay has stale entries; review recommended",
+			slog.Info("catalog patch layer has stale entries; review recommended",
+				"layer", layer,
 				"stale_count", len(staleWarnings),
-				"dir", overlayDir,
+				"dir", layerDir,
 			)
 		}
-		slog.Info("catalog overlay merged",
-			"dir", overlayDir,
+		slog.Info("catalog patch layer merged",
+			"layer", layer,
+			"dir", layerDir,
 			"overlay_assets", catalogSize(overlayCat),
 			"new_assets", catalogSize(cat)-before,
 		)

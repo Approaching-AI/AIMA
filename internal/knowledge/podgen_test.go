@@ -225,6 +225,87 @@ func TestGeneratePodNilResolved(t *testing.T) {
 	}
 }
 
+func TestGeneratePodHostNetwork(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine: "distributed-vllm", EngineImage: "example/vllm:latest", ModelName: "model",
+		ModelPath: "/models/model", Command: []string{"vllm", "serve", "{{.ModelPath}}"},
+		Container: &ContainerAccess{NetworkMode: "host"},
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	text := string(podYAML)
+	if !strings.Contains(text, "hostNetwork: true") || !strings.Contains(text, "dnsPolicy: ClusterFirstWithHostNet") {
+		t.Fatalf("host-network fields missing:\n%s", text)
+	}
+}
+
+func TestGeneratePodMemGuardrail(t *testing.T) {
+	// No partition: the resolver's MemLimitMiB guardrail (unified-memory hosts)
+	// must still produce a container memory ceiling so a runaway pod is
+	// OOM-killed instead of hard-hanging the machine.
+	resolved := &ResolvedConfig{
+		Engine:      "vllm",
+		EngineImage: "vllm/vllm-openai:latest",
+		ModelPath:   "/data/models/qwen3-8b",
+		ModelName:   "qwen3-8b",
+		Slot:        "primary",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve"},
+		MemLimitMiB: 110000,
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, podYAML)
+	}
+	c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	resources, ok := c["resources"].(map[string]any)
+	if !ok {
+		t.Fatal("expected resources block when MemLimitMiB is set")
+	}
+	limits := resources["limits"].(map[string]any)
+	if limits["memory"] != "110000Mi" {
+		t.Errorf("memory limit = %v, want 110000Mi", limits["memory"])
+	}
+	if limits["cpu"] != nil {
+		t.Errorf("unexpected cpu limit %v (only the memory guardrail should be set)", limits["cpu"])
+	}
+}
+
+func TestGeneratePodPartitionOverridesMemGuardrail(t *testing.T) {
+	// An explicit partition RAM limit takes precedence over the fallback guardrail.
+	resolved := &ResolvedConfig{
+		Engine:      "vllm",
+		EngineImage: "vllm/vllm-openai:latest",
+		ModelPath:   "/data/models/qwen3-8b",
+		ModelName:   "qwen3-8b",
+		Slot:        "primary",
+		Config:      map[string]any{"port": 8000},
+		Command:     []string{"vllm", "serve"},
+		MemLimitMiB: 110000,
+		Partition:   &PartitionSlot{Name: "primary", RAMMiB: 65536},
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	var pod map[string]any
+	if err := yaml.Unmarshal(podYAML, &pod); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+	c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	limits := c["resources"].(map[string]any)["limits"].(map[string]any)
+	if limits["memory"] != "65536Mi" {
+		t.Errorf("memory limit = %v, want 65536Mi (partition wins)", limits["memory"])
+	}
+}
+
 func TestGeneratePodAMDDevices(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Engine:      "rocm-engine",
@@ -340,6 +421,37 @@ func TestGeneratePodWithCustomStartupPorts(t *testing.T) {
 	}
 }
 
+func TestGeneratePodFiltersUnsupportedConfigFlags(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "z-image-diffusers",
+		EngineImage: "qujing-z-image:latest",
+		ModelPath:   "/data/models/z-image",
+		ModelName:   "z-image",
+		Slot:        "default",
+		Command:     []string{"python3", "server.py"},
+		PortSpecs: []StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{
+			"port":          8188,
+			"max_model_len": 8192,
+		},
+		AcceptedConfigKeys: []string{"port"},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	s := string(podYAML)
+	if !strings.Contains(s, "--port") || !strings.Contains(s, "8188") {
+		t.Fatalf("expected accepted port flag in YAML:\n%s", s)
+	}
+	if strings.Contains(s, "--max-model-len") {
+		t.Fatalf("LLM-only context flag should not be emitted for image engine:\n%s", s)
+	}
+}
+
 func TestGeneratePodEnvMerge(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Engine:      "vllm",
@@ -393,5 +505,37 @@ func TestGeneratePodEnvMerge(t *testing.T) {
 	}
 	if envMap["SHARED_VAR"] != "engine-wins" {
 		t.Errorf("SHARED_VAR = %q, want engine-wins (engine overrides hw)", envMap["SHARED_VAR"])
+	}
+}
+
+func TestGeneratePodFiltersLLMOnlyArgsForImageService(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine:      "z-image-diffusers",
+		EngineImage: "qujing-z-image:latest",
+		ModelPath:   "/data/models/stable-diffusion-v1-5",
+		ModelName:   "stable-diffusion-v1-5",
+		ModelType:   "image_gen",
+		Slot:        "default",
+		Config: map[string]any{
+			"port":                   8188,
+			"max_model_len":          8192,
+			"gpu_memory_utilization": 0.5,
+		},
+		Command: []string{"python3", "server.py"},
+		PortSpecs: []StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+	}
+
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	s := string(podYAML)
+	if strings.Contains(s, "--max-model-len") || strings.Contains(s, "--gpu-memory-utilization") {
+		t.Fatalf("LLM-only args should not be emitted for image services:\n%s", s)
+	}
+	if !strings.Contains(s, "--port") {
+		t.Fatalf("expected service port flag to remain:\n%s", s)
 	}
 }

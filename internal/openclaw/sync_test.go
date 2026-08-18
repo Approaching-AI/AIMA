@@ -63,21 +63,6 @@ func (m *mockCatalog) ModelChatProvider(name string) bool {
 	return name != "glm-4.1v-9b"
 }
 
-func (m *mockCatalog) OpenClawRequestPatches(name string) []RequestPatch {
-	if name != "qwen3.5-9b" {
-		return nil
-	}
-	return []RequestPatch{{
-		Path:           "/v1/chat/completions",
-		EnginePrefixes: []string{"vllm"},
-		Body: map[string]any{
-			"chat_template_kwargs": map[string]any{
-				"enable_thinking": false,
-			},
-		},
-	}}
-}
-
 func TestSyncDryRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "openclaw.json")
 	deps := &Deps{
@@ -200,6 +185,17 @@ func TestSyncWritesConfig(t *testing.T) {
 	if managed.LLMProvider != "aima" {
 		t.Fatalf("managed llm provider = %q, want aima", managed.LLMProvider)
 	}
+	defaults := lookupMap(cfg, "agents", "defaults")
+	if defaults == nil {
+		t.Fatal("agents.defaults missing after sync")
+	}
+	chatModel, ok := defaults["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("agents.defaults.model = %T, want map", defaults["model"])
+	}
+	if got := chatModel["primary"]; got != "aima/qwen3-8b" {
+		t.Fatalf("agents.defaults.model.primary = %v, want aima/qwen3-8b", got)
+	}
 	if managed.MCPServerName != "aima" {
 		t.Fatalf("managed mcp server = %q, want aima", managed.MCPServerName)
 	}
@@ -212,6 +208,94 @@ func TestSyncWritesConfig(t *testing.T) {
 	}
 	if got := stringArgs(server["args"]); len(got) != 3 || got[0] != "mcp" || got[1] != "--profile" || got[2] != "operator" {
 		t.Fatalf("mcp.servers.aima.args = %v, want [mcp --profile operator]", got)
+	}
+}
+
+func TestSyncUsesBackendModelTypeWhenCatalogMisses(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "openclaw.json")
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"Qwen3.5-2B-Q4_K_M": {
+				ModelName:  "Qwen3.5-2B-Q4_K_M",
+				EngineType: "llamacpp",
+				ModelType:  "llm",
+				Address:    "http://127.0.0.1:8080",
+				Ready:      true,
+			},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	provider := lookupMap(cfg, "models", "providers", "aima")
+	if provider == nil {
+		t.Fatal("aima provider missing")
+	}
+	models, ok := provider["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("provider models = %#v, want one model", provider["models"])
+	}
+	model, ok := models[0].(map[string]any)
+	if !ok || model["id"] != "Qwen3.5-2B-Q4_K_M" {
+		t.Fatalf("provider model = %#v, want Qwen3.5-2B-Q4_K_M", models[0])
+	}
+	defaultModel := lookupMap(cfg, "agents", "defaults", "model")
+	if defaultModel == nil || defaultModel["primary"] != "aima/Qwen3.5-2B-Q4_K_M" {
+		t.Fatalf("agents.defaults.model = %#v, want aima/Qwen3.5-2B-Q4_K_M", defaultModel)
+	}
+}
+
+func TestMergeAIMAConfigReplacesStaleAIMAMediaChatDefault(t *testing.T) {
+	proxyAddr := "http://127.0.0.1:6188/v1"
+	existing := map[string]any{
+		"models": map[string]any{
+			"providers": map[string]any{
+				"aima-media": map[string]any{
+					"baseUrl": proxyAddr,
+					"models":  []any{map[string]any{"id": "qwen3.6-35b-a3b"}},
+				},
+			},
+		},
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"model": map[string]any{
+					"primary": "aima-media/qwen3.6-35b-a3b",
+				},
+			},
+		},
+	}
+
+	merged := MergeAIMAConfig(existing, &SyncResult{
+		LLMModels: []ModelEntry{{
+			ID:            "qwen3.5-9b",
+			Name:          "Qwen3.5 9B (AIMA)",
+			Input:         []string{"text"},
+			ContextWindow: 32768,
+			MaxTokens:     16384,
+		}},
+		ProxyAddr: proxyAddr,
+	})
+
+	defaults := lookupMap(merged, "agents", "defaults")
+	if defaults == nil {
+		t.Fatal("agents.defaults missing after merge")
+	}
+	chatModel, ok := defaults["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("agents.defaults.model = %T, want map", defaults["model"])
+	}
+	if got := chatModel["primary"]; got != "aima/qwen3.5-9b" {
+		t.Fatalf("agents.defaults.model.primary = %v, want aima/qwen3.5-9b", got)
 	}
 }
 
@@ -321,6 +405,9 @@ func TestSyncWritesTTSProviderSchema(t *testing.T) {
 	}
 	if got := openaiTTS["model"]; got != "qwen3-tts-0.6b" {
 		t.Fatalf("messages.tts.providers.openai.model = %v, want qwen3-tts-0.6b", got)
+	}
+	if _, ok := openaiTTS["voice"]; ok {
+		t.Fatalf("messages.tts.providers.openai.voice should not be written as an implicit default: %v", openaiTTS)
 	}
 	plugins := lookupMap(cfg, "plugins")
 	if plugins == nil {
@@ -1070,6 +1157,18 @@ func TestDeployPluginsWritesAIMAPlugins(t *testing.T) {
 	}
 	if !strings.Contains(string(ttsEntryData), `output path must stay within the OpenClaw workspace`) {
 		t.Fatal("expected TTS plugin to restrict output paths to the OpenClaw workspace")
+	}
+	if strings.Contains(string(ttsEntryData), `use_default_reference`) {
+		t.Fatal("TTS plugin must not ask backends to use a default reference voice")
+	}
+	if strings.Contains(string(ttsEntryData), `useDefaultReference`) {
+		t.Fatal("TTS plugin must not expose a default-reference control")
+	}
+	if strings.Contains(string(ttsEntryData), `route.voice ||`) {
+		t.Fatal("TTS plugin must not treat configured voice as an implicit request default")
+	}
+	if !strings.Contains(string(ttsEntryData), `voice cloning requires referenceAudioPath`) {
+		t.Fatal("expected TTS plugin to require explicit reference audio for voice cloning")
 	}
 
 	if _, err := os.Stat(filepath.Join(targetDir, "aima-local-image", "openclaw.plugin.json")); err != nil {

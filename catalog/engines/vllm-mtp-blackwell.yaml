@@ -1,0 +1,39 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-mtp-blackwell
+  type: vllm
+  version: "mtp-gb10"
+  supported_model_types: [llm, vlm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  # Custom GB10 ARM64 build with native MTP (multi-token prediction) speculative
+  # decoding. Private registry; pre-pull on target device.
+  # VLM image input requires a flash_attn layers shim mounted via runtime overlay
+  # extra_volumes — see qwen3.6-35b-a3b-blackwell-vllm-mtp-vlm variant notes.
+  name: qujing/vllm-gb10-mtp
+  tag: "latest"
+  platforms: [linux/arm64]
+patterns:
+  - "vllm-gb10-mtp"
+startup:
+  env: {}
+  default_args:
+    gpu_memory_utilization: 0.80
+    max_model_len: 131072
+  health_check:
+    timeout_s: 600
+amplifier:
+  features:
+    - mtp
+time_constraints:
+  cold_start_s: [120, 300]
+  model_switch_s: [120, 300]
+power_constraints:
+  typical_draw_watts: [40, 80]
+runtime:
+  default: "container"
+  platform_recommendations:
+    linux/arm64: "container"

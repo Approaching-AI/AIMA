@@ -1,0 +1,965 @@
+{
+  "label": "final_retained_dflash_context_sweep",
+  "image": "qujing/vllm-gb10-dflash-fa2:latest",
+  "model": "/models/Qwen3.6-35B-A3B",
+  "draft": "/models/Qwen3.6-35B-A3B-DFlash",
+  "input_buckets": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144
+  ],
+  "output_tokens": 512,
+  "concurrency": 1,
+  "requests": 1,
+  "rounds": 3,
+  "warmup": 2,
+  "config": {
+    "gpu_memory_utilization": 0.92,
+    "max_model_len": 262144,
+    "block_size": 1280,
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 1,
+    "async_scheduling": false,
+    "speculative_method": "dflash",
+    "num_speculative_tokens": 10,
+    "moe_tuned_config": false
+  },
+  "runs": [
+    {
+      "input_tokens_target": 1024,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 934,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 1024,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 10.534615384615389,
+          "gpu_utilization_pct": 58.14423076923077,
+          "power_draw_watts": 27.731346153846154,
+          "ram_usage_mib": 2587,
+          "unified_memory": true,
+          "vram_usage_mib": 2587
+        },
+        "result": {
+          "avg_input_tokens": 934,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 1024,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 38607,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.0777058622585023,
+          "round_results": [
+            {
+              "avg_tpot_ms": 23.702287671232877,
+              "avg_ttft_ms": 353.756,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 23.97601956947162,
+              "avg_ttft_ms": 353.237,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 25.803221135029354,
+              "avg_ttft_ms": 350.758,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 39.78540147635318,
+          "total_requests": 3,
+          "tpot_cv_pct": 4.663150523198381,
+          "tpot_max_ms": 25.803221135029354,
+          "tpot_min_ms": 23.702287671232877,
+          "tpot_p50_ms": 23.97601956947162,
+          "tpot_p95_ms": 25.62050097847358,
+          "tpot_std_ms": 1.1421847583024003,
+          "ttft_cv_pct": 0.45442488677067655,
+          "ttft_max_ms": 353.756,
+          "ttft_min_ms": 350.758,
+          "ttft_p50_ms": 353.237,
+          "ttft_p95_ms": 353.7041,
+          "ttft_p99_ms": 353.74562,
+          "ttft_std_ms": 1.6022279280218996
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 744.0,
+        "spec_decode_num_draft_tokens_total": 7440.0,
+        "spec_decode_num_accepted_tokens_total": 1813.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 36.75013249996118,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 65.94129970599897,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.4368279569892475,
+        "draft_acceptance_rate": 0.24368279569892473,
+        "avg_prefill_s_per_req": 7.350026499992237,
+        "avg_decode_s_per_req": 13.188259941199794
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 2048,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 1844,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 2048,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 11.482089552238808,
+          "gpu_utilization_pct": 93.40298507462687,
+          "power_draw_watts": 38.2510447761194,
+          "ram_usage_mib": 581,
+          "unified_memory": true,
+          "vram_usage_mib": 581
+        },
+        "result": {
+          "avg_input_tokens": 1844,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 2048,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 39530,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.07589072824417759,
+          "round_results": [
+            {
+              "avg_tpot_ms": 26.653244618395306,
+              "avg_ttft_ms": 498.167,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 23.447407045009786,
+              "avg_ttft_ms": 492.338,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 24.352667318982387,
+              "avg_ttft_ms": 493.767,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 38.856052861018924,
+          "total_requests": 3,
+          "tpot_cv_pct": 6.659552346905727,
+          "tpot_max_ms": 26.653244618395306,
+          "tpot_min_ms": 23.447407045009786,
+          "tpot_p50_ms": 24.352667318982387,
+          "tpot_p95_ms": 26.423186888454016,
+          "tpot_std_ms": 1.6527525838802644,
+          "ttft_cv_pct": 0.6140529118141242,
+          "ttft_max_ms": 498.167,
+          "ttft_min_ms": 492.338,
+          "ttft_p50_ms": 493.767,
+          "ttft_p95_ms": 497.727,
+          "ttft_p99_ms": 498.07899999999995,
+          "ttft_std_ms": 3.038071811747246
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 766.0,
+        "spec_decode_num_draft_tokens_total": 7660.0,
+        "spec_decode_num_accepted_tokens_total": 1797.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 2.428852928103879,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 63.22548165998887,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.345953002610966,
+        "draft_acceptance_rate": 0.2345953002610966,
+        "avg_prefill_s_per_req": 0.4857705856207758,
+        "avg_decode_s_per_req": 12.645096331997774
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 4096,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 3664,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 4096,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 11.23283582089552,
+          "gpu_utilization_pct": 94.67164179104478,
+          "power_draw_watts": 39.434925373134334,
+          "ram_usage_mib": 215,
+          "unified_memory": true,
+          "vram_usage_mib": 215
+        },
+        "result": {
+          "avg_input_tokens": 3664,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 4096,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 40079,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.07485115604541241,
+          "round_results": [
+            {
+              "avg_tpot_ms": 24.82111154598826,
+              "avg_ttft_ms": 769.18,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 24.128923679060662,
+              "avg_ttft_ms": 771.256,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 24.935671232876714,
+              "avg_ttft_ms": 783.135,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 38.323791895251155,
+          "total_requests": 3,
+          "tpot_cv_pct": 1.7722514175581243,
+          "tpot_max_ms": 24.935671232876714,
+          "tpot_min_ms": 24.128923679060662,
+          "tpot_p50_ms": 24.82111154598826,
+          "tpot_p95_ms": 24.924215264187872,
+          "tpot_std_ms": 0.4364801600244738,
+          "ttft_cv_pct": 0.9721490639431642,
+          "ttft_max_ms": 783.135,
+          "ttft_min_ms": 769.18,
+          "ttft_p50_ms": 771.256,
+          "ttft_p95_ms": 781.9471,
+          "ttft_p99_ms": 782.89742,
+          "ttft_std_ms": 7.5295245755182725
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 723.0,
+        "spec_decode_num_draft_tokens_total": 7230.0,
+        "spec_decode_num_accepted_tokens_total": 1838.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 4.021357449935749,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 61.066544749890454,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.5421853388658366,
+        "draft_acceptance_rate": 0.25421853388658366,
+        "avg_prefill_s_per_req": 0.8042714899871498,
+        "avg_decode_s_per_req": 12.21330894997809
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 8192,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 7304,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 8192,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 10.80735294117647,
+          "gpu_utilization_pct": 94.77941176470588,
+          "power_draw_watts": 41.51661764705882,
+          "ram_usage_mib": 154,
+          "unified_memory": true,
+          "vram_usage_mib": 154
+        },
+        "result": {
+          "avg_input_tokens": 7304,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 8192,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 37885,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.07918493054563086,
+          "round_results": [
+            {
+              "avg_tpot_ms": 22.112197651663408,
+              "avg_ttft_ms": 1321.088,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 23.397763209393347,
+              "avg_ttft_ms": 1313.526,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 20.896923679060663,
+              "avg_ttft_ms": 1316.906,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 40.542684439363,
+          "total_requests": 3,
+          "tpot_cv_pct": 5.649644933346515,
+          "tpot_max_ms": 23.397763209393347,
+          "tpot_min_ms": 20.896923679060663,
+          "tpot_p50_ms": 22.112197651663408,
+          "tpot_p95_ms": 23.269206653620355,
+          "tpot_std_ms": 1.2505843959380045,
+          "ttft_cv_pct": 0.2875917230217236,
+          "ttft_max_ms": 1321.088,
+          "ttft_min_ms": 1313.526,
+          "ttft_p50_ms": 1316.906,
+          "ttft_p95_ms": 1320.6698,
+          "ttft_p99_ms": 1321.0043600000001,
+          "ttft_std_ms": 3.7880814845160033
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 685.0,
+        "spec_decode_num_draft_tokens_total": 6850.0,
+        "spec_decode_num_accepted_tokens_total": 1878.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 6.480157568003051,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 60.0077819689177,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.7416058394160583,
+        "draft_acceptance_rate": 0.27416058394160586,
+        "avg_prefill_s_per_req": 1.2960315136006102,
+        "avg_decode_s_per_req": 12.00155639378354
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 16384,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 14586,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 16384,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 10.77674418604651,
+          "gpu_utilization_pct": 93.67441860465117,
+          "power_draw_watts": 45.04348837209304,
+          "ram_usage_mib": 122,
+          "unified_memory": true,
+          "vram_usage_mib": 122
+        },
+        "result": {
+          "avg_input_tokens": 14586,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 16384,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 50269,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.059677765701586026,
+          "round_results": [
+            {
+              "avg_tpot_ms": 26.636156555772992,
+              "avg_ttft_ms": 2743.794,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 27.76849119373777,
+              "avg_ttft_ms": 2757.187,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 27.819416829745595,
+              "avg_ttft_ms": 2741.811,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 30.555016039212045,
+          "total_requests": 3,
+          "tpot_cv_pct": 2.440670378467609,
+          "tpot_max_ms": 27.819416829745595,
+          "tpot_min_ms": 26.636156555772992,
+          "tpot_p50_ms": 27.76849119373777,
+          "tpot_p95_ms": 27.814324266144812,
+          "tpot_std_ms": 0.668939462719329,
+          "ttft_cv_pct": 0.3044067538258042,
+          "ttft_max_ms": 2757.187,
+          "ttft_min_ms": 2741.811,
+          "ttft_p50_ms": 2743.794,
+          "ttft_p95_ms": 2755.8477,
+          "ttft_p99_ms": 2756.91914,
+          "ttft_std_ms": 8.36387185060436
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 745.0,
+        "spec_decode_num_draft_tokens_total": 7450.0,
+        "spec_decode_num_accepted_tokens_total": 1814.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 14.596350087085739,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 69.51748789299745,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.4348993288590606,
+        "draft_acceptance_rate": 0.24348993288590604,
+        "avg_prefill_s_per_req": 2.9192700174171478,
+        "avg_decode_s_per_req": 13.90349757859949
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 32768,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 29149,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 32768,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 9.509523809523811,
+          "gpu_utilization_pct": 94.27619047619048,
+          "power_draw_watts": 51.96380952380953,
+          "ram_usage_mib": 298,
+          "unified_memory": true,
+          "vram_usage_mib": 298
+        },
+        "result": {
+          "avg_input_tokens": 29149,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 32768,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 62238,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.04820175662660736,
+          "round_results": [
+            {
+              "avg_tpot_ms": 30.024011741682976,
+              "avg_ttft_ms": 5939.912,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 27.581641878669274,
+              "avg_ttft_ms": 5931.977,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 29.363344422700585,
+              "avg_ttft_ms": 5913.498,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 24.67929939282297,
+          "total_requests": 3,
+          "tpot_cv_pct": 4.357885924997854,
+          "tpot_max_ms": 30.024011741682976,
+          "tpot_min_ms": 27.581641878669274,
+          "tpot_p50_ms": 29.363344422700585,
+          "tpot_p95_ms": 29.957945009784737,
+          "tpot_std_ms": 1.263336574943286,
+          "ttft_cv_pct": 0.22861257390300438,
+          "ttft_max_ms": 5939.912,
+          "ttft_min_ms": 5913.498,
+          "ttft_p50_ms": 5931.977,
+          "ttft_p95_ms": 5939.1185000000005,
+          "ttft_p99_ms": 5939.7533,
+          "ttft_std_ms": 13.553210333103443
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 707.0,
+        "spec_decode_num_draft_tokens_total": 7070.0,
+        "spec_decode_num_accepted_tokens_total": 1860.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 29.21602580882609,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 74.12106812302954,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.6308345120226306,
+        "draft_acceptance_rate": 0.26308345120226306,
+        "avg_prefill_s_per_req": 5.843205161765217,
+        "avg_decode_s_per_req": 14.824213624605909
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 65536,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 58277,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 65536,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 10.1672619047619,
+          "gpu_utilization_pct": 94.83928571428571,
+          "power_draw_watts": 59.38869047619054,
+          "ram_usage_mib": 978,
+          "unified_memory": true,
+          "vram_usage_mib": 978
+        },
+        "result": {
+          "avg_input_tokens": 58277,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 65536,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 100920,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.02972640155677669,
+          "round_results": [
+            {
+              "avg_tpot_ms": 38.11258512720156,
+              "avg_ttft_ms": 13771.369,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 37.795062622309196,
+              "avg_ttft_ms": 13726.426,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 40.86573776908023,
+              "avg_ttft_ms": 13748.56,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 15.219917597069665,
+          "total_requests": 3,
+          "tpot_cv_pct": 4.33833572080056,
+          "tpot_max_ms": 40.86573776908023,
+          "tpot_min_ms": 37.795062622309196,
+          "tpot_p50_ms": 38.11258512720156,
+          "tpot_p95_ms": 40.590422504892366,
+          "tpot_std_ms": 1.6886738321137271,
+          "ttft_cv_pct": 0.16344967794773171,
+          "ttft_max_ms": 13771.369,
+          "ttft_min_ms": 13726.426,
+          "ttft_p50_ms": 13748.56,
+          "ttft_p95_ms": 13769.0881,
+          "ttft_p99_ms": 13770.91282,
+          "ttft_std_ms": 22.472344804226044
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 772.0,
+        "spec_decode_num_draft_tokens_total": 7720.0,
+        "spec_decode_num_accepted_tokens_total": 1795.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 68.10074901522603,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 97.4765534948092,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.3251295336787563,
+        "draft_acceptance_rate": 0.23251295336787564,
+        "avg_prefill_s_per_req": 13.620149803045205,
+        "avg_decode_s_per_req": 19.495310698961838
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 131072,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 116532,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 131072,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 9.727184466019427,
+          "gpu_utilization_pct": 95.35598705501619,
+          "power_draw_watts": 67.89598705501615,
+          "ram_usage_mib": 20,
+          "unified_memory": true,
+          "vram_usage_mib": 20
+        },
+        "result": {
+          "avg_input_tokens": 116532,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 131072,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 183299,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.016366682277751052,
+          "round_results": [
+            {
+              "avg_tpot_ms": 50.20542661448141,
+              "avg_ttft_ms": 35153.943,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 50.014720156555775,
+              "avg_ttft_ms": 35297.64,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 51.761673189823874,
+              "avg_ttft_ms": 35169.202,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 8.379741326208539,
+          "total_requests": 3,
+          "tpot_cv_pct": 1.891622230052729,
+          "tpot_max_ms": 51.761673189823874,
+          "tpot_min_ms": 50.014720156555775,
+          "tpot_p50_ms": 50.20542661448141,
+          "tpot_p95_ms": 51.60604853228963,
+          "tpot_std_ms": 0.9583072973394546,
+          "ttft_cv_pct": 0.2241837759398428,
+          "ttft_max_ms": 35297.64,
+          "ttft_min_ms": 35153.943,
+          "ttft_p50_ms": 35169.202,
+          "ttft_p95_ms": 35284.7962,
+          "ttft_p99_ms": 35295.07124,
+          "ttft_std_ms": 78.92822133010101
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 769.0,
+        "spec_decode_num_draft_tokens_total": 7690.0,
+        "spec_decode_num_accepted_tokens_total": 1797.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 174.83048764592968,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 131.24127925001085,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.3368010403120936,
+        "draft_acceptance_rate": 0.23368010403120937,
+        "avg_prefill_s_per_req": 34.96609752918594,
+        "avg_decode_s_per_req": 26.24825585000217
+      },
+      "status": "ok"
+    },
+    {
+      "input_tokens_target": 262144,
+      "benchmark": {
+        "benchmark_profile": {
+          "avg_input_tokens": 233039,
+          "avg_output_tokens": 512,
+          "concurrency": 1,
+          "input_tokens": 262144,
+          "max_tokens": 512,
+          "num_requests": 1,
+          "rounds": 3,
+          "warmup_count": 2
+        },
+        "resource_usage": {
+          "cpu_usage_pct": 10.298503401360579,
+          "gpu_utilization_pct": 95.55918367346939,
+          "power_draw_watts": 76.25749659863934,
+          "ram_usage_mib": 29,
+          "unified_memory": true,
+          "vram_usage_mib": 29
+        },
+        "result": {
+          "avg_input_tokens": 233039,
+          "avg_output_tokens": 512,
+          "config": {
+            "concurrency": 1,
+            "endpoint": "http://127.0.0.1:18081",
+            "input_tokens": 262144,
+            "max_retries": 1,
+            "max_tokens": 512,
+            "min_output_ratio": 1,
+            "model": "Qwen3.6-35B-A3B",
+            "num_requests": 1,
+            "retry_delay": 1000000000,
+            "rounds": 3,
+            "temperature": 0.01,
+            "timeout": 300000000000,
+            "warmup_count": 2
+          },
+          "duration_ms": 441147,
+          "error_rate": 0,
+          "failed_requests": 0,
+          "modality": "llm",
+          "qps": 0.006800453481123487,
+          "round_results": [
+            {
+              "avg_tpot_ms": 72.76194520547945,
+              "avg_ttft_ms": 109788.671,
+              "failed_requests": 0,
+              "round_id": 1,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 74.19714677103718,
+              "avg_ttft_ms": 108702.074,
+              "failed_requests": 0,
+              "round_id": 2,
+              "successful_requests": 1
+            },
+            {
+              "avg_tpot_ms": 75.05470254403131,
+              "avg_ttft_ms": 109195.604,
+              "failed_requests": 0,
+              "round_id": 3,
+              "successful_requests": 1
+            }
+          ],
+          "rounds": 3,
+          "successful_requests": 3,
+          "throughput_tps": 3.4818321823352254,
+          "total_requests": 3,
+          "tpot_cv_pct": 1.565366298631009,
+          "tpot_max_ms": 75.05470254403131,
+          "tpot_min_ms": 72.76194520547945,
+          "tpot_p50_ms": 74.19714677103718,
+          "tpot_p95_ms": 74.9689469667319,
+          "tpot_std_ms": 1.1584430392455187,
+          "ttft_cv_pct": 0.498090145796092,
+          "ttft_max_ms": 109788.671,
+          "ttft_min_ms": 108702.074,
+          "ttft_p50_ms": 109195.604,
+          "ttft_p95_ms": 109729.36430000002,
+          "ttft_p99_ms": 109776.80966000001,
+          "ttft_std_ms": 544.0578044959971
+        },
+        "saved": false
+      },
+      "metrics_delta": {
+        "spec_decode_num_drafts_total": 731.0,
+        "spec_decode_num_draft_tokens_total": 7310.0,
+        "spec_decode_num_accepted_tokens_total": 1828.0,
+        "request_prefill_time_seconds_count": 5.0,
+        "request_prefill_time_seconds_sum": 543.5917270480422,
+        "request_decode_time_seconds_count": 5.0,
+        "request_decode_time_seconds_sum": 188.1517954027513,
+        "kv_cache_usage_perc": 0.0,
+        "mean_acceptance_length": 2.500683994528044,
+        "draft_acceptance_rate": 0.2500683994528044,
+        "avg_prefill_s_per_req": 108.71834540960845,
+        "avg_decode_s_per_req": 37.630359080550264
+      },
+      "status": "ok"
+    }
+  ],
+  "ready_s": 376.4,
+  "startup_log_tail": "99]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.19.1.dev0+g2a69949bd.d20260403\n(APIServer pid=1) INFO 04-23 13:47:05 [utils.py:299]   █▄█▀ █     █     █     █  model   /models/Qwen3.6-35B-A3B\n(APIServer pid=1) INFO 04-23 13:47:05 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀\n(APIServer pid=1) INFO 04-23 13:47:05 [utils.py:299] \n(APIServer pid=1) INFO 04-23 13:47:05 [utils.py:233] non-default args: {'model_tag': '/models/Qwen3.6-35B-A3B', 'host': '0.0.0.0', 'model': '/models/Qwen3.6-35B-A3B', 'trust_remote_code': True, 'dtype': 'bfloat16', 'max_model_len': 262144, 'served_model_name': ['Qwen3.6-35B-A3B'], 'attention_backend': 'FLASH_ATTN', 'reasoning_parser': 'qwen3', 'block_size': 1280, 'gpu_memory_utilization': 0.92, 'language_model_only': True, 'mm_encoder_attn_backend': 'TORCH_SDPA', 'skip_mm_profiling': True, 'max_num_batched_tokens': 8192, 'max_num_seqs': 1, 'async_scheduling': False, 'speculative_config': {'method': 'dflash', 'model': '/models/Qwen3.6-35B-A3B-DFlash', 'num_speculative_tokens': 10}}\n(APIServer pid=1) WARNING 04-23 13:47:05 [envs.py:1744] Unknown vLLM environment variable detected: VLLM_SKIP_GDN_PREFILL_WARMUP\n(APIServer pid=1) WARNING 04-23 13:47:05 [envs.py:1744] Unknown vLLM environment variable detected: VLLM_FLASH_ATTN_SRC_DIR\n(APIServer pid=1) WARNING 04-23 13:47:05 [envs.py:1744] Unknown vLLM environment variable detected: VLLM_SKIP_STABLE_LIBTORCH\n(APIServer pid=1) INFO 04-23 13:47:12 [model.py:549] Resolved architecture: Qwen3_5MoeForConditionalGeneration\n(APIServer pid=1) INFO 04-23 13:47:12 [model.py:1678] Using max model len 262144\n(APIServer pid=1) INFO 04-23 13:47:17 [model.py:549] Resolved architecture: DFlashDraftModel\n(APIServer pid=1) INFO 04-23 13:47:17 [model.py:1678] Using max model len 262144\n(APIServer pid=1) INFO 04-23 13:47:17 [scheduler.py:238] Chunked prefill is enabled with max_num_batched_tokens=8192.\n(APIServer pid=1) INFO 04-23 13:47:17 [config.py:312] Padding mamba page size by 13.48% to ensure that mamba page size and attention page size are exactly equal.\n(APIServer pid=1) INFO 04-23 13:47:17 [vllm.py:790] Asynchronous scheduling is disabled.\n(APIServer pid=1) INFO 04-23 13:47:18 [registry.py:126] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.\n(EngineCore pid=248) INFO 04-23 13:47:24 [core.py:105] Initializing a V1 LLM engine (v0.19.1.dev0+g2a69949bd.d20260403) with config: model='/models/Qwen3.6-35B-A3B', speculative_config=SpeculativeConfig(method='dflash', model='/models/Qwen3.6-35B-A3B-DFlash', num_spec_tokens=10), tokenizer='/models/Qwen3.6-35B-A3B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=True, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='qwen3', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=Qwen3.6-35B-A3B, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_images_per_batch': 0, 'compile_sizes': [], 'compile_ranges_endpoints': [8192], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 16, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}\n(EngineCore pid=248) INFO 04-23 13:47:25 [registry.py:126] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.\n(EngineCore pid=248) INFO 04-23 13:47:25 [parallel_state.py:1400] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://172.17.0.2:43035 backend=nccl\n(EngineCore pid=248) INFO 04-23 13:47:25 [parallel_state.py:1716] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A\n(EngineCore pid=248) WARNING 04-23 13:47:26 [__init__.py:206] min_p and logit_bias parameters won't work with speculative decoding.\n(EngineCore pid=248) INFO 04-23 13:47:26 [gpu_model_runner.py:4745] Starting to load model /models/Qwen3.6-35B-A3B...\n(EngineCore pid=248) INFO 04-23 13:47:26 [cuda.py:376] Using backend AttentionBackendEnum.TORCH_SDPA for vit attention\n(EngineCore pid=248) INFO 04-23 13:47:26 [mm_encoder_attention.py:230] Using AttentionBackendEnum.TORCH_SDPA for MMEncoderAttention.\n(EngineCore pid=248) INFO 04-23 13:47:26 [gdn_linear_attn.py:147] Using Triton/FLA GDN prefill kernel\n(EngineCore pid=248) INFO 04-23 13:47:37 [unquantized.py:186] Using TRITON backend for Unquantized MoE\n(EngineCore pid=248) INFO 04-23 13:47:37 [cuda.py:278] Using AttentionBackendEnum.FLASH_ATTN backend.\n(EngineCore pid=248) INFO 04-23 13:47:37 [flash_attn.py:600] Using FlashAttention version 2\n(EngineCore pid=248) INFO 04-23 13:50:22 [default_loader.py:384] Loading weights took 162.27 seconds\n(EngineCore pid=248) INFO 04-23 13:50:22 [gpu_model_runner.py:4769] Loading drafter model...\n(EngineCore pid=248) INFO 04-23 13:50:22 [cuda.py:278] Using AttentionBackendEnum.FLASH_ATTN backend.\n(EngineCore pid=248) INFO 04-23 13:50:27 [default_loader.py:384] Loading weights took 4.40 seconds\n(EngineCore pid=248) INFO 04-23 13:50:27 [eagle.py:1396] Detected EAGLE model without its own embed_tokens in the checkpoint. Sharing target model embedding weights with the draft model.\n(EngineCore pid=248) INFO 04-23 13:50:27 [eagle.py:1451] Detected EAGLE model without its own lm_head in the checkpoint. Sharing target model lm_head weights with the draft model.\n(EngineCore pid=248) INFO 04-23 13:50:27 [gpu_model_runner.py:4807] Using auxiliary layers from speculative config: (1, 10, 19, 28, 37)\n(EngineCore pid=248) INFO 04-23 13:50:27 [gpu_model_runner.py:4830] Model loading took 65.66 GiB memory and 180.683529 seconds\n(EngineCore pid=248) INFO 04-23 13:50:31 [backends.py:1051] Using cache directory: /root/.cache/vllm/torch_compile_cache/cc1c7ed2b2/rank_0_0/backbone for vLLM's torch.compile\n(EngineCore pid=248) INFO 04-23 13:50:31 [backends.py:1111] Dynamo bytecode transform time: 3.92 s\n(EngineCore pid=248) INFO 04-23 13:50:34 [backends.py:372] Cache the graph of compile range (1, 8192) for later use\n(EngineCore pid=248) INFO 04-23 13:51:17 [backends.py:390] Compiling a graph for compile range (1, 8192) takes 44.77 s\n(EngineCore pid=248) WARNING 04-23 13:51:17 [gdn_linear_attn.py:595] Skipping GDN prefill kernel warmup because VLLM_SKIP_GDN_PREFILL_WARMUP=1\n(EngineCore pid=248) WARNING 04-23 13:51:18 [fused_moe.py:1090] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=256,N=512,device_name=NVIDIA_GB10.json\n(EngineCore pid=248) INFO 04-23 13:51:21 [monitor.py:48] torch.compile and initial profiling/warmup run together took 53.86 s in total\n(EngineCore pid=248) INFO 04-23 13:51:22 [backends.py:1051] Using cache directory: /root/.cache/vllm/torch_compile_cache/cc1c7ed2b2/rank_0_0/eagle_head for vLLM's torch.compile\n(EngineCore pid=248) INFO 04-23 13:51:22 [backends.py:1111] Dynamo bytecode transform time: 0.71 s\n(EngineCore pid=248) INFO 04-23 13:51:26 [backends.py:390] Compiling a graph for compile range (1, 8192) takes 4.38 s\n(EngineCore pid=248) INFO 04-23 13:51:27 [monitor.py:48] torch.compile and initial profiling/warmup run together took 5.60 s in total\n(EngineCore pid=248) WARNING 04-23 13:51:28 [kv_cache_utils.py:1059] Add 2 padding layers, may waste at most 6.67% KV cache memory\n(EngineCore pid=248) WARNING 04-23 13:51:28 [kv_cache_utils.py:1059] Add 6 padding layers, may waste at most 60.00% KV cache memory\n(EngineCore pid=248) INFO 04-23 13:51:28 [kv_cache_utils.py:829] Overriding num_gpu_blocks=0 with num_gpu_blocks_override=16\n(EngineCore pid=248) INFO 04-23 13:51:28 [utils.py:74] `VLLM_KV_CACHE_LAYOUT` environment variable detected. Setting KV cache layout to NHD.\n(EngineCore pid=248) INFO 04-23 13:51:28 [gpu_model_runner.py:5889] Profiling CUDA graph memory: PIECEWISE=1 (largest=11), FULL=1 (largest=11)\n(EngineCore pid=248) INFO 04-23 13:52:21 [gpu_model_runner.py:5968] Estimated CUDA graph memory: 0.65 GiB total\n(EngineCore pid=248) INFO 04-23 13:52:22 [gpu_worker.py:436] Available KV cache memory: 37.7 GiB\n(EngineCore pid=248) INFO 04-23 13:52:22 [gpu_worker.py:452] CUDA graph memory profiling is enabled (VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1). This will become the default in v0.19. The current --gpu-memory-utilization=0.9200 is equivalent to --gpu-memory-utilization=0.9145 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.9255.\n(EngineCore pid=248) WARNING 04-23 13:52:22 [kv_cache_utils.py:1059] Add 2 padding layers, may waste at most 6.67% KV cache memory\n(EngineCore pid=248) WARNING 04-23 13:52:22 [kv_cache_utils.py:1059] Add 6 padding layers, may waste at most 60.00% KV cache memory\n(EngineCore pid=248) INFO 04-23 13:52:22 [kv_cache_utils.py:1319] GPU KV cache size: 352,000 tokens\n(EngineCore pid=248) INFO 04-23 13:52:22 [kv_cache_utils.py:1324] Maximum concurrency for 262,144 tokens per request: 2.93x\n(EngineCore pid=248) INFO 04-23 13:52:44 [gpu_model_runner.py:6059] Graph capturing finished in 11 secs, took 1.15 GiB\n(EngineCore pid=248) INFO 04-23 13:52:44 [gpu_worker.py:597] CUDA graph pool memory: 1.15 GiB (actual), 0.65 GiB (estimated), difference: 0.49 GiB (43.0%).\n(EngineCore pid=248) INFO 04-23 13:52:44 [core.py:283] init engine (profile, create kv cache, warmup model) took 137.16 seconds\n(EngineCore pid=248) INFO 04-23 13:52:45 [vllm.py:790] Asynchronous scheduling is disabled.\n(APIServer pid=1) INFO 04-23 13:52:45 [api_server.py:590] Supported tasks: ['generate']\n(APIServer pid=1) WARNING 04-23 13:52:50 [model.py:1435] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 1.0, 'top_k': 20, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.\n(APIServer pid=1) INFO 04-23 13:52:54 [hf.py:314] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.\n(APIServer pid=1) INFO 04-23 13:53:01 [base.py:231] Multi-modal warmup completed in 7.126s\n(APIServer pid=1) INFO 04-23 13:53:01 [api_server.py:594] Starting vLLM server on http://0.0.0.0:8000\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:37] Available routes are:\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /openapi.json, Methods: GET, HEAD\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /docs, Methods: GET, HEAD\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /docs/oauth2-redirect, Methods: GET, HEAD\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /redoc, Methods: GET, HEAD\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /tokenize, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /detokenize, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /load, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /version, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /health, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /metrics, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/models, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /ping, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /ping, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /invocations, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/chat/completions, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/chat/completions/batch, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/responses, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/responses/{response_id}, Methods: GET\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/responses/{response_id}/cancel, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/completions, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/messages, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/messages/count_tokens, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /inference/v1/generate, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /scale_elastic_ep, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /is_scaling_elastic_ep, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/chat/completions/render, Methods: POST\n(APIServer pid=1) INFO 04-23 13:53:01 [launcher.py:46] Route: /v1/completions/render, Methods: POST\n(APIServer pid=1) INFO:     172.17.0.1:46182 - \"GET /v1/models HTTP/1.1\" 200 OK\n(APIServer pid=1) `Qwen2VLImageProcessorFast` is deprecated. The `Fast` suffix for image processors has been removed; use `Qwen2VLImageProcessor` instead.\n(EngineCore pid=248) `Qwen2VLImageProcessorFast` is deprecated. The `Fast` suffix for image processors has been removed; use `Qwen2VLImageProcessor` instead.\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/torch/library.py:357: UserWarning: Warning only once for all operators,  other operators may also be overridden.\n(EngineCore pid=248)   Overriding a previously registered kernel for the same operator and the same dispatch key\n(EngineCore pid=248)   operator: flash_attn::_flash_attn_backward(Tensor dout, Tensor q, Tensor k, Tensor v, Tensor out, Tensor softmax_lse, Tensor(a6!)? dq, Tensor(a7!)? dk, Tensor(a8!)? dv, float dropout_p, float softmax_scale, bool causal, SymInt window_size_left, SymInt window_size_right, float softcap, Tensor? alibi_slopes, bool deterministic, Tensor? rng_state=None) -> Tensor\n(EngineCore pid=248)     registered at /usr/local/lib/python3.12/dist-packages/torch/_library/custom_ops.py:926\n(EngineCore pid=248)   dispatch key: ADInplaceOrView\n(EngineCore pid=248)   previous kernel: no debug info\n(EngineCore pid=248)        new kernel: registered at /usr/local/lib/python3.12/dist-packages/torch/_library/custom_ops.py:926 (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/core/dispatch/OperatorEntry.cpp:208.)\n(EngineCore pid=248)   self.m.impl(\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:   0% Completed | 0/26 [00:00<?, ?it/s]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:   4% Completed | 1/26 [00:07<03:17,  7.92s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:   8% Completed | 2/26 [00:11<02:03,  5.15s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  12% Completed | 3/26 [00:22<03:01,  7.90s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  15% Completed | 4/26 [00:34<03:28,  9.50s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  19% Completed | 5/26 [00:45<03:33, 10.18s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  23% Completed | 6/26 [00:49<02:39,  7.96s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  27% Completed | 7/26 [00:51<01:58,  6.22s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  31% Completed | 8/26 [00:55<01:37,  5.40s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  35% Completed | 9/26 [00:59<01:21,  4.81s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  38% Completed | 10/26 [01:02<01:11,  4.46s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  42% Completed | 11/26 [01:08<01:13,  4.92s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  46% Completed | 12/26 [01:11<01:01,  4.38s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  50% Completed | 13/26 [01:17<01:03,  4.87s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  54% Completed | 14/26 [01:21<00:52,  4.37s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  58% Completed | 15/26 [01:27<00:53,  4.87s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  62% Completed | 16/26 [01:30<00:44,  4.50s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  65% Completed | 17/26 [01:32<00:34,  3.81s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  69% Completed | 18/26 [01:36<00:31,  3.88s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  73% Completed | 19/26 [01:43<00:31,  4.55s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  77% Completed | 20/26 [01:46<00:24,  4.16s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  81% Completed | 21/26 [01:51<00:22,  4.59s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  85% Completed | 22/26 [02:03<00:27,  6.80s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  88% Completed | 23/26 [02:15<00:24,  8.20s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  92% Completed | 24/26 [02:27<00:18,  9.40s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards:  96% Completed | 25/26 [02:35<00:09,  9.08s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards: 100% Completed | 26/26 [02:42<00:00,  8.24s/it]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards: 100% Completed | 26/26 [02:42<00:00,  6.24s/it]\n(EngineCore pid=248) \n(EngineCore pid=248) \nLoading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]\n(EngineCore pid=248) \nLoading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00, 53.17it/s]\n(EngineCore pid=248) \n(EngineCore pid=248) [rank0]:W0423 13:50:32.492000 248 torch/_inductor/utils.py:1703] [0/0] Not enough SMs to use max_autotune_gemm mode\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/torch/_dynamo/eval_frame.py:1154: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (16). This may indicate the inputs were passed in head-first format [B, H, T, ...] Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*args, **kwargs)\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fla/ops/utils.py:113: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (32). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*contiguous_args, **contiguous_kwargs)\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/torch/_dynamo/eval_frame.py:1154: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (16). This may indicate the inputs were passed in head-first format [B, H, T, ...] Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*args, **kwargs)\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fla/ops/utils.py:113: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (32). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*contiguous_args, **contiguous_kwargs)\n(EngineCore pid=248) 2026-04-23 13:52:31,133 - INFO - autotuner.py:262 - flashinfer.jit: [Autotuner]: Autotuning process starts ...\n(EngineCore pid=248) 2026-04-23 13:52:32,603 - INFO - autotuner.py:268 - flashinfer.jit: [Autotuner]: Autotuning process ends\n(EngineCore pid=248) \nCapturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/1 [00:00<?, ?it/s]\nCapturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 1/1 [00:00<00:00,  1.34it/s]\nCapturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 1/1 [00:00<00:00,  1.34it/s]\n(EngineCore pid=248) \nCapturing CUDA graphs (decode, FULL):   0%|          | 0/1 [00:00<?, ?it/s]/usr/local/lib/python3.12/dist-packages/torch/_dynamo/eval_frame.py:1154: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (16). This may indicate the inputs were passed in head-first format [B, H, T, ...] Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*args, **kwargs)\n(EngineCore pid=248) /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fla/ops/utils.py:113: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (11) < num_heads (32). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].\n(EngineCore pid=248)   return fn(*contiguous_args, **contiguous_kwargs)\n(EngineCore pid=248) \nCapturing CUDA graphs (decode, FULL): 100%|██████████| 1/1 [00:02<00:00,  2.81s/it]\nCapturing CUDA graphs (decode, FULL): 100%|██████████| 1/1 [00:02<00:00,  2.81s/it]\n(APIServer pid=1) The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend=\"torchvision\"` instead of `use_fast=True`, or `backend=\"pil\"` instead of `use_fast=False`.\n(APIServer pid=1) INFO:     Started server process [1]\n(APIServer pid=1) INFO:     Waiting for application startup.\n(APIServer pid=1) INFO:     Application startup complete.\n",
+  "final_log_tail": ""
+}

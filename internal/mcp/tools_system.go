@@ -78,4 +78,25 @@ func registerSystemTools(s *Server, deps *ToolDeps) {
 			return TextResult(val), nil
 		},
 	})
+
+	// system.diagnostics
+	s.RegisterTool(&Tool{
+		Name:        "system.diagnostics",
+		Description: "Export a telemetry-free local diagnostics bundle for troubleshooting. Secrets are redacted. By default writes a JSON file under the local AIMA data directory; set inline=true to return the bundle directly.",
+		InputSchema: schema(
+			`"output_path":{"type":"string","description":"Optional output JSON path. If omitted and inline=false, AIMA writes to its local diagnostics directory."},` +
+				`"inline":{"type":"boolean","description":"Return the diagnostics bundle directly instead of writing a file. Default: false."},` +
+				`"include_logs":{"type":"boolean","description":"Include redacted deployment log tails. Default: true."},` +
+				`"log_lines":{"type":"integer","description":"Deployment log tail lines per deployment. Default: 80."}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
+			if deps.DiagnosticsExport == nil {
+				return ErrorResult("system.diagnostics not implemented"), nil
+			}
+			data, err := deps.DiagnosticsExport(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("system diagnostics: %w", err)
+			}
+			return TextResult(string(data)), nil
+		},
+	})
 }

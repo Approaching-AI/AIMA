@@ -2,12 +2,16 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jguan/aima/internal/recovery"
 )
 
 func mustOpen(t *testing.T) *DB {
@@ -24,6 +28,695 @@ func TestOpenClose(t *testing.T) {
 	db := mustOpen(t)
 	if db == nil {
 		t.Fatal("expected non-nil DB")
+	}
+}
+
+func TestMigrateV20CreatesDeploymentIntents(t *testing.T) {
+	db := mustOpen(t)
+
+	var version int
+	if err := db.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version < 20 {
+		t.Fatalf("user_version=%d want at least 20", version)
+	}
+	for _, col := range []string{
+		"name", "model", "engine_asset", "engine_version", "slot", "runtime", "revision",
+		"config_json", "desired_state", "recovery_state", "recovery_policy_json",
+		"attempt_count", "consecutive_failure_count", "observed_restart_count",
+		"window_started_at", "next_attempt_at", "healthy_since", "last_exit_code", "last_error",
+		"created_at", "updated_at",
+	} {
+		var count int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('deployment_intents') WHERE name = ?`, col).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("missing %s", col)
+		}
+	}
+	for _, index := range []struct {
+		name    string
+		columns []string
+	}{
+		{"idx_deployment_intents_desired_recovery", []string{"desired_state", "recovery_state"}},
+		{"idx_deployment_intents_next_attempt_at", []string{"next_attempt_at"}},
+	} {
+		rows, err := db.db.Query(`SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno`, index.name)
+		if err != nil {
+			t.Fatalf("index info for %s: %v", index.name, err)
+		}
+		var columns []string
+		for rows.Next() {
+			var seq int
+			var name string
+			if err := rows.Scan(&seq, &name); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			columns = append(columns, name)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		rows.Close()
+		if !reflect.DeepEqual(columns, index.columns) {
+			t.Errorf("index %s columns = %v, want %v", index.name, columns, index.columns)
+		}
+	}
+}
+
+func TestMigrateV22ExtendsEngineInventory(t *testing.T) {
+	db := mustOpen(t)
+
+	var version int
+	if err := db.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 22 {
+		t.Fatalf("user_version=%d want 22", version)
+	}
+	for _, col := range []string{
+		"asset_name", "version", "catalog_version", "origin", "content_digest",
+		"detected_version", "version_match", "location", "active", "lifecycle_status", "verification_status", "previous_engine_id",
+	} {
+		var count int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('engines') WHERE name = ?`, col).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("missing %s", col)
+		}
+	}
+
+	var partial int
+	if err := db.db.QueryRow(`SELECT partial FROM pragma_index_list('engines') WHERE name = 'idx_engines_one_active_version'`).Scan(&partial); err != nil {
+		t.Fatalf("active-version index: %v", err)
+	}
+	if partial != 1 {
+		t.Fatalf("active-version index partial=%d want 1", partial)
+	}
+}
+
+func TestMigrateV21BackfillsLegacyEngineInventory(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	legacy, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.db.ExecContext(ctx, `
+DROP TABLE engines;
+CREATE TABLE engines (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    image TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    size_bytes INTEGER,
+    platform TEXT,
+    available BOOLEAN DEFAULT TRUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    runtime_type TEXT DEFAULT 'container',
+    binary_path TEXT
+);
+INSERT INTO engines (id, type, image, tag, platform, runtime_type, binary_path, available)
+VALUES
+    ('legacy-native', 'native-type', '', '', 'linux-amd64', 'native', '/opt/engine/bin/server', 1),
+    ('legacy-container', 'container-type', 'registry.example/engine', 'v1', 'linux-amd64', 'container', '', 1);
+PRAGMA user_version = 20;`)
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatalf("seed v20 database: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("upgrade v20 database: %v", err)
+	}
+	t.Cleanup(func() { _ = upgraded.Close() })
+	for _, tc := range []struct {
+		id       string
+		location string
+	}{
+		{id: "legacy-native", location: "/opt/engine/bin/server"},
+		{id: "legacy-container", location: "registry.example/engine:v1"},
+	} {
+		engine, err := upgraded.GetEngine(ctx, tc.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if engine.Location != tc.location || engine.Origin != "legacy" || engine.Active ||
+			engine.LifecycleStatus != "discovered" || engine.VerificationStatus != "unverified" ||
+			engine.PreviousEngineID != "" {
+			t.Fatalf("migrated engine %s = %+v", tc.id, engine)
+		}
+	}
+
+	first := lifecycleTestEngine("active-v1", "1.0.0")
+	first.Active = true
+	first.LifecycleStatus = "active"
+	if err := upgraded.InsertEngine(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := lifecycleTestEngine("active-v2", "2.0.0")
+	second.Active = true
+	second.LifecycleStatus = "active"
+	if err := upgraded.InsertEngine(ctx, second); err == nil {
+		t.Fatal("partial unique index allowed two active versions in one engine group")
+	}
+}
+
+func TestDeploymentIntentRoundTripsSanitizedConfig(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	exitCode := 17
+	intent := &recovery.Intent{
+		Name:                    "intent-1",
+		Model:                   "model-1",
+		EngineAsset:             "engine-1",
+		EngineVersion:           "1.2.3",
+		Slot:                    "slot-a",
+		Runtime:                 "native",
+		Revision:                4,
+		Config:                  map[string]any{"ctx_size": 8192, "api_key": "secret", "nested": map[string]any{"token": "nested-secret"}},
+		DesiredState:            recovery.DesiredRunning,
+		RecoveryState:           recovery.StateWaiting,
+		Policy:                  recovery.DefaultPolicy(),
+		AttemptCount:            2,
+		ConsecutiveFailureCount: 1,
+		ObservedRestartCount:    3,
+		WindowStartedAt:         time.Date(2026, 7, 30, 8, 9, 10, 123456789, time.FixedZone("UTC+8", 8*60*60)),
+		NextAttemptAt:           time.Date(2026, 7, 30, 0, 10, 11, 0, time.UTC),
+		HealthySince:            time.Date(2026, 7, 29, 23, 0, 0, 0, time.UTC),
+		LastExitCode:            &exitCode,
+		LastError:               "startup failed",
+		CreatedAt:               time.Date(2026, 7, 29, 22, 0, 0, 0, time.UTC),
+		UpdatedAt:               time.Date(2026, 7, 29, 22, 1, 0, 0, time.UTC),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatalf("UpsertDeploymentIntent: %v", err)
+	}
+
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatalf("GetDeploymentIntent: %v", err)
+	}
+	if got.Name != intent.Name || got.Model != intent.Model || got.EngineAsset != intent.EngineAsset || got.EngineVersion != intent.EngineVersion || got.Slot != intent.Slot || got.Runtime != intent.Runtime || got.Revision != intent.Revision {
+		t.Fatalf("identity fields = %#v", got)
+	}
+	if got.DesiredState != recovery.DesiredRunning || got.RecoveryState != recovery.StateWaiting || got.AttemptCount != 2 || got.ConsecutiveFailureCount != 1 || got.ObservedRestartCount != 3 || got.LastError != "startup failed" {
+		t.Fatalf("recovery fields = %#v", got)
+	}
+	if got.LastExitCode == nil || *got.LastExitCode != exitCode {
+		t.Fatalf("LastExitCode = %v, want %d", got.LastExitCode, exitCode)
+	}
+	if !reflect.DeepEqual(got.Policy, intent.Policy) {
+		t.Fatalf("Policy = %#v, want %#v", got.Policy, intent.Policy)
+	}
+	if !got.WindowStartedAt.Equal(intent.WindowStartedAt.UTC()) || !got.NextAttemptAt.Equal(intent.NextAttemptAt.UTC()) || !got.HealthySince.Equal(intent.HealthySince.UTC()) || !got.CreatedAt.Equal(intent.CreatedAt.UTC()) || !got.UpdatedAt.Equal(intent.UpdatedAt.UTC()) {
+		t.Fatalf("timestamps = %#v", got)
+	}
+	ctxSize, ok := got.Config["ctx_size"].(json.Number)
+	if !ok || ctxSize.String() != "8192" || got.Config["api_key"] != "[REDACTED]" {
+		t.Fatalf("Config = %#v", got.Config)
+	}
+	nested, ok := got.Config["nested"].(map[string]any)
+	if !ok || nested["token"] != "[REDACTED]" {
+		t.Fatalf("nested config = %#v", got.Config["nested"])
+	}
+
+	var configJSON string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&configJSON); err != nil {
+		t.Fatalf("select stored config: %v", err)
+	}
+	if strings.Contains(configJSON, "secret") {
+		t.Fatalf("stored config leaks a secret: %s", configJSON)
+	}
+}
+
+func TestDeploymentIntentRoundTripPreservesLargeIntegerJSONToken(t *testing.T) {
+	const want = "9007199254740993"
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{
+		Name:          "intent-large-integer",
+		Config:        map[string]any{"large_integer": uint64(9007199254740993)},
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	var configJSON string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&configJSON); err != nil {
+		t.Fatal(err)
+	}
+	if configJSON != `{"large_integer":9007199254740993}` {
+		t.Fatalf("stored config JSON = %s", configJSON)
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	number, ok := got.Config["large_integer"].(json.Number)
+	if !ok || number.String() != want {
+		t.Fatalf("retrieved large integer = %#v", got.Config["large_integer"])
+	}
+}
+
+func TestDeploymentIntentCASRejectsStaleRevision(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{Name: "intent-cas", Revision: 1, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intent.RecoveryState = recovery.StateWaiting
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("stale revision updated row")
+	}
+
+	ok, err = db.CompareAndSwapDeploymentIntent(ctx, intent, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("current revision did not update row")
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 2 || got.RecoveryState != recovery.StateWaiting {
+		t.Fatalf("CAS result = %#v", got)
+	}
+}
+
+func TestDeploymentIntentCASUsesFreshAuditTimeAndDoesNotMutateStaleCaller(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	initialUpdatedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	intent := &recovery.Intent{
+		Name:          "intent-cas-audit",
+		Revision:      1,
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+		UpdatedAt:     initialUpdatedAt,
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	caller, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller.RecoveryState = recovery.StateWaiting
+	staleBefore := *caller
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, caller, 99)
+	if err != nil || ok {
+		t.Fatalf("stale CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	if !reflect.DeepEqual(*caller, staleBefore) {
+		t.Fatalf("stale CAS mutated caller: %#v", caller)
+	}
+
+	ok, err = db.CompareAndSwapDeploymentIntent(ctx, caller, 1)
+	if err != nil || !ok {
+		t.Fatalf("current CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	if !caller.UpdatedAt.After(initialUpdatedAt) || caller.Revision != 2 {
+		t.Fatalf("successful CAS caller = %#v", caller)
+	}
+	stored, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.UpdatedAt.After(initialUpdatedAt) || !stored.UpdatedAt.Equal(caller.UpdatedAt) {
+		t.Fatalf("stored updated_at = %v, caller = %v", stored.UpdatedAt, caller.UpdatedAt)
+	}
+}
+
+func TestDeploymentIntentPersistenceRedactsConfigAndLastErrorWithoutMutatingCaller(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	typedMap := map[string]string{"openai_api_key": "upsert-key-secret"}
+	typedSlice := []map[string]string{{"github_token": "upsert-token-secret"}}
+	intent := &recovery.Intent{
+		Name:          "intent-redaction",
+		Revision:      1,
+		Config:        map[string]any{"typed_map": typedMap, "typed_slice": typedSlice},
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+		LastError:     "api_key=upsert-error-secret; Authorization: Bearer upsert-bearer-secret",
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if typedMap["openai_api_key"] != "upsert-key-secret" || typedSlice[0]["github_token"] != "upsert-token-secret" || strings.Contains(intent.LastError, "[REDACTED]") {
+		t.Fatalf("persistence mutated caller: %#v", intent)
+	}
+
+	assertStoredIntentSecretsRedacted(t, db, ctx, intent.Name, []string{"upsert-key-secret", "upsert-token-secret", "upsert-error-secret", "upsert-bearer-secret"})
+	intent, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Config = map[string]any{"service_token": "cas-token-secret"}
+	intent.LastError = "password: cas-password-secret; bearer cas-bearer-secret"
+	ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 1)
+	if err != nil || !ok {
+		t.Fatalf("CompareAndSwapDeploymentIntent = (%v, %v)", ok, err)
+	}
+	assertStoredIntentSecretsRedacted(t, db, ctx, intent.Name, []string{"cas-token-secret", "cas-password-secret", "cas-bearer-secret"})
+}
+
+func TestDeploymentIntentReadReportsMalformedJSONAndTimestamps(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{Name: "intent-invalid-read", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode config JSON") {
+		t.Fatalf("GetDeploymentIntent malformed config error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{}', recovery_policy_json = '{' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode recovery policy JSON") {
+		t.Fatalf("GetDeploymentIntent malformed recovery policy error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{} {}', recovery_policy_json = '{"enabled":true}' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode config JSON") {
+		t.Fatalf("GetDeploymentIntent trailing config error = %v", err)
+	}
+	if _, err := db.RawDB().ExecContext(ctx, `UPDATE deployment_intents SET config_json = '{}', updated_at = 'not-a-timestamp' WHERE name = ?`, intent.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetDeploymentIntent(ctx, intent.Name); err == nil || !strings.Contains(err.Error(), "decode updated_at") {
+		t.Fatalf("GetDeploymentIntent malformed timestamp error = %v", err)
+	}
+}
+
+func TestDeploymentIntentPersistenceRejectsUnsupportedConfigValues(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	unsupported := make(chan int)
+	intent := &recovery.Intent{Name: "intent-invalid-write", Config: map[string]any{"unsupported": unsupported}, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+		t.Fatalf("UpsertDeploymentIntent unsupported config error = %v", err)
+	}
+	intent.Config = nil
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intent.Config = map[string]any{"unsupported": unsupported}
+	if ok, err := db.CompareAndSwapDeploymentIntent(ctx, intent, 0); ok || err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+		t.Fatalf("CompareAndSwapDeploymentIntent unsupported config = (%v, %v)", ok, err)
+	}
+}
+
+func TestDeploymentIntentPersistenceRejectsCyclicConfigWithoutPartialRow(t *testing.T) {
+	type recursiveConfig struct {
+		Next *recursiveConfig `json:"next"`
+	}
+	mapCycle := map[string]any{}
+	mapCycle["self"] = mapCycle
+	pointerCycle := &recursiveConfig{}
+	pointerCycle.Next = pointerCycle
+
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, test := range []struct {
+		name   string
+		config map[string]any
+	}{
+		{"map", map[string]any{"cycle": mapCycle}},
+		{"pointer", map[string]any{"cycle": pointerCycle}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			intent := &recovery.Intent{Name: "intent-cycle-" + test.name, Config: test.config, DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()}
+			if err := db.UpsertDeploymentIntent(ctx, intent); err == nil || !strings.Contains(err.Error(), "encode deployment intent config") {
+				t.Fatalf("UpsertDeploymentIntent cycle error = %v", err)
+			}
+			var count int
+			if err := db.RawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM deployment_intents WHERE name = ?`, intent.Name).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("partial row count = %d", count)
+			}
+		})
+	}
+}
+
+func assertStoredIntentSecretsRedacted(t *testing.T, db *DB, ctx context.Context, name string, secrets []string) {
+	t.Helper()
+	var configJSON, lastError string
+	if err := db.RawDB().QueryRowContext(ctx, `SELECT config_json, last_error FROM deployment_intents WHERE name = ?`, name).Scan(&configJSON, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(configJSON, secret) || strings.Contains(lastError, secret) {
+			t.Fatalf("stored intent leaks %q: config=%q last_error=%q", secret, configJSON, lastError)
+		}
+	}
+}
+
+func TestListRunnableDeploymentIntentsIncludesPendingQuarantineEnforcement(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, intent := range []*recovery.Intent{
+		{Name: "healthy", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+		{Name: "waiting", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateWaiting, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantine-enforced", Runtime: "docker", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantine-pending", Runtime: "docker", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy(), NextAttemptAt: time.Now().UTC()},
+		{Name: "native-quarantine", Runtime: "native", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy(), NextAttemptAt: time.Now().UTC()},
+		{Name: "stopped", DesiredState: recovery.DesiredStopped, RecoveryState: recovery.StateWaiting, Policy: recovery.DefaultPolicy()},
+	} {
+		if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+			t.Fatalf("UpsertDeploymentIntent(%s): %v", intent.Name, err)
+		}
+	}
+
+	got, err := db.ListRunnableDeploymentIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListRunnableDeploymentIntents: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, intent := range got {
+		names = append(names, intent.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"healthy", "quarantine-pending", "waiting"}) {
+		t.Fatalf("runnable intent names = %v", names)
+	}
+}
+
+func TestListDeploymentIntentsIncludesStoppedAndQuarantined(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	for _, intent := range []*recovery.Intent{
+		{Name: "healthy", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+		{Name: "quarantined", DesiredState: recovery.DesiredRunning, RecoveryState: recovery.StateQuarantined, Policy: recovery.DefaultPolicy()},
+		{Name: "stopped", DesiredState: recovery.DesiredStopped, RecoveryState: recovery.StateHealthy, Policy: recovery.DefaultPolicy()},
+	} {
+		if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+			t.Fatalf("UpsertDeploymentIntent(%s): %v", intent.Name, err)
+		}
+	}
+
+	got, err := db.ListDeploymentIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListDeploymentIntents: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, intent := range got {
+		names = append(names, intent.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"healthy", "quarantined", "stopped"}) {
+		t.Fatalf("intent names = %v", names)
+	}
+}
+
+func TestStopDeploymentIntentStopsAndClearsScheduledAttempt(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	intent := &recovery.Intent{
+		Name:          "intent-stop",
+		Revision:      5,
+		DesiredState:  recovery.DesiredRunning,
+		RecoveryState: recovery.StateWaiting,
+		Policy:        recovery.DefaultPolicy(),
+		NextAttemptAt: time.Now().UTC().Add(time.Minute),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StopDeploymentIntent(ctx, intent.Name); err != nil {
+		t.Fatalf("StopDeploymentIntent: %v", err)
+	}
+	got, err := db.GetDeploymentIntent(ctx, intent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DesiredState != recovery.DesiredStopped || !got.NextAttemptAt.IsZero() || got.Revision != 6 {
+		t.Fatalf("stopped intent = %#v", got)
+	}
+}
+
+func TestIntentConfigRedactsSensitiveKeys(t *testing.T) {
+	got := recovery.SanitizeConfig(map[string]any{
+		"ctx_size": 8192,
+		"api_key":  "secret",
+		"nested":   map[string]any{"token": "x"},
+	})
+	if got["ctx_size"] != 8192 || got["api_key"] != "[REDACTED]" {
+		t.Fatalf("got %#v", got)
+	}
+	nested, ok := got["nested"].(map[string]any)
+	if !ok || nested["token"] != "[REDACTED]" {
+		t.Fatalf("nested config = %#v", got["nested"])
+	}
+}
+
+func TestExternalServiceUpsertAndList(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	first := &ExternalService{
+		ID:           "external-1",
+		BaseURL:      "http://127.0.0.1:8009",
+		Kind:         "healthz",
+		Status:       "reachable",
+		Source:       "scan",
+		ModelsJSON:   `["SenseVoiceSmall"]`,
+		MetadataJSON: `{"status":"ok"}`,
+	}
+	if err := db.UpsertExternalService(ctx, first); err != nil {
+		t.Fatalf("UpsertExternalService(first): %v", err)
+	}
+
+	second := &ExternalService{
+		ID:           "external-1",
+		BaseURL:      "http://127.0.0.1:8009",
+		Kind:         "healthz",
+		Status:       "reachable",
+		Source:       "scan",
+		ModelsJSON:   `["SenseVoiceSmall","pyannote"]`,
+		MetadataJSON: `{"status":"ok","version":"2"}`,
+	}
+	if err := db.UpsertExternalService(ctx, second); err != nil {
+		t.Fatalf("UpsertExternalService(second): %v", err)
+	}
+
+	services, err := db.ListExternalServices(ctx)
+	if err != nil {
+		t.Fatalf("ListExternalServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("len = %d, want 1", len(services))
+	}
+	got := services[0]
+	if got.BaseURL != "http://127.0.0.1:8009" {
+		t.Fatalf("BaseURL = %q, want http://127.0.0.1:8009", got.BaseURL)
+	}
+	if got.ModelsJSON != `["SenseVoiceSmall","pyannote"]` {
+		t.Fatalf("ModelsJSON = %s, want updated models", got.ModelsJSON)
+	}
+	if got.FirstSeenAt.IsZero() || got.LastSeenAt.IsZero() {
+		t.Fatalf("timestamps should be populated: %+v", got)
+	}
+	if got.LastSeenAt.Before(got.FirstSeenAt) {
+		t.Fatalf("LastSeenAt %s before FirstSeenAt %s", got.LastSeenAt, got.FirstSeenAt)
+	}
+}
+
+func TestExternalServiceImportedFlagPersistsAcrossScanUpserts(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	svc := &ExternalService{
+		ID:         "external-2",
+		BaseURL:    "http://127.0.0.1:8004",
+		Kind:       "openai",
+		Status:     "reachable",
+		Source:     "scan",
+		ModelsJSON: `["whisper-large-v3-hf"]`,
+	}
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("UpsertExternalService: %v", err)
+	}
+	if err := db.SetExternalServiceImported(ctx, "http://127.0.0.1:8004", true); err != nil {
+		t.Fatalf("SetExternalServiceImported: %v", err)
+	}
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("second UpsertExternalService: %v", err)
+	}
+
+	services, err := db.ListExternalServices(ctx)
+	if err != nil {
+		t.Fatalf("ListExternalServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("len = %d, want 1", len(services))
+	}
+	if !services[0].Imported {
+		t.Fatal("Imported = false, want true after scan refresh")
+	}
+}
+
+func TestExternalServiceImportedModelsPersistAcrossScanUpserts(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+
+	svc := &ExternalService{
+		ID:         "external-3",
+		BaseURL:    "http://127.0.0.1:8005",
+		Kind:       "openai",
+		Status:     "reachable",
+		Source:     "scan",
+		ModelsJSON: `["old-model","new-model"]`,
+	}
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("UpsertExternalService: %v", err)
+	}
+	if err := db.SetExternalServiceImportedModels(ctx, svc.BaseURL, true, []string{"new-model"}); err != nil {
+		t.Fatalf("SetExternalServiceImportedModels: %v", err)
+	}
+	svc.ModelsJSON = `["old-model","new-model","later-model"]`
+	if err := db.UpsertExternalService(ctx, svc); err != nil {
+		t.Fatalf("second UpsertExternalService: %v", err)
+	}
+
+	services, err := db.ListExternalServices(ctx)
+	if err != nil {
+		t.Fatalf("ListExternalServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("len = %d, want 1", len(services))
+	}
+	if !services[0].Imported {
+		t.Fatal("Imported = false, want true after selected import")
+	}
+	if services[0].ImportedModelsJSON != `["new-model"]` {
+		t.Fatalf("ImportedModelsJSON = %s, want selected model subset", services[0].ImportedModelsJSON)
 	}
 }
 
@@ -328,6 +1021,342 @@ func TestEngineCRUD(t *testing.T) {
 	})
 }
 
+func TestActivateEngineVersionIsAtomic(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	v1 := lifecycleTestEngine("engine-v1", "1.0.0")
+	v1.Active = true
+	v1.LifecycleStatus = "active"
+	v2 := lifecycleTestEngine("engine-v2", "2.0.0")
+	if err := db.InsertEngine(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+
+	previousID, err := db.ActivateEngineVersion(ctx, v2.ID)
+	if err != nil {
+		t.Fatalf("ActivateEngineVersion: %v", err)
+	}
+	if previousID != v1.ID {
+		t.Fatalf("previousID=%q want %q", previousID, v1.ID)
+	}
+	gotV1, err := db.GetEngine(ctx, v1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotV2, err := db.GetEngine(ctx, v2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotV1.Active || gotV1.LifecycleStatus != "verified" {
+		t.Fatalf("old active=%v lifecycle=%q, want inactive verified", gotV1.Active, gotV1.LifecycleStatus)
+	}
+	if !gotV2.Active || gotV2.LifecycleStatus != "active" || gotV2.PreviousEngineID != v1.ID {
+		t.Fatalf("new version=%+v, want active with previous %q", gotV2, v1.ID)
+	}
+
+	versions, err := db.ListEngineVersions(ctx, v1.AssetName, v1.Platform, v1.RuntimeType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].ID != v2.ID {
+		t.Fatalf("versions=%+v, want active v2 first and both versions", versions)
+	}
+}
+
+func TestActivateEngineVersionRollsBackOnWriteFailure(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	v1 := lifecycleTestEngine("engine-v1", "1.0.0")
+	v1.Active = true
+	v1.LifecycleStatus = "active"
+	v2 := lifecycleTestEngine("engine-v2", "2.0.0")
+	if err := db.InsertEngine(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `
+CREATE TRIGGER fail_engine_activation
+BEFORE UPDATE OF active ON engines
+WHEN NEW.id = 'engine-v2' AND NEW.active = 1
+BEGIN
+    SELECT RAISE(ABORT, 'forced activation failure');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ActivateEngineVersion(ctx, v2.ID); err == nil {
+		t.Fatal("ActivateEngineVersion succeeded despite injected write failure")
+	}
+	gotV1, err := db.GetEngine(ctx, v1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotV2, err := db.GetEngine(ctx, v2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotV1.Active || gotV1.LifecycleStatus != "active" || gotV2.Active ||
+		gotV2.LifecycleStatus != "verified" || gotV2.PreviousEngineID != "" {
+		t.Fatalf("activation failure was not atomic: old=%+v candidate=%+v", gotV1, gotV2)
+	}
+}
+
+func TestActivateRejectsUnverifiedVersion(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	v1 := lifecycleTestEngine("engine-v1", "1.0.0")
+	v1.Active = true
+	v1.LifecycleStatus = "active"
+	v2 := lifecycleTestEngine("engine-v2", "2.0.0")
+	v2.VerificationStatus = "unverified"
+	v2.LifecycleStatus = "staged"
+	if err := db.InsertEngine(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ActivateEngineVersion(ctx, v2.ID); err == nil || !strings.Contains(err.Error(), "verified") {
+		t.Fatalf("ActivateEngineVersion error=%v, want verification rejection", err)
+	}
+	gotV1, _ := db.GetEngine(ctx, v1.ID)
+	gotV2, _ := db.GetEngine(ctx, v2.ID)
+	if !gotV1.Active || gotV2.Active {
+		t.Fatalf("activation changed rows on failure: v1.active=%v v2.active=%v", gotV1.Active, gotV2.Active)
+	}
+}
+
+func TestRollbackEngineVersionRequiresExistingVerifiedPrevious(t *testing.T) {
+	cases := []struct {
+		name          string
+		previousID    string
+		available     bool
+		verification  string
+		wantErr       string
+		wantNewActive string
+	}{
+		{name: "missing previous", previousID: "missing", available: true, verification: "verified", wantErr: "not found"},
+		{name: "unavailable previous", previousID: "engine-v1", available: false, verification: "verified", wantErr: "unavailable"},
+		{name: "unverified previous", previousID: "engine-v1", available: true, verification: "unverified", wantErr: "verified"},
+		{name: "verified previous", previousID: "engine-v1", available: true, verification: "verified", wantNewActive: "engine-v1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := mustOpen(t)
+			ctx := context.Background()
+			if tc.previousID != "missing" {
+				previous := lifecycleTestEngine("engine-v1", "1.0.0")
+				previous.Available = tc.available
+				previous.VerificationStatus = tc.verification
+				if tc.verification != "verified" {
+					previous.LifecycleStatus = "staged"
+				}
+				if err := db.InsertEngine(ctx, previous); err != nil {
+					t.Fatal(err)
+				}
+			}
+			current := lifecycleTestEngine("engine-v2", "2.0.0")
+			current.Active = true
+			current.LifecycleStatus = "active"
+			current.PreviousEngineID = tc.previousID
+			if err := db.InsertEngine(ctx, current); err != nil {
+				t.Fatal(err)
+			}
+
+			newActive, err := db.RollbackEngineVersion(ctx, current.ID)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("RollbackEngineVersion error=%v want %q", err, tc.wantErr)
+				}
+				stillCurrent, _ := db.GetEngine(ctx, current.ID)
+				if !stillCurrent.Active {
+					t.Fatal("failed rollback changed the active version")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RollbackEngineVersion: %v", err)
+			}
+			if newActive != tc.wantNewActive {
+				t.Fatalf("newActive=%q want %q", newActive, tc.wantNewActive)
+			}
+			previous, _ := db.GetEngine(ctx, newActive)
+			old, _ := db.GetEngine(ctx, current.ID)
+			if !previous.Active || previous.PreviousEngineID != current.ID || old.Active {
+				t.Fatalf("rollback rows: previous=%+v old=%+v", previous, old)
+			}
+		})
+	}
+}
+
+func TestRollbackEngineVersionRollsBackOnWriteFailure(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	previous := lifecycleTestEngine("engine-v1", "1.0.0")
+	current := lifecycleTestEngine("engine-v2", "2.0.0")
+	current.Active = true
+	current.LifecycleStatus = "active"
+	current.PreviousEngineID = previous.ID
+	if err := db.InsertEngine(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `
+CREATE TRIGGER fail_engine_rollback
+BEFORE UPDATE OF active ON engines
+WHEN NEW.id = 'engine-v1' AND NEW.active = 1
+BEGIN
+    SELECT RAISE(ABORT, 'forced rollback failure');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.RollbackEngineVersion(ctx, current.ID); err == nil {
+		t.Fatal("RollbackEngineVersion succeeded despite injected write failure")
+	}
+	gotPrevious, err := db.GetEngine(ctx, previous.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCurrent, err := db.GetEngine(ctx, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrevious.Active || gotPrevious.LifecycleStatus != "verified" ||
+		!gotCurrent.Active || gotCurrent.LifecycleStatus != "active" ||
+		gotCurrent.PreviousEngineID != previous.ID {
+		t.Fatalf("rollback failure was not atomic: previous=%+v current=%+v", gotPrevious, gotCurrent)
+	}
+}
+
+func TestEngineHasReferences(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	engineVersion := lifecycleTestEngine("engine-v1", "1.0.0")
+	if err := db.InsertEngine(ctx, engineVersion); err != nil {
+		t.Fatal(err)
+	}
+	if referenced, err := db.EngineHasReferences(ctx, engineVersion.ID); err != nil || referenced {
+		t.Fatalf("initial references=%v err=%v, want false", referenced, err)
+	}
+	active := lifecycleTestEngine("active-engine", "1.0.0")
+	active.AssetName = "active-engine-a"
+	active.Active = true
+	active.LifecycleStatus = "active"
+	if err := db.InsertEngine(ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	if referenced, err := db.EngineHasReferences(ctx, active.ID); err != nil || !referenced {
+		t.Fatalf("active references=%v err=%v, want true", referenced, err)
+	}
+
+	dependent := lifecycleTestEngine("engine-v2", "2.0.0")
+	dependent.PreviousEngineID = engineVersion.ID
+	if err := db.InsertEngine(ctx, dependent); err != nil {
+		t.Fatal(err)
+	}
+	if referenced, err := db.EngineHasReferences(ctx, engineVersion.ID); err != nil || !referenced {
+		t.Fatalf("rollback-link references=%v err=%v, want true", referenced, err)
+	}
+	if err := db.DeleteEngine(ctx, dependent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	intent := &recovery.Intent{
+		Name:          "deployment-a",
+		Model:         "model-a",
+		EngineAsset:   engineVersion.AssetName,
+		EngineVersion: engineVersion.Version,
+		Runtime:       engineVersion.RuntimeType,
+		DesiredState:  recovery.DesiredStopped,
+		RecoveryState: recovery.StateHealthy,
+		Policy:        recovery.DefaultPolicy(),
+		Config:        map[string]any{},
+		LastError:     "",
+		Revision:      1,
+		Slot:          "",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	if err := db.UpsertDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if referenced, err := db.EngineHasReferences(ctx, engineVersion.ID); err != nil || !referenced {
+		t.Fatalf("deployment references=%v err=%v, want true", referenced, err)
+	}
+}
+
+func TestUpsertScannedEnginePreservesOwnedLifecycleEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		storedOrigin  string
+		scannedOrigin string
+	}{
+		{storedOrigin: "managed", scannedOrigin: "preinstalled"},
+		{storedOrigin: "imported", scannedOrigin: "preinstalled"},
+		{storedOrigin: "imported", scannedOrigin: "managed"},
+	} {
+		t.Run(tc.storedOrigin+"_from_"+tc.scannedOrigin, func(t *testing.T) {
+			db := mustOpen(t)
+			ctx := context.Background()
+			stored := lifecycleTestEngine("engine-v1", "1.0.0")
+			stored.Origin = tc.storedOrigin
+			stored.Active = true
+			stored.LifecycleStatus = "active"
+			stored.PreviousEngineID = "engine-v0"
+			if err := db.InsertEngine(ctx, stored); err != nil {
+				t.Fatal(err)
+			}
+
+			scanned := *stored
+			scanned.Origin = tc.scannedOrigin
+			scanned.Active = false
+			scanned.LifecycleStatus = "discovered"
+			scanned.VerificationStatus = "unverified"
+			scanned.PreviousEngineID = ""
+			if err := db.UpsertScannedEngine(ctx, &scanned); err != nil {
+				t.Fatal(err)
+			}
+			got, err := db.GetEngine(ctx, stored.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Origin != tc.storedOrigin || !got.Active || got.LifecycleStatus != "active" ||
+				got.VerificationStatus != "verified" || got.PreviousEngineID != "engine-v0" {
+				t.Fatalf("scanned upsert downgraded owned evidence: %+v", got)
+			}
+		})
+	}
+}
+
+func lifecycleTestEngine(id, version string) *Engine {
+	return &Engine{
+		ID:                 id,
+		Type:               "engine-type",
+		Platform:           "linux-amd64",
+		RuntimeType:        "native",
+		BinaryPath:         "/data/dist/linux-amd64/engine-a/" + version + "/engine",
+		Available:          true,
+		AssetName:          "engine-a",
+		Version:            version,
+		CatalogVersion:     version,
+		DetectedVersion:    version,
+		VersionMatch:       "exact",
+		Origin:             "managed",
+		ContentDigest:      "sha256:" + id,
+		Location:           "/data/dist/linux-amd64/engine-a/" + version,
+		LifecycleStatus:    "verified",
+		VerificationStatus: "verified",
+	}
+}
+
 func TestKnowledgeNoteCRUD(t *testing.T) {
 	db := mustOpen(t)
 	ctx := context.Background()
@@ -498,6 +1527,52 @@ func TestAuditLog(t *testing.T) {
 
 	if err := db.LogAction(ctx, entry); err != nil {
 		t.Fatalf("LogAction: %v", err)
+	}
+}
+
+func TestRecoveryAuditLog(t *testing.T) {
+	db := mustOpen(t)
+	ctx := context.Background()
+	event := recovery.AuditEvent{
+		Type:          recovery.AuditRecoveryFailed,
+		Source:        recovery.AuditSourceReconciler,
+		Deployment:    "generic-deployment",
+		Model:         "generic-model",
+		Runtime:       "native",
+		EngineAsset:   "generic-engine",
+		EngineVersion: "1.2.3",
+		Result:        recovery.AuditResultFailed,
+		Reason:        "launch failed token=secret-value",
+		RecoveryState: recovery.StateWaiting,
+		AttemptCount:  2,
+		Revision:      7,
+		NextAttemptAt: time.Unix(20_000, 0).UTC().Format(time.RFC3339),
+	}
+
+	if err := db.LogRecoveryEvent(ctx, event); err != nil {
+		t.Fatalf("LogRecoveryEvent: %v", err)
+	}
+	var agentType, toolName, arguments, resultSummary string
+	if err := db.db.QueryRowContext(ctx, `
+SELECT agent_type, tool_name, arguments, result_summary
+FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&agentType, &toolName, &arguments, &resultSummary); err != nil {
+		t.Fatalf("query recovery audit: %v", err)
+	}
+	if agentType != recovery.AuditSourceReconciler || toolName != "deployment.recovery."+recovery.AuditRecoveryFailed {
+		t.Fatalf("audit identity = %q/%q", agentType, toolName)
+	}
+	if strings.Contains(arguments, "secret-value") || strings.Contains(resultSummary, "secret-value") {
+		t.Fatalf("audit leaked credential: arguments=%q result=%q", arguments, resultSummary)
+	}
+	var stored recovery.AuditEvent
+	if err := json.Unmarshal([]byte(arguments), &stored); err != nil {
+		t.Fatalf("decode recovery audit arguments: %v", err)
+	}
+	if stored.Deployment != event.Deployment || stored.EngineVersion != event.EngineVersion || stored.Reason != "launch failed token=[REDACTED]" {
+		t.Fatalf("stored recovery audit = %+v", stored)
+	}
+	if !strings.Contains(resultSummary, recovery.AuditResultFailed) || !strings.Contains(resultSummary, "[REDACTED]") {
+		t.Fatalf("result summary = %q, want failed and redacted reason", resultSummary)
 	}
 }
 

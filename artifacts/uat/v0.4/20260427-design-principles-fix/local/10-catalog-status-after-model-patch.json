@@ -1,0 +1,12 @@
+{
+  "factory_assets": 88,
+  "overlay_assets": 1,
+  "parse_warnings": null,
+  "shadowed": [
+    {
+      "name": "qwen3-4b",
+      "kind": "model_asset",
+      "stale": false
+    }
+  ]
+}

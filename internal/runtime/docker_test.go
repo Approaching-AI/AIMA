@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -33,10 +35,73 @@ func TestBuildRunArgs_NVIDIA(t *testing.T) {
 	assertContains(t, argStr, "--env NVIDIA_VISIBLE_DEVICES=all", "NVIDIA env")
 	assertContains(t, argStr, "--env VLLM_WORKER_MULTIPROC_METHOD=spawn", "extra env")
 	assertContains(t, argStr, "--volume /data/models/qwen3:/models:ro", "model volume")
-	assertContains(t, argStr, "--publish 8000:8000", "port publish")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish")
 	assertContains(t, argStr, "--restart unless-stopped", "restart policy")
 	assertContains(t, argStr, "--entrypoint vllm", "entrypoint override")
 	assertContains(t, argStr, "serve /models", "command with model path substitution")
+}
+
+func TestBuildRunArgs_PublishesBackendOnLoopbackByDefault(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	assertContains(t, joinArgs(args), "--publish 127.0.0.1:8000:8000", "loopback publish")
+}
+
+func TestBuildRunArgs_HonorsExplicitPublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "192.168.10.20",
+		},
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	argStr := joinArgs(args)
+	assertContains(t, argStr, "--publish 192.168.10.20:8000:8000", "explicit publish host")
+	assertContains(t, argStr, "--label aima.dev/publish_host=192.168.10.20", "publish host identity")
+}
+
+func TestDockerPublishedAddressUsesPersistedPublishHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		port   int
+		want   string
+	}{
+		{name: "legacy defaults to loopback", labels: nil, port: 8000, want: "127.0.0.1:8000"},
+		{name: "private IPv4", labels: map[string]string{"aima.dev/publish_host": "192.168.10.20"}, port: 8000, want: "192.168.10.20:8000"},
+		{name: "IPv6 loopback", labels: map[string]string{"aima.dev/publish_host": "::1"}, port: 8000, want: "[::1]:8000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dockerPublishedAddress(tt.labels, tt.port); got != tt.want {
+				t.Fatalf("dockerPublishedAddress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRunArgs_FormatsExplicitIPv6PublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "::1",
+		},
+	}
+
+	args := r.buildRunArgs("test", req)
+	assertContains(t, strings.Join(args, " "), "--publish [::1]:8000:8000", "IPv6 publish")
 }
 
 func TestBuildRunArgs_AMD(t *testing.T) {
@@ -145,6 +210,31 @@ func TestBuildRunArgs_ConfigFlags(t *testing.T) {
 	assertContains(t, argStr, "--ctx-size 16384", "ctx_size config flag")
 	assertContains(t, argStr, "--ubatch-size 256", "ubatch_size config flag")
 	assertContains(t, argStr, "--flash-attn", "bool config flag")
+}
+
+func TestBuildRunArgs_FiltersUnsupportedConfigFlags(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:      "z-image",
+		Engine:    "z-image-diffusers",
+		Image:     "qujing-z-image:latest",
+		Command:   []string{"python3", "server.py"},
+		ModelPath: "/data/models/z-image",
+		PortSpecs: []knowledge.StartupPort{
+			{Name: "http", Flag: "--port", ConfigKey: "port", Primary: true},
+		},
+		Config: map[string]any{
+			"port":          8188,
+			"max_model_len": 8192,
+		},
+		AcceptedConfigKeys: []string{"port"},
+	}
+
+	args := r.buildRunArgs("z-image-z-image-diffusers", req)
+	argStr := joinArgs(args)
+
+	assertContains(t, argStr, "--port 8188", "accepted port flag")
+	assertNotContains(t, argStr, "--max-model-len", "LLM-only context flag must not be sent to image engines")
 }
 
 func TestBuildRunArgs_Labels(t *testing.T) {
@@ -282,7 +372,7 @@ func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
 	assertContains(t, argStr, "--grpc_port_v1beta1 32108", "custom gRPC v1beta1 port flag")
 	assertContains(t, argStr, "--grpc_port 32109", "custom gRPC port flag")
 	assertContains(t, argStr, "--http_port 32110", "custom HTTP port flag")
-	assertContains(t, argStr, "--publish 32110:32110", "only primary HTTP port is published")
+	assertContains(t, argStr, "--publish 127.0.0.1:32110:32110", "only primary HTTP port is published")
 	assertNotContains(t, argStr, "--publish 32108:32108", "extra ports should stay container-local on bridge network")
 	assertNotContains(t, argStr, "--publish 32109:32109", "extra ports should stay container-local on bridge network")
 }
@@ -301,6 +391,7 @@ func TestBuildRunArgs_Ascend(t *testing.T) {
 			DockerRuntime: "ascend",
 			NetworkMode:   "host",
 			ShmSize:       "500g",
+			Ulimits:       map[string]string{"memlock": "-1:-1"},
 			Init:          true,
 			Devices:       []string{"/dev/davinci0", "/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"},
 			Env:           map[string]string{"PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True"},
@@ -316,6 +407,7 @@ func TestBuildRunArgs_Ascend(t *testing.T) {
 	assertContains(t, argStr, "--init", "init flag")
 	assertContains(t, argStr, "--network host", "host network")
 	assertContains(t, argStr, "--shm-size 500g", "shared memory size")
+	assertContains(t, argStr, "--ulimit memlock=-1:-1", "memlock ulimit")
 	assertContains(t, argStr, "--privileged", "privileged mode")
 	assertContains(t, argStr, "--device /dev/davinci0", "davinci device")
 	assertContains(t, argStr, "--device /dev/davinci_manager", "davinci manager device")
@@ -343,7 +435,7 @@ func TestBuildRunArgs_ExistingUnchanged(t *testing.T) {
 	args := r.buildRunArgs("test-vllm", req)
 	argStr := joinArgs(args)
 
-	assertContains(t, argStr, "--publish 8000:8000", "port publish without host network")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish without host network")
 	assertNotContains(t, argStr, "--runtime", "no runtime flag for NVIDIA")
 	assertNotContains(t, argStr, "--init", "no init flag")
 	assertNotContains(t, argStr, "--network", "no network flag")
@@ -378,6 +470,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "running", Running: true, StartedAt: "2026-03-03T00:00:00Z"},
 			},
 			wantPhase: "running",
@@ -392,6 +485,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "exited", ExitCode: 1},
 			},
 			wantPhase: "failed",
@@ -410,6 +504,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "exited", ExitCode: 0},
 			},
 			wantPhase: "stopped",
@@ -424,6 +519,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "restarting", ExitCode: 2, Restarting: true},
 			},
 			wantPhase: "failed",
@@ -442,6 +538,7 @@ func TestDockerInspectToStatus(t *testing.T) {
 					ExitCode   int    `json:"ExitCode"`
 					Running    bool   `json:"Running"`
 					Restarting bool   `json:"Restarting"`
+					Pid        int    `json:"Pid"`
 				}{Status: "created"},
 			},
 			wantPhase: "starting",
@@ -466,6 +563,136 @@ func TestDockerInspectToStatus(t *testing.T) {
 				t.Errorf("runtime = %q, want %q", ds.Runtime, "docker")
 			}
 		})
+	}
+}
+
+func TestDockerInspectToStatusIncludesRestartCount(t *testing.T) {
+	var di dockerInspect
+	if err := json.Unmarshal([]byte(`{
+		"Name": "/test-vllm",
+		"RestartCount": 4,
+		"State": {"Status": "running", "Running": true},
+		"Config": {"Labels": {}}
+	}`), &di); err != nil {
+		t.Fatalf("unmarshal docker inspect: %v", err)
+	}
+
+	got := (&DockerRuntime{}).inspectToStatus(di)
+	if got.Restarts != 4 {
+		t.Fatalf("Restarts = %d, want 4", got.Restarts)
+	}
+}
+
+func TestDockerInspectToStatusIncludesImageAndLaunchConfig(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"vllm", "serve"}
+	di.Config.Cmd = []string{
+		"--gpu-memory-utilization", "0.6",
+		"--max-model-len=131072",
+		"--served-model-name", "GLM-4.6V-Flash-FP4",
+		"--trust-remote-code",
+		"--no-enable-prefix-caching",
+	}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if ds.Image != "nvcr.io/nvidia/vllm:26.01-py3" {
+		t.Fatalf("Image = %q, want nvcr.io/nvidia/vllm:26.01-py3", ds.Image)
+	}
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.6 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.6", ds.Config["gpu_memory_utilization"])
+	}
+	if got, ok := ds.Config["max_model_len"].(int); !ok || got != 131072 {
+		t.Fatalf("max_model_len = %#v, want 131072", ds.Config["max_model_len"])
+	}
+	if got := ds.Config["served_model_name"]; got != "GLM-4.6V-Flash-FP4" {
+		t.Fatalf("served_model_name = %#v, want GLM-4.6V-Flash-FP4", got)
+	}
+	if got, ok := ds.Config["trust_remote_code"].(bool); !ok || !got {
+		t.Fatalf("trust_remote_code = %#v, want true", ds.Config["trust_remote_code"])
+	}
+	if got, ok := ds.Config["enable_prefix_caching"].(bool); !ok || got {
+		t.Fatalf("enable_prefix_caching = %#v, want false", ds.Config["enable_prefix_caching"])
+	}
+}
+
+func TestDockerInspectToStatusParsesShellLaunchConfig(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm-shell"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"/bin/bash"}
+	di.Config.Cmd = []string{
+		"-c",
+		"python - <<'PY'\nprint('init')\nPY\n && exec vllm serve /models --gpu-memory-utilization 0.6 --served-model-name 'GLM-4.6V-Flash-FP4'",
+	}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.6 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.6", ds.Config["gpu_memory_utilization"])
+	}
+	if got := ds.Config["served_model_name"]; got != "GLM-4.6V-Flash-FP4" {
+		t.Fatalf("served_model_name = %#v, want GLM-4.6V-Flash-FP4", got)
+	}
+}
+
+func TestDockerInspectToStatusParsesCombinedShellCommandFlag(t *testing.T) {
+	r := &DockerRuntime{}
+	di := dockerInspect{Name: "/test-vllm-shell-lc"}
+	di.State.Status = "running"
+	di.State.Running = true
+	di.Config.Entrypoint = []string{"/bin/bash"}
+	di.Config.Cmd = []string{"-lc", "exec vllm serve /models --gpu-memory-utilization 0.7 --max-model-len 65536"}
+	di.Config.Image = "nvcr.io/nvidia/vllm:26.01-py3"
+	di.Config.Labels = map[string]string{"aima.dev/port": "8000"}
+	ds := r.inspectToStatus(di)
+
+	if got, ok := ds.Config["gpu_memory_utilization"].(float64); !ok || got != 0.7 {
+		t.Fatalf("gpu_memory_utilization = %#v, want 0.7", ds.Config["gpu_memory_utilization"])
+	}
+	if got, ok := ds.Config["max_model_len"].(int); !ok || got != 65536 {
+		t.Fatalf("max_model_len = %#v, want 65536", ds.Config["max_model_len"])
+	}
+}
+
+func TestParseNvidiaMemoryMiB(t *testing.T) {
+	tests := map[string]int{
+		"1700":     1700,
+		"1700 MiB": 1700,
+		" 42 ":     42,
+		"N/A":      0,
+		"":         0,
+	}
+	for input, want := range tests {
+		if got := parseNvidiaMemoryMiB(input); got != want {
+			t.Fatalf("parseNvidiaMemoryMiB(%q) = %d, want %d", input, got, want)
+		}
+	}
+}
+
+func TestDockerContainerMatchTokensPrefersContainerID(t *testing.T) {
+	tokens := dockerContainerMatchTokens("qwen3-vllm", "abcdef1234567890")
+	if strings.Join(tokens, ",") != "abcdef1234567890,abcdef123456" {
+		t.Fatalf("tokens = %#v, want full and short container IDs only", tokens)
+	}
+}
+
+func TestParentPIDFromProcStat(t *testing.T) {
+	stat := "12345 (python worker) S 6789 1 1 0 -1 4194560"
+	if got := parentPIDFromProcStat(stat); got != "6789" {
+		t.Fatalf("parentPIDFromProcStat = %q, want 6789", got)
+	}
+}
+
+func TestIsDescendantPIDIncludesSelf(t *testing.T) {
+	if !isDescendantPID(context.Background(), "12345", "12345") {
+		t.Fatal("expected a container main PID to match itself")
 	}
 }
 

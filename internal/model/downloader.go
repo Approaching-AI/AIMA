@@ -623,6 +623,22 @@ func PathLooksCompatible(modelPath, format, quantization string) bool {
 	return normalizeQuantString(actual) == expected
 }
 
+// DetectPathFormat identifies a supported local model format from its on-disk
+// structure. Ambiguous or incomplete paths return an empty format.
+func DetectPathFormat(modelPath string) string {
+	var detected string
+	for _, format := range []string{"safetensors", "gguf", "onnx", "mnn"} {
+		if !PathLooksUsable(modelPath, format) {
+			continue
+		}
+		if detected != "" {
+			return ""
+		}
+		detected = format
+	}
+	return detected
+}
+
 func requiresExplicitQuantizationMetadata(modelPath, format, expected string) bool {
 	if !isCompressedQuantization(expected) {
 		return false

@@ -7,6 +7,7 @@
 - hardware.metrics      -> 实时 GPU 利用率、温度、显存
 - system.status         -> 综合概览（硬件 + 部署 + 指标）
 - system.config         -> 读写系统配置
+- system.diagnostics    -> 本地脱敏诊断包（不上传，用于排查/支持）
 
 ## 部署模型
 1. knowledge.resolve(model=...) -> 获取最优引擎和配置

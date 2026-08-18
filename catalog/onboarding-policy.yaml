@@ -1,0 +1,36 @@
+kind: onboarding_policy
+metadata:
+  name: default-first-run
+  description: First-run recommendation guardrails for local/native onboarding.
+
+first_run:
+  default_modality_score: 2
+  modality_scores:
+    llm: 30
+    vlm: 25
+    embedding: 8
+    rerank: 8
+    asr: 5
+    tts: 5
+    image_gen: 3
+    video_gen: 3
+  native_guardrail:
+    wildcard_gpu_arch: "*"
+    skip_discrete_accelerators: true
+    max_penalty: 45
+    ram_utilization_penalties:
+      - above: 1.00
+        penalty: 35
+      - above: 0.85
+        penalty: 25
+      - above: 0.70
+        penalty: 15
+      - above: 0.55
+        penalty: 8
+    parameter_count_penalties:
+      - above_billion: 32
+        penalty: 20
+      - above_billion: 14
+        penalty: 12
+      - above_billion: 8
+        penalty: 6

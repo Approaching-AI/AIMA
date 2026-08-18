@@ -4,7 +4,22 @@ metadata:
   type: tts
   family: litetts
   parameter_count: "~50M"
+  model_class: pipeline
   released_at: "2024-12"
+ui:
+  role: deployable
+  display_note: "LiteTTS speech synthesis pipeline"
+  display_note_zh: "LiteTTS 语音合成流水线"
+capabilities:
+  standalone_deploy: true
+openclaw:
+  chat_provider: false
+http:
+  adapters:
+    - path: /v1/audio/speech
+      kind: litetts_http
+    - path: /v1/tts
+      kind: litetts_http
 storage:
   formats: [mnn]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"

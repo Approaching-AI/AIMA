@@ -39,6 +39,7 @@
 
 ## News
 
+- **2026-08** — v0.5.0 ships: persistent deployment recovery, verified native-engine lifecycle, AMD Strix Halo/AMD395 packages for Windows and Linux, cross-device Fleet scenarios, structured inference adapters, and expanded hardware/model coverage.
 - **2026-04** — v0.4.0 ships: Explorer Agent Planner (PDCA), Central Advisor + Analyzer, MCP consolidation 101→61, aima-service device identity Phase 1, onboarding wizard with 5-dimension 0–100 scoring, multi-modal benchmark (chat/TTS/ASR/T2I/T2V).
 - **2026-03** — v0.3.x: OpenClaw full-stack integration, smart agent routing, Engine Profile system with SGLang-KT, AMD RDNA3 (W7900D) 8-GPU validated.
 - **2026-02** — v0.2.0: Support service, Web UI redesign, OpenClaw integration.
@@ -46,9 +47,10 @@
 
 ## Features
 
-- **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Huawei Ascend, Hygon DCU, Apple Silicon), CPU, and RAM.
+- **Zero-config hardware detection** — automatically discovers NVIDIA, AMD, Huawei Ascend, Hygon DCU, MetaX, Moore Threads, Houmo, and Apple accelerators, plus CPU and RAM.
 - **Knowledge-driven deployment** — YAML catalog of hardware profiles, engines, models, and partition strategies; no engine-specific code branches.
 - **Multi-runtime** — K3S (Pod) for clusters, Docker for single-node containers, Native (exec) for bare-metal inference.
+- **Recoverable native-engine lifecycle** — verifies, imports, installs, upgrades, rolls back, and restores native deployments across restarts.
 - **61 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more.
 - **Fleet management** — mDNS-based auto-discovery of LAN peers; remote tool execution across heterogeneous devices.
 - **Offline-first** — all core functions work with zero network; network is enhancement, not requirement.
@@ -84,7 +86,7 @@ Notes:
 - The installer resolves the latest installable `vX.Y.Z` product release instead of GitHub's `latest` release, because bundle tags such as `bundle/stack/2026-02-26` are not product binaries.
 - If tags are ahead of published binaries, the installer warns and stays on the latest installable release until the new assets are uploaded.
 - Override the source repo for forks with `AIMA_REPO=<owner>/<repo>`.
-- Pin a release with `AIMA_VERSION=v0.2.0`.
+- Pin a release with `AIMA_VERSION=v0.5.0`.
 - Windows installer currently targets `windows/amd64` and installs to `%LOCALAPPDATA%\Programs\AIMA`.
 
 ### Server Setup (Linux)
@@ -264,7 +266,7 @@ internal/
   fleet/           mDNS fleet discovery + remote execution
   sqlite.go        SQLite state store (`package state`, modernc.org/sqlite, zero CGO)
   model/           Model scan/download/import + metadata detection
-  engine/          Engine image management
+  engine/          Verified container/native engine lifecycle
   stack/           K3S + HAMi infrastructure installer
 catalog/
   hardware/        Hardware profile YAML
@@ -312,7 +314,7 @@ To upload those assets to the matching GitHub release with `gh`:
 make publish-release-assets
 ```
 
-Annotated SemVer tag pushes such as `v0.2.1` also trigger `.github/workflows/release.yml`, which builds the same assets and uploads them automatically.
+Annotated SemVer tag pushes such as `v0.5.0` also trigger `.github/workflows/release.yml`, which builds the same assets and uploads them automatically.
 
 ### Run tests
 

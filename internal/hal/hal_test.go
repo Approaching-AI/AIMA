@@ -323,6 +323,50 @@ func TestDetectGPU_NvidiaSmiError(t *testing.T) {
 	}
 }
 
+func TestDetectGPU_AMDDSysfsFallback(t *testing.T) {
+	runner := newMockRunner(map[string]mockResult{
+		"lspci -nn -D": {
+			output: []byte("0000:c6:00.0 Display controller [0380]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:1586] (rev c1)\n"),
+		},
+		"cat /sys/class/drm/card1/device/vendor": {
+			output: []byte("0x1002\n"),
+		},
+		"cat /sys/class/drm/card1/device/device": {
+			output: []byte("0x1586\n"),
+		},
+		"cat /sys/class/drm/card1/device/uevent": {
+			output: []byte("DRIVER=amdgpu\nPCI_CLASS=38000\nPCI_ID=1002:1586\nPCI_SLOT_NAME=0000:c6:00.0\n"),
+		},
+		"cat /sys/class/drm/card1/device/mem_info_vram_total": {
+			output: []byte("536870912\n"),
+		},
+	})
+
+	ctx := context.Background()
+	gpu := detectGPU(ctx, runner)
+	if gpu == nil {
+		t.Fatal("expected AMD GPU from sysfs fallback")
+	}
+	if gpu.Vendor != "amd" {
+		t.Errorf("Vendor = %q, want %q", gpu.Vendor, "amd")
+	}
+	if gpu.Name != "AMD Radeon 8060S Graphics" {
+		t.Errorf("Name = %q, want Radeon 8060S Graphics", gpu.Name)
+	}
+	if gpu.Arch != "RDNA3.5" {
+		t.Errorf("Arch = %q, want %q", gpu.Arch, "RDNA3.5")
+	}
+	if gpu.ComputeID != "gfx1151" {
+		t.Errorf("ComputeID = %q, want %q", gpu.ComputeID, "gfx1151")
+	}
+	if !gpu.UnifiedMemory {
+		t.Error("UnifiedMemory = false, want true for Strix Halo Radeon 8060S")
+	}
+	if gpu.Count != 1 {
+		t.Errorf("Count = %d, want 1", gpu.Count)
+	}
+}
+
 func TestDetectGPU_ValidOutput(t *testing.T) {
 	runner := newMockRunner(map[string]mockResult{
 		"nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits": {
@@ -1131,10 +1175,48 @@ func TestEnrichNvidiaGPU(t *testing.T) {
 }
 
 func TestEnrichAMDGPU(t *testing.T) {
+	t.Run("uses DRM GTT pool for Strix Halo unified memory", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /sys/class/drm/card1/device/vendor":              {output: []byte("0x1002\n")},
+			"cat /sys/class/drm/card1/device/uevent":              {output: []byte("DRIVER=amdgpu\nPCI_ID=1002:1586\n")},
+			"cat /sys/class/drm/card1/device/device":              {output: []byte("0x1586\n")},
+			"cat /sys/class/drm/card1/device/mem_info_vram_total": {output: []byte("536870912\n")},
+			"cat /sys/class/drm/card1/device/mem_info_gtt_total":  {output: []byte("103079215104\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics", Arch: "RDNA3.5", ComputeID: "gfx1151", VRAMMiB: 512, Count: 1}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if !gpu.UnifiedMemory {
+			t.Error("UnifiedMemory = false, want true")
+		}
+		if gpu.VRAMMiB != 98304 {
+			t.Errorf("VRAMMiB = %d, want 98304", gpu.VRAMMiB)
+		}
+	})
+
+	t.Run("does not change discrete GPU memory", func(t *testing.T) {
+		runner := newMockRunner(map[string]mockResult{
+			"cat /sys/class/drm/card0/device/vendor":              {output: []byte("0x1002\n")},
+			"cat /sys/class/drm/card0/device/uevent":              {output: []byte("DRIVER=amdgpu\nPCI_ID=1002:744C\n")},
+			"cat /sys/class/drm/card0/device/device":              {output: []byte("0x744c\n")},
+			"cat /sys/class/drm/card0/device/mem_info_vram_total": {output: []byte("25769803776\n")},
+			"cat /sys/class/drm/card0/device/mem_info_gtt_total":  {output: []byte("68719476736\n")},
+		})
+		gpu := &GPUInfo{Vendor: "amd", Name: "Radeon RX 7900 XTX", VRAMMiB: 24576, Count: 1}
+		enrichAMDGPU(context.Background(), runner, gpu)
+
+		if gpu.UnifiedMemory {
+			t.Error("UnifiedMemory = true, want false")
+		}
+		if gpu.VRAMMiB != 24576 {
+			t.Errorf("VRAMMiB = %d, want 24576", gpu.VRAMMiB)
+		}
+	})
+
 	t.Run("fills SDK and driver version", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
-			"cat /opt/rocm/.info/version":       {output: []byte("6.4.0\n")},
-			"modinfo -F version amdgpu":          {output: []byte("6.11.8\n")},
+			"cat /opt/rocm/.info/version": {output: []byte("6.4.0\n")},
+			"modinfo -F version amdgpu":   {output: []byte("6.11.8\n")},
 		})
 		gpu := &GPUInfo{Vendor: "amd", Name: "AMD Radeon Graphics"}
 		enrichAMDGPU(context.Background(), runner, gpu)
@@ -1149,8 +1231,8 @@ func TestEnrichAMDGPU(t *testing.T) {
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
-			"cat /opt/rocm/.info/version":       {output: []byte("6.4.0\n")},
-			"modinfo -F version amdgpu":          {output: []byte("6.11.8\n")},
+			"cat /opt/rocm/.info/version": {output: []byte("6.4.0\n")},
+			"modinfo -F version amdgpu":   {output: []byte("6.11.8\n")},
 		})
 		gpu := &GPUInfo{Vendor: "amd", SDKVersion: "ROCm 5.0", DriverVersion: "5.0.0"}
 		enrichAMDGPU(context.Background(), runner, gpu)
@@ -1261,6 +1343,44 @@ func TestDetectWithRunner_AMDUnifiedMemory(t *testing.T) {
 	}
 }
 
+func TestDetectWithRunner_AMDStrixHaloUsesGTTWhenRocmSMIReports512MiB(t *testing.T) {
+	mocks := platformMockOutputs()
+	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
+		err: fmt.Errorf("nvidia-smi failed"),
+	}
+	mocks["rocm-smi --json --showproductname --showmeminfo vram --showtemp --showpower"] = mockResult{
+		output: []byte(`{"card0":{"Card Series":"AMD Radeon Graphics","Card Model":"0x1586","VRAM Total Memory (B)":"536870912","GFX Version":"gfx1151"}}`),
+	}
+	mocks["lspci -nn -D"] = mockResult{
+		output: []byte("0000:c5:00.0 Display controller [0380]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:1586] (rev c1)\n"),
+	}
+	mocks["cat /sys/class/drm/card1/device/vendor"] = mockResult{output: []byte("0x1002\n")}
+	mocks["cat /sys/class/drm/card1/device/device"] = mockResult{output: []byte("0x1586\n")}
+	mocks["cat /sys/class/drm/card1/device/uevent"] = mockResult{
+		output: []byte("DRIVER=amdgpu\nPCI_CLASS=38000\nPCI_ID=1002:1586\nPCI_SLOT_NAME=0000:c5:00.0\n"),
+	}
+	mocks["cat /sys/class/drm/card1/device/mem_info_vram_total"] = mockResult{output: []byte("536870912\n")}
+	mocks["cat /sys/class/drm/card1/device/mem_info_gtt_total"] = mockResult{output: []byte("103079215104\n")}
+	runner := newMockRunner(mocks)
+
+	hw, err := detectWithRunner(context.Background(), runner)
+	if err != nil {
+		t.Fatalf("detectWithRunner: %v", err)
+	}
+	if hw.GPU == nil {
+		t.Fatal("expected AMD GPU")
+	}
+	if !hw.GPU.UnifiedMemory {
+		t.Fatal("UnifiedMemory = false, want true for Strix Halo GTT pool")
+	}
+	if hw.GPU.VRAMMiB != 98304 {
+		t.Fatalf("VRAMMiB = %d, want 98304 MiB GTT pool", hw.GPU.VRAMMiB)
+	}
+	if hw.GPU.Name != "AMD Radeon 8060S Graphics" || hw.GPU.Arch != "RDNA3.5" || hw.GPU.ComputeID != "gfx1151" {
+		t.Fatalf("GPU identity = %#v", hw.GPU)
+	}
+}
+
 func TestDetectWithRunner_AMDDiscreteNotUnified(t *testing.T) {
 	mocks := platformMockOutputs()
 	mocks["nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap,power.draw,power.limit,temperature.gpu --format=csv,noheader,nounits"] = mockResult{
@@ -1361,11 +1481,11 @@ func TestNpuVendorFromDriver(t *testing.T) {
 
 func TestNpuName(t *testing.T) {
 	tests := []struct {
-		name    string
-		vbnv    string
-		pciID   string
-		driver  string
-		want    string
+		name   string
+		vbnv   string
+		pciID  string
+		driver string
+		want   string
 	}{
 		{"prefer vbnv", "RyzenAI-npu5", "1022:17F0", "amdxdna", "RyzenAI-npu5"},
 		{"fallback to pciID", "", "1022:17F0", "amdxdna", "1022:17F0"},
@@ -1515,7 +1635,7 @@ func TestProbeChain_FallsToHuaweiText(t *testing.T) {
 func TestEnrichHuaweiNPU(t *testing.T) {
 	t.Run("fills driver and CANN version", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
-			"cat /usr/local/Ascend/driver/version.info":                 {output: []byte("Version=25.3.rc1\n")},
+			"cat /usr/local/Ascend/driver/version.info":               {output: []byte("Version=25.3.rc1\n")},
 			"cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg": {output: []byte("package_name=Ascend-cann-toolkit\nversion=8.3.RC1\n")},
 		})
 		gpu := &GPUInfo{Vendor: "huawei", Name: "910B1"}
@@ -1531,7 +1651,7 @@ func TestEnrichHuaweiNPU(t *testing.T) {
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {
 		runner := newMockRunner(map[string]mockResult{
-			"cat /usr/local/Ascend/driver/version.info":                 {output: []byte("Version=25.3.rc1\n")},
+			"cat /usr/local/Ascend/driver/version.info":               {output: []byte("Version=25.3.rc1\n")},
 			"cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg": {output: []byte("version=8.3.RC1\n")},
 		})
 		gpu := &GPUInfo{Vendor: "huawei", DriverVersion: "24.1", SDKVersion: "CANN 7.0"}

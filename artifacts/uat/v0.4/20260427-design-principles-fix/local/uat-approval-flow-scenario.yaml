@@ -1,0 +1,14 @@
+kind: deployment_scenario
+metadata:
+  name: uat-approval-flow
+  description: "UAT dry-run-only scenario for scenario.apply approval gate"
+target:
+  hardware_profile: ""
+deployments:
+  - model: qwen3-4b
+    engine: llamacpp
+    role: primary
+    modalities: [text]
+    config:
+      max_model_len: 2048
+      n_gpu_layers: 0

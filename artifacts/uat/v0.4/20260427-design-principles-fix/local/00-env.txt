@@ -1,0 +1,5 @@
+uat_id=20260427-design-principles-fix
+date_utc=2026-04-27T03:40:32Z
+branch=develop
+head=9428c59785c61944beb4c146c12b975f6db2f938
+worktree_status=dirty-with-scoped-uat-fixes

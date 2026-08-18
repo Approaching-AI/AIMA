@@ -1,0 +1,2801 @@
+{
+  "model_shape": {
+    "num_experts": 256,
+    "moe_intermediate_size": 512,
+    "hidden_size": 2048,
+    "topk": 8,
+    "dtype": "bfloat16"
+  },
+  "device_name": "NVIDIA GB10",
+  "batch_sizes": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192
+  ],
+  "num_iters": 4,
+  "batches": [
+    {
+      "batch_size": 1,
+      "candidate_count": 49,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 32,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 259.5120072364807,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 259.5120072364807
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 260.48800349235535
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 260.72800159454346
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 262.5040113925934
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 4,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 262.7120018005371
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 263.88800144195557
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 265.04001021385193
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 265.1839852333069
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 266.30398631095886
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 266.36001467704773
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 2,
+      "candidate_count": 49,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 4,
+        "num_stages": 2,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 466.72800183296204,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 466.72800183296204
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 474.016010761261
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 476.0479927062988
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 477.04800963401794
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 477.35199332237244
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 478.7440001964569
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 480.19200563430786
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 481.29600286483765
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 481.9679856300354
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 482.57601261138916
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 4,
+      "candidate_count": 49,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 32,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 874.4720220565796,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 874.4720220565796
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 878.6640167236328
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 879.8320293426514
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 880.9599876403809
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 881.1360001564026
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 883.7760090827942
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 885.4719996452332
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 885.5360150337219
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 887.1440291404724
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 889.1599774360657
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 8,
+      "candidate_count": 49,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 32,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 1723.3359813690186,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1723.3359813690186
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1726.8320322036743
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 4,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1726.9920110702515
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1730.8239936828613
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1731.063961982727
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1736.9999885559082
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1744.4959878921509
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1745.792031288147
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1749.8960494995117
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 1750.0
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 16,
+      "candidate_count": 98,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 32,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 2890.7599449157715,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2890.7599449157715
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2891.576051712036
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2895.359992980957
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2895.4319953918457
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2896.3520526885986
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 4,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2897.592067718506
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2898.144006729126
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2909.4879627227783
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2909.93595123291
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 2915.127992630005
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 24,
+      "candidate_count": 97,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 3591.104030609131,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3591.104030609131
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3605.0078868865967
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3609.4319820404053
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3615.4720783233643
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3616.919994354248
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3617.016077041626
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3619.760036468506
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3628.135919570923
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 4,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3629.096031188965
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 3633.2240104675293
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 32,
+      "candidate_count": 97,
+      "best_config": {
+        "BLOCK_SIZE_M": 32,
+        "BLOCK_SIZE_N": 32,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 4696.320056915283,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4696.320056915283
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4713.992118835449
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4734.68017578125
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4746.352195739746
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4747.943878173828
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 32,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4748.38399887085
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4752.831935882568
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4753.416061401367
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4756.984233856201
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 4759.479999542236
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 48,
+      "candidate_count": 163,
+      "best_config": {
+        "BLOCK_SIZE_M": 32,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 5341.104030609131,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5341.104030609131
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5356.800079345703
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5358.952045440674
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5363.1439208984375
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5378.871917724609
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5382.887840270996
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5390.168190002441
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5391.928195953369
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5396.128177642822
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5396.927833557129
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 64,
+      "candidate_count": 162,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 5929.840087890625,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5929.840087890625
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5948.376178741455
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5949.632167816162
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5979.207992553711
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5988.1439208984375
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5988.840103149414
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5996.816158294678
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5997.632026672363
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 5998.871803283691
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6005.631923675537
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 96,
+      "candidate_count": 162,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 6640.27214050293,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6640.27214050293
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6645.480155944824
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6649.456024169922
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6650.303840637207
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6669.77596282959
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6673.880100250244
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6677.271842956543
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6690.887928009033
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6697.455883026123
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6698.1201171875
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 128,
+      "candidate_count": 162,
+      "best_config": {
+        "BLOCK_SIZE_M": 32,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 6797.50394821167,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6797.50394821167
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6821.720123291016
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6822.423934936523
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6833.2319259643555
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6836.711883544922
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6848.480224609375
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6858.4160804748535
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6858.5357666015625
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6881.288051605225
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 6882.391929626465
+        }
+      ],
+      "errors": []
+    },
+    {
+      "batch_size": 256,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 7066.808223724365,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7066.808223724365
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7081.264019012451
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7114.920139312744
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7119.071960449219
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7123.991966247559
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7136.496067047119
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7144.455909729004
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7154.463768005371
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7154.615879058838
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7162.519931793213
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    },
+    {
+      "batch_size": 512,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 32,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 4,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 7327.879905700684,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7327.879905700684
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7329.895973205566
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7336.7600440979
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7352.416038513184
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7357.039928436279
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7369.296073913574
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7369.423866271973
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7373.032093048096
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7379.335880279541
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7384.024143218994
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    },
+    {
+      "batch_size": 1024,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 64,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 7666.831970214844,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7666.831970214844
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7682.072162628174
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7705.495834350586
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7720.799922943115
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7723.919868469238
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7733.888149261475
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7738.480091094971
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7740.128040313721
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7751.560211181641
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 7752.079963684082
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 32,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 64,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 8385.248184204102,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8385.248184204102
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8392.151832580566
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8433.967590332031
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8514.599800109863
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8539.135932922363
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8548.975944519043
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8553.919792175293
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8555.68790435791
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8557.344436645508
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 8561.440467834473
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    },
+    {
+      "batch_size": 4096,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 128,
+        "BLOCK_SIZE_N": 64,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 16,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 9878.552436828613,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 9878.552436828613
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 9985.808372497559
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 9993.127822875977
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10011.112213134766
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10141.9038772583
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10146.439552307129
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10148.896217346191
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 16,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10181.072235107422
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10184.304237365723
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 10190.983772277832
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    },
+    {
+      "batch_size": 8192,
+      "candidate_count": 216,
+      "best_config": {
+        "BLOCK_SIZE_M": 64,
+        "BLOCK_SIZE_N": 128,
+        "BLOCK_SIZE_K": 64,
+        "GROUP_SIZE_M": 1,
+        "num_warps": 8,
+        "num_stages": 3,
+        "SPLIT_K": 1
+      },
+      "best_kernel_us": 13415.063858032227,
+      "top10": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13415.063858032227
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13430.376052856445
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13482.463836669922
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13515.080451965332
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13605.376243591309
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13633.543968200684
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13656.623840332031
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 32,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 2,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13661.416053771973
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13691.439628601074
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 64,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "kernel_us": 13692.61646270752
+        }
+      ],
+      "errors": [
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 1,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 16,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 4,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        },
+        {
+          "config": {
+            "BLOCK_SIZE_M": 128,
+            "BLOCK_SIZE_N": 128,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 64,
+            "num_warps": 8,
+            "num_stages": 3,
+            "SPLIT_K": 1
+          },
+          "error": "OutOfResources: out of resource: shared memory, Required: 131072, Hardware limit: 101376. Reducing block sizes or `num_stages` may help."
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 292.1616430282593,
+  "config_path": "/out/E=256,N=512,device_name=NVIDIA_GB10.json"
+}

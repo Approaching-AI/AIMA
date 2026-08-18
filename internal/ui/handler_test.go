@@ -126,6 +126,232 @@ func TestRegisterRoutes_IndexIncludesOnboardingDrawerShell(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexWaitsForAIMAServePersistenceBeforeScan(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "wizStackReadyForScan(stack)") {
+		t.Fatal("index missing stack readiness helper")
+	}
+	if strings.Contains(body, `data.stack_status && (data.stack_status.docker === 'ready' || data.stack_status.k3s === 'ready')`) {
+		t.Fatal("init polling still advances on docker/k3s readiness without checking needs_init")
+	}
+	if strings.Contains(body, `(this.onboardingData.stack_status.docker === 'ready' || this.onboardingData.stack_status.k3s === 'ready')`) {
+		t.Fatal("init completion still advances on docker/k3s readiness without checking needs_init")
+	}
+}
+
+func TestRegisterRoutes_IndexUsesConsolidatedPatrolTool(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "agent.patrol_config") {
+		t.Fatal("index still references removed agent.patrol_config tool")
+	}
+	for _, token := range []string{
+		`this.callTool('patrol', { action: 'config', config_action: 'get' })`,
+		`this.callTool('patrol', { action: 'config', config_action: 'set', key: pk.key, value: pk.value })`,
+		`this.callTool('patrol', { action: 'config', config_action: 'set', key: 'interval', value: '5m' })`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing %q", token)
+		}
+	}
+}
+
+func TestRegisterRoutes_IndexReadsBootstrapAPIKey(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`window.__AIMA_BOOTSTRAP_API_KEY__ = "";`,
+		`localStorage.getItem('aima_api_key') || window.__AIMA_BOOTSTRAP_API_KEY__ || ''`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing bootstrap API key token %q", token)
+		}
+	}
+}
+
+func TestRegisterRoutes_IndexScanResultsDoNotLookSelectable(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `item.type === 'model' ? '\u25A0'`) {
+		t.Fatal("scan result model rows still use a checkbox-like square icon")
+	}
+	for _, token := range []string{
+		`item.type === 'model' ? 'M'`,
+		`x-show="onboardingScanDone && onboardingScanResults.models.length > 0"`,
+		`@click="onboardingPhase = 'local'" x-text="t('wiz_choose_local')"`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing %q", token)
+		}
+	}
+}
+
+func TestRegisterRoutes_IndexLocalOnboardingDeploySkipsPull(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`rec.no_pull || (rec.model_local && rec.engine_installed)`,
+		`rec.engine_status && rec.engine_status.installed && rec.model_status && rec.model_status.local_available`,
+		`no_pull: noPull`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("onboarding deploy body missing %q", token)
+		}
+	}
+	if !strings.Contains(body, `this.wizDeploy({ model: m.name || m.model, engine: m.engine || '', model_local: true, engine_installed: true, no_pull: true })`) {
+		t.Fatal("local onboarding deploy does not request no_pull")
+	}
+}
+
+func TestRegisterRoutes_IndexOffersExistingRunningModelChoice(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`wizHasExistingService()`,
+		`wizBestExistingService()`,
+		`@click="wizUseExistingService(wizBestExistingService())"`,
+		`fetch('/ui/api/onboarding-use-existing'`,
+		`wiz_choose_existing`,
+		`wiz_best_choice`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing existing-service onboarding token %q", token)
+		}
+	}
+}
+
+func TestRegisterRoutes_IndexShowsAPIAccessWithoutRenderingPrivateIP(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`api_access`,
+		`api_access_desc`,
+		`apiBaseDisplay()`,
+		`apiDeploymentChatCapable(deploymentDetailData)`,
+		`api_non_chat_hint`,
+		`copyCurrentAPIBaseURL($event)`,
+		`copyAPICurl(deploymentDetailData, $event)`,
+		`apiCurlTemplate(dep)`,
+		`api_public_unconfigured`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing API access token %q", token)
+		}
+	}
+	if strings.Contains(body, `x-text="apiCurrentBaseURL()"`) {
+		t.Fatal("API access UI renders the current browser origin directly")
+	}
+}
+
+func TestRegisterRoutes_IndexDoesNotShowChatExamplesForUnknownModelType(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	start := strings.Index(body, "apiDeploymentChatCapable(dep) {")
+	if start == -1 {
+		t.Fatal("apiDeploymentChatCapable not found")
+	}
+	end := strings.Index(body[start:], "\n    }")
+	if end == -1 {
+		t.Fatal("could not isolate apiDeploymentChatCapable body")
+	}
+	fnBody := body[start : start+end]
+	if strings.Contains(fnBody, "if (!kind) return true") {
+		t.Fatalf("unknown model type should not default to chat-capable, body=%s", fnBody)
+	}
+	if !strings.Contains(fnBody, "if (!kind) return false") {
+		t.Fatalf("unknown model type should return false, body=%s", fnBody)
+	}
+}
+
+func TestRegisterRoutes_IndexMasksDevicePrivateAddress(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `class="device-ip" x-show="selfIp`) || strings.Contains(body, `x-text="selfIp"`) {
+		t.Fatal("device identity still renders selfIp directly")
+	}
+	for _, token := range []string{
+		`privateAddressLabel()`,
+		`private_address_hidden`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing private-address masking token %q", token)
+		}
+	}
+}
+
 func TestRegisterRoutes_IndexIncludesOnboardingInteractionHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +452,34 @@ func TestRegisterRoutes_IndexFallbackOnboardingUsesCLICommands(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IndexOnlyAllowsOpenAIExternalServiceImport(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	start := strings.Index(body, "externalServiceImportable(service) {")
+	if start == -1 {
+		t.Fatal("externalServiceImportable not found")
+	}
+	end := strings.Index(body[start:], "\n    }")
+	if end == -1 {
+		t.Fatal("could not isolate externalServiceImportable body")
+	}
+	fnBody := body[start : start+end]
+	if !strings.Contains(fnBody, "service.kind === 'openai'") {
+		t.Fatalf("externalServiceImportable should allow openai services, body=%s", fnBody)
+	}
+	if strings.Contains(fnBody, "healthz") {
+		t.Fatalf("externalServiceImportable should not allow healthz imports, body=%s", fnBody)
+	}
+}
+
 func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -239,14 +493,224 @@ func TestRegisterRoutes_IndexIncludesDeploymentStageFeedback(t *testing.T) {
 	body := rec.Body.String()
 	for _, token := range []string{
 		"startup_progress",
-		"startup_message || dep.startup_phase || 'Initializing...'",
-		"dep.eta ? '~' + dep.eta",
+		"deployment-service-card",
+		"deploymentShowProgress(dep)",
+		"deploymentProgressValue(dep)",
+		"deploymentProgressText(dep)",
+		"openDeploymentDetail(dep)",
+		"deploymentDetailOpen",
+		"deploymentDetailRequestSeq",
+		"this.callTool('deploy.status', { name })",
+		"clearMissingGpuMemory: true",
+		"deploymentGpuMemoryMiB(d)",
+		"handleDeploymentStopClick($event, deploymentDetailData.name, { closeDetail: true })",
 		"failure_detail: this.summarizeDeploymentFailure(d)",
 		"summarizeDeploymentFailure(dep)",
-		"dep.phase === 'running' && dep.ready && dep.address",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)
+		}
+	}
+}
+
+func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, token := range []string{
+		`this.callTool('deploy.defaults', { action: 'get', model: modelName })`,
+		`this.callTool('deploy.defaults', { action: 'set', model: modelName, ...payload })`,
+		`const data = await this.callTool('deploy.run', request);`,
+		`this.deployDetailOpen = false;`,
+		`await this.refreshDeployDryRun();`,
+		`if (!kvApplied) suggestions.push({ key: 'kv_cache_dtype', value: 'fp8'`,
+		`deploy_started_background`,
+		`deploy_restore_recommended: 'Recommended parameters'`,
+		`deploy_compat_title: 'Image architecture preflight'`,
+		`deploy_compat_title: '\u955C\u50CF\u67B6\u6784\u9884\u68C0'`,
+		`x-text="t('deploy_compat_title')"`,
+		`handleDeployEngineChange($event)`,
+		`handleDeployEngineChange(event) {`,
+		`deployDryRunSeq: 0`,
+		`const seq = ++this.deployDryRunSeq;`,
+		`if (seq !== this.deployDryRunSeq) return;`,
+		`this.deployDetailPlan = { ...this.deployDetailPlan, compatibility: null };`,
+		`deployEngineRequestValue()`,
+		`deploySelectedEngineMeta()`,
+		`deployPlanMatchesSelectedEngine()`,
+		`deployCompatibilityRows()`,
+		`typeof c.image_available_in_docker === 'boolean'`,
+		`typeof c.image_available_in_containerd === 'boolean'`,
+		`.deploy-compat-grid,`,
+		`model.detected_arch`,
+		`this.callTool('scenario.apply', { name: this.deployScenarioName, bindings: scenarioBindings })`,
+		`this.callTool('scenario.apply', {`,
+		`this.callTool('scenario.show', { name: scenarioName })`,
+		`x-text="t('deploy_cluster_config')"`,
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("body missing deploy detail token %q", token)
+		}
+	}
+
+	start := strings.Index(body, "async confirmDeployDetail() {")
+	if start == -1 {
+		t.Fatal("confirmDeployDetail not found")
+	}
+	end := strings.Index(body[start:], "\n    componentStatusNote(model)")
+	if end == -1 {
+		t.Fatal("could not isolate confirmDeployDetail body")
+	}
+	fnBody := body[start : start+end]
+	closeIdx := strings.Index(fnBody, `this.deployDetailOpen = false;`)
+	runIdx := strings.Index(fnBody, `const data = await this.callTool('deploy.run', request);`)
+	if closeIdx == -1 || runIdx == -1 || closeIdx > runIdx {
+		t.Fatalf("deploy detail should close before awaiting deploy.run, body=%s", fnBody)
+	}
+
+	start = strings.Index(body, "async refreshDeployDryRun(forceRecommended = false) {")
+	if start == -1 {
+		t.Fatal("refreshDeployDryRun not found")
+	}
+	end = strings.Index(body[start:], "\n    seedDeployDefaultParams()")
+	if end == -1 {
+		t.Fatal("could not isolate refreshDeployDryRun body")
+	}
+	fnBody = body[start : start+end]
+	if strings.Contains(fnBody, "if (!modelName || this.deployDetailLoading) return;") {
+		t.Fatalf("refreshDeployDryRun still drops newer preflights while loading, body=%s", fnBody)
+	}
+	if !strings.Contains(fnBody, "const requestEngine = forceRecommended ? '' : this.deployEngineRequestValue();") {
+		t.Fatalf("refreshDeployDryRun should map selected engine before dry-run, body=%s", fnBody)
+	}
+
+	if strings.Contains(body, "aima_deploy_defaults:") || strings.Contains(body, "localStorage.setItem(this.deployDefaultsKey()") {
+		t.Fatal("deploy defaults should not be stored only in browser localStorage")
+	}
+}
+
+func TestRegisterRoutes_IndexReplaysExistingSupportMessages(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+
+	handleStart := strings.Index(body, "handleSupportStatus(data) {")
+	if handleStart == -1 {
+		t.Fatal("handleSupportStatus not found")
+	}
+	handleEnd := strings.Index(body[handleStart:], "\n\n    handleOpenClawStatus(data) {")
+	if handleEnd == -1 {
+		t.Fatal("could not isolate handleSupportStatus body")
+	}
+	handleBody := body[handleStart : handleStart+handleEnd]
+	for _, token := range []string{
+		"this._supportSeen.initialized = true;",
+		"this.syncSupportMessages();",
+		"this.syncSupportPageUpdates();",
+	} {
+		if !strings.Contains(handleBody, token) {
+			t.Fatalf("handleSupportStatus missing %q", token)
+		}
+	}
+	if strings.Contains(handleBody, "_supportSeen.msgSeq = msgs[msgs.length - 1].seq") {
+		t.Fatalf("handleSupportStatus should not mark existing messages as seen, body=%s", handleBody)
+	}
+
+	primeStart := strings.Index(body, "primeSupportPageSeen() {")
+	if primeStart == -1 {
+		t.Fatal("primeSupportPageSeen not found")
+	}
+	primeEnd := strings.Index(body[primeStart:], "\n\n    appendSupportPageMessage(text, type) {")
+	if primeEnd == -1 {
+		t.Fatal("could not isolate primeSupportPageSeen body")
+	}
+	primeBody := body[primeStart : primeStart+primeEnd]
+	if !strings.Contains(primeBody, "this.syncSupportPageUpdates();") {
+		t.Fatalf("primeSupportPageSeen should sync current messages, body=%s", primeBody)
+	}
+	if strings.Contains(primeBody, "_supportPageSeen.msgSeq = msgs[msgs.length - 1].seq") {
+		t.Fatalf("primeSupportPageSeen should not mark existing page messages as seen, body=%s", primeBody)
+	}
+}
+
+func TestRegisterRoutes_IndexDoesNotMirrorSupportMessagesIntoAgentChat(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+
+	syncStart := strings.Index(body, "syncSupportMessages() {")
+	if syncStart == -1 {
+		t.Fatal("syncSupportMessages not found")
+	}
+	syncEnd := strings.Index(body[syncStart:], "\n\n    primeSupportPageSeen() {")
+	if syncEnd == -1 {
+		t.Fatal("could not isolate syncSupportMessages body")
+	}
+	syncBody := body[syncStart : syncStart+syncEnd]
+	for _, token := range []string{
+		"this._supportSeen.msgSeq = m.seq;",
+		"do not mirror support state into chat",
+	} {
+		if !strings.Contains(syncBody, token) {
+			t.Fatalf("syncSupportMessages missing %q", token)
+		}
+	}
+	for _, token := range []string{
+		"this.messages.push",
+		"this.scrollChat()",
+		"Support task active:",
+		"灵机云已连接",
+	} {
+		if strings.Contains(syncBody, token) {
+			t.Fatalf("syncSupportMessages should not write support updates into Agent chat; found %q in body=%s", token, syncBody)
+		}
+	}
+
+	pageStart := strings.Index(body, "syncSupportPageUpdates() {")
+	if pageStart == -1 {
+		t.Fatal("syncSupportPageUpdates not found")
+	}
+	pageEnd := strings.Index(body[pageStart:], "\n\n    supportPageTypeClass(type) {")
+	if pageEnd == -1 {
+		t.Fatal("could not isolate syncSupportPageUpdates body")
+	}
+	pageBody := body[pageStart : pageStart+pageEnd]
+	for _, token := range []string{
+		"this.appendSupportPageMessage(msg, m.type || 'info');",
+		"this.appendSupportPageMessage(text, 'command_intent');",
+		"this.appendSupportPageMessage(text, 'task_completion');",
+	} {
+		if !strings.Contains(pageBody, token) {
+			t.Fatalf("syncSupportPageUpdates should still render support messages on support page; missing %q", token)
 		}
 	}
 }
@@ -279,7 +743,16 @@ func TestRegisterRoutes_IndexIncludesDirectModeRoutingAndModelCards(t *testing.T
 		"configuredAgentEndpoint()",
 		"chat-mode-strip",
 		"modelStatusNote(m.name)",
+		"deployableModels()",
+		"componentModels()",
+		"componentStatusNote(m)",
+		"model_components",
+		"standalone_deploy",
+		"rec.engine.name || rec.engine.type || ''",
 		"model-entry-meta",
+		"dep.name || dep.model || dep.address || dep.detail",
+		"const nextDeployments = list.map(d => {",
+		"nextDeployments.sort((a, b) => {",
 		"agent_strategy",
 		"selected_model",
 		"configured_model",
@@ -288,6 +761,44 @@ func TestRegisterRoutes_IndexIncludesDirectModeRoutingAndModelCards(t *testing.T
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing %q", token)
 		}
+	}
+}
+
+func TestRegisterRoutes_IndexBootstrapsAPIKeyForLoopbackOnly(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(&Deps{
+		APIKey: func(context.Context) string {
+			return "local-secret"
+		},
+	})(mux)
+
+	localReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	localReq.Host = "127.0.0.1:6188"
+	localReq.RemoteAddr = "127.0.0.1:51000"
+	localRec := httptest.NewRecorder()
+	mux.ServeHTTP(localRec, localReq)
+	if localRec.Code != http.StatusOK {
+		t.Fatalf("local status = %d, want %d", localRec.Code, http.StatusOK)
+	}
+	if !strings.Contains(localRec.Body.String(), `window.__AIMA_BOOTSTRAP_API_KEY__ = "local-secret";`) {
+		t.Fatal("loopback UI did not receive bootstrap API key")
+	}
+
+	remoteReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	remoteReq.Host = "192.168.110.184:6188"
+	remoteReq.RemoteAddr = "127.0.0.1:51001"
+	remoteRec := httptest.NewRecorder()
+	mux.ServeHTTP(remoteRec, remoteReq)
+	if remoteRec.Code != http.StatusOK {
+		t.Fatalf("remote status = %d, want %d", remoteRec.Code, http.StatusOK)
+	}
+	if strings.Contains(remoteRec.Body.String(), "local-secret") {
+		t.Fatal("non-loopback UI response leaked bootstrap API key")
+	}
+	if !strings.Contains(remoteRec.Body.String(), `window.__AIMA_BOOTSTRAP_API_KEY__ = "";`) {
+		t.Fatal("non-loopback UI should keep an empty bootstrap API key")
 	}
 }
 

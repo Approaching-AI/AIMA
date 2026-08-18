@@ -1,0 +1,137 @@
+{
+  "aima_version": "v0.5-dev",
+  "generated_at": "2026-04-24T08:55:30Z",
+  "host": {
+    "data_dir": "~/projects/aima-dev-agent/ref/aima/artifacts/uat/v0.4/u10-first-run-productization-20260424/data",
+    "goarch": "arm64",
+    "goos": "darwin"
+  },
+  "privacy": {
+    "collection_scope": "local_only_no_health_probes",
+    "secrets_redacted": true,
+    "sent_to_network": false,
+    "telemetry_free": true
+  },
+  "schema_version": 1,
+  "sections": {
+    "catalog_status": {
+      "factory_assets": 81,
+      "overlay_assets": 0,
+      "parse_warnings": null,
+      "shadowed": null
+    },
+    "config": {},
+    "deployment_logs": [],
+    "deployments": [],
+    "hardware": {
+      "cpu": {
+        "arch": "arm64",
+        "cores": 10,
+        "freq_ghz": 0,
+        "model": "Apple M4",
+        "threads": 10
+      },
+      "os": {
+        "arch": "arm64",
+        "os": "darwin"
+      },
+      "ram": {
+        "available_mib": 10486,
+        "swap_total_mib": 3072,
+        "total_mib": 16384
+      },
+      "storage": {
+        "data_dir_path": "~/projects/aima-dev-agent/ref/aima/artifacts/uat/v0.4/u10-first-run-productization-20260424/data",
+        "free_mib": 162474,
+        "total_mib": 471482,
+        "volumes": [
+          {
+            "free_mib": 162474,
+            "mount_point": "/",
+            "total_mib": 471482
+          }
+        ]
+      }
+    },
+    "knowledge_summary": {
+      "deployment_scenarios": 3,
+      "engine_assets": 31,
+      "engines": [],
+      "hardware_profiles": 11,
+      "model_assets": 28,
+      "models": [],
+      "partition_strategies": 3,
+      "partitions": [
+        "gb10-dual-model",
+        "rtx4090-triple-model",
+        "single-model-default"
+      ],
+      "profiles": [],
+      "scenarios": [
+        "aibook-coldstart",
+        "openclaw-multi-aibook",
+        "openclaw-multi"
+      ]
+    },
+    "metrics": {
+      "cpu": {
+        "usage_percent": 10.5
+      },
+      "ram": {
+        "available_mib": 10486,
+        "total_mib": 16384,
+        "used_mib": 5898
+      }
+    },
+    "omitted_sections": [
+      "system.status",
+      "agent.status",
+      "onboarding.status"
+    ],
+    "stack_status": {
+      "all_ready": false,
+      "components": [
+        {
+          "installed": false,
+          "message": "skipped: platform darwin/arm64 not supported",
+          "name": "aima-serve",
+          "ready": false,
+          "skipped": true,
+          "version": "0.0.1"
+        },
+        {
+          "installed": false,
+          "message": "skipped: platform darwin/arm64 not supported",
+          "name": "docker",
+          "ready": false,
+          "skipped": true,
+          "version": "27.5.1"
+        },
+        {
+          "installed": false,
+          "message": "skipped: platform darwin/arm64 not supported",
+          "name": "hami",
+          "ready": false,
+          "skipped": true,
+          "version": "2.4.1"
+        },
+        {
+          "installed": false,
+          "message": "skipped: platform darwin/arm64 not supported",
+          "name": "k3s",
+          "ready": false,
+          "skipped": true,
+          "version": "1.31.4+k3s1"
+        },
+        {
+          "installed": false,
+          "message": "skipped: platform darwin/arm64 not supported",
+          "name": "nvidia-ctk",
+          "ready": false,
+          "skipped": true,
+          "version": "1.17.5"
+        }
+      ]
+    }
+  }
+}

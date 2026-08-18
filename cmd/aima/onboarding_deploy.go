@@ -19,6 +19,7 @@ import (
 type onboardingDeployRequest struct {
 	Model  string `json:"model"`
 	Engine string `json:"engine,omitempty"`
+	NoPull bool   `json:"no_pull,omitempty"`
 }
 
 // handleOnboardingDeploy is the thin SSE wrapper around onboarding.RunDeploy.
@@ -80,7 +81,7 @@ func handleOnboardingDeploy(ac *appContext, deps *mcp.ToolDeps) http.HandlerFunc
 		}
 
 		obDeps := buildOnboardingDepsStruct(ac, deps)
-		_, _, runErr := onboarding.RunDeploy(r.Context(), obDeps, req.Model, engineType, "", nil, false, sink)
+		_, _, runErr := onboarding.RunDeploy(r.Context(), obDeps, req.Model, engineType, "", nil, req.NoPull, sink)
 		if runErr != nil && !sawError.Load() {
 			stream.writeJSON("error", map[string]any{
 				"step":    3,

@@ -10,19 +10,19 @@
         "troubleshooting": "遇到问题"
       },
       "quick_start": {
-        "intro": "先确认系统在线，再看本机模型和引擎，最后再提问或输入命令。",
+        "intro": "先跑首次使用向导，确认推荐模型，然后用一条命令把本机模型跑起来。",
         "steps": [
-          { "title": "确认系统在线", "body": "先看顶部状态和 Agent 状态是否正常。" },
-          { "title": "确认本机资源", "body": "检查 models、engines、deployments 三块是否有内容。" },
-          { "title": "开始提问或输入命令", "body": "可以直接提问，也可以先用常用命令快速查看状态。" }
+          { "title": "运行首次使用向导", "body": "用 onboarding 检查硬件、扫描资源并生成推荐。" },
+          { "title": "确认推荐模型", "body": "查看推荐列表，优先选择分数最高且适合首次运行的模型。" },
+          { "title": "一条命令运行模型", "body": "用 run 拉取、部署并等待模型服务就绪。" }
         ],
         "commands": [
-          { "id": "status", "command": "/cli status", "label": "查看系统状态", "description": "检查硬件、部署和资源概况。" },
-          { "id": "help", "command": "/cli help", "label": "查看帮助", "description": "查看命令帮助和可用用法。" },
-          { "id": "hardware", "command": "/cli hal detect", "label": "查看硬件", "description": "查看 GPU、CPU、内存等基础信息。" },
-          { "id": "models", "command": "/cli model list", "label": "查看模型", "description": "确认 AIMA 已识别到哪些模型。" },
-          { "id": "engines", "command": "/cli engine list", "label": "查看引擎", "description": "确认本机可用推理引擎。" },
-          { "id": "deployments", "command": "/cli deploy list", "label": "查看部署", "description": "检查当前运行中的部署。" }
+          { "id": "onboarding", "command": "/cli onboarding", "label": "首次使用向导", "description": "检查硬件、扫描资源并给出下一条命令。" },
+          { "id": "recommend", "command": "/cli onboarding recommend --locale zh", "label": "查看推荐", "description": "查看适合当前硬件的模型和引擎组合。" },
+          { "id": "run", "command": "/cli run {sample_model}", "label": "运行模型", "description": "拉取、部署并等待模型服务就绪。" },
+          { "id": "serve", "command": "/cli serve", "label": "启动服务", "description": "保持 OpenAI 兼容 API 和 Web UI 常驻。" },
+          { "id": "status", "command": "/cli status", "label": "查看状态", "description": "检查硬件、部署和资源概况。" },
+          { "id": "hardware", "command": "/cli hal detect", "label": "查看硬件", "description": "查看 GPU、CPU、内存等基础信息。" }
         ]
       },
       "full_commands": {
@@ -60,7 +60,6 @@
               { "id": "completion", "description": "为指定 shell 生成自动补全脚本。需要补 shell 名称，例如 /cli completion zsh。" },
               { "id": "config", "description": "获取或设置持久化配置。需要子命令，例如 /cli config get agent.endpoint 或 /cli config set agent.model {sample_model}。" },
               { "id": "deploy", "description": "部署推理服务。通常需要模型名，例如 /cli deploy {sample_model} --dry-run；查看部署列表可用 /cli deploy list。" },
-              { "id": "discover", "description": "发现局域网上的 LLM 推理服务。可直接执行，例如 /cli discover。" },
               { "id": "engine", "description": "管理推理引擎。需要子命令，例如 /cli engine list 或 /cli engine pull。" },
               { "id": "explore", "description": "持久化探索任务。需要子命令，例如 /cli explore start --model {sample_model} 或 /cli explore status --id <run-id>。" },
               { "id": "fleet", "description": "管理局域网中的 AIMA 设备集群。需要子命令，例如 /cli fleet devices 或 /cli fleet info <device-id>。" },
@@ -85,7 +84,7 @@
             "id": "common_examples",
             "title": "常用示例",
             "items": [
-              { "id": "engine_plan", "command": "/cli engine plan", "description": "先看当前硬件推荐使用哪个引擎。" },
+              { "id": "recommend", "command": "/cli onboarding recommend --locale zh", "description": "先看当前硬件推荐使用哪些模型和引擎组合。" },
               { "id": "engine_pull", "command": "/cli engine pull", "description": "预先拉取默认引擎，减少首次部署等待。" },
               { "id": "model_pull", "command": "/cli model pull {sample_model}", "description": "按模型名下载模型文件，`{sample_model}` 是示例值，可替换为实际模型名。" },
               { "id": "deploy_dry_run", "command": "/cli deploy {sample_model} --dry-run", "description": "先预览部署解析结果和推荐配置，`{sample_model}` 是示例值，可替换为实际模型名。" },
@@ -110,19 +109,19 @@
         "troubleshooting": "Troubleshooting"
       },
       "quick_start": {
-        "intro": "Start by confirming the system is online, then inspect local models and engines, then ask a question or run a command.",
+        "intro": "Start with the first-run guide, confirm the recommended model, then run a local model with one command.",
         "steps": [
-          { "title": "Check system health", "body": "Use the top status row and Agent status to confirm the service is ready." },
-          { "title": "Inspect local resources", "body": "Look at models, engines, and deployments before issuing tasks." },
-          { "title": "Ask or run a command", "body": "You can ask AIMA directly or begin with a common command." }
+          { "title": "Run the first-run guide", "body": "Use onboarding to check hardware, scan resources, and produce recommendations." },
+          { "title": "Confirm the recommendation", "body": "Review the recommendation list and start with the highest-scoring safe model." },
+          { "title": "Run the model", "body": "Use run to pull, deploy, and wait until the model is ready." }
         ],
         "commands": [
-          { "id": "status", "command": "/cli status", "label": "System status", "description": "Inspect hardware, deployments, and overall state." },
-          { "id": "help", "command": "/cli help", "label": "Help", "description": "Show command help and available usage." },
-          { "id": "hardware", "command": "/cli hal detect", "label": "Hardware", "description": "Show detected GPU, CPU, and memory information." },
-          { "id": "models", "command": "/cli model list", "label": "Models", "description": "List models AIMA already knows about." },
-          { "id": "engines", "command": "/cli engine list", "label": "Engines", "description": "List available inference engines." },
-          { "id": "deployments", "command": "/cli deploy list", "label": "Deployments", "description": "Show active inference deployments." }
+          { "id": "onboarding", "command": "/cli onboarding", "label": "First-run guide", "description": "Check hardware, scan resources, and print the next command." },
+          { "id": "recommend", "command": "/cli onboarding recommend", "label": "Recommendations", "description": "Show model and engine combinations that fit this host." },
+          { "id": "run", "command": "/cli run {sample_model}", "label": "Run model", "description": "Pull, deploy, and wait until the model is ready." },
+          { "id": "serve", "command": "/cli serve", "label": "Start server", "description": "Keep the OpenAI-compatible API and Web UI running." },
+          { "id": "status", "command": "/cli status", "label": "Status", "description": "Inspect hardware, deployments, and overall state." },
+          { "id": "hardware", "command": "/cli hal detect", "label": "Hardware", "description": "Show detected GPU, CPU, and memory information." }
         ]
       },
       "full_commands": {
@@ -160,7 +159,6 @@
               { "id": "completion", "description": "Generate shell autocompletion. You need to add the shell name, for example /cli completion zsh." },
               { "id": "config", "description": "Get or set persistent configuration. It needs a subcommand, for example /cli config get agent.endpoint or /cli config set agent.model {sample_model}." },
               { "id": "deploy", "description": "Deploy an inference service. It usually needs a model name, for example /cli deploy {sample_model} --dry-run; to inspect deployments use /cli deploy list." },
-              { "id": "discover", "description": "Discover LLM inference services on the local network. You can run it directly, for example /cli discover." },
               { "id": "engine", "description": "Manage inference engines. It needs a subcommand, for example /cli engine list or /cli engine pull." },
               { "id": "explore", "description": "Run persistent exploration jobs. It needs a subcommand, for example /cli explore start --model {sample_model} or /cli explore status --id <run-id>." },
               { "id": "fleet", "description": "Manage AIMA devices on the LAN. It needs a subcommand, for example /cli fleet devices or /cli fleet info <device-id>." },
@@ -185,7 +183,7 @@
             "id": "common_examples",
             "title": "Common examples",
             "items": [
-              { "id": "engine_plan", "command": "/cli engine plan", "description": "Check which engine the current hardware should use." },
+              { "id": "recommend", "command": "/cli onboarding recommend", "description": "Check which model and engine combinations fit the current hardware." },
               { "id": "engine_pull", "command": "/cli engine pull", "description": "Pre-pull the default engine to reduce first-run latency." },
               { "id": "model_pull", "command": "/cli model pull {sample_model}", "description": "Download a model by name; `{sample_model}` is an example value and can be replaced with a real model name." },
               { "id": "deploy_dry_run", "command": "/cli deploy {sample_model} --dry-run", "description": "Preview the resolved deployment plan before execution; `{sample_model}` is an example value and can be replaced with a real model name." },

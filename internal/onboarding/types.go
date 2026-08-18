@@ -22,10 +22,19 @@ type EventSink func(Event)
 
 // GPU is a single GPU entry in the onboarding status response.
 type GPU struct {
-	Name    string `json:"name"`
-	VRAMMiB int    `json:"vram_mib"`
-	Count   int    `json:"count"`
-	Arch    string `json:"arch"`
+	Name          string `json:"name"`
+	VRAMMiB       int    `json:"vram_mib"`
+	Count         int    `json:"count"`
+	Arch          string `json:"arch"`
+	UnifiedMemory bool   `json:"unified_memory,omitempty"`
+}
+
+// NPU is a single neural processing unit entry in the onboarding status response.
+type NPU struct {
+	Vendor string `json:"vendor"`
+	Name   string `json:"name"`
+	Driver string `json:"driver"`
+	Count  int    `json:"count"`
 }
 
 // CPU describes the host CPU in the onboarding status response.
@@ -36,18 +45,21 @@ type CPU struct {
 
 // Hardware aggregates hardware info for the onboarding status response.
 type Hardware struct {
-	GPU          []GPU  `json:"gpu"`
-	CPU          CPU    `json:"cpu"`
-	RAMMiB       int    `json:"ram_mib"`
-	OS           string `json:"os"`
-	Arch         string `json:"arch"`
-	ProfileMatch string `json:"profile_match"`
+	GPU           []GPU  `json:"gpu"`
+	NPU           *NPU   `json:"npu,omitempty"`
+	CPU           CPU    `json:"cpu"`
+	RAMMiB        int    `json:"ram_mib"`
+	OS            string `json:"os"`
+	Arch          string `json:"arch"`
+	ProfileMatch  string `json:"profile_match"`
+	UnifiedMemory bool   `json:"unified_memory,omitempty"`
 }
 
 // StackStatusInfo describes the stack readiness for onboarding.
 type StackStatusInfo struct {
 	Docker                 string `json:"docker"`
 	K3S                    string `json:"k3s"`
+	AIMAServe              string `json:"aima_serve,omitempty"`
 	NeedsInit              bool   `json:"needs_init"`
 	InitTierRecommendation string `json:"init_tier_recommendation"`
 	CanAutoInit            bool   `json:"can_auto_init"`
@@ -71,13 +83,41 @@ type GPUProcess struct {
 	GPUMemMiB int    `json:"gpu_mem_mib,omitempty"`
 }
 
+// RunningService describes an already-running inference service that AIMA can
+// use directly instead of starting a second model.
+type RunningService struct {
+	Name                string `json:"name,omitempty"`
+	Model               string `json:"model"`
+	UpstreamModel       string `json:"upstream_model,omitempty"`
+	Engine              string `json:"engine,omitempty"`
+	Endpoint            string `json:"endpoint"`
+	BackendEndpoint     string `json:"backend_endpoint,omitempty"`
+	Source              string `json:"source"` // "proxy_backend", "deployment", "container", "remote"
+	Status              string `json:"status"`
+	Ready               bool   `json:"ready"`
+	ParameterCount      string `json:"parameter_count,omitempty"`
+	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+}
+
+// BestChoice is the wizard's first recommended action when an existing running
+// model is already healthy.
+type BestChoice struct {
+	Action   string `json:"action"`
+	Model    string `json:"model"`
+	Engine   string `json:"engine,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 // StatusResult is the full onboarding status response.
 type StatusResult struct {
-	OnboardingCompleted bool            `json:"onboarding_completed"`
-	Hardware            Hardware        `json:"hardware"`
-	StackStatus         StackStatusInfo `json:"stack_status"`
-	Version             VersionInfo     `json:"version"`
-	GPUOccupancy        []GPUProcess    `json:"gpu_occupancy,omitempty"`
+	OnboardingCompleted bool             `json:"onboarding_completed"`
+	Hardware            Hardware         `json:"hardware"`
+	StackStatus         StackStatusInfo  `json:"stack_status"`
+	Version             VersionInfo      `json:"version"`
+	GPUOccupancy        []GPUProcess     `json:"gpu_occupancy,omitempty"`
+	RunningServices     []RunningService `json:"running_services,omitempty"`
+	BestChoice          *BestChoice      `json:"best_choice,omitempty"`
 }
 
 // ScanEngineEntry describes one discovered engine (binary/image).
@@ -182,6 +222,18 @@ type RecommendResult struct {
 	GPUCount        int                   `json:"gpu_count"`
 	TotalModels     int                   `json:"total_models_evaluated"`
 	Recommendations []ModelRecommendation `json:"recommendations"`
+}
+
+// StartResult is the read-only first-run guide payload. It combines status,
+// scan, and recommend so CLI, MCP, and UI callers can share the same first-run
+// decision surface.
+type StartResult struct {
+	Status      StatusResult    `json:"status"`
+	Scan        ScanResult      `json:"scan"`
+	Events      []Event         `json:"events,omitempty"`
+	Recommend   RecommendResult `json:"recommend"`
+	NextModel   string          `json:"next_model,omitempty"`
+	NextCommand string          `json:"next_command,omitempty"`
 }
 
 // InitResult describes the final state after stack init finishes.

@@ -332,6 +332,74 @@ func findModelDir(modelName, primaryDataDir, format, quantization string) string
 	return ""
 }
 
+func resolveSymlinkMirrorModelPath(modelPath, format, quantization string) string {
+	if modelPath == "" {
+		return modelPath
+	}
+	if linkInfo, err := os.Lstat(modelPath); err == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
+		if target, err := filepath.EvalSymlinks(modelPath); err == nil && target != modelPath {
+			if model.PathLooksCompatible(target, format, quantization) {
+				return target
+			}
+		}
+	}
+	info, err := os.Stat(modelPath)
+	if err != nil || !info.IsDir() {
+		return modelPath
+	}
+
+	if parent := symlinkEntryParent(modelPath, "config.json"); parent != "" {
+		if model.PathLooksCompatible(parent, format, quantization) {
+			return parent
+		}
+	}
+
+	entries, err := os.ReadDir(modelPath)
+	if err != nil {
+		return modelPath
+	}
+	parentCounts := map[string]int{}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		parent := symlinkEntryParent(modelPath, entry.Name())
+		if parent == "" {
+			continue
+		}
+		parentCounts[parent]++
+	}
+	var bestParent string
+	var bestCount int
+	for parent, count := range parentCounts {
+		if count > bestCount && model.PathLooksCompatible(parent, format, quantization) {
+			bestParent = parent
+			bestCount = count
+		}
+	}
+	if bestParent != "" {
+		return bestParent
+	}
+	return modelPath
+}
+
+func symlinkEntryParent(dir, name string) string {
+	linkPath := filepath.Join(dir, name)
+	info, err := os.Stat(linkPath)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	target, err := filepath.EvalSymlinks(linkPath)
+	if err != nil {
+		return ""
+	}
+	parent := filepath.Dir(target)
+	if parent == dir {
+		return ""
+	}
+	return parent
+}
+
 func resolveLocalModelPathNoPull(modelName string, resolved *knowledge.ResolvedConfig, dataDir string) (string, error) {
 	if resolved == nil {
 		return "", fmt.Errorf("resolved config is nil")
@@ -349,6 +417,7 @@ func resolveLocalModelPathNoPull(modelName string, resolved *knowledge.ResolvedC
 			return "", fmt.Errorf("model %s not found locally and auto-pull is disabled", modelName)
 		}
 	}
+	modelPath = resolveSymlinkMirrorModelPath(modelPath, requiredFormat, requiredQuantization)
 	if resolved.Source != nil {
 		if fi, err := os.Stat(modelPath); err == nil && fi.IsDir() && dirRequiresSingleFileModelPath(modelPath) {
 			if f := findModelFileInDir(modelPath); f != "" {

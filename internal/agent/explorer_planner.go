@@ -76,6 +76,7 @@ type LocalEngine struct {
 	Notes               string         `json:"notes,omitempty"`                 // e.g. "CPU+GPU hybrid MoE inference"
 	TunableParams       map[string]any `json:"tunable_params,omitempty"`        // startup.default_args from engine YAML
 	InternalArgs        []string       `json:"internal_args,omitempty"`         // startup.internal_args from engine YAML
+	SupportedFormats    []string       `json:"supported_formats,omitempty"`     // model storage formats supported by engine YAML
 	SupportedModelTypes []string       `json:"supported_model_types,omitempty"` // e.g. ["llm","embedding"] — empty = all
 	HealthCheckPath     string         `json:"health_check_path,omitempty"`     // startup.health_check.path from engine YAML
 }
@@ -228,6 +229,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 	localEngineTypes := localEngineTypeSet(input.LocalEngines)
 	modelFormats := localModelFormatMap(input.LocalModels)
 	modelTypes := localModelTypeMap(input.LocalModels)
+	engineFormats := localEngineSupportedFormats(input.LocalEngines)
 	engineModelTypes := localEngineSupportedModelTypes(input.LocalEngines)
 	totalVRAMMiB := input.Hardware.VRAMMiB * input.Hardware.GPUCount
 	if totalVRAMMiB == 0 {
@@ -314,7 +316,7 @@ func (p *RulePlanner) Plan(ctx context.Context, input PlanInput) (*ExplorerPlan,
 		if !isLocallyAvailable(g.Model, g.Engine, localModels, localEngineTypes) {
 			continue
 		}
-		if !engineFormatCompatible(g.Engine, modelFormats[g.Model]) {
+		if !engineFormatCompatible(engineFormats[strings.ToLower(g.Engine)], modelFormats[g.Model]) {
 			continue
 		}
 		// B24: skip models whose type is not supported by the engine
@@ -433,20 +435,18 @@ func localModelFormatMap(models []LocalModel) map[string]string {
 	return m
 }
 
-// engineFormatCompatible returns true if a model's format is compatible with an engine type.
-// llamacpp needs GGUF; vllm/sglang/sglang-kt need safetensors.
-func engineFormatCompatible(engineType, modelFormat string) bool {
-	if modelFormat == "" || engineType == "" {
-		return true // unknown format — allow (best-effort)
+// engineFormatCompatible checks the model format against engine YAML metadata.
+// Empty fields are treated as unknown and allowed so older catalog entries stay compatible.
+func engineFormatCompatible(supportedFormats []string, modelFormat string) bool {
+	if modelFormat == "" || len(supportedFormats) == 0 {
+		return true
 	}
-	switch engineType {
-	case "llamacpp":
-		return modelFormat == "gguf"
-	case "vllm", "sglang", "sglang-kt":
-		return modelFormat == "safetensors"
-	default:
-		return true // unknown engine — allow
+	for _, supported := range supportedFormats {
+		if strings.EqualFold(supported, modelFormat) {
+			return true
+		}
 	}
+	return false
 }
 
 // modelFitsVRAM checks if a model can plausibly fit in total available VRAM.
@@ -508,6 +508,15 @@ func localEngineSupportedModelTypes(engines []LocalEngine) map[string][]string {
 	for _, e := range engines {
 		m[strings.ToLower(e.Type)] = e.SupportedModelTypes
 		m[strings.ToLower(e.Name)] = e.SupportedModelTypes
+	}
+	return m
+}
+
+func localEngineSupportedFormats(engines []LocalEngine) map[string][]string {
+	m := make(map[string][]string, len(engines))
+	for _, e := range engines {
+		m[strings.ToLower(e.Type)] = e.SupportedFormats
+		m[strings.ToLower(e.Name)] = e.SupportedFormats
 	}
 	return m
 }

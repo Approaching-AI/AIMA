@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -43,6 +44,112 @@ func TestResolveBasic(t *testing.T) {
 	}
 }
 
+func TestInferEngineTypePrefersLocalImage(t *testing.T) {
+	engYAML := func(name, etype, img, mult string) []byte {
+		return []byte(`kind: engine_asset
+metadata:
+  name: ` + name + `
+  type: ` + etype + `
+image:
+  name: ` + img + `
+  tag: "v1"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 0
+startup:
+  command: ["serve"]
+api:
+  protocol: openai
+  base_path: /v1
+amplifier:
+  performance_multiplier: ` + mult + `
+time_constraints:
+  cold_start_s: [10, 30]
+`)
+	}
+	fsys := fstest.MapFS{
+		"engines/fast.yaml": &fstest.MapFile{Data: engYAML("eng-fast-1.0", "eng-fast", "fast/img", "2.0")},
+		"engines/slow.yaml": &fstest.MapFile{Data: engYAML("eng-slow-1.0", "eng-slow", "slow/img", "1.0")},
+		"models/img-model.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: img-test-model
+  type: llm
+storage:
+  formats: [safetensors]
+  sources:
+    - type: huggingface
+      repo: test/img-test-model
+variants:
+  - name: img-test-model-fast
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+    engine: eng-fast
+    format: safetensors
+  - name: img-test-model-slow
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+    engine: eng-slow
+    format: safetensors
+`)},
+	}
+	cat, err := LoadCatalog(fsys)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	hw := HardwareInfo{GPUArch: "Blackwell", CPUArch: "arm64"}
+
+	// No image checker: the higher-multiplier engine wins (default behavior).
+	eng, err := cat.InferEngineType("img-test-model", hw)
+	if err != nil {
+		t.Fatalf("InferEngineType: %v", err)
+	}
+	if eng != "eng-fast" {
+		t.Errorf("without checker: engine = %q, want eng-fast (highest multiplier)", eng)
+	}
+
+	// Only the slower engine's image is cached locally — it must be preferred
+	// over the higher-multiplier engine whose image cannot be obtained.
+	eng, err = cat.InferEngineType("img-test-model", hw,
+		WithLocalImageChecker(func(ref string) bool { return ref == "slow/img:v1" }))
+	if err != nil {
+		t.Fatalf("InferEngineType: %v", err)
+	}
+	if eng != "eng-slow" {
+		t.Errorf("with local image: engine = %q, want eng-slow (cached beats higher multiplier)", eng)
+	}
+}
+
+func TestResolveMemGuardrail(t *testing.T) {
+	cat := mustLoadCatalog(t)
+
+	// Unified-memory host: a memory ceiling is computed (total minus 10% / 4 GiB reserve).
+	unified := HardwareInfo{
+		GPUArch:       "TestArch",
+		CPUArch:       "x86_64",
+		UnifiedMemory: true,
+		RAMTotalMiB:   122000,
+	}
+	resolved, err := cat.Resolve(unified, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if want := 122000 - 12200; resolved.MemLimitMiB != want {
+		t.Errorf("MemLimitMiB = %d, want %d", resolved.MemLimitMiB, want)
+	}
+
+	// Discrete-GPU host (or unknown RAM): no guardrail — prior unbounded behavior.
+	discrete := HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64", RAMTotalMiB: 122000}
+	resolved2, err := cat.Resolve(discrete, "test-model-8b", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved2.MemLimitMiB != 0 {
+		t.Errorf("MemLimitMiB = %d, want 0 for discrete-GPU host", resolved2.MemLimitMiB)
+	}
+}
+
 func TestResolveWithUserOverrides(t *testing.T) {
 	cat := mustLoadCatalog(t)
 
@@ -74,6 +181,103 @@ func TestResolveWithUserOverrides(t *testing.T) {
 	// Non-overridden keys stay at L0
 	if resolved.Config["dtype"] != "float16" {
 		t.Errorf("Config[dtype] = %v, want float16", resolved.Config["dtype"])
+	}
+}
+
+func TestResolveUsesVariantLocalPath(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{{
+			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
+			Hardware: EngineHardware{GPUArch: "*"},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+		}},
+		ModelAssets: []ModelAsset{{
+			Metadata: ModelMetadata{Name: "local-variant-model"},
+			Storage: ModelStorage{
+				Sources: []ModelSource{{Type: "local_path", Path: "/opt/models/fallback"}},
+			},
+			Variants: []ModelVariant{{
+				Name:     "local-variant-model-testengine",
+				Hardware: ModelVariantHardware{GPUArch: "*"},
+				Engine:   "testengine",
+				Format:   "safetensors",
+				Source:   &ModelSource{Type: "local_path", Path: "/opt/models/variant"},
+			}},
+		}},
+	}
+
+	resolved, err := cat.Resolve(HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64"}, "local-variant-model", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.ModelPath != "/opt/models/variant" {
+		t.Fatalf("ModelPath = %q, want /opt/models/variant", resolved.ModelPath)
+	}
+}
+
+func TestResolveUsesStorageLocalPath(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{{
+			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
+			Hardware: EngineHardware{GPUArch: "*"},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+		}},
+		ModelAssets: []ModelAsset{{
+			Metadata: ModelMetadata{Name: "local-storage-model"},
+			Storage: ModelStorage{
+				Sources: []ModelSource{{Type: "local_path", Path: "/opt/models/storage"}},
+			},
+			Variants: []ModelVariant{{
+				Name:     "local-storage-model-testengine",
+				Hardware: ModelVariantHardware{GPUArch: "*"},
+				Engine:   "testengine",
+				Format:   "safetensors",
+			}},
+		}},
+	}
+
+	resolved, err := cat.Resolve(HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64"}, "local-storage-model", "testengine", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.ModelPath != "/opt/models/storage" {
+		t.Fatalf("ModelPath = %q, want /opt/models/storage", resolved.ModelPath)
+	}
+}
+
+func TestResolveModelPathOverrideStillWins(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{{
+			Metadata: EngineMetadata{Name: "testengine", Type: "testengine"},
+			Hardware: EngineHardware{GPUArch: "*"},
+			Startup:  EngineStartup{Command: []string{"serve"}, DefaultArgs: map[string]any{}},
+		}},
+		ModelAssets: []ModelAsset{{
+			Metadata: ModelMetadata{Name: "override-model"},
+			Storage: ModelStorage{
+				Sources: []ModelSource{{Type: "local_path", Path: "/opt/models/storage"}},
+			},
+			Variants: []ModelVariant{{
+				Name:     "override-model-testengine",
+				Hardware: ModelVariantHardware{GPUArch: "*"},
+				Engine:   "testengine",
+				Format:   "safetensors",
+				Source:   &ModelSource{Type: "local_path", Path: "/opt/models/variant"},
+			}},
+		}},
+	}
+
+	resolved, err := cat.Resolve(
+		HardwareInfo{GPUArch: "TestArch", CPUArch: "x86_64"},
+		"override-model",
+		"testengine",
+		map[string]any{"model_path": "/tmp/custom"},
+	)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.ModelPath != "/tmp/custom" {
+		t.Fatalf("ModelPath = %q, want /tmp/custom", resolved.ModelPath)
 	}
 }
 
@@ -421,9 +625,9 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 		modelType    string
 		wantEngine   string
 		wantType     string
-		wantVariants int // non-default engines get a fallback variant
+		wantVariants int
 	}{
-		{"safetensors->vllm", "safetensors", "llm", "vllm", "llm", 2},
+		{"safetensors->vllm", "safetensors", "llm", "vllm", "llm", 1},
 		{"gguf->llamacpp", "gguf", "llm", "llamacpp", "llm", 1},
 		{"empty type defaults to llm", "gguf", "", "llamacpp", "llm", 1},
 		{"unknown format->default engine", "awq", "llm", "llamacpp", "llm", 1},
@@ -450,13 +654,6 @@ func TestBuildSyntheticModelAsset(t *testing.T) {
 			if !strings.HasSuffix(v.Name, "-auto") {
 				t.Errorf("variant Name = %q, want suffix -auto", v.Name)
 			}
-			// Non-default engines should have a fallback variant
-			if tt.wantVariants == 2 {
-				fb := ma.Variants[1]
-				if fb.Engine != "llamacpp" {
-					t.Errorf("fallback Engine = %q, want llamacpp", fb.Engine)
-				}
-			}
 		})
 	}
 }
@@ -470,7 +667,7 @@ func TestResolveCatalogModelName(t *testing.T) {
 			}},
 			{Metadata: ModelMetadata{
 				Name:    "qwen3-8b",
-				Aliases: []string{"Qwen3-8B-junhowie", "gptq-Qwen3-8B-junhowie"},
+				Aliases: []string{"Qwen3-8B-junhowie", "gptq-Qwen3-8B-junhowie", "gptq-Qwen3-8B"},
 			}},
 			{Metadata: ModelMetadata{Name: "llama-3.1-8b"}},
 		},
@@ -484,6 +681,7 @@ func TestResolveCatalogModelName(t *testing.T) {
 		{"alias exact case", "Qwen3-Embedding-0.6B", "qwen3-emb-0.6b"},
 		{"alias lowercase", "qwen3-embedding-0.6b", "qwen3-emb-0.6b"},
 		{"quant-prefixed alias", "gptq-Qwen3-8B-junhowie", "qwen3-8b"},
+		{"quant short alias", "gptq-Qwen3-8B", "qwen3-8b"},
 		{"canonical name passthrough", "qwen3-8b", "qwen3-8b"},
 		{"canonical name different case", "LLaMA-3.1-8B", "llama-3.1-8b"},
 		{"no match returns input", "some-unknown-model", "some-unknown-model"},
@@ -505,14 +703,14 @@ func TestBuildSyntheticModelAssetDisallowsMooerForNonASRSafetensors(t *testing.T
 			{
 				Metadata: EngineMetadata{
 					Name: "mooer-test", Type: "mooer", Version: "1.0",
-					SupportedFormats: []string{"safetensors"},
+					SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"asr"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
 			{
 				Metadata: EngineMetadata{
 					Name: "vllm-test", Type: "vllm", Version: "1.0",
-					Default: true, SupportedFormats: []string{"safetensors"},
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "embedding"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
@@ -551,14 +749,14 @@ func TestBuildSyntheticModelAssetKeepsMooerForASR(t *testing.T) {
 			{
 				Metadata: EngineMetadata{
 					Name: "mooer-test", Type: "mooer", Version: "1.0",
-					SupportedFormats: []string{"safetensors"},
+					SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"asr"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
 			{
 				Metadata: EngineMetadata{
 					Name: "vllm-test", Type: "vllm", Version: "1.0",
-					Default: true, SupportedFormats: []string{"safetensors"},
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "embedding"},
 				},
 				Hardware: EngineHardware{GPUArch: "MUSA"},
 			},
@@ -680,9 +878,11 @@ func TestBuildSyntheticWithHardware(t *testing.T) {
 
 	ma := cat.BuildSyntheticModelAsset(meta, hw)
 
-	// Should have 3 variants: hardware-specific + wildcard + llamacpp fallback
-	if len(ma.Variants) != 3 {
-		t.Fatalf("Variants count = %d, want 3", len(ma.Variants))
+	// Should have 2 variants: hardware-specific + wildcard. The default
+	// llamacpp fallback is not emitted because its YAML supports gguf, not
+	// this safetensors model.
+	if len(ma.Variants) != 2 {
+		t.Fatalf("Variants count = %d, want 2", len(ma.Variants))
 	}
 
 	// First variant should be hardware-specific with VRAM estimate
@@ -710,6 +910,61 @@ func TestBuildSyntheticWithHardware(t *testing.T) {
 	}
 	if wc.Hardware.VRAMMinMiB == 0 {
 		t.Error("variant[1] VRAMMinMiB should be > 0 (wildcard with VRAM constraint)")
+	}
+}
+
+func TestBuildSyntheticImageModelDoesNotInjectLLMContext(t *testing.T) {
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{
+					Name:                "z-image-diffusers",
+					Type:                "z-image-diffusers",
+					Version:             "1.0",
+					SupportedFormats:    []string{"safetensors"},
+					SupportedModelTypes: []string{"image_gen"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{
+					DefaultArgs:        map[string]any{"port": 8188},
+					AcceptedConfigKeys: []string{"port"},
+				},
+			},
+			{
+				Metadata: EngineMetadata{
+					Name: "vllm-test", Type: "vllm", Version: "1.0",
+					Default: true, SupportedFormats: []string{"safetensors"}, SupportedModelTypes: []string{"llm", "vlm", "embedding"},
+				},
+				Hardware: EngineHardware{GPUArch: "*"},
+				Startup: EngineStartup{DefaultArgs: map[string]any{
+					"gpu_memory_utilization": 0.90,
+					"max_model_len":          8192,
+				}},
+			},
+		},
+	}
+
+	ma := cat.BuildSyntheticModelAsset(ScanMetadata{
+		Name:      "stable-diffusion-v1-5",
+		Type:      "image_gen",
+		Format:    "safetensors",
+		SizeBytes: 16 * 1024 * 1024 * 1024,
+	}, HardwareInfo{GPUArch: "Blackwell", GPUVRAMMiB: 131072, GPUCount: 1, UnifiedMemory: true, RAMTotalMiB: 131072})
+
+	if len(ma.Variants) == 0 {
+		t.Fatal("expected synthetic image variant")
+	}
+	v := ma.Variants[0]
+	if v.Engine != "z-image-diffusers" {
+		t.Fatalf("engine = %q, want z-image-diffusers", v.Engine)
+	}
+	for _, key := range []string{"max_model_len", "gpu_memory_utilization", "mem_fraction_static", "tensor_parallel_size"} {
+		if _, ok := v.DefaultConfig[key]; ok {
+			t.Fatalf("image synthetic config leaked LLM-only key %q: %#v", key, v.DefaultConfig)
+		}
+	}
+	if _, ok := v.DefaultConfig["port"]; ok {
+		t.Fatalf("port should come from engine default_args at resolve time, not synthetic variant config: %#v", v.DefaultConfig)
 	}
 }
 
@@ -998,6 +1253,49 @@ func TestRealCatalogSGLangKTUsesAppImageExtractAndRunFallback(t *testing.T) {
 	}
 	if got := engine.Startup.Env["APPIMAGE_EXTRACT_AND_RUN"]; got != "1" {
 		t.Fatalf("APPIMAGE_EXTRACT_AND_RUN = %q, want 1", got)
+	}
+}
+
+func TestResolveAMD395Qwen36NativeBF16(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		GPUCount:      1,
+		UnifiedMemory: true,
+		CPUArch:       "amd64",
+		RAMTotalMiB:   126000,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	resolved, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "aima-engine-native" || resolved.EngineAssetName != "aima-engine-native-amd395" {
+		t.Fatalf("engine = %q asset = %q", resolved.Engine, resolved.EngineAssetName)
+	}
+	if resolved.ModelFormat != "safetensors" || resolved.RuntimeRecommendation != "native" {
+		t.Fatalf("format/runtime = %q/%q", resolved.ModelFormat, resolved.RuntimeRecommendation)
+	}
+	if resolved.Config["context_tokens"] != 8192 {
+		t.Fatalf("config = %#v", resolved.Config)
+	}
+	if resolved.Config["cache_capacity"] != 9216 {
+		t.Fatalf("config = %#v", resolved.Config)
+	}
+	if resolved.Source == nil || resolved.Source.Binary != "aima-engine" {
+		t.Fatalf("source = %#v", resolved.Source)
+	}
+	if len(resolved.Command) < 2 || resolved.Command[0] != "aima-engine" || resolved.Command[1] != "serve" {
+		t.Fatalf("command = %q", resolved.Command)
+	}
+	if resolved.Warmup != nil {
+		t.Fatalf("warmup = %#v, want disabled", resolved.Warmup)
 	}
 }
 
@@ -1551,6 +1849,74 @@ func TestResolveLeavesEngineImageEmptyForNativePreinstalledEngine(t *testing.T) 
 	}
 	if resolved.RuntimeRecommendation != "native" {
 		t.Fatalf("RuntimeRecommendation = %q, want native", resolved.RuntimeRecommendation)
+	}
+	if resolved.Engine != "vllm" {
+		t.Fatalf("Engine = %q, want vllm", resolved.Engine)
+	}
+	if resolved.EngineAssetName != "vllm-musa" {
+		t.Fatalf("EngineAssetName = %q, want vllm-musa", resolved.EngineAssetName)
+	}
+}
+
+func TestResolveKeepsBlackwellVariantOnVLLM(t *testing.T) {
+	unified := true
+	cat := &Catalog{
+		EngineAssets: []EngineAsset{
+			{
+				Metadata: EngineMetadata{Name: "vllm-blackwell", Type: "vllm", Version: "0.9.2"},
+				Hardware: EngineHardware{GPUArch: "Blackwell"},
+				Image:    EngineImage{Name: "vllm/vllm-openai", Tag: "0.9.2"},
+				Startup:  EngineStartup{Command: []string{"vllm", "serve"}, DefaultArgs: map[string]any{}, HealthCheck: HealthCheck{Path: "/health", TimeoutS: 60}},
+			},
+			{
+				Metadata: EngineMetadata{Name: "vllm-musa", Type: "vllm", Version: "0.9.2"},
+				Hardware: EngineHardware{GPUArch: "MUSA"},
+				Source: &EngineSource{
+					InstallType: "preinstalled",
+					Probe: &EngineSourceProbe{
+						Paths: []string{"/opt/mt-ai/llm/venv/bin/vllm"},
+					},
+				},
+				Runtime: EngineRuntime{Default: "native"},
+				Startup: EngineStartup{Command: []string{"vllm", "serve"}, DefaultArgs: map[string]any{}, HealthCheck: HealthCheck{Path: "/health", TimeoutS: 60}},
+			},
+		},
+		ModelAssets: []ModelAsset{{
+			Kind:     "model_asset",
+			Metadata: ModelMetadata{Name: "qwen3-8b"},
+			Variants: []ModelVariant{
+				{
+					Name:   "qwen3-8b-blackwell-vllm-bf16",
+					Engine: "vllm",
+					Format: "safetensors",
+					Hardware: ModelVariantHardware{
+						GPUArch:       "Blackwell",
+						UnifiedMemory: &unified,
+					},
+				},
+				{
+					Name:   "qwen3-8b-musa-soc-vllm-gptq",
+					Engine: "vllm-musa",
+					Format: "safetensors",
+					Hardware: ModelVariantHardware{
+						GPUArch:       "MUSA",
+						UnifiedMemory: &unified,
+					},
+				},
+			},
+		}},
+	}
+
+	hw := HardwareInfo{GPUArch: "Blackwell", UnifiedMemory: true, Platform: "linux/arm64"}
+	resolved, err := cat.Resolve(hw, "qwen3-8b", "vllm", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "vllm" {
+		t.Fatalf("Engine = %q, want vllm", resolved.Engine)
+	}
+	if resolved.EngineAssetName != "vllm-blackwell" {
+		t.Fatalf("EngineAssetName = %q, want vllm-blackwell", resolved.EngineAssetName)
 	}
 }
 
@@ -2113,6 +2479,23 @@ func TestCheckFitTPExceedsGPUCount(t *testing.T) {
 			t.Fatalf("expected Fit=true without TP config, got Reason=%q", fit.Reason)
 		}
 	})
+}
+
+func TestCheckFitUsesPersistedJSONNumbers(t *testing.T) {
+	resolved := &ResolvedConfig{Config: map[string]any{
+		"gpu_memory_utilization": json.Number("0.95"),
+		"tensor_parallel_size":   json.Number("2"),
+	}}
+	hw := HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 16384, GPUCount: 1}
+
+	fit := CheckFit(resolved, hw)
+	if fit.Fit || !strings.Contains(fit.Reason, "tensor_parallel_size=2") {
+		t.Fatalf("persisted numeric fit = %+v, want one-GPU TP rejection", fit)
+	}
+	adjusted, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok || toFloat64(adjusted) != 0.5 {
+		t.Fatalf("persisted numeric adjustments = %+v, want gpu_memory_utilization=0.5", fit.Adjustments)
+	}
 }
 
 // TestBuildSyntheticConfig_NoVRAMLeakForEnginesWithoutDeclaredKnob is the

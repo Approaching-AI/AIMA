@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -79,7 +81,11 @@ func BuildStatus(ctx context.Context, deps *Deps) (StatusResult, error) {
 	// (d) Version check
 	status.Version = buildVersion(ctx, td)
 
-	// (e) GPU occupancy — detect non-AIMA containers consuming GPU
+	// (e) Running services already available through the proxy/static backends
+	status.RunningServices = normalizeRunningServices(ctx, deps)
+	status.BestChoice = chooseBestRunningService(status.RunningServices)
+
+	// (f) GPU occupancy — detect non-AIMA containers consuming GPU
 	if hw != nil && hw.GPU != nil {
 		occ := detectGPUOccupancy(ctx)
 		if len(occ) > 0 {
@@ -104,11 +110,21 @@ func buildHardware(ctx context.Context, deps *Deps, hw *hal.HardwareInfo) Hardwa
 
 	if hw.GPU != nil {
 		result.GPU = []GPU{{
-			Name:    hw.GPU.Name,
-			VRAMMiB: hw.GPU.VRAMMiB,
-			Count:   hw.GPU.Count,
-			Arch:    hw.GPU.Arch,
+			Name:          hw.GPU.Name,
+			VRAMMiB:       hw.GPU.VRAMMiB,
+			Count:         hw.GPU.Count,
+			Arch:          hw.GPU.Arch,
+			UnifiedMemory: hw.GPU.UnifiedMemory,
 		}}
+		result.UnifiedMemory = hw.GPU.UnifiedMemory
+	}
+	if hw.NPU != nil {
+		result.NPU = &NPU{
+			Vendor: hw.NPU.Vendor,
+			Name:   hw.NPU.Name,
+			Driver: hw.NPU.Driver,
+			Count:  hw.NPU.Count,
+		}
 	}
 
 	result.CPU = CPU{
@@ -133,6 +149,7 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 	result := StackStatusInfo{
 		Docker:                 "not_installed",
 		K3S:                    "not_installed",
+		AIMAServe:              "not_installed",
 		NeedsInit:              false,
 		InitTierRecommendation: "docker",
 	}
@@ -159,9 +176,17 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 		return result, fmt.Errorf("parse stack status: %w", err)
 	}
 
+	sawAIMAServe := false
 	for _, comp := range initResult.Components {
 		name := strings.ToLower(comp.Name)
 		switch {
+		case name == "aima-serve":
+			sawAIMAServe = true
+			if comp.Ready {
+				result.AIMAServe = "ready"
+			} else if comp.Skipped {
+				result.AIMAServe = "skipped"
+			}
 		case strings.Contains(name, "docker"):
 			if comp.Ready {
 				result.Docker = "ready"
@@ -177,8 +202,23 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 		}
 	}
 
-	// Determine needs_init: true if neither docker nor k3s is ready
+	// Native-only hosts (macOS/Windows/local llama.cpp paths) intentionally skip
+	// Docker/K3S. Treat that as a valid first-run state, not a broken stack.
+	if result.Docker == "skipped" && result.K3S == "skipped" && (!sawAIMAServe || result.AIMAServe == "skipped") {
+		result.NeedsInit = false
+		result.InitTierRecommendation = "native"
+		return result, nil
+	}
+
+	// Determine needs_init: true if neither docker nor k3s is ready, or if the
+	// Linux aima-serve daemon catalog entry exists but is not managed by
+	// systemd. Without that second condition, a device with Docker already ready
+	// can skip init and leave the UI/API as a foreground process that disappears
+	// after reboot.
 	if result.Docker != "ready" && result.K3S != "ready" {
+		result.NeedsInit = true
+	}
+	if sawAIMAServe && result.AIMAServe != "ready" && result.AIMAServe != "skipped" {
 		result.NeedsInit = true
 	}
 
@@ -191,6 +231,61 @@ func BuildStackStatus(ctx context.Context, deps *Deps) (StackStatusInfo, error) 
 	}
 
 	return result, nil
+}
+
+func normalizeRunningServices(ctx context.Context, deps *Deps) []RunningService {
+	if deps == nil || deps.ListRunningServices == nil {
+		return nil
+	}
+	services := deps.ListRunningServices(ctx)
+	if len(services) == 0 {
+		return nil
+	}
+	out := make([]RunningService, 0, len(services))
+	for _, svc := range services {
+		svc.Model = strings.TrimSpace(svc.Model)
+		svc.Endpoint = strings.TrimRight(strings.TrimSpace(svc.Endpoint), "/")
+		if svc.Model == "" || svc.Endpoint == "" {
+			continue
+		}
+		if svc.Status == "" {
+			if svc.Ready {
+				svc.Status = "ready"
+			} else {
+				svc.Status = "not_ready"
+			}
+		}
+		if svc.Source == "" {
+			svc.Source = "proxy_backend"
+		}
+		out = append(out, svc)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Ready != out[j].Ready {
+			return out[i].Ready
+		}
+		if out[i].Model != out[j].Model {
+			return out[i].Model < out[j].Model
+		}
+		return out[i].Endpoint < out[j].Endpoint
+	})
+	return out
+}
+
+func chooseBestRunningService(services []RunningService) *BestChoice {
+	for _, svc := range services {
+		if !svc.Ready || svc.Endpoint == "" || svc.Model == "" {
+			continue
+		}
+		return &BestChoice{
+			Action:   "use_existing",
+			Model:    svc.Model,
+			Engine:   svc.Engine,
+			Endpoint: svc.Endpoint,
+			Reason:   "running model is already available",
+		}
+	}
+	return nil
 }
 
 func defaultOnboardingInitCapability(deps *mcp.ToolDeps) (bool, string) {
@@ -451,6 +546,9 @@ func detectGPUOccupancy(ctx context.Context) []GPUProcess {
 			continue
 		}
 		gpuMem := containerGPUMemMiB(detectCtx, e.Names)
+		if gpuMem == 0 {
+			gpuMem = amdGlobalGPUMemMiB()
+		}
 		procs = append(procs, GPUProcess{
 			Name:      e.Names,
 			Type:      "container",
@@ -461,17 +559,82 @@ func detectGPUOccupancy(ctx context.Context) []GPUProcess {
 	return procs
 }
 
-// containerUsesGPU checks whether a container has GPU device requests or uses
-// the nvidia runtime.
+// containerUsesGPU checks whether a container has GPU device requests, uses a
+// GPU runtime, or mounts ROCm/DRM devices such as /dev/kfd and /dev/dri.
 func containerUsesGPU(ctx context.Context, name string) bool {
-	out, err := exec.CommandContext(ctx, "docker", "inspect", name,
-		"--format", "{{json .HostConfig.DeviceRequests}} {{.HostConfig.Runtime}}",
-	).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "docker", "inspect", name).CombinedOutput()
 	if err != nil {
 		return false
 	}
-	s := string(out)
-	return strings.Contains(s, "nvidia") || strings.Contains(s, "gpu")
+	if inspectOutputUsesGPU(out) {
+		return true
+	}
+	s := strings.ToLower(string(out))
+	return strings.Contains(s, "nvidia") || strings.Contains(s, `"gpu"`)
+}
+
+type dockerInspectGPUInfo struct {
+	HostConfig struct {
+		DeviceRequests []struct {
+			Driver       string     `json:"Driver"`
+			Capabilities [][]string `json:"Capabilities"`
+			DeviceIDs    []string   `json:"DeviceIDs"`
+		} `json:"DeviceRequests"`
+		Runtime string `json:"Runtime"`
+		Devices []struct {
+			PathOnHost        string `json:"PathOnHost"`
+			PathInContainer   string `json:"PathInContainer"`
+			CgroupPermissions string `json:"CgroupPermissions"`
+		} `json:"Devices"`
+	} `json:"HostConfig"`
+}
+
+func inspectOutputUsesGPU(raw []byte) bool {
+	var many []dockerInspectGPUInfo
+	if err := json.Unmarshal(raw, &many); err == nil {
+		for _, item := range many {
+			if inspectInfoUsesGPU(item) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var one dockerInspectGPUInfo
+	if err := json.Unmarshal(raw, &one); err == nil {
+		return inspectInfoUsesGPU(one)
+	}
+	return false
+}
+
+func inspectInfoUsesGPU(info dockerInspectGPUInfo) bool {
+	runtimeName := strings.ToLower(info.HostConfig.Runtime)
+	if strings.Contains(runtimeName, "nvidia") || strings.Contains(runtimeName, "gpu") {
+		return true
+	}
+	for _, req := range info.HostConfig.DeviceRequests {
+		if strings.Contains(strings.ToLower(req.Driver), "nvidia") || len(req.DeviceIDs) > 0 {
+			return true
+		}
+		for _, group := range req.Capabilities {
+			for _, cap := range group {
+				if strings.EqualFold(cap, "gpu") || strings.EqualFold(cap, "nvidia") {
+					return true
+				}
+			}
+		}
+	}
+	for _, dev := range info.HostConfig.Devices {
+		if dockerDevicePathUsesGPU(dev.PathOnHost) || dockerDevicePathUsesGPU(dev.PathInContainer) {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerDevicePathUsesGPU(path string) bool {
+	path = strings.TrimSpace(path)
+	return path == "/dev/kfd" || path == "/dev/dri" || strings.HasPrefix(path, "/dev/dri/")
 }
 
 // containerGPUMemMiB tries to estimate GPU memory used by a container by
@@ -526,6 +689,31 @@ func containerGPUMemMiB(ctx context.Context, name string) int {
 		}
 	}
 	return totalMiB
+}
+
+func amdGlobalGPUMemMiB() int {
+	total := 0
+	for _, pattern := range []string{
+		"/sys/class/drm/card*/device/mem_info_vram_used",
+		"/sys/class/drm/card*/device/mem_info_gtt_used",
+	} {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			bytesUsed, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+			if err != nil || bytesUsed <= 0 {
+				continue
+			}
+			total += int(bytesUsed / 1024 / 1024)
+		}
+	}
+	return total
 }
 
 // isChildOfPID checks if childPID is a descendant of parentPID by walking /proc.

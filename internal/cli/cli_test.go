@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -64,6 +65,9 @@ func testApp(t *testing.T) *App {
 			SupportAskForHelp: func(ctx context.Context, description, endpoint, inviteCode, workerCode, recoveryCode, referralCode string) (json.RawMessage, error) {
 				return json.RawMessage(`{"enabled":true,"device_id":"dev-test","created":false}`), nil
 			},
+			DiagnosticsExport: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"path":"/tmp/aima-diagnostics.json","telemetry_free":true}`), nil
+			},
 		},
 	}
 }
@@ -82,6 +86,7 @@ func TestNewRootCmd(t *testing.T) {
 		"deploy", "undeploy", "status",
 		"model", "engine", "knowledge", "catalog",
 		"ask", "agent", "config", "serve", "mcp",
+		"diagnostics", "onboarding",
 	}
 	cmds := make(map[string]bool)
 	for _, c := range root.Commands() {
@@ -154,7 +159,7 @@ func TestEngineSubcommands(t *testing.T) {
 		t.Fatal("engine command not found")
 	}
 
-	expected := []string{"scan", "list", "pull", "import", "remove"}
+	expected := []string{"scan", "list", "pull", "import", "ensure", "rollback", "remove"}
 	subs := make(map[string]bool)
 	for _, c := range engineCmd.Commands() {
 		subs[c.Name()] = true
@@ -163,6 +168,64 @@ func TestEngineSubcommands(t *testing.T) {
 		if !subs[name] {
 			t.Errorf("engine missing subcommand %q", name)
 		}
+	}
+}
+
+func TestEngineEnsureCmd(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantVersion string
+		wantApply   bool
+	}{
+		{name: "plan only", args: []string{"engine", "ensure", "engine-a"}},
+		{name: "versioned apply", args: []string{"engine", "ensure", "engine-a", "--version", "b9330", "--apply"}, wantVersion: "b9330", wantApply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testApp(t)
+			calls := 0
+			app.ToolDeps.EnsureEngine = func(_ context.Context, name, version string, apply bool) (json.RawMessage, error) {
+				calls++
+				if name != "engine-a" || version != tc.wantVersion || apply != tc.wantApply {
+					t.Fatalf("EnsureEngine(%q, %q, %v)", name, version, apply)
+				}
+				return json.RawMessage(`{"plan":{"action":"install"},"applied":false}`), nil
+			}
+			root := NewRootCmd(app)
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetArgs(tc.args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("engine ensure failed: %v", err)
+			}
+			if calls != 1 || !strings.Contains(buf.String(), `"action": "install"`) {
+				t.Fatalf("calls=%d output=%s", calls, buf.String())
+			}
+		})
+	}
+}
+
+func TestEngineRollbackCmd(t *testing.T) {
+	app := testApp(t)
+	calls := 0
+	app.ToolDeps.RollbackEngine = func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
+		calls++
+		if name != "engine-a" || runtimeType != "native" || !confirm {
+			t.Fatalf("RollbackEngine(%q, %q, %v)", name, runtimeType, confirm)
+		}
+		return json.RawMessage(`{"asset_name":"engine-a","applied":true,"active_engine_id":"engine-v1"}`), nil
+	}
+	root := NewRootCmd(app)
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"engine", "rollback", "engine-a", "--runtime", "native", "--confirm"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("engine rollback failed: %v", err)
+	}
+	if calls != 1 || !strings.Contains(buf.String(), `"active_engine_id": "engine-v1"`) {
+		t.Fatalf("calls=%d output=%s", calls, buf.String())
 	}
 }
 
@@ -220,6 +283,53 @@ func TestKnowledgeSubcommands(t *testing.T) {
 	}
 }
 
+func TestCatalogEffectiveCmdPrintsYAML(t *testing.T) {
+	app := testApp(t)
+	app.ToolDeps.CatalogEffective = func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+		return json.RawMessage(`{"kind":"model_asset","name":"demo","yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "effective", "model_asset", "demo"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog effective failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "kind: model_asset") || !strings.Contains(buf.String(), "name: demo") {
+		t.Fatalf("unexpected catalog effective output: %s", buf.String())
+	}
+}
+
+func TestCatalogValidatePatchCmdReadsFile(t *testing.T) {
+	app := testApp(t)
+	var gotContent string
+	app.ToolDeps.CatalogValidatePatch = func(ctx context.Context, content string) (json.RawMessage, error) {
+		gotContent = content
+		return json.RawMessage(`{"valid":true,"effective_yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	patchPath := t.TempDir() + "/demo.patch.yaml"
+	if err := os.WriteFile(patchPath, []byte("kind: model_asset_patch\nmetadata:\n  name: demo\n"), 0o644); err != nil {
+		t.Fatalf("write patch: %v", err)
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "validate-patch", patchPath})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog validate-patch failed: %v", err)
+	}
+	if !strings.Contains(gotContent, "kind: model_asset_patch") {
+		t.Fatalf("validate-patch did not read file content: %q", gotContent)
+	}
+	if !strings.Contains(buf.String(), `"valid": true`) {
+		t.Fatalf("unexpected validate-patch output: %s", buf.String())
+	}
+}
+
 func TestAgentSubcommands(t *testing.T) {
 	app := testApp(t)
 	root := NewRootCmd(app)
@@ -247,6 +357,71 @@ func TestAgentSubcommands(t *testing.T) {
 	}
 }
 
+func TestOnboardingRootRunsGuidedStart(t *testing.T) {
+	app := testApp(t)
+	var startCalls int
+	var gotLocale string
+	app.ToolDeps.OnboardingStart = func(ctx context.Context, locale string) (json.RawMessage, error) {
+		startCalls++
+		gotLocale = locale
+		return json.RawMessage(`{"status":{"onboarding_completed":false,"hardware":{"profile_match":"apple-m4-16g","os":"darwin","arch":"arm64","ram_mib":16384,"gpu":[]},"stack_status":{"docker":"skipped","k3s":"skipped","needs_init":false,"init_tier_recommendation":"native","can_auto_init":false}},"scan":{"engines":[{"type":"llamacpp","runtime":"native"}],"models":[],"central_connected":false,"configs_pulled":0,"benchmarks_pulled":0},"recommend":{"hardware_profile":"apple-m4-16g","gpu_arch":"","gpu_vram_mib":0,"gpu_count":0,"total_models_evaluated":2,"recommendations":[{"model_name":"qwen3-4b","model_type":"llm","family":"qwen3","parameter_count":"4B","fit_score":72,"hardware_fit":true,"recommendation_reason":"safe first run","engine":{"type":"llamacpp","name":"llamacpp"},"model_status":{"local_available":false}}]},"next_model":"qwen3-4b","next_command":"aima run qwen3-4b"}`), nil
+	}
+
+	root := NewRootCmd(app)
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"onboarding", "--locale", "zh"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("onboarding failed: %v\n%s", err, buf.String())
+	}
+	if startCalls != 1 {
+		t.Fatalf("start calls = %d, want 1", startCalls)
+	}
+	if gotLocale != "zh" {
+		t.Fatalf("locale = %q, want zh", gotLocale)
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"AIMA first-run guide",
+		"Stack: docker=skipped k3s=skipped needs_init=false",
+		"Next: aima run qwen3-4b",
+		"Keep the local API/UI open with: aima serve",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("onboarding output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestOnboardingStartAliasRunsGuidedStart(t *testing.T) {
+	app := testApp(t)
+	app.ToolDeps.OnboardingStart = func(ctx context.Context, locale string) (json.RawMessage, error) {
+		return json.RawMessage(`{"status":{"onboarding_completed":false,"hardware":{"profile_match":"","os":"linux","arch":"amd64","ram_mib":32768,"gpu":[]},"stack_status":{"docker":"not_installed","k3s":"not_installed","needs_init":true,"init_tier_recommendation":"docker","can_auto_init":false,"init_blocked_reason":"automatic init requires root"}},"scan":{"engines":[],"models":[],"central_connected":false},"recommend":{"total_models_evaluated":1,"recommendations":[{"model_name":"qwen3-4b","model_type":"llm","family":"qwen3","parameter_count":"4B","fit_score":68,"hardware_fit":true,"model_status":{"local_available":false}}]},"next_model":"qwen3-4b","next_command":"aima run qwen3-4b"}`), nil
+	}
+
+	root := NewRootCmd(app)
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"onboarding", "start"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("onboarding start failed: %v\n%s", err, buf.String())
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Init blocked: automatic init requires root") {
+		t.Fatalf("onboarding start output missing blocked reason:\n%s", output)
+	}
+	if !strings.Contains(output, "Manual init: sudo aima onboarding init --tier docker --yes") {
+		t.Fatalf("onboarding start output missing manual init suggestion:\n%s", output)
+	}
+	if !strings.Contains(output, "Next: aima run qwen3-4b") {
+		t.Fatalf("onboarding start output missing next command:\n%s", output)
+	}
+}
+
 func TestAskForHelpCommand(t *testing.T) {
 	app := testApp(t)
 	root := NewRootCmd(app)
@@ -261,6 +436,33 @@ func TestAskForHelpCommand(t *testing.T) {
 
 	if got := buf.String(); got == "" || !bytes.Contains(buf.Bytes(), []byte(`"device_id": "dev-test"`)) {
 		t.Fatalf("unexpected askforhelp output: %q", got)
+	}
+}
+
+func TestDiagnosticsExportCommand(t *testing.T) {
+	app := testApp(t)
+	var gotParams map[string]any
+	app.ToolDeps.DiagnosticsExport = func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+		if err := json.Unmarshal(params, &gotParams); err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+		return json.RawMessage(`{"path":"/tmp/aima-diagnostics.json","telemetry_free":true}`), nil
+	}
+
+	root := NewRootCmd(app)
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"diagnostics", "export", "--stdout", "--no-logs", "--log-lines", "5"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("diagnostics export failed: %v\n%s", err, buf.String())
+	}
+	if gotParams["inline"] != true || gotParams["include_logs"] != false || gotParams["log_lines"] != float64(5) {
+		t.Fatalf("params = %#v, want inline=true include_logs=false log_lines=5", gotParams)
+	}
+	if !strings.Contains(buf.String(), `"telemetry_free": true`) {
+		t.Fatalf("diagnostics output missing telemetry marker:\n%s", buf.String())
 	}
 }
 
@@ -409,7 +611,7 @@ func TestCatalogSubcommands(t *testing.T) {
 		t.Fatal("catalog command not found")
 	}
 
-	expected := []string{"status", "override"}
+	expected := []string{"status", "override", "validate", "effective", "diff", "validate-patch"}
 	subs := make(map[string]bool)
 	for _, c := range catalogCmd.Commands() {
 		subs[c.Name()] = true

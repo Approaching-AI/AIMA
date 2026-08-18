@@ -19,11 +19,11 @@ storage:
       repo: Qwen/Qwen3-Embedding-0.6B
       format: safetensors
     - type: local_path
-      path: ""
+      path: "/opt/mt-ai/emb/models/Qwen3-Embedding-0.6B"
 variants:
   # --- Moore Threads MUSA (M1000 SoC / AIBook, 32GB unified) ---
-  # 0.6B params, FP16 weights ~1.2GB, vLLM-MUSA serve with gmu=0.20
-  # Coexists with LLM at gmu=0.50 (total gmu=0.70, ~26GB/32GB)
+  # 0.6B params, FP16 weights ~1.2GB, vLLM-MUSA serve with gmu=0.35
+  # Coexists with LLM at gmu=0.50 (total gmu=0.85, ~27GB/32GB)
   # Pre-loaded at /opt/mt-ai/emb/models/Qwen3-Embedding-0.6B
   # Output: 1024-dim embeddings, max 4096 tokens input
   - name: qwen3-emb-0.6b-musa-soc-vllm
@@ -31,10 +31,10 @@ variants:
       gpu_arch: MUSA
       vram_min_mib: 4096
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
-      gpu_memory_utilization: 0.20
+      gpu_memory_utilization: 0.35
       max_model_len: 4096
       num_gpu_blocks_override: 128
       enforce_eager: true
@@ -45,7 +45,7 @@ variants:
       startup_time_s: 80
       cold_start_time_s: 90
       vram_mib: 6400
-      notes: "AIBook M1000 SoC 32GB. vLLM-MUSA 0.9.2, 1024-dim embeddings. Measured 2026-03-27: model load 3.78s (1.12 GiB), total cold start ~80s. Latency: 240ms (3 tokens) to 670ms (351 tokens) single query. Batch-20: 695ms (35ms/item). Pre-loaded at /opt/mt-ai/emb/models/Qwen3-Embedding-0.6B."
+      notes: "AIBook M1000 SoC 32GB. vLLM-MUSA 0.9.2, 1024-dim embeddings. gmu=0.35 is required on MUSA 5.1/vLLM-MUSA to allocate a 4096-token KV cache; gmu=0.20 failed with available KV cache memory below requirement. Measured 2026-05-07 on AIBook: model load ~1.12 GiB, service ready at /health. Pre-loaded at /opt/mt-ai/emb/models/Qwen3-Embedding-0.6B."
 
   # --- Moore Threads MUSA (M1000 Dev Kit, 62GB unified) ---
   # Same model, more headroom on 62GB
@@ -54,7 +54,7 @@ variants:
       gpu_arch: MUSA
       vram_min_mib: 4096
       unified_memory: true
-    engine: vllm
+    engine: vllm-musa
     format: safetensors
     default_config:
       gpu_memory_utilization: 0.10

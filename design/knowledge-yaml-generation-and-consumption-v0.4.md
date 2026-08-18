@@ -38,7 +38,7 @@
 - `internal/knowledge/loader.go`
 - `cmd/aima/tooldeps_knowledge.go`
 - `cmd/aima/tooldeps_integration.go`
-- `internal/central/advisor.go`
+- `aima-central-knowledge` repo 的 advisor/scenario 服务端实现
 - `cmd/aima/scenario.go`
 
 需要额外强调一条 `CLAUDE.md` 边界：
@@ -199,7 +199,7 @@
 
 ### 4.5 Central 生成的 `scenario_yaml` 不是 edge catalog 直接消费的格式
 
-`internal/central/advisor.go` 的 `GenerateScenario()` 当前持久化的 `scenario_yaml` 结构更像一个轻量记录：
+`aima-central-knowledge` repo 中 `GenerateScenario()` 当前持久化的 `scenario_yaml` 结构更像一个轻量记录：
 
 - `name`
 - `description`

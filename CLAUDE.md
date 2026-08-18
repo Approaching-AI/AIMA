@@ -4,7 +4,7 @@
 
 AIMA (AI-Inference-Managed-by-AI): a Go binary that manages AI inference on edge devices.
 It detects hardware, resolves optimal configs from a YAML knowledge base, generates K3S Pod YAML,
-and exposes 61 MCP tools for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
+and exposes a documented MCP tool surface for AI Agents to operate everything. **This project is 100% developed by Claude Code.**
 
 Tech: Go (no CGO), K3S, HAMi, SQLite (modernc.org/sqlite), MCP (JSON-RPC 2.0), Cobra CLI, log/slog.
 Design docs: `design/ARCHITECTURE.md` (system architecture), `design/PRD.md`, `design/MRD.md`.
@@ -359,9 +359,9 @@ Before starting any v1.0-targeted work, read that doc first. Keep it updated as 
 
 ### Current State (v0.4.0)
 
-61 MCP tools, 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 32 engine YAMLs, 28 model YAMLs, 3 deployment scenarios, 3 partition strategies, 5 stack components.
+A documented MCP tool surface (see `docs/mcp.md`), 3 runtimes (K3S/Docker/Native), 11 hardware profiles, 32 engine YAMLs, 28 model YAMLs, 3 deployment scenarios, 3 partition strategies, 5 stack components.
 Carried from v0.3.0: OpenClaw full-stack integration, Smart Agent routing with model ranking, Engine Profile system with SGLang-KT, AMD RDNA3 (W7900D) 8-GPU validated, god file refactor (`cmd/aima/main.go` → 46 modules), ZeroClaw removal, embedded Web UI with per-card GPU metrics + multi-socket CPU fix, TUI dashboard (Bubble Tea), ResourceSlot abstraction, knowledge query engine (6 query types), patrol + self-healing auto-diagnosis, L2c golden config injection, time constraint engine filtering.
-v0.4.0 adds: Explorer Agent Planner (document-driven PDCA with `ExplorerWorkspace` + 7 bash-like tools + SQLite query tool) replacing single-shot JSON prompt, with `PendingWork` / `search_space` / long-context anchor contracts and structured decision-trace logging; Central Advisor Engine + Periodic Analyzer + `CentralStore` interface (SQLite + Postgres/pgx) + advisory lifecycle (pending→delivered→validated/rejected→expired) + Sync v2 protocol (now in separate `aima-central-knowledge` repo, deployed at `https://aimaservice.ai/central`); aima-service device identity Phase 1 (`internal/cloud/` canonical surface, `internal/support/Bootstrap` auto-register + token renew, Central strict mode `?device_id=`, `aima device register/status/renew/reset` + 4 MCP tools); MCP consolidation 101→61 with profile-aware `ListToolsForProfile`; onboarding cold-start wizard with 5-dimension 0-100 recommend scoring; multi-modal benchmark system (chat/TTS/ASR/T2I/T2V) with V14 SQLite migration; model `metadata.aliases` for catalog-driven scan-name matching; MCP-initiated tune detached from HTTP request context for long-run stability; engine health_check timeout honored; edge HTTP timeout 600s for LLM reasoning endpoints.
+v0.4.0 adds: Explorer Agent Planner (document-driven PDCA with `ExplorerWorkspace` + 7 bash-like tools + SQLite query tool) replacing single-shot JSON prompt, with `PendingWork` / `search_space` / long-context anchor contracts and structured decision-trace logging; Central Advisor Engine + Periodic Analyzer + `CentralStore` interface (SQLite + Postgres/pgx) + advisory lifecycle (pending→delivered→validated/rejected→expired) + Sync v2 protocol (now in separate `aima-central-knowledge` repo, deployed at `https://aimaservice.ai/central`); aima-service device identity Phase 1 (`internal/cloud/` canonical surface, `internal/support/Bootstrap` auto-register + token renew, Central strict mode `?device_id=`, `aima device register/status/renew/reset` + 4 MCP tools); MCP consolidation from 101 tools to a profile-aware `ListToolsForProfile` surface; onboarding cold-start wizard with 5-dimension 0-100 recommend scoring; multi-modal benchmark system (chat/TTS/ASR/T2I/T2V) with V14 SQLite migration; model `metadata.aliases` for catalog-driven scan-name matching; MCP-initiated tune detached from HTTP request context for long-run stability; engine health_check timeout honored; edge HTTP timeout 600s for LLM reasoning endpoints.
 
 ### v0.3.0 Completed — "Edge Intelligence"
 
@@ -445,7 +445,7 @@ internal/
   engine/                     # Engine image scan/pull/import + native binary manager
   stack/                      # Tiered stack installer (Docker/CTK/K3S/HAMi, archive/binary/helm, airgap)
   benchmark/                  # Live benchmark runner (SSE streaming, concurrency, percentile stats)
-  mcp/                        # MCP server + 56 tool implementations
+  mcp/                        # MCP server + documented tool implementations
   agent/                      # Go Agent (L3a) + Dispatcher + Explorer (PDCA agent planner, workspace, tools, harvester)
   cli/                        # Cobra commands (thin wrappers over MCP tools)
   ui/                         # Embedded Web UI (go:embed, Alpine.js SPA on :6188/ui/)

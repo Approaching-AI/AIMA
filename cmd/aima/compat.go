@@ -103,7 +103,8 @@ func prepareContainerCompatibility(
 	}
 
 	probeSummary := summarizeCompatibilityProbeOutput(probeOutput, probeErr)
-	if allowAutoPull && len(resolved.EngineRegistries) > 0 && !strings.EqualFold(resolved.EngineDistribution, "local") {
+	engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
+	if allowAutoPull && len(engineRegistries) > 0 && !strings.EqualFold(resolved.EngineDistribution, "local") {
 		if refreshErr := refreshDockerImageForCompatibilityProbe(ctx, runner, resolved); refreshErr == nil {
 			plan.DockerImageChanged = true
 			refreshedOutput, refreshedErr := timedContainerCompatibilityProbe(ctx, runner, resolved.CompatibilityProbe, resolved.EngineImage, modelPath, trustRemoteCode, nil)
@@ -159,7 +160,7 @@ func ensureDockerImageForCompatibilityProbe(ctx context.Context, runner engine.C
 	if engine.ImageExistsInDocker(ctx, resolved.EngineImage, runner) {
 		return true, false, nil
 	}
-	if !allowAutoPull || len(resolved.EngineRegistries) == 0 || strings.EqualFold(resolved.EngineDistribution, "local") {
+	if !allowAutoPull || len(engineRegistriesWithEnv(resolved.EngineRegistries)) == 0 || strings.EqualFold(resolved.EngineDistribution, "local") {
 		return false, false, nil
 	}
 	if err := pullDockerImageForCompatibilityProbe(ctx, runner, resolved); err != nil {
@@ -179,20 +180,21 @@ func pullDockerImageForCompatibilityProbe(ctx context.Context, runner engine.Com
 	if resolved == nil {
 		return fmt.Errorf("resolved config is nil")
 	}
-	if len(resolved.EngineRegistries) == 0 {
+	engineRegistries := engineRegistriesWithEnv(resolved.EngineRegistries)
+	if len(engineRegistries) == 0 {
 		return fmt.Errorf("no registries configured for %s", resolved.EngineImage)
 	}
 	imgName, imgTag := splitImageRef(resolved.EngineImage)
 	if err := engine.Pull(ctx, engine.PullOptions{
 		Image:          imgName,
 		Tag:            imgTag,
-		Registries:     resolved.EngineRegistries,
+		Registries:     engineRegistries,
 		Runner:         &dockerOnlyRunner{base: runner},
 		ExpectedDigest: resolved.EngineDigest,
 	}); err != nil {
 		return err
 	}
-	return ensureDockerImageAlias(ctx, runner, resolved.EngineImage, resolved.EngineRegistries)
+	return ensureDockerImageAlias(ctx, runner, resolved.EngineImage, engineRegistries)
 }
 
 func ensureDockerImageAlias(ctx context.Context, runner engine.CommandRunner, image string, registries []string) error {

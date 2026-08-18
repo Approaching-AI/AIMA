@@ -1,0 +1,52 @@
+{
+  "amplifier_score": 1,
+  "cold_start_s": {
+    "max": 10,
+    "min": 3
+  },
+  "config": {
+    "ctx_size": 8192,
+    "n_gpu_layers": 999,
+    "port": 8080,
+    "quantization": "int4"
+  },
+  "engine": "llamacpp",
+  "engine_image": "ghcr.io/ggml-org/llama.cpp:server",
+  "engine_power_watts": {
+    "max": 60,
+    "min": 20
+  },
+  "fit_report": {
+    "adjustments": {},
+    "fit": true,
+    "reason": "",
+    "warnings": null
+  },
+  "model": "qwen3-4b",
+  "performance_reference": {
+    "power_watts": 40,
+    "source": "yaml_estimate"
+  },
+  "ports": [
+    {
+      "config_key": "port",
+      "flag": "--port",
+      "name": "http",
+      "port": 8080,
+      "primary": true
+    }
+  ],
+  "provenance": {
+    "ctx_size": "L0",
+    "n_gpu_layers": "L0",
+    "port": "L0",
+    "quantization": "L0"
+  },
+  "resource_estimate": {
+    "cpu_cores": 4,
+    "power_watts": 40,
+    "ram_mib": 2048
+  },
+  "runtime": "native",
+  "slot": "primary"
+}

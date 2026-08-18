@@ -28,6 +28,8 @@ func npuVendorFromDriver(driver string) string {
 		return "intel"
 	case strings.HasPrefix(driver, "qcom"):
 		return "qualcomm"
+	case strings.HasPrefix(driver, "houmo,"):
+		return "houmo"
 	default:
 		return driver
 	}

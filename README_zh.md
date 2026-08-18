@@ -32,6 +32,7 @@
 
 ## 动态
 
+- **2026-08** —— v0.5.0 发布：持久部署自动恢复、可校验的原生引擎全生命周期、AMD Strix Halo/AMD395 Windows 与 Linux 安装包、跨设备 Fleet 场景编排、结构化推理适配器，以及更广的硬件与模型覆盖。
 - **2026-04** —— v0.4.0 发布:Explorer Agent Planner(PDCA)、Central Advisor + Analyzer、MCP 工具从 101 精简至 61、aima-service 设备身份 Phase 1、Onboarding 冷启动向导(五维 0–100 打分)、多模态 Benchmark(chat/TTS/ASR/T2I/T2V)。
 - **2026-03** —— v0.3.x:OpenClaw 全栈集成、智能 Agent 路由、带 SGLang-KT 的 Engine Profile 体系、AMD RDNA3(W7900D)8 卡已验证。
 - **2026-02** —— v0.2.0:Support 服务、Web UI 重构、OpenClaw 集成。
@@ -39,9 +40,10 @@
 
 ## 特性
 
-- **零配置硬件检测** —— 自动发现 GPU(NVIDIA、AMD、华为昇腾、海光 DCU、Apple Silicon)、CPU 和内存。
+- **零配置硬件检测** —— 自动发现 NVIDIA、AMD、华为昇腾、海光 DCU、沐曦、摩尔线程、后摩与 Apple 加速器，以及 CPU 和内存。
 - **知识驱动部署** —— YAML 目录包含硬件画像、引擎、模型和分区策略;无引擎特定代码分支。
 - **多运行时** —— K3S(Pod)集群容器 + Docker(单机容器)+ Native(exec)裸机推理。
+- **可恢复的原生引擎生命周期** —— 原生引擎支持校验、导入、安装、升级、回滚，并可在重启后恢复持久部署。
 - **61 个 MCP 工具** —— AI Agent 可通过程序化接口完整控制硬件、模型、引擎、部署、集群等。
 - **集群管理** —— 基于 mDNS 的局域网自动发现;跨异构设备远程工具执行。
 - **离线优先** —— 所有核心功能零网络依赖;网络仅作增强。
@@ -75,7 +77,7 @@ irm https://raw.githubusercontent.com/Approaching-AI/AIMA/master/install.ps1 | i
 - 安装器会解析最新"可安装"的 `vX.Y.Z` 产品 release,而不是 GitHub 的 `latest` release,因为像 `bundle/stack/2026-02-26` 这种 bundle tag 不是主二进制发布。
 - 如果最新 tag 还没上传主二进制资产,安装器会给出告警,并退回到最新可安装 release。
 - Fork 仓库可通过 `AIMA_REPO=<owner>/<repo>` 覆盖下载源。
-- 指定版本可用 `AIMA_VERSION=v0.2.0`。
+- 指定版本可用 `AIMA_VERSION=v0.5.0`。
 - Windows 安装器当前面向 `windows/amd64`,默认安装到 `%LOCALAPPDATA%\Programs\AIMA`。
 
 ### 服务器部署(Linux)
@@ -248,7 +250,7 @@ internal/
   fleet/           mDNS 集群发现 + 远程执行
   sqlite.go        SQLite 状态存储(`package state`,modernc.org/sqlite,零 CGO)
   model/           模型扫描/下载/导入 + 元数据识别
-  engine/          引擎镜像管理
+  engine/          可校验的容器/原生引擎生命周期
   stack/           K3S + HAMi 基础设施安装器
 catalog/
   hardware/        硬件画像 YAML
@@ -296,7 +298,7 @@ make release-assets
 make publish-release-assets
 ```
 
-推送 `v0.2.1` 这类带注释的 SemVer tag 时,也会自动触发 `.github/workflows/release.yml`,构建并上传同一套资产。
+推送 `v0.5.0` 这类带注释的 SemVer tag 时,也会自动触发 `.github/workflows/release.yml`,构建并上传同一套资产。
 
 ### 运行测试
 

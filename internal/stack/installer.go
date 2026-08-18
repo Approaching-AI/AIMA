@@ -120,6 +120,16 @@ type Installer struct {
 	podQuerier PodQuerier
 }
 
+var lookupPath = exec.LookPath
+
+var (
+	systemBinDir     = "/usr/local/bin"
+	systemAIMAEnvDir = "/etc/aima"
+	systemK3SEnvDir  = "/etc/rancher/k3s"
+	systemDataDir    = "/var/lib/aima"
+	systemdUnitDir   = "/etc/systemd/system"
+)
+
 // NewInstaller creates a stack installer.
 func NewInstaller(runner CommandRunner, dataDir string) *Installer {
 	platform := runtime.GOOS + "-" + runtime.GOARCH
@@ -197,7 +207,7 @@ func (inst *Installer) PreCheck(ctx context.Context, components []knowledge.Stac
 		if allActive {
 			continue
 		}
-		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo aima init", comp.Metadata.Name)
+		return fmt.Errorf("root privileges required: installing %s needs to write to /etc and /usr/local/bin\n  run: sudo $(command -v aima) onboarding init --tier auto", comp.Metadata.Name)
 	}
 
 	return nil
@@ -684,7 +694,7 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 
 	// Copy binary to /usr/local/bin/ so it's accessible to all users.
 	// This matches the K3S official install script convention.
-	systemBinary := filepath.Join("/usr/local/bin", name)
+	systemBinary := filepath.Join(systemBinDir, name)
 	if err := copyFile(resolvedBinary, systemBinary, 0o755); err != nil {
 		slog.Warn("failed to copy binary to system path, using original", "error", err)
 		systemBinary = resolvedBinary
@@ -697,10 +707,10 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	}
 
 	// Write env file: K3S uses /etc/rancher/k3s/, other daemons use /etc/aima/
-	envDir := "/etc/aima"
+	envDir := systemAIMAEnvDir
 	envDirMode := os.FileMode(0o755)
 	if name == "k3s" {
-		envDir = "/etc/rancher/k3s"
+		envDir = systemK3SEnvDir
 		envDirMode = 0o750
 	}
 	if err := os.MkdirAll(envDir, envDirMode); err != nil {
@@ -718,7 +728,7 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	// Pin AIMA_DATA_DIR to a shared, world-readable path so that CLI commands
 	// invoked by any user resolve the same data directory as the systemd service.
 	// Using /var/lib/aima (not /root/.aima) because /root is typically mode 700.
-	aimaDataDir := "/var/lib/aima"
+	aimaDataDir := systemDataDir
 	if v, exists := env["AIMA_DATA_DIR"]; exists {
 		aimaDataDir = v
 	} else {
@@ -750,10 +760,22 @@ func (inst *Installer) installDaemonSystemd(ctx context.Context, comp knowledge.
 	if serviceType == "" {
 		serviceType = "notify" // backward compat for K3S
 	}
+	afterTargets := []string{"network-online.target"}
+	wantsTargets := []string{"network-online.target"}
+	var requiresLine string
+	if name == "aima-serve" {
+		// AIMA selects its runtime during process startup. Starting after Docker
+		// prevents reboot races where the proxy comes up first, sees no Docker
+		// runtime, and never reconciles container deployments.
+		afterTargets = append(afterTargets, "docker.service")
+		wantsTargets = append(wantsTargets, "docker.service")
+		requiresLine = "Requires=docker.service"
+	}
 	unit := fmt.Sprintf(`[Unit]
 Description=AIMA managed %s (%s)
-After=network-online.target
-Wants=network-online.target
+After=%s
+Wants=%s
+%s
 
 [Service]
 Type=%s
@@ -768,9 +790,9 @@ LimitNPROC=infinity
 
 [Install]
 WantedBy=multi-user.target
-`, name, comp.Metadata.Version, serviceType, envFile, execStart)
+`, name, comp.Metadata.Version, strings.Join(afterTargets, " "), strings.Join(wantsTargets, " "), requiresLine, serviceType, envFile, execStart)
 
-	unitPath := "/etc/systemd/system/" + name + ".service"
+	unitPath := filepath.Join(systemdUnitDir, name+".service")
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write unit file %s: %w", unitPath, err)
 	}
@@ -798,7 +820,7 @@ func resolveSystemdBinaryPath(binary string) string {
 	if filepath.IsAbs(binary) {
 		return binary
 	}
-	if resolved, err := exec.LookPath(binary); err == nil && resolved != "" {
+	if resolved, err := lookupPath(binary); err == nil && resolved != "" {
 		return resolved
 	}
 	return binary
@@ -821,7 +843,7 @@ func (inst *Installer) installArchive(ctx context.Context, comp knowledge.StackC
 
 	// 1. Extract binaries (skip if extract_binaries is empty — e.g. deb archives handled by post_install)
 	if len(comp.Source.ExtractBinaries) > 0 {
-		destDir := "/usr/local/bin"
+		destDir := systemBinDir
 		if err := extractBinaries(archivePath, comp.Source.ExtractBinaries, destDir); err != nil {
 			return fmt.Errorf("extract binaries from %s: %w", archiveName, err)
 		}
@@ -955,8 +977,8 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 `, unit.Name, comp.Metadata.Version, after, wants, serviceType, unit.Exec)
 
-	unitPath := "/etc/systemd/system/" + unit.Name + ".service"
-	if err := os.MkdirAll("/etc/systemd/system", 0o755); err != nil {
+	unitPath := filepath.Join(systemdUnitDir, unit.Name+".service")
+	if err := os.MkdirAll(systemdUnitDir, 0o755); err != nil {
 		return fmt.Errorf("create systemd dir: %w", err)
 	}
 	if err := os.WriteFile(unitPath, []byte(content), 0o644); err != nil {
@@ -1079,11 +1101,7 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 		return fmt.Errorf("empty verify command for %s", comp.Metadata.Name)
 	}
 
-	// Resolve binary from dist/ if not in PATH
-	binary := parts[0]
-	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
-		binary = localPath
-	}
+	binary := resolveVerificationBinary(parts[0], inst.distDir)
 
 	for time.Now().Before(deadline) {
 		out, err := inst.runner.Run(ctx, binary, parts[1:]...)
@@ -1100,6 +1118,20 @@ func (inst *Installer) verify(ctx context.Context, comp knowledge.StackComponent
 	}
 
 	return fmt.Errorf("timeout waiting for %s to become ready", comp.Metadata.Name)
+}
+
+func resolveVerificationBinary(binary, distDir string) string {
+	// Prefer the currently installed/PATH-resolved binary when available.
+	// Dist/ may contain stale bootstrap artifacts from a previous init run and
+	// should only be used as a fallback when the binary is not otherwise
+	// discoverable on the host.
+	if lookedUp, err := lookupPath(binary); err == nil {
+		return lookedUp
+	}
+	if localPath := filepath.Join(distDir, binary); fileExists(localPath) {
+		return localPath
+	}
+	return binary
 }
 
 func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackComponent, hwProfile string) ComponentStatus {
@@ -1143,17 +1175,13 @@ func (inst *Installer) checkComponent(ctx context.Context, comp knowledge.StackC
 		for _, uname := range unitNames {
 			out, err := inst.runner.Run(ctx, "systemctl", "is-active", uname)
 			if err != nil || strings.TrimSpace(string(out)) != "active" {
-				status.Message = fmt.Sprintf("service %s not running; try: sudo systemctl start %s", uname, uname)
+				status.Message = fmt.Sprintf("service not running: %s; try: sudo systemctl start %s", uname, uname)
 				return status
 			}
 		}
 	}
 
-	// Resolve binary from dist/ if not in PATH
-	binary := parts[0]
-	if localPath := filepath.Join(inst.distDir, binary); fileExists(localPath) {
-		binary = localPath
-	}
+	binary := resolveVerificationBinary(parts[0], inst.distDir)
 
 	out, err := inst.runner.Run(ctx, binary, parts[1:]...)
 	if err != nil {
@@ -1217,14 +1245,14 @@ func collectArgs(comp knowledge.StackComponent, hwProfile string) []string {
 // component binary (e.g. k3s). K3S is a multi-call binary: when invoked as
 // "kubectl" it auto-detects /etc/rancher/k3s/k3s.yaml and acts as standard kubectl.
 func (inst *Installer) ensureKubectlLink(binaryName string) {
-	kubectlLink := "/usr/local/bin/kubectl"
+	kubectlLink := filepath.Join(systemBinDir, "kubectl")
 	if _, err := os.Lstat(kubectlLink); err == nil {
 		return // already exists (symlink, real binary, anything)
 	}
 
 	// Prefer system-installed binary (/usr/local/bin/k3s), then dist/, then PATH
 	var binary string
-	systemPath := filepath.Join("/usr/local/bin", binaryName)
+	systemPath := filepath.Join(systemBinDir, binaryName)
 	switch {
 	case fileExists(systemPath):
 		binary = systemPath
@@ -1275,7 +1303,7 @@ func fileExists(path string) bool {
 // writeRegistriesConfig writes container registry mirror config to /etc/rancher/k3s/registries.yaml.
 // K3S containerd hot-reloads this file, so no restart is needed.
 func writeRegistriesConfig(registries map[string]any) error {
-	dir := "/etc/rancher/k3s"
+	dir := systemK3SEnvDir
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create registries dir: %w", err)
 	}

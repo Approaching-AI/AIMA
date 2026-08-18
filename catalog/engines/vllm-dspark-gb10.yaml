@@ -1,0 +1,117 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-dspark-gb10
+  type: vllm
+  version: "anemll-0.1.1"
+  supported_formats: [safetensors]
+  supported_model_types: [llm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  name: ghcr.io/anemll/dspark-vllm-gx10
+  tag: "0.1.1"
+  platforms: [linux/arm64]
+  registries: [ghcr.io]
+patterns:
+  - "dspark-vllm-gx10"
+container:
+  devices:
+    - /dev/infiniband
+  network_mode: host
+  shm_size: 64gb
+  ulimits:
+    memlock: "-1:-1"
+    stack: "67108864:67108864"
+startup:
+  init_commands:
+    - "ulimit -l unlimited; ulimit -s 65536"
+    - "if [ -f /models/encoding/encoding_dsv4.py ]; then cp -f /models/encoding/encoding_dsv4.py /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py; fi"
+  env:
+    HF_HOME: /cache/huggingface
+    HF_HUB_DISABLE_XET: "1"
+    VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+    VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "256"
+    VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    VLLM_USE_FLASHINFER_SAMPLER: "1"
+    VLLM_USE_B12X_MOE: "1"
+    VLLM_USE_B12X_WO_PROJECTION: "1"
+    VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK: "1"
+    VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+    TORCH_CUDA_ARCH_LIST: "12.1a"
+    FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+    CUTE_DSL_ARCH: sm_121a
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"
+    FLASHINFER_WORKSPACE_BASE: /cache/huggingface/flashinfer
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NET: IB
+    NCCL_IB_DISABLE: "0"
+    NCCL_IB_ADDR_FAMILY: AF_INET
+    NCCL_IB_ROCE_VERSION_NUM: "2"
+    NCCL_CROSS_NIC: "1"
+    NCCL_CUMEM_ENABLE: "0"
+    NCCL_IGNORE_CPU_AFFINITY: "1"
+    NCCL_NVLS_ENABLE: "0"
+    NCCL_DEBUG: WARN
+  default_args:
+    port: 8888
+    host: 0.0.0.0
+    served_model_name: deepseek-v4-flash-dspark
+    trust_remote_code: true
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    kv_cache_dtype: nvfp4_ds_mla
+    block_size: 256
+    max_model_len: 1048576
+    max_num_seqs: 6
+    max_num_batched_tokens: 8192
+    max_cudagraph_capture_size: 36
+    gpu_memory_utilization: 0.80
+    enable_prefix_caching: true
+    enable_prompt_tokens_details: true
+    async_scheduling: true
+    enable_chunked_prefill: true
+    speculative_config:
+      method: dspark
+      num_speculative_tokens: 5
+      draft_sample_method: probabilistic
+    tokenizer_mode: deepseek_v4
+    distributed_executor_backend: mp
+    moe_backend: flashinfer_b12x
+    tool_call_parser: deepseek_v4
+    enable_auto_tool_choice: true
+    reasoning_parser: deepseek_v4
+    reasoning_config:
+      reasoning_parser: deepseek_v4
+      reasoning_start_str: <think>
+      reasoning_end_str: </think>
+    default_chat_template_kwargs:
+      thinking: false
+    generation_config: vllm
+    enable_flashinfer_autotune: true
+    nnodes: 2
+    master_port: 25000
+  health_check:
+    path: /health
+    timeout_s: 1200
+  warmup:
+    enabled: true
+    prompt: "Return the word ready."
+    max_tokens: 8
+    timeout_s: 180
+amplifier:
+  features:
+    - dspark_mtp
+    - nvfp4_ds_mla
+    - flashinfer_b12x
+time_constraints:
+  cold_start_s: [600, 1200]
+  model_switch_s: [600, 1200]
+power_constraints:
+  typical_draw_watts: [60, 100]
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container

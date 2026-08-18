@@ -1,0 +1,42 @@
+[
+  {
+    "model_name": "qwen3-4b",
+    "fit_score": 62,
+    "model_type": "llm",
+    "local_available": true,
+    "engine_type": null,
+    "engine_name": "llamacpp-universal"
+  },
+  {
+    "model_name": "qwen3-8b",
+    "fit_score": 55,
+    "model_type": "llm",
+    "local_available": false,
+    "engine_type": null,
+    "engine_name": "llamacpp-universal"
+  },
+  {
+    "model_name": "qwen3-14b",
+    "fit_score": 47,
+    "model_type": "llm",
+    "local_available": false,
+    "engine_type": null,
+    "engine_name": "llamacpp-universal"
+  },
+  {
+    "model_name": "qwen3.5-9b",
+    "fit_score": 46,
+    "model_type": "vlm",
+    "local_available": false,
+    "engine_type": null,
+    "engine_name": "llamacpp-universal"
+  },
+  {
+    "model_name": "litetts-mnn",
+    "fit_score": 26,
+    "model_type": "tts",
+    "local_available": false,
+    "engine_type": null,
+    "engine_name": "litetts"
+  }
+]

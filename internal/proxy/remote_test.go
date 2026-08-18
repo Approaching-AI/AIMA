@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestSyncRemoteBackends_SkipsLocalModels(t *testing.T) {
+func TestSyncRemoteBackends_PreservesLocalAndRejectsAdvertisedModels(t *testing.T) {
 	s := NewServer()
 	// Register a local backend
 	s.RegisterBackend("qwen3-8b", &Backend{
@@ -45,17 +45,12 @@ func TestSyncRemoteBackends_SkipsLocalModels(t *testing.T) {
 		t.Errorf("qwen3-8b address = %q, want local address", b.Address)
 	}
 
-	// llama3-70b should be registered as remote
-	b2 := backends["llama3-70b"]
-	if b2 == nil {
-		t.Fatal("expected llama3-70b backend")
-	}
-	if !b2.Remote {
-		t.Error("llama3-70b should be Remote=true")
+	if b2 := backends["llama3-70b"]; b2 != nil {
+		t.Fatalf("untrusted advertised backend became routable: %+v", b2)
 	}
 }
 
-func TestSyncRemoteBackends_RegistersRemote(t *testing.T) {
+func TestSyncRemoteBackends_DoesNotRegisterRemote(t *testing.T) {
 	s := NewServer()
 
 	ts := newModelServer(t, []string{"qwen3.5-35b-a3b", "qwen3-8b"})
@@ -69,22 +64,8 @@ func TestSyncRemoteBackends_RegistersRemote(t *testing.T) {
 	SyncRemoteBackends(context.Background(), s, services, 0)
 
 	backends := s.ListBackends()
-	if len(backends) != 2 {
-		t.Fatalf("expected 2 backends, got %d", len(backends))
-	}
-
-	for _, model := range []string{"qwen3.5-35b-a3b", "qwen3-8b"} {
-		b, ok := backends[model]
-		if !ok {
-			t.Errorf("expected backend for %s", model)
-			continue
-		}
-		if !b.Remote {
-			t.Errorf("%s should be Remote=true", model)
-		}
-		if !b.Ready {
-			t.Errorf("%s should be Ready=true", model)
-		}
+	if len(backends) != 0 {
+		t.Fatalf("untrusted advertisements became routable: %+v", backends)
 	}
 }
 
@@ -92,10 +73,25 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 	s := NewServer()
 	// Pre-register a remote backend that will disappear
 	s.RegisterBackend("old-remote-model", &Backend{
-		ModelName: "old-remote-model",
-		Address:   "192.168.1.100:8080",
+		ModelName:  "old-remote-model",
+		Address:    "192.168.1.100:8080",
+		Ready:      true,
+		Remote:     true,
+		Discovered: true,
+	})
+	// An explicit remote backend is operator-configured and must survive discovery.
+	s.RegisterBackend("static-remote-model", &Backend{
+		ModelName: "static-remote-model",
+		Address:   "192.168.1.101:6188",
 		Ready:     true,
 		Remote:    true,
+	})
+	// Imported external backends are not owned by mDNS discovery and should survive.
+	s.RegisterBackend("external-model", &Backend{
+		ModelName: "external-model",
+		Address:   "127.0.0.1:8004",
+		Ready:     true,
+		External:  true,
 	})
 	// Also register a local backend that should survive
 	s.RegisterBackend("local-model", &Backend{
@@ -121,14 +117,20 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 		t.Error("stale remote backend 'old-remote-model' should have been removed")
 	}
 
+	if _, ok := backends["external-model"]; !ok {
+		t.Error("external backend 'external-model' should not be removed")
+	}
+
 	// local-model should survive
 	if _, ok := backends["local-model"]; !ok {
 		t.Error("local backend 'local-model' should not be removed")
 	}
 
-	// new-model should be registered
-	if _, ok := backends["new-model"]; !ok {
-		t.Error("new-model should be registered")
+	if _, ok := backends["new-model"]; ok {
+		t.Error("untrusted new-model should not be registered")
+	}
+	if _, ok := backends["static-remote-model"]; !ok {
+		t.Error("explicit static remote backend should survive discovery")
 	}
 }
 
@@ -209,6 +211,50 @@ func TestQueryRemoteModels_WithAPIKey(t *testing.T) {
 	}
 }
 
+func TestSyncRemoteBackendsDoesNotDiscloseServerAPIKey(t *testing.T) {
+	var receivedAuthorization string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"models": []map[string]any{{
+				"model_name": "remote-model",
+				"model_type": "llm",
+				"ready":      true,
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	s := NewServer(WithAPIKey("server-client-key"))
+	SyncRemoteBackends(context.Background(), s, []DiscoveredService{{
+		Name: "untrusted-mdns-advertisement", AddrV4: addr, Port: port,
+	}}, 0)
+
+	if receivedAuthorization != "" {
+		t.Fatalf("discovered service received AIMA server key: %q", receivedAuthorization)
+	}
+	if backend := s.ListBackends()["remote-model"]; backend != nil {
+		t.Fatalf("untrusted advertised model became routable: %+v", backend)
+	}
+}
+
+func TestSyncRemoteBackendsDoesNotRouteUntrustedAdvertisement(t *testing.T) {
+	ts := newModelServer(t, []string{"attacker-controlled-model"})
+	defer ts.Close()
+	addr, port := splitHostPort(t, ts)
+	s := NewServer()
+
+	SyncRemoteBackends(context.Background(), s, []DiscoveredService{{
+		Name: "untrusted-mdns-advertisement", AddrV4: addr, Port: port,
+	}}, 0)
+
+	if backend := s.ListBackends()["attacker-controlled-model"]; backend != nil {
+		t.Fatalf("untrusted advertisement became routable: %+v", backend)
+	}
+}
+
 func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {
@@ -220,6 +266,7 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 			"models": []map[string]any{
 				{
 					"model_name":            "qwen3-8b",
+					"model_type":            "llm",
 					"ready":                 true,
 					"remote":                false,
 					"parameter_count":       "8B",
@@ -227,6 +274,7 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 				},
 				{
 					"model_name":            "qwen3.5-35b-a3b",
+					"model_type":            "llm",
 					"ready":                 true,
 					"remote":                false,
 					"parameter_count":       "35B",
@@ -247,6 +295,48 @@ func TestQueryRemoteStatus_UsesStatusMetadata(t *testing.T) {
 	}
 	if models[0].ParameterCount != "35B" {
 		t.Fatalf("parameter_count = %q, want 35B", models[0].ParameterCount)
+	}
+	if models[0].ModelType != "llm" {
+		t.Fatalf("model_type = %q, want llm", models[0].ModelType)
+	}
+}
+
+func TestQueryRemoteStatus_DoesNotFallbackWhenStatusHasOnlyNonChatModels(t *testing.T) {
+	modelsCalled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"models": []map[string]any{
+					{
+						"model_name":      "flux2-dev",
+						"model_type":      "image_gen",
+						"engine_type":     "flux-diffusers",
+						"ready":           true,
+						"parameter_count": "32B",
+					},
+				},
+			})
+		case "/v1/models":
+			modelsCalled = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"data":   []map[string]string{{"id": "flux2-dev", "object": "model"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	models := QueryRemoteStatus(context.Background(), addr, port, "")
+	if len(models) != 0 {
+		t.Fatalf("models = %v, want no chat-capable models", models)
+	}
+	if modelsCalled {
+		t.Fatal("/v1/models should not be queried after authoritative /status filtered all models")
 	}
 }
 

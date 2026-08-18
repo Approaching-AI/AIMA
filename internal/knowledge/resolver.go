@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -14,20 +15,20 @@ var modelLookupSeparatorRE = regexp.MustCompile(`[-_\s.]+`)
 // Zero-valued fields mean "unknown" and are skipped during validation,
 // ensuring backward compatibility with callers that only set GPUArch/CPUArch.
 type HardwareInfo struct {
-	GPUArch         string
-	GPUVRAMMiB      int  // Per-GPU VRAM (0 = unknown, skip VRAM checks)
-	GPUCount        int  // Number of GPUs
-	UnifiedMemory   bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
-	CPUArch         string
-	CPUCores        int    // Physical CPU core count
-	RAMTotalMiB     int    // Total system RAM
-	GPUModel        string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
-	HardwareProfile string // Name of a matching HardwareProfile, if known
-	Platform        string // "linux/amd64", "darwin/arm64", etc.
-	RuntimeType     string // "k3s" or "native"
-	SwapTotalMiB    int    // Total swap space (0 = unknown or none)
-	TDPWatts        int    // hardware TDP from profile (0 = unknown)
-	GPUBandwidthGbps int   // Per-GPU memory bandwidth in GB/s from profile (0 = unknown)
+	GPUArch          string
+	GPUVRAMMiB       int  // Per-GPU VRAM (0 = unknown, skip VRAM checks)
+	GPUCount         int  // Number of GPUs
+	UnifiedMemory    bool // GPU shares system RAM (Apple M-series, GB10, AMD APU)
+	CPUArch          string
+	CPUCores         int    // Physical CPU core count
+	RAMTotalMiB      int    // Total system RAM
+	GPUModel         string // GPU model name from detection (e.g. "RTX 4060") — for gpu_model variant matching
+	HardwareProfile  string // Name of a matching HardwareProfile, if known
+	Platform         string // "linux/amd64", "darwin/arm64", etc.
+	RuntimeType      string // "k3s" or "native"
+	SwapTotalMiB     int    // Total swap space (0 = unknown or none)
+	TDPWatts         int    // hardware TDP from profile (0 = unknown)
+	GPUBandwidthGbps int    // Per-GPU memory bandwidth in GB/s from profile (0 = unknown)
 	// Dynamic fields from runtime metrics (0 = not collected, graceful degradation)
 	GPUMemUsedMiB int // Currently used GPU memory
 	GPUMemFreeMiB int // Currently free GPU memory
@@ -51,6 +52,7 @@ type ResolvedConfig struct {
 	EngineImage           string
 	ModelPath             string
 	ModelName             string
+	ModelType             string
 	ModelFormat           string
 	Slot                  string
 	Config                map[string]any
@@ -61,6 +63,7 @@ type ResolvedConfig struct {
 	InitCommands          []string          // pre-commands to run before main server (from engine YAML)
 	CompatibilityProbe    string            // container compatibility probe declared by engine YAML
 	RepairInitCommands    []string          // model-variant repair commands to prepend when compatibility probe needs self-heal
+	AcceptedConfigKeys    []string          // optional engine allowlist for config keys emitted as CLI flags
 	ExtraVolumes          []ContainerVolume // additional host volumes to mount (from engine YAML)
 	HealthCheck           *HealthCheck
 	Warmup                *WarmupConfig     // post-healthcheck warmup config (nil = no warmup)
@@ -88,6 +91,7 @@ type ResolvedConfig struct {
 	// Resource estimates (zero = unknown)
 	EstimatedVRAMMiB int               // expected VRAM usage from model variant
 	ResourceEstimate *ResourceEstimate // full cost(path, R) estimate
+	MemLimitMiB      int               // container memory ceiling (0 = none) — safety guardrail on unified-memory hosts
 
 	// Amplifier info (from engine selection)
 	AmplifierScore float64 // performance multiplier of selected engine
@@ -95,6 +99,10 @@ type ResolvedConfig struct {
 
 	// Performance reference (K4 — historical data or YAML estimate)
 	PerformanceRef *PerformanceReference
+
+	// Warnings collected during resolution (e.g. GPU-offload downgrade). Surfaced
+	// to the user via CheckFit's FitReport so resolve-time decisions are visible.
+	Warnings []string
 }
 
 // PerformanceReference attaches known performance data to a resolved config.
@@ -149,7 +157,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		return nil, err
 	}
 
-	model, variant, err := c.findModelVariant(modelName, engineType, engine, selectionHW)
+	model, variant, err := c.findModelVariant(modelName, engineType, engine, selectionHW, &ropts)
 	if err != nil {
 		return nil, err
 	}
@@ -221,6 +229,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		Engine:             engineType,
 		EngineAssetName:    engineAssetName,
 		ModelName:          model.Metadata.Name,
+		ModelType:          model.Metadata.Type,
 		ModelFormat:        variant.Format,
 		Slot:               slot.Name,
 		Config:             config,
@@ -230,6 +239,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		PortSpecs:          engine.Startup.Ports,
 		InitCommands:       engine.Startup.InitCommands,
 		CompatibilityProbe: engine.Startup.CompatibilityProbe,
+		AcceptedConfigKeys: append([]string(nil), engine.Startup.AcceptedConfigKeys...),
 		ExtraVolumes:       engine.Startup.ExtraVolumes,
 		Env:                engine.Startup.Env,
 		WorkDir:            engine.Startup.WorkDir,
@@ -253,7 +263,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 	resolved.GPUResourceName = c.findGPUResourceName(hw)
 	resolved.RuntimeClassName = c.findRuntimeClassName(hw)
 	resolved.CPUArch = hw.CPUArch
-	resolved.Container = c.findContainerAccess(hw)
+	resolved.Container = mergeContainerAccess(c.findContainerAccess(hw), engine.Container)
 
 	// Set runtime recommendation from engine's platform_recommendations
 	if rec, ok := engine.Runtime.PlatformRecommendations[hw.Platform]; ok {
@@ -292,11 +302,41 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 			resolved.EstimatedVRAMMiB = variant.Hardware.VRAMMinMiB
 		}
 		resolved.ResourceEstimate = estimateResources(engine, variant, hw)
+		capGPUOffloadForVRAM(resolved, engine, variant, hw)
 	}
 
-	// Set ModelPath from user overrides or default pattern
+	// Container memory guardrail. On unified-memory hosts (GB10, Apple M-series,
+	// AMD APU) the GPU shares system RAM, so a runaway container — e.g. a vLLM
+	// torch.compile / JIT storm or an OOM during model load — can exhaust all
+	// memory and hard-hang the whole machine (no SSH, requires a power cycle).
+	// Cap the container below total RAM so the cgroup OOM-killer reaps the pod
+	// (which then restarts) instead of the kernel thrashing the host. Reserve
+	// 10% (min 4 GiB) for the OS; the remaining ~90% comfortably fits typical
+	// gpu_memory_utilization (0.7–0.9) reservations. Discrete-GPU hosts keep the
+	// prior unbounded behavior since their GPU memory is separate from system RAM.
+	if hw.UnifiedMemory && hw.RAMTotalMiB > 0 {
+		reserve := hw.RAMTotalMiB / 10
+		if reserve < 4096 {
+			reserve = 4096
+		}
+		if limit := hw.RAMTotalMiB - reserve; limit > 0 {
+			resolved.MemLimitMiB = limit
+		}
+	}
+
+	// Prefer an explicit user override, otherwise honor catalog local_path
+	// declarations for preloaded models before falling back to runtime discovery.
 	if mp, ok := userOverrides["model_path"]; ok {
 		resolved.ModelPath = fmt.Sprint(mp)
+	} else if variant != nil && variant.Source != nil && variant.Source.Type == "local_path" && strings.TrimSpace(variant.Source.Path) != "" {
+		resolved.ModelPath = strings.TrimSpace(variant.Source.Path)
+	} else {
+		for _, src := range model.Storage.Sources {
+			if src.Type == "local_path" && strings.TrimSpace(src.Path) != "" {
+				resolved.ModelPath = strings.TrimSpace(src.Path)
+				break
+			}
+		}
 	}
 
 	return resolved, nil
@@ -370,11 +410,34 @@ type engineCandidate struct {
 	coldStartS int  // engine cold start upper bound (0 = unknown)
 	offload    bool // selected via effective_R (offload path)
 	exactArch  bool // true if gpu_arch matched exactly (not wildcard)
+	imageLocal bool // true if the engine container image is cached in the local runtime
 }
 
 // GoldenConfigFunc returns the golden (L2c) config overrides for a hardware/engine/model triple.
 // Returns nil map if no golden config exists (graceful degradation).
 type GoldenConfigFunc func(hardware, engine, model string) map[string]any
+
+// engineImageRef builds the "name:tag" reference for an engine's container image.
+func engineImageRef(ea *EngineAsset) string {
+	if ea.Image.Name == "" {
+		return ""
+	}
+	ref := ea.Image.Name
+	if ea.Image.Tag != "" {
+		ref += ":" + ea.Image.Tag
+	}
+	return ref
+}
+
+// engineImageCachedLocally reports whether the engine's container image is
+// present in the local runtime cache (per the caller-supplied checker).
+func engineImageCachedLocally(ea *EngineAsset, ropts *resolveOpts) bool {
+	if ropts == nil || ropts.LocalImageChecker == nil {
+		return false
+	}
+	ref := engineImageRef(ea)
+	return ref != "" && ropts.LocalImageChecker(ref)
+}
 
 // engineUnblockedByLocalImage decides whether a blocked engine should be
 // reconsidered because its image is already present in the local runtime. Used
@@ -382,22 +445,12 @@ type GoldenConfigFunc func(hardware, engine, model string) map[string]any
 // that an edge device has cached. When the checker returns true, we WARN to
 // keep the decision visible in serve.log and fall through to normal matching.
 func engineUnblockedByLocalImage(ea *EngineAsset, ropts *resolveOpts) bool {
-	if ropts == nil || ropts.LocalImageChecker == nil {
-		return false
-	}
-	if ea.Image.Name == "" {
-		return false
-	}
-	ref := ea.Image.Name
-	if ea.Image.Tag != "" {
-		ref += ":" + ea.Image.Tag
-	}
-	if !ropts.LocalImageChecker(ref) {
+	if !engineImageCachedLocally(ea, ropts) {
 		return false
 	}
 	slog.Warn("engine marked blocked but image cached locally — using it anyway",
 		"engine", ea.Metadata.Name,
-		"image", ref,
+		"image", engineImageRef(ea),
 		"status_reason", ea.Metadata.StatusReason)
 	return true
 }
@@ -409,6 +462,7 @@ type resolveOpts struct {
 	MaxColdStartS     int
 	GoldenConfig      GoldenConfigFunc
 	LocalImageChecker func(imageRef string) bool
+	ModelFormat       string
 }
 
 // WithMaxColdStart filters engines whose cold start exceeds the given seconds.
@@ -430,6 +484,11 @@ func WithLocalImageChecker(fn func(imageRef string) bool) ResolveOption {
 	return func(o *resolveOpts) { o.LocalImageChecker = fn }
 }
 
+// WithModelFormat restricts selection to variants compatible with a local model artifact.
+func WithModelFormat(format string) ResolveOption {
+	return func(o *resolveOpts) { o.ModelFormat = strings.ToLower(strings.TrimSpace(format)) }
+}
+
 // InferEngineType picks the best engine for a model on the given hardware.
 // Priority: collect all candidates that can run (format + VRAM fit or offload),
 // then rank by amplifier.performance_multiplier (descending), cold_start as tiebreaker.
@@ -448,6 +507,9 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 
 		for _, v := range ma.Variants {
 			if strings.TrimSpace(v.Compatibility.UnsupportedReason) != "" {
+				continue
+			}
+			if ropts.ModelFormat != "" && !strings.EqualFold(v.Format, ropts.ModelFormat) {
 				continue
 			}
 			if v.Hardware.GPUArch != hw.GPUArch && v.Hardware.GPUArch != "*" {
@@ -490,6 +552,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			}
 
 			exact := v.Hardware.GPUArch == hw.GPUArch
+			imgLocal := engineImageCachedLocally(engine, &ropts)
 
 			if fitsRawVRAM {
 				mult := engine.Amplifier.PerformanceMultiplier
@@ -501,6 +564,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 					multiplier: mult,
 					coldStartS: coldStartMax,
 					exactArch:  exact,
+					imageLocal: imgLocal,
 				})
 				continue
 			}
@@ -519,6 +583,7 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 						coldStartS: coldStartMax,
 						offload:    true,
 						exactArch:  exact,
+						imageLocal: imgLocal,
 					})
 				}
 			}
@@ -545,21 +610,34 @@ func (c *Catalog) InferEngineType(modelName string, hw HardwareInfo, opts ...Res
 			// If all filtered out, keep all candidates (graceful degradation)
 		}
 
-		// Rank: exact arch > wildcard, then highest multiplier, then non-offload > offload,
-		// then lower cold_start as final tiebreaker.
+		// Rank: exact arch > wildcard, then image-cached-locally > needs-pull,
+		// then highest multiplier, then non-offload > offload, then lower
+		// cold_start as final tiebreaker. Preferring a locally-cached image keeps
+		// auto-selection from picking a higher-scored variant whose image cannot
+		// be obtained (offline, or a local-only/blocked image that isn't present),
+		// which would otherwise fail at pull time. When no candidate is cached the
+		// order is unchanged, so online pull-and-deploy still works.
 		best := candidates[0]
 		for _, c := range candidates[1:] {
-			if c.exactArch && !best.exactArch {
-				best = c
-			} else if c.exactArch == best.exactArch {
-				if c.multiplier > best.multiplier {
+			if c.exactArch != best.exactArch {
+				if c.exactArch {
 					best = c
-				} else if c.multiplier == best.multiplier {
-					if !c.offload && best.offload {
-						best = c
-					} else if c.offload == best.offload && c.coldStartS > 0 && best.coldStartS > 0 && c.coldStartS < best.coldStartS {
-						best = c
-					}
+				}
+				continue
+			}
+			if c.imageLocal != best.imageLocal {
+				if c.imageLocal {
+					best = c
+				}
+				continue
+			}
+			if c.multiplier > best.multiplier {
+				best = c
+			} else if c.multiplier == best.multiplier {
+				if !c.offload && best.offload {
+					best = c
+				} else if c.offload == best.offload && c.coldStartS > 0 && best.coldStartS > 0 && c.coldStartS < best.coldStartS {
+					best = c
 				}
 			}
 		}
@@ -599,7 +677,7 @@ func (c *Catalog) ResolveVariantForPull(modelName string, hw HardwareInfo) (*Mod
 	if ferr != nil {
 		return nil, nil, engineType, ferr
 	}
-	ma, variant, err := c.findModelVariant(modelName, engineType, engine, hw)
+	ma, variant, err := c.findModelVariant(modelName, engineType, engine, hw, nil)
 	if err != nil {
 		return ma, nil, engineType, err
 	}
@@ -713,6 +791,68 @@ func (c *Catalog) findContainerAccess(hw HardwareInfo) *ContainerAccess {
 	return nil
 }
 
+func mergeContainerAccess(base, override *ContainerAccess) *ContainerAccess {
+	if base == nil && override == nil {
+		return nil
+	}
+	out := &ContainerAccess{}
+	merge := func(src *ContainerAccess) {
+		if src == nil {
+			return
+		}
+		out.Devices = appendUniqueStrings(out.Devices, src.Devices...)
+		out.PartitionRemoveEnv = appendUniqueStrings(out.PartitionRemoveEnv, src.PartitionRemoveEnv...)
+		out.Volumes = append(out.Volumes, src.Volumes...)
+		if out.Env == nil {
+			out.Env = map[string]string{}
+		}
+		for k, v := range src.Env {
+			out.Env[k] = v
+		}
+		if out.Ulimits == nil {
+			out.Ulimits = map[string]string{}
+		}
+		for k, v := range src.Ulimits {
+			out.Ulimits[k] = v
+		}
+		if src.Security != nil {
+			copied := *src.Security
+			copied.SupplementalGroups = append([]int(nil), src.Security.SupplementalGroups...)
+			out.Security = &copied
+		}
+		if src.DockerRuntime != "" {
+			out.DockerRuntime = src.DockerRuntime
+		}
+		if src.NetworkMode != "" {
+			out.NetworkMode = src.NetworkMode
+		}
+		if src.ShmSize != "" {
+			out.ShmSize = src.ShmSize
+		}
+		if src.Init {
+			out.Init = true
+		}
+	}
+	merge(base)
+	merge(override)
+	return out
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
 // findRuntimeClassName looks up the K8s runtimeClassName from hardware profiles.
 // Returns "" if not specified (no runtimeClassName in pod spec).
 func (c *Catalog) findRuntimeClassName(hw HardwareInfo) string {
@@ -752,7 +892,7 @@ func platformInList(platform string, platforms []string) bool {
 	return false
 }
 
-func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *EngineAsset, hw HardwareInfo) (*ModelAsset, *ModelVariant, error) {
+func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *EngineAsset, hw HardwareInfo, ropts *resolveOpts) (*ModelAsset, *ModelVariant, error) {
 	type rankedVariant struct {
 		variant *ModelVariant
 		rank    int
@@ -781,6 +921,9 @@ func (c *Catalog) findModelVariant(modelName, engineQuery string, engine *Engine
 		var gpuModelMatch, archMatch, wildcardMatch *rankedVariant
 		for j := range ma.Variants {
 			v := &ma.Variants[j]
+			if ropts != nil && ropts.ModelFormat != "" && !strings.EqualFold(v.Format, ropts.ModelFormat) {
+				continue
+			}
 			rank := matchRank(v)
 			if rank < 0 {
 				continue
@@ -933,16 +1076,19 @@ const FallbackEngine = "llamacpp"
 
 // FormatToEngine returns the engine type for a given model file format,
 // derived from the catalog's engine assets (supported_formats field).
-// Prefers general-purpose engines (supporting llm/vlm) over specialized ones
-// (e.g. ASR-only) so that safetensors → vllm instead of mooer.
+// It prefers default engines when they declare the format, then falls back to
+// the first format-compatible engine in catalog order.
 // Returns "" if no engine declares support for the format.
 func (c *Catalog) FormatToEngine(format string) string {
-	lower := strings.ToLower(format)
+	format = strings.TrimSpace(format)
+	if format == "" {
+		return ""
+	}
 	var firstMatch string
 	for _, ea := range c.EngineAssets {
 		for _, f := range ea.Metadata.SupportedFormats {
-			if strings.EqualFold(f, lower) {
-				if engineSupportsModelType(ea.Metadata.SupportedModelTypes, "llm") {
+			if strings.EqualFold(f, format) {
+				if ea.Metadata.Default {
 					return ea.Metadata.Type
 				}
 				if firstMatch == "" {
@@ -953,17 +1099,6 @@ func (c *Catalog) FormatToEngine(format string) string {
 		}
 	}
 	return firstMatch
-}
-
-// engineSupportsModelType checks if an engine's supported_model_types list
-// contains the given type (case-insensitive).
-func engineSupportsModelType(supported []string, modelType string) bool {
-	for _, s := range supported {
-		if strings.EqualFold(s, modelType) {
-			return true
-		}
-	}
-	return false
 }
 
 // normalizeModelLookupKey lowercases, collapses separators, and trims a model
@@ -1002,6 +1137,15 @@ func (c *Catalog) resolveCatalogModelName(modelName string) string {
 	return trimmed
 }
 
+// ResolveCatalogModelName returns the catalog canonical model name for a user,
+// scan, or deployment model identifier. Unknown names are returned trimmed.
+func (c *Catalog) ResolveCatalogModelName(modelName string) string {
+	if c == nil {
+		return strings.TrimSpace(modelName)
+	}
+	return c.resolveCatalogModelName(modelName)
+}
+
 // DefaultEngine returns the fallback engine type from the catalog.
 // Priority: explicit default: true in metadata, then first wildcard gpu_arch engine.
 func (c *Catalog) DefaultEngine() string {
@@ -1016,6 +1160,73 @@ func (c *Catalog) DefaultEngine() string {
 		}
 	}
 	return FallbackEngine
+}
+
+// EngineForScanMetadata selects a synthetic-model engine from catalog metadata.
+// Format and model type compatibility come from engine_asset YAML; unknown
+// engine metadata stays permissive so older overlays continue to work.
+func (c *Catalog) EngineForScanMetadata(meta ScanMetadata) string {
+	if proposed := strings.TrimSpace(c.FormatToEngine(meta.Format)); proposed != "" && c.engineTypeMatchesScanMetadata(proposed, meta) {
+		return proposed
+	}
+	if proposed := c.DefaultEngineForScanMetadata(meta); proposed != "" {
+		return proposed
+	}
+	return c.DefaultEngine()
+}
+
+// DefaultEngineForScanMetadata returns the default engine only when its YAML
+// metadata matches the scanned model. Otherwise it falls back to the first
+// compatible catalog engine.
+func (c *Catalog) DefaultEngineForScanMetadata(meta ScanMetadata) string {
+	if proposed := strings.TrimSpace(c.DefaultEngine()); proposed != "" && c.engineTypeMatchesScanMetadata(proposed, meta) {
+		return proposed
+	}
+	for _, ea := range c.EngineAssets {
+		if engineAssetMatchesScanMetadata(ea, meta) {
+			return ea.Metadata.Type
+		}
+	}
+	return ""
+}
+
+func (c *Catalog) engineTypeMatchesScanMetadata(engineType string, meta ScanMetadata) bool {
+	engineType = strings.TrimSpace(engineType)
+	if engineType == "" {
+		return false
+	}
+	found := false
+	for _, ea := range c.EngineAssets {
+		if !strings.EqualFold(ea.Metadata.Type, engineType) && !strings.EqualFold(ea.Metadata.Name, engineType) {
+			continue
+		}
+		found = true
+		if engineAssetMatchesScanMetadata(ea, meta) {
+			return true
+		}
+	}
+	return !found
+}
+
+func engineAssetMatchesScanMetadata(ea EngineAsset, meta ScanMetadata) bool {
+	format := strings.TrimSpace(meta.Format)
+	if format != "" && len(ea.Metadata.SupportedFormats) > 0 && !stringListContainsFold(ea.Metadata.SupportedFormats, format) {
+		return false
+	}
+	modelType := strings.TrimSpace(meta.Type)
+	if modelType != "" && len(ea.Metadata.SupportedModelTypes) > 0 && !stringListContainsFold(ea.Metadata.SupportedModelTypes, modelType) {
+		return false
+	}
+	return true
+}
+
+func stringListContainsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanMetadata holds model metadata collected during filesystem scan,
@@ -1171,13 +1382,13 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	if meta.Type == "" {
 		meta.Type = "llm"
 	}
-	inferredEngineType := substituteDisallowedMooer(meta, c.FormatToEngine(meta.Format))
-	if inferredEngineType == "" {
-		inferredEngineType = substituteDisallowedMooer(meta, c.DefaultEngine())
-	}
+	inferredEngineType := c.EngineForScanMetadata(meta)
 
 	estimatedVRAM := estimateVRAMMiB(meta)
-	defaultEngine := substituteDisallowedMooer(meta, c.DefaultEngine())
+	defaultEngine := c.DefaultEngineForScanMetadata(meta)
+	if defaultEngine == "" {
+		defaultEngine = inferredEngineType
+	}
 
 	var variants []ModelVariant
 	var targetedHW *ModelVariantHardware
@@ -1249,8 +1460,11 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	}
 
 	for _, re := range requestedEngines {
-		re = substituteDisallowedMooer(meta, re)
+		re = strings.TrimSpace(re)
 		if re == "" || re == inferredEngineType || re == defaultEngine {
+			continue
+		}
+		if !c.engineTypeMatchesScanMetadata(re, meta) {
 			continue
 		}
 		if targetedHW != nil {
@@ -1300,29 +1514,6 @@ func (c *Catalog) BuildSyntheticModelAsset(meta ScanMetadata, hw HardwareInfo, r
 	}
 }
 
-func syntheticDisallowMooer(meta ScanMetadata) bool {
-	if !strings.EqualFold(meta.Format, "safetensors") {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(meta.Type)) {
-	case "llm", "embedding":
-		return true
-	default:
-		return false
-	}
-}
-
-// substituteDisallowedMooer returns "vllm" when the proposed engine is mooer
-// (ASR-only) but the scan metadata describes a non-ASR safetensors model.
-// Otherwise returns the proposal unchanged. This collapses the previously
-// duplicated "guard against mooer" inline checks in BuildSyntheticModelAsset.
-func substituteDisallowedMooer(meta ScanMetadata, proposed string) string {
-	if syntheticDisallowMooer(meta) && strings.EqualFold(proposed, "mooer") {
-		return "vllm"
-	}
-	return proposed
-}
-
 // buildSyntheticConfig emits config keys for a synthetic model variant.
 // Memory fraction is strictly YAML-driven: passing an unknown flag like
 // --gpu-memory-utilization to engines that don't accept it aborts startup.
@@ -1350,10 +1541,11 @@ func (c *Catalog) buildSyntheticConfig(engineType string, hw HardwareInfo, gmu f
 	if maxLen > 0 {
 		if key := pickDeclared([]string{"context_length", "max_model_len", "ctx_size", "max_context_tokens"}); key != "" {
 			cfg[key] = maxLen
-		} else if _, hasMFS := engineArgs["mem_fraction_static"]; !hasMFS {
+		} else if len(engineArgs) == 0 {
 			// Engines that declare mem_fraction_static (SGLang family) have
-			// no explicit context-length knob. Fall back to max_model_len
-			// only for the vLLM-shaped path.
+			// no explicit context-length knob, and non-LLM engines commonly
+			// declare only port-like args. Use the vLLM-shaped fallback only
+			// for older/unknown engine metadata with no declared args at all.
 			cfg["max_model_len"] = maxLen
 		}
 	}
@@ -1487,6 +1679,47 @@ func (c *Catalog) UpsertSyntheticModel(ma ModelAsset) {
 	c.ModelAssets = append(c.ModelAssets, ma)
 }
 
+// capGPUOffloadForVRAM downgrades an engine's GPU-offload knob to CPU when a
+// discrete GPU cannot hold the model. llama.cpp's default n_gpu_layers=999
+// ("offload every layer") assumes the model fits VRAM; on a discrete GPU with
+// less VRAM than the model needs it forces an impossible allocation → CUDA OOM
+// at load, which surfaces to users as a deployment that never becomes ready.
+// Unified-memory hosts (APU/GB10/Apple) share system RAM with the GPU, so full
+// offload is correct there and left untouched. The knob is identified by the
+// engine-declared offload_config_key, so this stays engine-agnostic (INV-1/2):
+// no engine name or config key is hardcoded here.
+func capGPUOffloadForVRAM(resolved *ResolvedConfig, engine *EngineAsset, variant *ModelVariant, hw HardwareInfo) {
+	if resolved == nil || engine == nil || variant == nil {
+		return
+	}
+	key := engine.Amplifier.OffloadConfigKey
+	if key == "" || hw.UnifiedMemory || hw.GPUVRAMMiB <= 0 {
+		return
+	}
+	// Model memory footprint. RAMMinMiB is the catalog's footprint proxy, used
+	// precisely when vram_min_mib=0 (a GGUF variant declared to "fit any GPU"
+	// via CPU offload); fall back to any explicit VRAM estimate.
+	footprint := variant.Hardware.RAMMinMiB
+	if resolved.EstimatedVRAMMiB > footprint {
+		footprint = resolved.EstimatedVRAMMiB
+	}
+	if footprint <= 0 || footprint <= hw.GPUVRAMMiB {
+		return // fits, or footprint unknown — full GPU offload is correct
+	}
+	if resolved.Provenance[key] == "L1" {
+		return // user set the offload knob explicitly — respect it
+	}
+	if cur, ok := resolved.Config[key]; ok && toFloat64(cur) == 0 {
+		return // already CPU-only
+	}
+	resolved.Config[key] = 0
+	resolved.Provenance[key] = "L0-fit"
+	resolved.OffloadPath = true
+	resolved.Warnings = append(resolved.Warnings, fmt.Sprintf(
+		"model needs ~%d MiB but this GPU has %d MiB VRAM; disabling GPU offload and running on CPU (much slower). Use a smaller model or a larger-VRAM GPU for GPU acceleration.",
+		footprint, hw.GPUVRAMMiB))
+}
+
 // estimateResources computes cost(path, R) — the full resource consumption estimate.
 func estimateResources(engine *EngineAsset, variant *ModelVariant, hw HardwareInfo) *ResourceEstimate {
 	perf := variant.ParsedExpectedPerf()
@@ -1534,6 +1767,10 @@ var gmuKeys = []string{"gpu_memory_utilization", "mem_fraction_static"}
 // Zero-valued hw fields are skipped (graceful degradation when metrics unavailable).
 func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 	r := &FitReport{Fit: true, Adjustments: make(map[string]any)}
+
+	// Surface warnings collected during resolution (e.g. GPU-offload downgrade)
+	// even if a hard-fail check below returns early.
+	r.Warnings = append(r.Warnings, resolved.Warnings...)
 
 	// Unified memory guard: GPU allocation directly reduces available system memory.
 	// Enforce minimum OS reserve to prevent starvation / swap thrashing.
@@ -1680,6 +1917,12 @@ func toFloat64(v any) float64 {
 		return float64(x)
 	case int64:
 		return float64(x)
+	case json.Number:
+		value, err := x.Float64()
+		if err == nil {
+			return value
+		}
+		return 0
 	default:
 		return 0
 	}

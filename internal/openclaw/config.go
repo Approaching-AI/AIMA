@@ -43,15 +43,49 @@ func WriteConfig(path string, cfg map[string]any) error {
 		return fmt.Errorf("marshal openclaw config: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create openclaw config dir: %w", err)
+	if err := writeFileAtomic(path, data, 0644); err != nil {
+		return fmt.Errorf("write openclaw config: %w", err)
 	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	closed := false
+	cleanup := true
+	defer func() {
+		if !closed {
+			_ = tmp.Close()
+		}
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		closed = true
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	closed = true
 	if err := ensureConfigOwnerWritable(path); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write openclaw config: %w", err)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
 	}
+	cleanup = false
 	return nil
 }
 
@@ -89,6 +123,7 @@ func MergeAIMAConfigWithState(existing map[string]any, managed *ManagedState, re
 	next := &ManagedState{Version: managedStateVersion}
 
 	mergeLLMProvider(existing, managed, next, result)
+	mergeChatModelDefault(existing, managed, next, result)
 	next.AudioModels = mergeMediaModels(existing, "audio", audioIDs(result.ASRModels), managedSet(managedAudioModels(managed)), result.ProxyAddr, false)
 	if len(next.AudioModels) > 0 {
 		if audio := lookupMap(existing, "tools", "media", "audio"); audio != nil {
@@ -122,6 +157,56 @@ func mergeLLMProvider(cfg map[string]any, managed, next *ManagedState, result *S
 	}
 }
 
+func mergeChatModelDefault(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {
+	if result != nil && result.SkipDefaultModel {
+		// Partner opted out of AIMA managing the primary model: leave whatever the
+		// user has set as their default untouched, but carry forward any prior AIMA
+		// ownership record so toggling this back on still works cleanly.
+		if managed != nil {
+			next.ChatModelProvider = managed.ChatModelProvider
+			next.ChatModelModels = managed.ChatModelModels
+		}
+		return
+	}
+	desired := uniqueSorted(modelIDs(result.LLMModels))
+	if len(desired) == 0 {
+		if managedOwnsChatModel(managed) {
+			removeAgentDefaultModelIfManaged(cfg, "model", managed.ChatModelProvider)
+		} else if legacyChatModelDefaultOwned(cfg) {
+			removeAgentDefaultModelForProviders(cfg, "model", []string{aimaLLMProviderID, aimaMediaProviderID, legacyLLMProviderID})
+		}
+		return
+	}
+	setAgentDefaultModel(cfg, "model", aimaLLMProviderID, desired)
+	next.ChatModelProvider = aimaLLMProviderID
+	next.ChatModelModels = desired
+}
+
+func canManageChatModelDefault(cfg map[string]any, managed *ManagedState) bool {
+	if managedOwnsChatModel(managed) {
+		return true
+	}
+	if legacyChatModelDefaultOwned(cfg) {
+		return true
+	}
+	return !hasAgentDefaultModel(cfg, "model")
+}
+
+func legacyChatModelDefaultOwned(cfg map[string]any) bool {
+	refs := parseAgentModelRefs(lookupAgentDefault(cfg, "model"))
+	if len(refs) == 0 {
+		return false
+	}
+	for _, ref := range refs {
+		switch ref.Provider {
+		case aimaLLMProviderID, aimaMediaProviderID, legacyLLMProviderID:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func mergeTTS(cfg map[string]any, managed, next *ManagedState, result *SyncResult) {
 	ownsTTS := managedOwnsTTS(managed)
 	if result.TTSModel == nil {
@@ -144,7 +229,6 @@ func mergeTTS(cfg map[string]any, managed, next *ManagedState, result *SyncResul
 				"apiKey":  directToolAPIKey(result.APIKey),
 				"baseUrl": result.ProxyAddr,
 				"model":   result.TTSModel.ID,
-				"voice":   "default",
 			},
 		},
 	}
@@ -651,6 +735,29 @@ func removeAgentDefaultModelIfManaged(cfg map[string]any, key, providerID string
 	}
 	for _, ref := range refs {
 		if ref.Provider != providerID {
+			return
+		}
+	}
+	delete(defaults, key)
+}
+
+func removeAgentDefaultModelForProviders(cfg map[string]any, key string, providerIDs []string) {
+	agents, ok := cfg["agents"].(map[string]any)
+	if !ok {
+		return
+	}
+	defaults, ok := agents["defaults"].(map[string]any)
+	if !ok {
+		return
+	}
+	refs := parseAgentModelRefs(defaults[key])
+	if len(refs) == 0 {
+		delete(defaults, key)
+		return
+	}
+	allowed := managedSet(providerIDs)
+	for _, ref := range refs {
+		if _, ok := allowed[ref.Provider]; !ok {
 			return
 		}
 	}

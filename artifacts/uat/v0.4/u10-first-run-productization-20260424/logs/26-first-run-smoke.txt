@@ -1,0 +1,8 @@
+bash ./scripts/first-run-smoke.sh
+==> building smoke binary: /var/folders/5b/v3km41cs10ddfw3pm7s97l0c0000gn/T//aima-first-run-smoke.AF4jpZ/aima
+==> hal-detect: aima hal detect
+==> onboarding-start-json: aima onboarding start --json
+==> onboarding-human: aima onboarding --locale en
+==> onboarding-recommend-json: aima onboarding recommend --json
+==> deploy-dry-run: aima deploy qwen3-4b --dry-run
+first-run smoke passed: next_model=qwen3-4b

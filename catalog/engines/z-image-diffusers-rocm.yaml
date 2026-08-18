@@ -25,6 +25,8 @@ startup:
     HSA_OVERRIDE_GFX_VERSION: "11.0.0"
   default_args:
     port: 8188
+  accepted_config_keys:
+    - port
   health_check:
     path: /health
     timeout_s: 600

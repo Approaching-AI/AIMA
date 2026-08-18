@@ -223,11 +223,12 @@ func (sc *ScanConfig) applyDefaultPatterns() {
 			typeHint:    "asr",
 		},
 		{
-			name:        "funasr_onnx",
-			configFiles: []string{"configuration.json"},
-			weightExts:  []string{".onnx"},
-			format:      "onnx",
-			skipMinSize: true,
+			name:           "funasr_onnx",
+			configFiles:    []string{"configuration.json"},
+			weightExts:     []string{".onnx"},
+			format:         "onnx",
+			modelClassHint: "component",
+			skipMinSize:    true,
 			taskMappings: map[string]string{
 				"speech-recognition":       "asr",
 				"voice-activity-detection": "vad",

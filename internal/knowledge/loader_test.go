@@ -1,10 +1,48 @@
 package knowledge
 
 import (
+	"fmt"
+	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func TestContainerPublishHostRejectsNonPrivateOrNonLiteralAddresses(t *testing.T) {
+	for _, host := range []string{"model.internal", "8.8.8.8"} {
+		t.Run(host, func(t *testing.T) {
+			cat := &Catalog{}
+			err := cat.parseAsset([]byte(fmt.Sprintf(`kind: hardware_profile
+metadata:
+  name: invalid-publish-host
+container:
+  publish_host: %q
+`, host)), "hardware/invalid.yaml")
+			if err == nil || !strings.Contains(err.Error(), "publish_host") {
+				t.Fatalf("parseAsset() error = %v, want publish_host validation", err)
+			}
+		})
+	}
+}
+
+func TestContainerPublishHostAcceptsExplicitLoopbackPrivateAndUnspecifiedIPs(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "192.168.121.157", "0.0.0.0", "::1"} {
+		t.Run(host, func(t *testing.T) {
+			cat := &Catalog{}
+			err := cat.parseAsset([]byte(fmt.Sprintf(`kind: hardware_profile
+metadata:
+  name: valid-publish-host
+container:
+  publish_host: %q
+`, host)), "hardware/valid.yaml")
+			if err != nil {
+				t.Fatalf("parseAsset() error = %v", err)
+			}
+		})
+	}
+}
 
 func testFS() fstest.MapFS {
 	return fstest.MapFS{
@@ -58,6 +96,18 @@ startup:
   health_check:
     path: /health
     timeout_s: 120
+  warmup:
+    enabled: true
+    timeout_s: 30
+    request_body:
+      messages:
+        - role: user
+          content: Return JSON
+      max_tokens: 64
+      response_format:
+        type: json_object
+      chat_template_kwargs:
+        enable_thinking: false
 api:
   protocol: openai
   base_path: /v1
@@ -255,6 +305,20 @@ func TestLoadCatalog(t *testing.T) {
 		if len(cat.EngineAssets) != 2 {
 			t.Fatalf("EngineAssets count = %d, want 2", len(cat.EngineAssets))
 		}
+		var engine *EngineAsset
+		for i := range cat.EngineAssets {
+			if cat.EngineAssets[i].Metadata.Name == "testengine-1.0" {
+				engine = &cat.EngineAssets[i]
+				break
+			}
+		}
+		if engine == nil {
+			t.Fatal("test engine not loaded")
+		}
+		responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
+		if !ok || responseFormat["type"] != "json_object" {
+			t.Fatalf("structured warmup response_format = %#v", engine.Startup.Warmup.RequestBody["response_format"])
+		}
 	})
 
 	t.Run("model assets loaded", func(t *testing.T) {
@@ -272,6 +336,110 @@ func TestLoadCatalog(t *testing.T) {
 			t.Fatalf("PartitionStrategies count = %d, want 2", len(cat.PartitionStrategies))
 		}
 	})
+}
+
+func TestLoadCatalogExactContextRequestAdapter(t *testing.T) {
+	cat, err := LoadCatalog(fstest.MapFS{
+		"engines/profiles/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: native
+api:
+  protocol: openai
+  base_path: /v1
+  request_adapter:
+    kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    disable_thinking: true
+    padding_role: system
+    padding_prefix: Ignore transport padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+`)},
+		"engines/native.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: native
+metadata:
+  name: native-test
+  type: native-test
+  version: v1
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.EngineAssets) != 1 {
+		t.Fatalf("EngineAssets = %d, want 1", len(cat.EngineAssets))
+	}
+	adapter := cat.EngineAssets[0].API.RequestAdapter
+	if adapter == nil {
+		t.Fatal("request adapter was not inherited from profile")
+	}
+	if adapter.Kind != "exact_context" || adapter.ContextConfigKey != "context_tokens" {
+		t.Fatalf("request adapter = %#v", adapter)
+	}
+	if adapter.MaxAttempts != 8 {
+		t.Fatalf("MaxAttempts = %d, want default 8", adapter.MaxAttempts)
+	}
+	if adapter.PaddingUnit != " ·" || adapter.UpstreamModel != "native-model" {
+		t.Fatalf("request adapter strings = %#v", adapter)
+	}
+
+	adapter.PaddingPrefix = "mutated"
+	if got := cat.EngineProfiles["native"].API.RequestAdapter.PaddingPrefix; got == "mutated" {
+		t.Fatal("engine asset shares request adapter pointer with profile")
+	}
+}
+
+func TestLoadCatalogRejectsInvalidRequestAdapter(t *testing.T) {
+	tests := []struct {
+		name    string
+		adapter string
+		want    string
+	}{
+		{
+			name: "unknown kind",
+			adapter: `kind: magic_padding
+    path: /v1/chat/completions`,
+			want: "unknown request adapter kind",
+		},
+		{
+			name: "missing context key",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model`,
+			want: "context_config_key",
+		},
+		{
+			name: "invalid attempts",
+			adapter: `kind: exact_context
+    path: /v1/chat/completions
+    context_config_key: context_tokens
+    probe_subcommand: chat-template-probe
+    padding_role: system
+    padding_prefix: Ignore padding.
+    padding_unit: " ·"
+    upstream_model: native-model
+    max_attempts: 33`,
+			want: "max_attempts",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := "kind: engine_asset\nmetadata:\n  name: invalid-adapter\n  type: test\n  version: v1\napi:\n  request_adapter:\n    " + test.adapter + "\n"
+			_, err := LoadCatalog(fstest.MapFS{
+				"engines/invalid.yaml": &fstest.MapFile{Data: []byte(data)},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadCatalog error = %v, want %q", err, test.want)
+			}
+		})
+	}
 }
 
 func TestLoadCatalogFromEmbedFS(t *testing.T) {
@@ -294,6 +462,215 @@ func TestLoadCatalogFromEmbedFS(t *testing.T) {
 	}
 	if len(cat.DeploymentScenarios) == 0 {
 		t.Error("expected at least one deployment scenario from real catalog")
+	}
+}
+
+func TestQwen36StructuredGB10ProfileRequiresGrammarWarmupWithoutSpeculation(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "qwen36-gb10-structured-bf16" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("qwen36 structured GB10 engine is missing")
+	}
+	for _, arg := range engine.Startup.Command {
+		if strings.HasPrefix(arg, "--speculative-") {
+			t.Fatalf("structured engine contains speculative argument %q", arg)
+		}
+	}
+	var toolParser string
+	for i, arg := range engine.Startup.Command {
+		if arg == "--tool-call-parser" && i+1 < len(engine.Startup.Command) {
+			toolParser = engine.Startup.Command[i+1]
+		}
+	}
+	if toolParser != "qwen3_coder" {
+		t.Fatalf("structured engine tool call parser = %q, want qwen3_coder", toolParser)
+	}
+	responseFormat, ok := engine.Startup.Warmup.RequestBody["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("structured engine warmup response_format = %#v", engine.Startup.Warmup.RequestBody["response_format"])
+	}
+
+	var foundAlias, foundVariant bool
+	for _, model := range cat.ModelAssets {
+		if model.Metadata.Name != "qwen3.6-35b-a3b" {
+			continue
+		}
+		for _, alias := range model.Metadata.Aliases {
+			if alias == "qwen3.6-35b-a3b-bf16" {
+				foundAlias = true
+			}
+		}
+		for _, variant := range model.Variants {
+			if variant.Engine == "qwen36-gb10-structured-bf16" {
+				foundVariant = true
+				if got := variant.DefaultConfig["served_model_name"]; got != "qwen3.6-35b-a3b-bf16" {
+					t.Fatalf("structured served_model_name = %#v", got)
+				}
+			}
+		}
+	}
+	if !foundAlias || !foundVariant {
+		t.Fatalf("qwen3.6 structured mapping incomplete: alias=%v variant=%v", foundAlias, foundVariant)
+	}
+}
+
+func TestWindowsHIPLlamaAvoidsUnicodeCachePruningCrash(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-windows" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-windows engine not found in catalog")
+	}
+	const want = "prune_interval=1h:prune_after=168h:cache_size=0%:cache_size_bytes=0:cache_size_files=100000"
+	if got := engine.Startup.Env["AMD_COMGR_CACHE_POLICY"]; got != want {
+		t.Fatalf("AMD_COMGR_CACHE_POLICY = %q, want %q", got, want)
+	}
+}
+
+func TestAMD395LinuxHIPLlamaUsesROCmB9330(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "llamacpp-hip-linux" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil {
+		t.Fatal("llamacpp-hip-linux engine not found in catalog")
+	}
+	if engine.Metadata.Version != "b9330" {
+		t.Fatalf("version = %q, want b9330", engine.Metadata.Version)
+	}
+	if len(engine.Metadata.CompatibleVersions) != 1 || engine.Metadata.CompatibleVersions[0] != "b9637" {
+		t.Fatalf("compatible versions = %v, want [b9637]", engine.Metadata.CompatibleVersions)
+	}
+	if engine.Source == nil || !engine.Source.Supports("linux/amd64") {
+		t.Fatal("llamacpp-hip-linux does not support linux/amd64")
+	}
+	if engine.Source.Supports("windows/amd64") {
+		t.Fatal("llamacpp-hip-linux unexpectedly supports windows/amd64")
+	}
+	if engine.Source.Probe == nil || engine.Source.Probe.VersionPattern != "version:[[:space:]]+([0-9]+)" {
+		t.Fatalf("version probe = %+v", engine.Source.Probe)
+	}
+	wantURL := "https://github.com/ggml-org/llama.cpp/releases/download/b9330/llama-b9330-bin-ubuntu-rocm-7.2-x64.tar.gz"
+	if got := engine.Source.Download["linux/amd64"]; got != wantURL {
+		t.Fatalf("download URL = %q, want %q", got, wantURL)
+	}
+
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch:         "RDNA3.5",
+		GPUVRAMMiB:      65536,
+		GPUCount:        1,
+		UnifiedMemory:   true,
+		CPUArch:         "amd64",
+		CPUCores:        16,
+		RAMTotalMiB:     65536,
+		HardwareProfile: "amd-radeon-8060s-x86",
+		Platform:        "linux/amd64",
+		RuntimeType:     "native",
+	}, "qwen3.6-35b-a3b", "llamacpp", map[string]any{})
+	if err != nil {
+		t.Fatalf("resolve AMD395 Linux config: %v", err)
+	}
+	if resolved.EngineAssetName != "llamacpp-hip-linux" {
+		t.Fatalf("engine asset = %q, want llamacpp-hip-linux", resolved.EngineAssetName)
+	}
+}
+
+func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	engine := cat.FindEngineByName("aima-engine-native-amd395", HardwareInfo{
+		GPUArch:  "RDNA3.5",
+		Platform: "linux/amd64",
+	})
+	if engine == nil {
+		t.Fatal("aima-engine-native-amd395 engine not found")
+	}
+	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.1" {
+		t.Fatalf("metadata = %+v", engine.Metadata)
+	}
+	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "preinstalled" {
+		t.Fatalf("source = %+v", engine.Source)
+	}
+	if !engine.Source.Supports("linux/amd64") || engine.Source.Supports("windows/amd64") {
+		t.Fatalf("source platforms = %v", engine.Source.Platforms)
+	}
+	if engine.Source.Probe == nil {
+		t.Fatal("source.probe is nil")
+	}
+	versionMatch := regexp.MustCompile(engine.Source.Probe.VersionPattern).FindStringSubmatch("aima-engine-native 1.5.1-native")
+	if len(versionMatch) != 2 || versionMatch[1] != "1.5.1" {
+		t.Fatalf("version pattern match = %v", versionMatch)
+	}
+	wantCommand := []string{"aima-engine", "serve", "--model-dir", "{{.ModelPath}}", "--host", "127.0.0.1"}
+	if !reflect.DeepEqual(engine.Startup.Command, wantCommand) {
+		t.Fatalf("startup.command = %v, want %v", engine.Startup.Command, wantCommand)
+	}
+	if engine.API.UpstreamModel != "aima-amd395-qwen36-35b" {
+		t.Fatalf("upstream model = %q", engine.API.UpstreamModel)
+	}
+	if engine.Startup.HealthCheck.Path != "/health" || engine.Startup.HealthCheck.TimeoutS != 120 {
+		t.Fatalf("health check = %+v", engine.Startup.HealthCheck)
+	}
+}
+
+func TestAMD395Qwen36LocalPrecisionPaths(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		RAMTotalMiB:   131072,
+		UnifiedMemory: true,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	native, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "aima-engine-native", nil)
+	if err != nil {
+		t.Fatalf("resolve native BF16: %v", err)
+	}
+	if native.EngineAssetName != "aima-engine-native-amd395" || native.ModelFormat != "safetensors" {
+		t.Fatalf("native resolution = engine %q format %q", native.EngineAssetName, native.ModelFormat)
+	}
+
+	gguf, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "llamacpp", nil)
+	if err != nil {
+		t.Fatalf("resolve llama.cpp GGUF: %v", err)
+	}
+	if gguf.EngineAssetName != "llamacpp-hip-linux" || gguf.ModelFormat != "gguf" {
+		t.Fatalf("GGUF resolution = engine %q format %q", gguf.EngineAssetName, gguf.ModelFormat)
+	}
+	if got := gguf.Config["quantization"]; got != "int4" {
+		t.Fatalf("GGUF quantization = %v, want int4", got)
 	}
 }
 
@@ -405,6 +782,76 @@ func TestScenarioNewFields(t *testing.T) {
 	}
 	if len(openclawAIBook.AlternativeConfigs) != 0 {
 		t.Error("openclaw-multi-aibook should not have alternative_configs")
+	}
+}
+
+func TestDeepSeekV4DSparkCatalogAssets(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	var model *ModelAsset
+	for i := range cat.ModelAssets {
+		if cat.ModelAssets[i].Metadata.Name == "deepseek-v4-flash-0731" {
+			model = &cat.ModelAssets[i]
+			break
+		}
+	}
+	if model == nil {
+		t.Fatal("deepseek-v4-flash-0731 model asset not found")
+	}
+	if model.Metadata.ParameterCount != "304B" || model.Capabilities.DeploymentScenario != "deepseek-v4-flash-dspark-2node" {
+		t.Fatalf("unexpected model metadata: %#v capabilities=%#v", model.Metadata, model.Capabilities)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "vllm-dspark-gb10" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil || engine.Container == nil {
+		t.Fatal("vllm-dspark-gb10 container metadata not found")
+	}
+	if engine.Container.NetworkMode != "host" || len(engine.Container.Devices) == 0 || engine.Container.Devices[0] != "/dev/infiniband" {
+		t.Fatalf("unexpected DSpark container access: %#v", engine.Container)
+	}
+	if got := engine.Startup.DefaultArgs["max_model_len"]; got != 1048576 {
+		t.Fatalf("max_model_len = %#v, want 1048576", got)
+	}
+	var scenario *DeploymentScenario
+	for i := range cat.DeploymentScenarios {
+		if cat.DeploymentScenarios[i].Metadata.Name == "deepseek-v4-flash-dspark-2node" {
+			scenario = &cat.DeploymentScenarios[i]
+			break
+		}
+	}
+	if scenario == nil || len(scenario.Inputs) == 0 || len(scenario.Deployments) != 2 {
+		t.Fatalf("unexpected DSpark scenario: %#v", scenario)
+	}
+	if scenario.Deployments[0].ID != "worker" || scenario.StartupOrder[0].Deployment != "worker" {
+		t.Fatalf("worker-first order not preserved: %#v", scenario.StartupOrder)
+	}
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch: "Blackwell", GPUVRAMMiB: 15360, GPUCount: 1, UnifiedMemory: true,
+		CPUArch: "arm64", RAMTotalMiB: 131072, Platform: "linux/arm64", HardwareProfile: "nvidia-gb10-arm64",
+	}, model.Metadata.Name, engine.Metadata.Name, map[string]any{"model_path": "/models/deepseek-v4-flash-0731"})
+	if err != nil {
+		t.Fatalf("resolve DSpark catalog assets: %v", err)
+	}
+	if resolved.Container == nil || resolved.Container.NetworkMode != "host" {
+		t.Fatalf("engine container access was not merged: %#v", resolved.Container)
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("generate DSpark pod: %v", err)
+	}
+	podText := string(podYAML)
+	if !strings.Contains(podText, `--max-model-len 1048576`) || strings.Contains(podText, "1.048576e+06") {
+		t.Fatalf("max_model_len was not rendered as a decimal integer:\n%s", podText)
+	}
+	if !strings.Contains(podText, "hostNetwork: true") || !strings.Contains(podText, "/dev/infiniband") {
+		t.Fatalf("DSpark pod is missing distributed container access:\n%s", podText)
 	}
 }
 
@@ -579,6 +1026,128 @@ startup:
 	}
 	if got := engine.Startup.Warmup.TimeoutS; got != 120 {
 		t.Errorf("warmup.timeout_s = %d, want 120", got)
+	}
+}
+
+func TestEngineStartupRecoveryParsesAndMerges(t *testing.T) {
+	fs := fstest.MapFS{
+		"engines/profiles/recovery.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: recovery-profile
+startup:
+  recovery:
+    enabled: true
+    check_interval_s: 7
+    consecutive_failures: 4
+    max_attempts: 3
+    window_s: 900
+    backoff_s: [2, 10, 30]
+    stable_reset_s: 1200
+`)},
+		"engines/recovery-engine.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: recovery-profile
+metadata:
+  name: recovery-engine
+  type: generic
+hardware:
+  gpu_arch: "*"
+  vram_min_mib: 0
+startup:
+  recovery:
+    max_attempts: 5
+`)},
+	}
+
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(cat.EngineAssets) != 1 {
+		t.Fatalf("EngineAssets count = %d, want 1", len(cat.EngineAssets))
+	}
+	recovery := cat.EngineAssets[0].Startup.Recovery
+	if recovery.Enabled == nil || !*recovery.Enabled {
+		t.Fatalf("recovery.enabled = %v, want true", recovery.Enabled)
+	}
+	if recovery.CheckIntervalS == nil || *recovery.CheckIntervalS != 7 {
+		t.Fatalf("recovery.check_interval_s = %v, want 7", recovery.CheckIntervalS)
+	}
+	if recovery.ConsecutiveFailures == nil || *recovery.ConsecutiveFailures != 4 {
+		t.Fatalf("recovery.consecutive_failures = %v, want 4", recovery.ConsecutiveFailures)
+	}
+	if recovery.MaxAttempts == nil || *recovery.MaxAttempts != 5 {
+		t.Fatalf("recovery.max_attempts = %v, want 5", recovery.MaxAttempts)
+	}
+	if recovery.WindowS == nil || *recovery.WindowS != 900 {
+		t.Fatalf("recovery.window_s = %v, want 900", recovery.WindowS)
+	}
+	if got := recovery.BackoffS; len(got) != 3 || got[0] != 2 || got[1] != 10 || got[2] != 30 {
+		t.Fatalf("recovery.backoff_s = %v, want [2 10 30]", got)
+	}
+	if recovery.StableResetS == nil || *recovery.StableResetS != 1200 {
+		t.Fatalf("recovery.stable_reset_s = %v, want 1200", recovery.StableResetS)
+	}
+}
+
+func TestCloneEngineAssetCopiesRecoveryBackoff(t *testing.T) {
+	src := EngineAsset{Startup: EngineStartup{Recovery: RecoveryPolicy{BackoffS: []int{2, 10, 30}}}}
+	clone := cloneEngineAsset(src)
+	clone.Startup.Recovery.BackoffS[0] = 99
+	if src.Startup.Recovery.BackoffS[0] != 2 {
+		t.Fatalf("recovery backoff aliases source: %v", src.Startup.Recovery.BackoffS)
+	}
+}
+
+func TestEngineCompatibleVersionsParseMergeAndClone(t *testing.T) {
+	fs := fstest.MapFS{
+		"engines/profiles/engine-a.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile
+metadata:
+  name: engine-a
+  version_default: "1.2.3"
+  compatible_versions: ["1.2.2", "1.2.x"]
+`)},
+		"engines/inherited.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-inherited
+  type: engine-a
+hardware:
+  gpu_arch: "*"
+`)},
+		"engines/override.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset
+_profile: engine-a
+metadata:
+  name: engine-a-override
+  type: engine-a
+  compatible_versions: ["1.1.9"]
+hardware:
+  gpu_arch: "*"
+`)},
+	}
+
+	cat, err := LoadCatalog(fs)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	byName := make(map[string]*EngineAsset)
+	for i := range cat.EngineAssets {
+		byName[cat.EngineAssets[i].Metadata.Name] = &cat.EngineAssets[i]
+	}
+	if got := byName["engine-a-inherited"].Metadata.CompatibleVersions; len(got) != 2 || got[0] != "1.2.2" || got[1] != "1.2.x" {
+		t.Fatalf("inherited compatible_versions = %v", got)
+	}
+	if got := byName["engine-a-override"].Metadata.CompatibleVersions; len(got) != 1 || got[0] != "1.1.9" {
+		t.Fatalf("override compatible_versions = %v", got)
+	}
+
+	byName["engine-a-inherited"].Metadata.CompatibleVersions[0] = "mutated"
+	if got := cat.EngineProfiles["engine-a"].Metadata.CompatibleVersions[0]; got != "1.2.2" {
+		t.Fatalf("finalized asset aliases profile compatible_versions: %q", got)
+	}
+	for _, raw := range cat.RawEngineAssets {
+		if raw.Metadata.Name == "engine-a-inherited" && len(raw.Metadata.CompatibleVersions) != 0 {
+			t.Fatalf("finalized asset mutated raw compatible_versions: %v", raw.Metadata.CompatibleVersions)
+		}
 	}
 }
 
@@ -948,6 +1517,179 @@ func TestKindToDir(t *testing.T) {
 		if got := KindToDir(tt.kind); got != tt.dir {
 			t.Errorf("KindToDir(%q) = %q, want %q", tt.kind, got, tt.dir)
 		}
+	}
+}
+
+func TestCatalogAssetYAMLAndValidateCatalogPatch(t *testing.T) {
+	base, err := LoadCatalog(fstest.MapFS{
+		"models/demo.yaml": &fstest.MapFile{Data: []byte(`kind: model_asset
+metadata:
+  name: demo-model
+  type: llm
+  family: demo
+  parameter_count: 1b
+storage:
+  formats: [safetensors]
+  default_path_pattern: models/demo-model
+  sources: []
+variants:
+  - name: default
+    engine: vllm
+    format: safetensors
+    hardware:
+      gpu_arch: Any
+      vram_min_mib: 1024
+    default_config:
+      max_model_len: 2048
+      gpu_memory_utilization: 0.8
+    expected_performance: {}
+`)},
+	})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+
+	patch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants:
+  - name: default
+    default_config:
+      gpu_memory_utilization: 0.9
+`)
+
+	effective, err := ValidateCatalogPatch(base, patch, "models/demo-model.patch.yaml")
+	if err != nil {
+		t.Fatalf("ValidateCatalogPatch: %v", err)
+	}
+	if !strings.Contains(string(effective), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("effective patch YAML missing override:\n%s", string(effective))
+	}
+	if !strings.Contains(string(effective), "max_model_len: 2048") {
+		t.Fatalf("effective patch YAML lost base config:\n%s", string(effective))
+	}
+
+	overlay := &Catalog{ModelAssets: []ModelAsset{}}
+	if err := overlay.parseAsset(effective, "effective.yaml"); err != nil {
+		t.Fatalf("parse effective patch: %v", err)
+	}
+	merged, _ := MergeCatalog(base, overlay)
+	yamlData, found, err := CatalogAssetYAML(merged, "model_asset", "demo-model")
+	if err != nil {
+		t.Fatalf("CatalogAssetYAML: %v", err)
+	}
+	if !found {
+		t.Fatal("CatalogAssetYAML did not find demo-model")
+	}
+	if !strings.Contains(string(yamlData), "gpu_memory_utilization: 0.9") {
+		t.Fatalf("catalog asset YAML missing effective value:\n%s", string(yamlData))
+	}
+
+	badPatch := []byte(`kind: model_asset_patch
+metadata:
+  name: demo-model
+variants: wrong-type
+`)
+	if _, err := ValidateCatalogPatch(base, badPatch, "models/demo-model.bad.patch.yaml"); err == nil {
+		t.Fatal("ValidateCatalogPatch accepted invalid asset schema")
+	}
+}
+
+func TestValidateCatalogPatchRejectsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patch := []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)
+
+	if _, err := ValidateCatalogPatch(base, patch, "engines/native-demo.patch.yaml"); err == nil || !strings.Contains(err.Error(), "unknown request adapter kind") {
+		t.Fatalf("ValidateCatalogPatch error = %v, want unknown adapter rejection", err)
+	}
+}
+
+func TestLoadCatalogPatchesLenientSkipsInvalidRequestAdapter(t *testing.T) {
+	base := &Catalog{EngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	patchFS := fstest.MapFS{
+		"engines/native-demo.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_asset_patch
+metadata:
+  name: native-demo
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineAssets) != 0 {
+		t.Fatalf("invalid adapter patch was loaded: %#v", overlay.EngineAssets)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want adapter validation warning", warnings)
+	}
+}
+
+func TestLoadCatalogPatchesLenientSkipsInvalidProfileRequestAdapter(t *testing.T) {
+	base := &Catalog{
+		EngineProfiles: map[string]*EngineProfile{
+			"native": {Kind: "engine_profile", Metadata: ProfileMeta{Name: "native"}},
+		},
+		RawEngineAssets: []EngineAsset{{
+			Kind: "engine_asset", Profile: "native", Metadata: EngineMetadata{Name: "native-demo"},
+		}},
+	}
+	patchFS := fstest.MapFS{
+		"engines/profiles/native.patch.yaml": &fstest.MapFile{Data: []byte(`kind: engine_profile_patch
+metadata:
+  name: native
+api:
+  request_adapter:
+    kind: unknown_adapter
+`)},
+	}
+
+	overlay, warnings := LoadCatalogPatchesLenient(patchFS, base)
+	if len(overlay.EngineProfiles) != 0 {
+		t.Fatalf("invalid profile adapter patch was loaded: %#v", overlay.EngineProfiles)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want profile adapter validation warning", warnings)
+	}
+}
+
+func TestMergeCatalogRejectsInvalidEffectiveRequestAdapterWithoutMutation(t *testing.T) {
+	base := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind: "engine_asset", Metadata: EngineMetadata{Name: "native-demo"},
+	}}}
+	overlay := &Catalog{RawEngineAssets: []EngineAsset{{
+		Kind:     "engine_asset",
+		Metadata: EngineMetadata{Name: "native-demo"},
+		API:      EngineAPI{RequestAdapter: &EngineRequestAdapter{Kind: "unknown_adapter"}},
+	}}}
+
+	merged, warnings := MergeCatalog(base, overlay)
+	if merged != base {
+		t.Fatal("MergeCatalog returned a different base pointer")
+	}
+	if got := rawEngineAssets(base)[0].API.RequestAdapter; got != nil {
+		t.Fatalf("invalid overlay mutated effective catalog: %#v", got)
+	}
+	if !slices.ContainsFunc(warnings, func(warning string) bool {
+		return strings.Contains(warning, "unknown request adapter kind")
+	}) {
+		t.Fatalf("warnings = %#v, want effective adapter validation warning", warnings)
 	}
 }
 

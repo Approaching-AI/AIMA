@@ -99,8 +99,8 @@ AIMA 通过 Remote Runtime 将推理请求代理到远程设备。
 │   Tier 1: Docker + CDI │ Tier 2: + K3S + HAMi (GPU 分区)      │
 ├───────────────────────────────────────────────────────────────┤
 │   Infrastructure Layer (基础设施层) — AIMA Go 二进制            │
-│   56 MCP 工具 · LAN 推理代理 (:6188) · Fleet REST API          │
-│   Web UI (嵌入式 SPA) · TUI 终端仪表盘 · mDNS 多网卡发现 · 审计+回滚  │
+│   MCP 工具面 (docs/mcp.md) · LAN 推理代理 (:6188)               │
+│   Fleet REST API · Web UI · TUI · mDNS 多网卡发现 · 审计+回滚    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -190,8 +190,8 @@ Native runtime 只做极简进程管理（start/stop/logs）。
 **INV-5: MCP 工具即真相。** CLI 是 MCP 工具的包装。CLI 永不实现 MCP 工具之外的逻辑。
 所有 CLI 命令（含 `ask`, `agent install/status`, `status`, `knowledge list`, `config`, `fleet`）均通过 ToolDeps 调用 MCP 工具。
 Fleet CLI 的 mDNS 发现逻辑也在 ToolDeps 层实现（`fleet.info` 每次自动扫描，其余 fleet 工具懒发现），CLI 和 MCP Agent 走完全相同的代码路径。
-当前共 56 个 MCP 工具覆盖所有功能领域 (Hardware 2 + Model 6 + Engine 6 + Deploy 8 + Knowledge 6 + Benchmark 4 + Catalog 3 + Central 3 + Data 2 + System 2 + Agent 3 + Automation 4 + Fleet 2 + Scenario 2 + OpenClaw 1 + Stack 1 + Support 1)。
-工具通过 4 个 Profile 按场景过滤可见性：Full(56), Operator(39), Patrol(10), Explorer(20)。
+当前 MCP 工具清单以 `docs/mcp.md` 为准，覆盖 Hardware、Model、Engine、Deploy、Knowledge、Benchmark、Catalog、Central、Data、System、Agent、Automation、Fleet、Scenario、OpenClaw、Stack、Support 等功能领域。
+工具通过 4 个 Profile 按场景过滤可见性，具体数量以 `docs/mcp.md` 与 `ListToolsForProfile()` 为准。
 当前 `agent.ask` 通过 `ListToolsForProfile()` 消费 profile。Explorer 使用独立的 `ExplorerAgentPlanner`（文档驱动 PDCA agent loop），通过 `ExplorerToolExecutor` 提供 7 个 bash 风格工具（cat/ls/write/append/grep/query/done）操作工作区文档，不依赖 MCP profile 工具列表。
 
 **INV-6: 探索即知识。** Agent 每次探索必须产出 Knowledge Note。
@@ -343,8 +343,9 @@ Agent (L3a) 调用以下工具时被完全拦截，返回错误:
 
 Agent 调用以下工具时需要用户批准才能执行:
 - `deploy.apply` — 创建或替换推理部署
+- `scenario.apply` — 按方案批量创建或替换推理部署
 
-流程: Agent 调用 `deploy.apply` → adapter 拦截 → 内部调 `deploy.dry_run` 获取部署计划 → 返回 NEEDS_APPROVAL + plan + approval_id → Agent 展示计划给用户 → 用户在同一会话中回复 "approved" → Agent 调用 `deploy.approve(id)` → 执行部署。
+流程: Agent 调用 `deploy.apply` / `scenario.apply` → adapter 拦截 → 内部调对应 dry-run (`deploy.dry_run` 或 `scenario.apply(dry_run=true)`) 获取部署计划 → 返回 NEEDS_APPROVAL + plan + approval_id → Agent 展示计划给用户 → 用户在同一会话中回复 "approved" → Agent 调用 `deploy.approve(id)` → 执行原始操作。
 
 `--dangerously-skip-permissions` (CLI) 或 `dangerously_skip_permissions` (MCP agent.ask 参数) 可跳过审批门控。
 
@@ -356,13 +357,13 @@ Agent 单次决策循环限制 ≤ 30 轮工具调用 (可配置)，防止无限
 
 ## 9. Central Knowledge Server (K9)
 
-独立 Go 二进制 (`cmd/central/main.go`)，聚合多设备的知识数据。
+Central 服务端已迁出到独立 repo `aima-central-knowledge`。本 repo 只保留 Edge 端 HTTP client 与 MCP 工具 (`central.sync`, `central.advise`, `central.scenario`)，不再包含 `cmd/central/` 或 `internal/central/` 服务端实现。
 
 ```
 Edge Device A ──push──→ ┌──────────────────────┐ ←──pull── Edge Device B
                         │  Central Server       │
-                        │  SQLite + REST API    │
-                        │  :8080                │
+                        │  aima-central-knowledge│
+                        │  REST API             │
                         │  POST /api/v1/ingest  │
                         │  GET  /api/v1/query   │
                         │  GET  /api/v1/sync    │
@@ -370,10 +371,8 @@ Edge Device A ──push──→ ┌──────────────�
                         └──────────────────────┘
 ```
 
-- 数据库: SQLite (与边端一致，零 CGO)。未来可升级 PostgreSQL。
-- 认证: Bearer token (API Key) + `crypto/subtle.ConstantTimeCompare`
-- 去重: `config_hash` 索引，相同配置不重复入库
-- Edge 端通过 `central.sync(action=push|pull|status)` MCP 工具交互
+- 服务端数据库、认证、去重与 Advisor 实现由 `aima-central-knowledge` repo 负责。
+- Edge 端通过 `central.sync(action=push|pull|status)` MCP 工具交互，client wiring 在 `cmd/aima/tooldeps_integration.go`。
 - 配置: `system.config set central.endpoint <url>` + `central.api_key`
 
 ## 10. TUI 终端仪表盘 (F6)
@@ -387,4 +386,4 @@ Edge Device A ──push──→ ┌──────────────�
 
 ---
 
-*最后更新：2026-04-09 (Explorer Agent Planner: 文档驱动 PDCA 工作流替代单次 JSON prompt, ExplorerWorkspace + 7 工具 + 知识库查询; engine discovery 解耦; 56 MCP tools)*
+*最后更新：2026-04-24 (新增 telemetry-free `system.diagnostics`; Explorer Agent Planner: 文档驱动 PDCA 工作流替代单次 JSON prompt, ExplorerWorkspace + 7 工具 + 知识库查询; engine discovery 解耦; MCP tool surface 以 docs/mcp.md 为准)*

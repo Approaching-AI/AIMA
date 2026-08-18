@@ -1,7 +1,9 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -155,6 +157,11 @@ func configPortValue(config map[string]any, key string) int {
 		return int(v)
 	case float32:
 		return int(v)
+	case json.Number:
+		port, err := strconv.Atoi(v.String())
+		if err == nil {
+			return port
+		}
 	}
 	return 0
 }

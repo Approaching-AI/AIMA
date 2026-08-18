@@ -39,8 +39,48 @@ func (m *mockRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if r, ok := m.results[key]; ok {
 		return r.output, r.err
 	}
+	if base := filepath.Base(name); base != name {
+		baseKey := base
+		if len(args) > 0 {
+			baseKey = base + " " + args[0]
+		}
+		if r, ok := m.results[baseKey]; ok {
+			return r.output, r.err
+		}
+	}
 	// Default: command not found
 	return nil, fmt.Errorf("command not found: %s", name)
+}
+
+func useTempSystemInstallDirs(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	oldBinDir := systemBinDir
+	oldAIMAEnvDir := systemAIMAEnvDir
+	oldK3SEnvDir := systemK3SEnvDir
+	oldDataDir := systemDataDir
+	oldUnitDir := systemdUnitDir
+
+	systemBinDir = filepath.Join(root, "bin")
+	systemAIMAEnvDir = filepath.Join(root, "etc", "aima")
+	systemK3SEnvDir = filepath.Join(root, "etc", "rancher", "k3s")
+	systemDataDir = filepath.Join(root, "var", "lib", "aima")
+	systemdUnitDir = filepath.Join(root, "etc", "systemd", "system")
+
+	if err := os.MkdirAll(systemBinDir, 0o755); err != nil {
+		t.Fatalf("mkdir system bin dir: %v", err)
+	}
+	if err := os.MkdirAll(systemdUnitDir, 0o755); err != nil {
+		t.Fatalf("mkdir systemd unit dir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		systemBinDir = oldBinDir
+		systemAIMAEnvDir = oldAIMAEnvDir
+		systemK3SEnvDir = oldK3SEnvDir
+		systemDataDir = oldDataDir
+		systemdUnitDir = oldUnitDir
+	})
 }
 
 func TestStatusAllReady(t *testing.T) {
@@ -107,6 +147,79 @@ func TestStatusNotInstalled(t *testing.T) {
 	}
 	if result.Components[0].Installed {
 		t.Error("expected Installed=false")
+	}
+}
+
+func TestStatusPrefersInstalledBinaryOverDistArtifact(t *testing.T) {
+	tmp := t.TempDir()
+	distDir := filepath.Join(tmp, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		t.Fatalf("mkdir distDir: %v", err)
+	}
+	realDocker := filepath.Join(tmp, "system-docker")
+	if err := os.WriteFile(realDocker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write real docker: %v", err)
+	}
+	// Stale artifact exists in dist/ but should not be preferred over PATH.
+	if err := os.WriteFile(filepath.Join(distDir, "docker"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write dist docker: %v", err)
+	}
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "docker" {
+			return realDocker, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
+
+	resolved := resolveVerificationBinary("docker", distDir)
+	if resolved != realDocker {
+		t.Fatalf("resolveVerificationBinary = %q, want %q", resolved, realDocker)
+	}
+}
+
+func TestCheckComponentPrefersInstalledBinaryOverDistArtifact(t *testing.T) {
+	tmp := t.TempDir()
+	distDir := filepath.Join(tmp, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		t.Fatalf("mkdir distDir: %v", err)
+	}
+	realDocker := filepath.Join(tmp, "system-docker")
+	if err := os.WriteFile(realDocker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write real docker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "docker"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write dist docker: %v", err)
+	}
+
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "docker" {
+			return realDocker, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			realDocker + " version": {output: []byte("24.0.7")},
+		},
+	}
+
+	inst := NewInstaller(runner, tmp).WithDistDir(distDir)
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "docker", Version: "24.0.7"},
+		Verify: knowledge.StackVerify{
+			Command:        "docker version",
+			ReadyCondition: "24.0.0",
+		},
+	}
+
+	status := inst.checkComponent(context.Background(), comp, "")
+	if !status.Installed || !status.Ready {
+		t.Fatalf("expected installed+ready status, got %+v", status)
 	}
 }
 
@@ -655,6 +768,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd tests only run on Linux")
 	}
+	useTempSystemInstallDirs(t)
 
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -712,7 +826,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	}
 
 	// Verify unit file was written
-	unitData, err := os.ReadFile("/etc/systemd/system/k3s.service")
+	unitData, err := os.ReadFile(filepath.Join(systemdUnitDir, "k3s.service"))
 	if err != nil {
 		t.Fatalf("read unit file: %v", err)
 	}
@@ -731,7 +845,7 @@ func TestInstallDaemonSystemd(t *testing.T) {
 	}
 
 	// Verify env file was written
-	envData, err := os.ReadFile("/etc/rancher/k3s/k3s.env")
+	envData, err := os.ReadFile(filepath.Join(systemK3SEnvDir, "k3s.env"))
 	if err != nil {
 		t.Fatalf("read env file: %v", err)
 	}
@@ -744,6 +858,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd tests only run on Linux")
 	}
+	useTempSystemInstallDirs(t)
 
 	runner := &mockRunner{
 		results: map[string]runResult{
@@ -780,7 +895,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("installDaemonSystemd: %v", err)
 	}
 
-	info, err := os.Stat("/etc/aima")
+	info, err := os.Stat(systemAIMAEnvDir)
 	if err != nil {
 		t.Fatalf("stat /etc/aima: %v", err)
 	}
@@ -788,7 +903,7 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("/etc/aima mode = %#o, want 0755", got)
 	}
 
-	dataDirData, err := os.ReadFile("/etc/aima/data-dir")
+	dataDirData, err := os.ReadFile(filepath.Join(systemAIMAEnvDir, "data-dir"))
 	if err != nil {
 		t.Fatalf("read shared data-dir pointer: %v", err)
 	}
@@ -796,12 +911,65 @@ func TestInstallDaemonSystemdSharedDataDirReadable(t *testing.T) {
 		t.Fatalf("shared data dir = %q, want %q", got, sharedDataDir)
 	}
 
-	envData, err := os.ReadFile("/etc/aima/aima-serve.env")
+	envData, err := os.ReadFile(filepath.Join(systemAIMAEnvDir, "aima-serve.env"))
 	if err != nil {
 		t.Fatalf("read env file: %v", err)
 	}
 	if !strings.Contains(string(envData), "AIMA_DATA_DIR="+sharedDataDir) {
 		t.Fatalf("env file missing shared data dir, got %q", string(envData))
+	}
+}
+
+func TestInstallDaemonSystemdAIMAServeStartsAfterDocker(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd tests only run on Linux")
+	}
+	useTempSystemInstallDirs(t)
+
+	runner := &mockRunner{
+		results: map[string]runResult{
+			"systemctl daemon-reload": {output: nil},
+			"systemctl enable":        {output: nil},
+			"systemctl start":         {output: nil},
+		},
+	}
+
+	dir := t.TempDir()
+	inst := NewInstaller(runner, dir).WithDistDir(dir)
+
+	binPath := filepath.Join(dir, "aima")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	comp := knowledge.StackComponent{
+		Metadata: knowledge.StackMetadata{Name: "aima-serve", Version: "0.0.1"},
+		Source:   knowledge.StackSource{Binary: "aima"},
+		Install: knowledge.StackInstall{
+			Method:      "binary",
+			Daemon:      true,
+			Subcommand:  "serve",
+			ServiceType: "simple",
+		},
+	}
+
+	if err := inst.installDaemonSystemd(context.Background(), comp, binPath, ""); err != nil {
+		t.Fatalf("installDaemonSystemd: %v", err)
+	}
+
+	unitData, err := os.ReadFile(filepath.Join(systemdUnitDir, "aima-serve.service"))
+	if err != nil {
+		t.Fatalf("read unit file: %v", err)
+	}
+	unitContent := string(unitData)
+	if !strings.Contains(unitContent, "After=network-online.target docker.service") {
+		t.Fatalf("aima-serve unit missing docker ordering, got:\n%s", unitContent)
+	}
+	if !strings.Contains(unitContent, "Wants=network-online.target docker.service") {
+		t.Fatalf("aima-serve unit missing docker wants, got:\n%s", unitContent)
+	}
+	if !strings.Contains(unitContent, "Requires=docker.service") {
+		t.Fatalf("aima-serve unit missing docker requirement, got:\n%s", unitContent)
 	}
 }
 
@@ -845,18 +1013,19 @@ func TestInstallDaemonSystemdUnitContent(t *testing.T) {
 
 func TestResolveSystemdBinaryPathPrefersLookPathForBareCommand(t *testing.T) {
 	tempDir := t.TempDir()
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin dir: %v", err)
-	}
-
-	installed := filepath.Join(binDir, "aima")
+	installed := filepath.Join(tempDir, "aima")
 	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write installed binary: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	oldLookupPath := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "aima" {
+			return installed, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookupPath = oldLookupPath })
 
 	if got := resolveSystemdBinaryPath("aima"); got != installed {
 		t.Fatalf("resolveSystemdBinaryPath(aima) = %q, want %q", got, installed)

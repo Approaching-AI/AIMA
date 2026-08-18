@@ -126,6 +126,7 @@ func TestStatusEndpoint(t *testing.T) {
 	s.RegisterBackend("qwen3-8b", &Backend{
 		ModelName:           "qwen3-8b",
 		EngineType:          "vllm",
+		ModelType:           "llm",
 		Address:             "10.42.0.5:8000",
 		Ready:               true,
 		ParameterCount:      "8B",
@@ -158,6 +159,9 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 	if got := first["parameter_count"]; got != "8B" {
 		t.Fatalf("parameter_count = %v, want 8B", got)
+	}
+	if got := first["model_type"]; got != "llm" {
+		t.Fatalf("model_type = %v, want llm", got)
 	}
 }
 
@@ -303,6 +307,37 @@ func TestChatCompletions_RoutesToCorrectBackend(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_UsesBackendScheme(t *testing.T) {
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("backend path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-1","choices":[{"message":{"content":"hello"}}]}`)
+	}))
+	defer backend.Close()
+
+	s := NewServer(WithTransport(backend.Client().Transport))
+	addr := strings.TrimPrefix(backend.URL, "https://")
+	s.RegisterBackend("secure-model", &Backend{
+		ModelName:  "secure-model",
+		EngineType: "external-openai",
+		Scheme:     "https",
+		Address:    addr,
+		Ready:      true,
+		External:   true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"secure-model","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
 func TestChatCompletions_AppliesRequestRewriter(t *testing.T) {
 	var receivedBody map[string]any
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
@@ -404,6 +439,168 @@ func TestChatCompletions_RewritesModelToBackendUpstreamModel(t *testing.T) {
 	}
 	if receivedModel != "musachat_local" {
 		t.Fatalf("backend model = %q, want musachat_local", receivedModel)
+	}
+}
+
+type testPreparationError struct {
+	status    int
+	errorType string
+	message   string
+}
+
+func (e testPreparationError) Error() string     { return e.message }
+func (e testPreparationError) HTTPStatus() int   { return e.status }
+func (e testPreparationError) ErrorType() string { return e.errorType }
+
+func TestRequestPreparerErrorStopsBackend(t *testing.T) {
+	backendCalls := 0
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	s.SetRequestPreparer(func(context.Context, string, string, string, string, string, string, []byte) (PreparedRequest, error) {
+		return PreparedRequest{}, testPreparationError{status: 400, errorType: "invalid_request", message: "bad fixed context"}
+	})
+	s.RegisterBackend("qwen3.6-35b-a3b", &Backend{
+		ModelName:     "qwen3.6-35b-a3b",
+		UpstreamModel: "native-model",
+		EngineType:    "native-test",
+		Address:       strings.TrimPrefix(backend.URL, "http://"),
+		Ready:         true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest || backendCalls != 0 {
+		t.Fatalf("status=%d backendCalls=%d, want 400/0; body=%s", w.Code, backendCalls, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"type":"invalid_request"`) || !strings.Contains(w.Body.String(), "bad fixed context") {
+		t.Fatalf("unexpected error body: %s", w.Body.String())
+	}
+}
+
+func TestRequestPreparerReceivesRouteContextAndFinishesSuccess(t *testing.T) {
+	var receivedModel string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode backend request: %v", err)
+		}
+		receivedModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, path, contentType, model, upstreamModel, engineType, deploymentName string, body []byte) (PreparedRequest, error) {
+		if path != "/v1/chat/completions" || contentType != "application/json" || model != "qwen3.6-35b-a3b" || upstreamModel != "native-model" || engineType != "native-test" || deploymentName != "deployment-native" {
+			t.Fatalf("preparer route context = %q %q %q %q %q %q", path, contentType, model, upstreamModel, engineType, deploymentName)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("decode preparer body: %v", err)
+		}
+		request["model"] = upstreamModel
+		preparedBody, _ := json.Marshal(request)
+		return PreparedRequest{Body: preparedBody, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("qwen3.6-35b-a3b", &Backend{
+		ModelName:      "qwen3.6-35b-a3b",
+		UpstreamModel:  "native-model",
+		EngineType:     "native-test",
+		DeploymentName: "deployment-native",
+		Address:        strings.TrimPrefix(backend.URL, "http://"),
+		Ready:          true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK || receivedModel != "native-model" {
+		t.Fatalf("status=%d backend model=%q", w.Code, receivedModel)
+	}
+	select {
+	case success := <-finish:
+		if !success {
+			t.Fatal("Finish called with false after successful exchange")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Finish was not called")
+	}
+}
+
+func TestRequestPreparerFinishesFalseForBackendFailure(t *testing.T) {
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, _, _, _, _, _, _ string, body []byte) (PreparedRequest, error) {
+		return PreparedRequest{Body: body, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("model", &Backend{ModelName: "model", Address: strings.TrimPrefix(backend.URL, "http://"), Ready: true})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if success := <-finish; success {
+		t.Fatal("Finish called with true for backend 500")
+	}
+}
+
+func TestRequestPreparerLeaseSpansSSEStream(t *testing.T) {
+	release := make(chan struct{})
+	backend := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: first\n\n")
+		flusher.Flush()
+		<-release
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	})
+	defer backend.Close()
+
+	finish := make(chan bool, 1)
+	s := NewServer()
+	s.SetRequestPreparer(func(_ context.Context, _, _, _, _, _, _ string, body []byte) (PreparedRequest, error) {
+		return PreparedRequest{Body: body, Finish: func(success bool) { finish <- success }}, nil
+	})
+	s.RegisterBackend("model", &Backend{ModelName: "model", Address: strings.TrimPrefix(backend.URL, "http://"), Ready: true})
+
+	done := make(chan struct{})
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model","messages":[],"stream":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.handler().ServeHTTP(w, req)
+		close(done)
+	}()
+	select {
+	case success := <-finish:
+		t.Fatalf("Finish(%v) called before SSE completed", success)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE request did not complete")
+	}
+	if success := <-finish; !success {
+		t.Fatal("Finish called with false after successful SSE")
 	}
 }
 
@@ -694,6 +891,50 @@ func TestAudioTranscriptions_MultipartRoutesToBackend(t *testing.T) {
 	}
 }
 
+func TestAudioTranscriptions_ExternalASRPathOverride(t *testing.T) {
+	var receivedPath string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"hello"}`))
+	})
+	defer backend.Close()
+
+	s := NewServer()
+	host := strings.TrimPrefix(backend.URL, "http://")
+	s.RegisterBackend("local-stt", &Backend{
+		ModelName: "local-stt",
+		Address:   host,
+		Ready:     true,
+		External:  true,
+		PathOverrides: map[string]string{
+			"/v1/audio/transcriptions": "/v1/asr",
+		},
+	})
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("model", "local-stt")
+	part, err := writer.CreateFormFile("file", "sample.wav")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	_, _ = part.Write([]byte("RIFFdemo"))
+	_ = writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /v1/audio/transcriptions status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if receivedPath != "/v1/asr" {
+		t.Fatalf("backend received path %q, want /v1/asr", receivedPath)
+	}
+}
+
 func TestImagesGenerations_RoutesToBackend(t *testing.T) {
 	var receivedPath string
 	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +1095,99 @@ func TestProxyForwardsRequestBody(t *testing.T) {
 
 	if !strings.Contains(receivedBody, "test body forwarding") {
 		t.Errorf("backend did not receive request body, got: %s", receivedBody)
+	}
+}
+
+func TestProxyDoesNotForwardClientAuthorizationToAnyBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		remote   bool
+		external bool
+	}{
+		{name: "managed local"},
+		{name: "discovered or static remote", remote: true},
+		{name: "external service", external: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var receivedAuthorization string
+			backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+				receivedAuthorization = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
+			})
+			defer backend.Close()
+
+			s := NewServer(WithAPIKey("aima-client-key"), WithTransport(backend.Client().Transport))
+			s.RegisterBackend("qwen3-8b", &Backend{
+				ModelName:  "qwen3-8b",
+				EngineType: "vllm",
+				Address:    strings.TrimPrefix(backend.URL, "http://"),
+				Ready:      true,
+				Remote:     tc.remote,
+				External:   tc.external,
+			})
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(`{"model":"qwen3-8b","messages":[]}`),
+			)
+			req.Header.Set("Authorization", "Bearer aima-client-key")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			s.handler().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if receivedAuthorization != "" {
+				t.Fatalf("backend received client Authorization header: %q", receivedAuthorization)
+			}
+		})
+	}
+}
+
+func TestProxyUsesConfiguredUpstreamAPIKeyInsteadOfClientAuthorization(t *testing.T) {
+	var receivedAuthorization string
+	backend := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1"}`)
+	})
+	defer backend.Close()
+
+	s := NewServer(WithAPIKey("aima-client-key"), WithTransport(backend.Client().Transport))
+	s.RegisterBackend("remote-model", &Backend{
+		ModelName:      "remote-model",
+		Address:        strings.TrimPrefix(backend.URL, "http://"),
+		Ready:          true,
+		Remote:         true,
+		UpstreamAPIKey: "peer-specific-key",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"remote-model","messages":[]}`,
+	))
+	req.Header.Set("Authorization", "Bearer aima-client-key")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if receivedAuthorization != "Bearer peer-specific-key" {
+		t.Fatalf("upstream Authorization = %q, want peer-specific credential", receivedAuthorization)
+	}
+}
+
+func TestNewServerUsesTransportWithoutEnvironmentProxy(t *testing.T) {
+	s := NewServer()
+	transport, ok := s.transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http.Transport", s.transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("default backend transport must not use environment proxies")
 	}
 }
 

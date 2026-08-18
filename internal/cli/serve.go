@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -35,6 +36,8 @@ func newServeCmd(app *App) *cobra.Command {
 		mdnsEnabled     bool
 		discoverEnabled bool
 		allowInsecure   bool
+		staticBackends  []string
+		noOpenClawSync  bool
 	)
 
 	cmd := &cobra.Command{
@@ -83,6 +86,13 @@ func newServeCmd(app *App) *cobra.Command {
 				slog.Info("API key authentication enabled")
 			}
 
+			if err := registerStaticBackends(app.Proxy, staticBackends); err != nil {
+				return err
+			}
+			if app.ServeBackground != nil {
+				go app.ServeBackground(ctx)
+			}
+
 			// Start backend sync loop (reconcile proxy routes with deployments)
 			if app.ToolDeps != nil && app.ToolDeps.DeployList != nil {
 				listFn := func(ctx context.Context) ([]*proxy.DeploymentInfo, error) {
@@ -98,21 +108,31 @@ func newServeCmd(app *App) *cobra.Command {
 				}
 				go proxy.StartSyncLoop(ctx, app.Proxy, listFn, 5*time.Second)
 			}
-			if app.OpenClaw != nil {
+			openClawLoopEnabled := openClawAutoSyncEnabled(noOpenClawSync)
+			if noOpenClawSync && app.ToolDeps != nil && app.ToolDeps.SetConfig != nil {
+				if err := app.ToolDeps.SetConfig(ctx, openclaw.ConfigKeySyncMode, openclaw.SyncModeManual); err != nil {
+					slog.Warn("persist openclaw sync policy failed", "error", err)
+				}
+			}
+			if openClawLoopEnabled && app.ToolDeps != nil && app.ToolDeps.GetConfig != nil {
+				if mode, err := app.ToolDeps.GetConfig(ctx, openclaw.ConfigKeySyncMode); err == nil {
+					openClawLoopEnabled = openclaw.AutoSyncEnabledForMode(mode)
+				}
+			}
+			if app.OpenClaw != nil && openClawLoopEnabled {
 				go openclaw.StartSyncLoop(ctx, app.OpenClaw, 10*time.Second)
+			} else if app.OpenClaw != nil {
+				slog.Info("openclaw auto-sync loop disabled; sync only via `aima openclaw sync`")
 			}
 
-			// Auto-scan engines on startup so Explorer and other tools see
-			// locally available engines even before a manual engine.scan call.
-			if app.ToolDeps != nil && app.ToolDeps.ScanEngines != nil {
+			// Auto-reconcile local assets on startup so Explorer, onboarding, and
+			// UI views see locally available engines and models even after an
+			// upgrade that skips the first-run onboarding scan.
+			if app.ToolDeps != nil && (app.ToolDeps.ScanEngines != nil || app.ToolDeps.ScanModels != nil || app.ToolDeps.ScanExternalServices != nil) {
 				go func() {
 					scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
 					defer scanCancel()
-					if _, err := app.ToolDeps.ScanEngines(scanCtx, "auto", false); err != nil {
-						slog.Warn("startup engine scan failed (non-fatal)", "error", err)
-					} else {
-						slog.Info("startup engine scan completed")
-					}
+					runStartupAssetReconcile(scanCtx, app.ToolDeps)
 				}()
 			}
 
@@ -222,10 +242,121 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&mcpProfile, "mcp-profile", "", "MCP tool profile: operator, patrol, explorer (default: all tools)")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
 	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
-	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Discover remote inference services via mDNS")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Observe remote inference services via mDNS without trusting or routing to them")
 	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
+	cmd.Flags().StringArrayVar(&staticBackends, "backend", nil, "Trusted static backend: model=http://host:port[/base],engine=vllm,upstream=served,param=35B,context=32768,upstream_api_key_env=ENV")
+	cmd.Flags().BoolVar(&noOpenClawSync, "no-openclaw-sync", false, "Disable the automatic OpenClaw config sync loop; sync only on explicit `aima openclaw sync` (or set AIMA_OPENCLAW_SYNC=manual)")
 
 	return cmd
+}
+
+func runStartupAssetReconcile(ctx context.Context, deps *mcp.ToolDeps) {
+	if deps == nil {
+		return
+	}
+	if deps.ScanEngines != nil {
+		if _, err := deps.ScanEngines(ctx, "auto", false); err != nil {
+			slog.Warn("startup engine scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup engine scan completed")
+		}
+	}
+	if deps.ScanModels != nil {
+		if _, err := deps.ScanModels(ctx); err != nil {
+			slog.Warn("startup model scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup model scan completed")
+		}
+	}
+	if deps.ScanExternalServices != nil {
+		if _, err := deps.ScanExternalServices(ctx); err != nil {
+			slog.Warn("startup external service scan failed (non-fatal)", "error", err)
+		} else {
+			slog.Info("startup external service scan completed")
+		}
+	}
+}
+
+func registerStaticBackends(server *proxy.Server, specs []string) error {
+	for _, spec := range specs {
+		model, backend, err := parseStaticBackendSpec(spec)
+		if err != nil {
+			return err
+		}
+		server.RegisterBackend(model, backend)
+		slog.Info("static backend registered", "model", model, "addr", backend.Address, "engine", backend.EngineType)
+	}
+	return nil
+}
+
+func parseStaticBackendSpec(spec string) (string, *proxy.Backend, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return "", nil, fmt.Errorf("empty static backend spec")
+	}
+
+	parts := strings.Split(spec, ",")
+	model, rawTarget, ok := strings.Cut(strings.TrimSpace(parts[0]), "=")
+	if !ok || strings.TrimSpace(model) == "" || strings.TrimSpace(rawTarget) == "" {
+		return "", nil, fmt.Errorf("static backend %q must start with model=http://host:port[/base]", spec)
+	}
+	model = strings.TrimSpace(model)
+	target := strings.TrimSpace(rawTarget)
+	if !strings.Contains(target, "://") {
+		target = "http://" + target
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" {
+		return "", nil, fmt.Errorf("static backend %q has invalid target %q", spec, rawTarget)
+	}
+
+	basePath := strings.TrimRight(parsed.Path, "/")
+	backend := &proxy.Backend{
+		ModelName:     model,
+		UpstreamModel: model,
+		Address:       parsed.Host,
+		BasePath:      basePath,
+		Ready:         true,
+		Remote:        true,
+	}
+
+	for _, rawPart := range parts[1:] {
+		key, value, ok := strings.Cut(strings.TrimSpace(rawPart), "=")
+		if !ok {
+			return "", nil, fmt.Errorf("static backend %q has malformed option %q", spec, rawPart)
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "engine":
+			backend.EngineType = value
+		case "upstream", "served_model", "served-model":
+			backend.UpstreamModel = value
+		case "base_path", "base-path":
+			backend.BasePath = strings.TrimRight(value, "/")
+		case "param", "params", "parameter_count", "parameter-count":
+			backend.ParameterCount = value
+		case "context", "context_window", "context-window":
+			contextWindow, err := strconv.Atoi(value)
+			if err != nil || contextWindow < 0 {
+				return "", nil, fmt.Errorf("static backend %q has invalid context value %q", spec, value)
+			}
+			backend.ContextWindowTokens = contextWindow
+		case "upstream_api_key_env", "upstream-api-key-env":
+			if value == "" {
+				return "", nil, fmt.Errorf("static backend %q has empty upstream API key environment name", spec)
+			}
+			upstreamKey := strings.TrimSpace(os.Getenv(value))
+			if upstreamKey == "" {
+				return "", nil, fmt.Errorf("static backend %q requires non-empty environment %s", spec, value)
+			}
+			backend.UpstreamAPIKey = upstreamKey
+		default:
+			return "", nil, fmt.Errorf("static backend %q has unknown option %q", spec, key)
+		}
+	}
+
+	return model, backend, nil
 }
 
 func resolveMCPProfile(mcpEnabled bool, profile string) (mcp.Profile, error) {
@@ -244,6 +375,17 @@ func parseMCPProfile(profile string) (mcp.Profile, error) {
 		return mcp.ProfileFull, fmt.Errorf("unknown MCP profile %q; valid profiles: operator, patrol, explorer", profile)
 	}
 	return p, nil
+}
+
+// openClawAutoSyncEnabled reports whether `aima serve` should run the background
+// OpenClaw config sync loop. A5: a partner can disable it (and drive sync only via
+// explicit `aima openclaw sync`) with the --no-openclaw-sync flag or, at the
+// product level, AIMA_OPENCLAW_SYNC=manual|off|false|0|no.
+func openClawAutoSyncEnabled(noFlag bool) bool {
+	if noFlag {
+		return false
+	}
+	return openclaw.AutoSyncEnabledFromEnv()
 }
 
 func validateServeSecurity(addr, mcpAddr string, mcpEnabled bool, apiKey string, allowInsecure bool) error {

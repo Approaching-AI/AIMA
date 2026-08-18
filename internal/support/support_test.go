@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -217,6 +218,121 @@ func TestServiceAskForHelpAndRun(t *testing.T) {
 	}
 }
 
+func TestServiceAskForHelpKeepsSavedTokenWhenActiveTaskProbeIsTransient(t *testing.T) {
+	t.Parallel()
+
+	var activeTaskCalls int
+	var registerCalls int
+	var taskCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/self-register", func(w http.ResponseWriter, r *http.Request) {
+		registerCalls++
+		http.Error(w, `{"detail":"unexpected register"}`, http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/active-task", func(w http.ResponseWriter, r *http.Request) {
+		activeTaskCalls++
+		http.Error(w, `{"detail":"temporary overload"}`, http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		taskCalls++
+		writeJSON(t, w, map[string]any{"task_id": "task-1", "status": "created"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	store := newMemoryStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.SetConfig(ctx, ConfigEndpoint, server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConfig(ctx, configStateDeviceID, "dev-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConfig(ctx, configStateToken, "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(store, WithHTTPClient(server.Client()))
+	result, err := svc.AskForHelp(ctx, AskRequest{
+		Description: "deploy dify",
+		Endpoint:    server.URL,
+		InviteCode:  "invite-123",
+	})
+	if err != nil {
+		t.Fatalf("AskForHelp: %v", err)
+	}
+	if !result.Created || result.TaskID != "task-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if registerCalls != 0 {
+		t.Fatalf("registerCalls = %d, want 0", registerCalls)
+	}
+	if activeTaskCalls != 4 {
+		t.Fatalf("activeTaskCalls = %d, want 4", activeTaskCalls)
+	}
+	if taskCalls != 1 {
+		t.Fatalf("taskCalls = %d, want 1", taskCalls)
+	}
+}
+
+func TestServiceAskForHelpRetriesTransientActiveTaskPreflight(t *testing.T) {
+	t.Parallel()
+
+	var activeTaskCalls int
+	var taskCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/self-register", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"device_id":        "dev-1",
+			"token":            "tok-1",
+			"recovery_code":    "rec-1",
+			"token_expires_at": time.Now().Add(48 * time.Hour).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/active-task", func(w http.ResponseWriter, r *http.Request) {
+		activeTaskCalls++
+		if activeTaskCalls == 1 {
+			http.Error(w, `{"detail":"temporary overload"}`, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(t, w, map[string]any{"has_active_task": false})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		taskCalls++
+		writeJSON(t, w, map[string]any{"task_id": "task-1", "status": "created"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	store := newMemoryStore()
+	svc := NewService(store, WithHTTPClient(server.Client()))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := svc.AskForHelp(ctx, AskRequest{
+		Description: "deploy dify",
+		Endpoint:    server.URL,
+		InviteCode:  "invite-123",
+	})
+	if err != nil {
+		t.Fatalf("AskForHelp: %v", err)
+	}
+	if !result.Created || result.TaskID != "task-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if activeTaskCalls != 2 {
+		t.Fatalf("activeTaskCalls = %d, want 2", activeTaskCalls)
+	}
+	if taskCalls != 1 {
+		t.Fatalf("taskCalls = %d, want 1", taskCalls)
+	}
+}
+
 func TestServiceRunRetriesTransientPollFailure(t *testing.T) {
 	t.Parallel()
 
@@ -334,6 +450,64 @@ func TestServiceRunRetriesTransientPollFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteSingleCommandTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell background process semantics")
+	}
+
+	resultCh := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/dev-1/commands/cmd-timeout/progress", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/v1/devices/dev-1/result", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode result body: %v", err)
+		}
+		resultCh <- body
+		writeJSON(t, w, map[string]any{"ok": true})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	svc := NewService(newMemoryStore(),
+		WithHTTPClient(server.Client()),
+		WithProgressInterval(20*time.Millisecond),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := svc.executeSingleCommand(ctx, server.URL+"/api/v1", deviceState{
+		DeviceID: "dev-1",
+		Token:    "tok-1",
+	}, pollResponse{
+		CommandID:             "cmd-timeout",
+		Command:               "sh -c 'sleep 10 &'",
+		CommandTimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("executeSingleCommand: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("timeout command took %s; child process likely survived termination", elapsed)
+	}
+
+	select {
+	case body := <-resultCh:
+		if exitCode, _ := body["exit_code"].(float64); int(exitCode) != 124 {
+			t.Fatalf("exit_code = %v, want 124; body=%+v", body["exit_code"], body)
+		}
+		if stderr, _ := body["stderr"].(string); !strings.Contains(stderr, "Command timed out after 1s") {
+			t.Fatalf("stderr missing timeout message: %q", stderr)
+		}
+	default:
+		t.Fatal("expected command result payload")
+	}
+}
+
 func TestServiceAskForHelpRegistrationPromptErrors(t *testing.T) {
 	t.Parallel()
 
@@ -374,9 +548,8 @@ func TestServiceAskForHelpRegistrationPromptErrors(t *testing.T) {
 			defer server.Close()
 
 			svc := NewService(newMemoryStore(), WithHTTPClient(server.Client()))
-			// Invite code must be supplied explicitly; offline-first (INV-8)
-			// blocks the HTTP call otherwise, so the test of server-driven
-			// 422/403 → prompt-error translation needs a real invite.
+			// Use an explicit invite so the request body is deterministic while
+			// testing server-driven 422/403 -> prompt-error translation.
 			_, err := svc.AskForHelp(context.Background(), AskRequest{Endpoint: server.URL, InviteCode: "test-invite"})
 			if err == nil {
 				t.Fatal("expected registration prompt error")
@@ -439,6 +612,27 @@ func TestServiceGoUXManifestJSON(t *testing.T) {
 	}
 	if gotPath != "/api/v1/ux-manifests/device-go?ref=ref-99&schema_version=v1&worker_code=worker-42" {
 		t.Fatalf("manifest path = %q", gotPath)
+	}
+}
+
+func TestStatusJSONIncludesNullActiveTaskWhenCleared(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(Status{Enabled: true, Registered: true})
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	value, ok := decoded["active_task"]
+	if !ok {
+		t.Fatalf("active_task omitted from status JSON: %s", string(payload))
+	}
+	if value != nil {
+		t.Fatalf("active_task = %#v, want null", value)
 	}
 }
 

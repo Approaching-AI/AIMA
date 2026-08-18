@@ -78,10 +78,11 @@ func Recommend(ctx context.Context, deps *Deps, locale string) (RecommendResult,
 	// Step 4b: Second pass — evaluate every model with the new spread-wide
 	// scoring formula (modality bonus, recency bonus, largest-fittable bonus).
 	var recs []ModelRecommendation
+	firstRunPolicy := effectiveFirstRunPolicy(deps)
 	for i := range cat.ModelAssets {
 		ma := &cat.ModelAssets[i]
 
-		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, allEngines, localModels, locale, maxFitBillion)
+		rec, ok := evaluateModelAsset(ctx, cat, kStore, ma, hwInfo, hwProfile, installedEngines, allEngines, localModels, locale, maxFitBillion, firstRunPolicy)
 		if !ok {
 			continue
 		}
@@ -138,6 +139,7 @@ func evaluateModelAsset(
 	localModels map[string]*state.Model,
 	locale string,
 	maxFitBillion float64,
+	firstRunPolicy FirstRunPolicy,
 ) (ModelRecommendation, bool) {
 	modelName := ma.Metadata.Name
 
@@ -212,7 +214,7 @@ func evaluateModelAsset(
 		}
 	}
 
-	score := computeFitScore(ma, hwInfo, variant, fit, engineStatus, modelAvailable, goldenExists, maxFitBillion)
+	score := computeFitScore(ma, hwInfo, variant, fit, engineStatus, modelAvailable, goldenExists, maxFitBillion, firstRunPolicy)
 
 	reason := buildRecommendationReason(ma, variant, engineType, fit, perf, hwInfo, locale)
 
@@ -351,6 +353,7 @@ func computeFitScore(
 	modelAvailable bool,
 	goldenExists bool,
 	maxFitBillion float64,
+	firstRunPolicy FirstRunPolicy,
 ) int {
 	if !fit.Fit {
 		return 0
@@ -358,8 +361,8 @@ func computeFitScore(
 
 	score := 0
 
-	// D1: Modality (0-30)
-	score += modalityScore(ma.Metadata.Type)
+	// D1: Modality
+	score += firstRunPolicy.modalityScore(ma.Metadata.Type)
 
 	// D2: Hardware match (0-25) = D2a + D2b + D2c
 	score += vramUtilizationScore(hw, variant)
@@ -386,6 +389,13 @@ func computeFitScore(
 	// D5: Deployment simplicity (0-10)
 	score += simplicityScore(variant)
 
+	// First-run guardrail: wildcard/native variants on small local machines
+	// should prefer a credible first success over the largest catalog entry.
+	score -= nativeFirstRunRiskPenalty(ma, hw, variant, firstRunPolicy)
+
+	if score < 0 {
+		return 0
+	}
 	if score > 100 {
 		score = 100
 	}
@@ -486,26 +496,6 @@ func bandwidthAffinityScore(hw knowledge.HardwareInfo, ma *knowledge.ModelAsset)
 	}
 }
 
-// modalityScore returns 0-30 for D1 modality priority. LLM dominates
-// the onboarding wizard; the gap to ASR/TTS (25 points) is impossible
-// to overcome through other dimensions alone.
-func modalityScore(modelType string) int {
-	switch strings.ToLower(strings.TrimSpace(modelType)) {
-	case "llm":
-		return 30
-	case "vlm":
-		return 25
-	case "embedding", "rerank":
-		return 8
-	case "asr", "tts":
-		return 5
-	case "image_gen", "video_gen":
-		return 3
-	default:
-		return 2
-	}
-}
-
 // largestFittableScore returns 0-8 for D4a. Rewards the largest model that
 // fits the box relative to the absolute maximum fittable model.
 func largestFittableScore(ma *knowledge.ModelAsset, maxFitBillion float64) int {
@@ -552,6 +542,54 @@ func simplicityScore(variant *knowledge.ModelVariant) int {
 	default:
 		return 2
 	}
+}
+
+func nativeFirstRunRiskPenalty(ma *knowledge.ModelAsset, hw knowledge.HardwareInfo, variant *knowledge.ModelVariant, policy FirstRunPolicy) int {
+	if variant == nil {
+		return 0
+	}
+	guardrail := policy.NativeGuardrail
+	if guardrail.Disabled {
+		return 0
+	}
+	if strings.TrimSpace(variant.Hardware.GPUArch) != guardrail.WildcardGPUArch {
+		return 0
+	}
+	// A wildcard variant on a discrete accelerator is a compatibility fallback,
+	// not a CPU/native first-run path. Keep high-end GPU behavior unchanged.
+	if guardrail.SkipDiscreteAccelerators != nil && *guardrail.SkipDiscreteAccelerators && hw.GPUVRAMMiB > 0 && hw.GPUArch != "" && !hw.UnifiedMemory {
+		return 0
+	}
+
+	penalty := 0
+	ramReq := variant.Hardware.RAMMinMiB
+	if ramReq <= 0 {
+		ramReq = variant.ParsedExpectedPerf().RAMMiB
+	}
+	if ramReq <= 0 && hw.UnifiedMemory {
+		ramReq = variant.Hardware.VRAMMinMiB
+	}
+	if hw.RAMTotalMiB > 0 && ramReq > 0 {
+		util := float64(ramReq) / float64(hw.RAMTotalMiB)
+		for _, threshold := range guardrail.RAMUtilizationPenalties {
+			if util > threshold.Above {
+				penalty += threshold.Penalty
+				break
+			}
+		}
+	}
+
+	params := parseParamBillion(ma.Metadata.ParameterCount)
+	for _, threshold := range guardrail.ParameterCountPenalties {
+		if params > threshold.AboveBillion {
+			penalty += threshold.Penalty
+			break
+		}
+	}
+	if guardrail.MaxPenalty > 0 && penalty > guardrail.MaxPenalty {
+		return guardrail.MaxPenalty
+	}
+	return penalty
 }
 
 // parseParamBillion turns a free-form parameter_count string ("8B", "1.7B",
@@ -881,26 +919,26 @@ func performanceSource(perf knowledge.ExpectedPerf) string {
 // plain text. Unknown locales fall back to English.
 var reasonMessages = map[string]map[string]string{
 	"en": {
-		"moe_active":        "MoE architecture, only %s active params",
-		"single_gpu":        "fits in single GPU",
-		"multi_gpu":         "requires %d GPUs",
-		"vram_light":        "lightweight VRAM usage",
-		"vram_good":         "good VRAM utilization",
-		"vram_tight":        "tight VRAM fit",
-		"tps_expected":      "~%.0f tok/s expected",
-		"may_not_fit":       "may not fit: %s",
-		"generic_compat":    "compatible with %s via %s",
+		"moe_active":     "MoE architecture, only %s active params",
+		"single_gpu":     "fits in single GPU",
+		"multi_gpu":      "requires %d GPUs",
+		"vram_light":     "lightweight VRAM usage",
+		"vram_good":      "good VRAM utilization",
+		"vram_tight":     "tight VRAM fit",
+		"tps_expected":   "~%.0f tok/s expected",
+		"may_not_fit":    "may not fit: %s",
+		"generic_compat": "compatible with %s via %s",
 	},
 	"zh": {
-		"moe_active":        "MoE 架构，仅 %s 激活参数",
-		"single_gpu":        "单卡即可运行",
-		"multi_gpu":         "需要 %d 张 GPU",
-		"vram_light":        "显存占用轻量",
-		"vram_good":         "显存利用率良好",
-		"vram_tight":        "显存紧张",
-		"tps_expected":      "预计 ~%.0f tok/s",
-		"may_not_fit":       "可能无法运行：%s",
-		"generic_compat":    "兼容 %s，引擎 %s",
+		"moe_active":     "MoE 架构，仅 %s 激活参数",
+		"single_gpu":     "单卡即可运行",
+		"multi_gpu":      "需要 %d 张 GPU",
+		"vram_light":     "显存占用轻量",
+		"vram_good":      "显存利用率良好",
+		"vram_tight":     "显存紧张",
+		"tps_expected":   "预计 ~%.0f tok/s",
+		"may_not_fit":    "可能无法运行：%s",
+		"generic_compat": "兼容 %s，引擎 %s",
 	},
 }
 

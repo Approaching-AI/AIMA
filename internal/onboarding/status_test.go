@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/mcp"
 )
 
@@ -34,6 +39,23 @@ func TestBuildStatus_NoConfig(t *testing.T) {
 	}
 	if status.Hardware.GPU == nil {
 		t.Error("expected hardware.gpu to be non-nil empty slice")
+	}
+}
+
+func TestBuildHardwareIncludesNPU(t *testing.T) {
+	hardware := buildHardware(context.Background(), nil, &hal.HardwareInfo{
+		NPU: &hal.NPUInfo{
+			Vendor: "houmo",
+			Name:   "Houmo XH2A IPU",
+			Driver: "houmo,xh2a",
+			Count:  1,
+		},
+	})
+	if hardware.NPU == nil {
+		t.Fatal("expected NPU in onboarding hardware")
+	}
+	if hardware.NPU.Name != "Houmo XH2A IPU" || hardware.NPU.Driver != "houmo,xh2a" || hardware.NPU.Count != 1 {
+		t.Fatalf("unexpected NPU: %+v", hardware.NPU)
 	}
 }
 
@@ -215,6 +237,128 @@ func TestBuildStackStatus_ExposesAutoInitCapability(t *testing.T) {
 	}
 	if !status.CanAutoInit {
 		t.Fatal("expected CanAutoInit=true")
+	}
+}
+
+func TestBuildStackStatus_DockerReadyButAIMAServeMissingNeedsInit(t *testing.T) {
+	orig := DetectOnboardingInitCapability
+	DetectOnboardingInitCapability = func(deps *mcp.ToolDeps) (bool, string) {
+		return true, ""
+	}
+	defer func() { DetectOnboardingInitCapability = orig }()
+
+	deps := &Deps{
+		ToolDeps: &mcp.ToolDeps{
+			StackInit: func(ctx context.Context, tier string, allowDownload bool) (json.RawMessage, error) {
+				return nil, nil
+			},
+			StackStatus: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`{"components":[{"name":"docker","ready":true},{"name":"aima-serve","ready":false}],"all_ready":false}`), nil
+			},
+		},
+	}
+
+	status, err := BuildStackStatus(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("BuildStackStatus: %v", err)
+	}
+	if !status.NeedsInit {
+		t.Fatal("expected NeedsInit=true when docker is ready but aima-serve is not persistent")
+	}
+	if !status.CanAutoInit {
+		t.Fatal("expected CanAutoInit=true for missing aima-serve on Linux stack")
+	}
+	if status.InitTierRecommendation != "docker" {
+		t.Fatalf("tier = %q, want docker", status.InitTierRecommendation)
+	}
+}
+
+func TestBuildStackStatus_NativeSkippedDoesNotNeedInit(t *testing.T) {
+	orig := DetectOnboardingInitCapability
+	initCapabilityCalled := false
+	DetectOnboardingInitCapability = func(deps *mcp.ToolDeps) (bool, string) {
+		initCapabilityCalled = true
+		return true, ""
+	}
+	defer func() { DetectOnboardingInitCapability = orig }()
+
+	deps := &Deps{
+		ToolDeps: &mcp.ToolDeps{
+			StackStatus: func(ctx context.Context) (json.RawMessage, error) {
+				return json.RawMessage(`{"components":[{"name":"docker","ready":false,"skipped":true},{"name":"k3s","ready":false,"skipped":true}],"all_ready":true}`), nil
+			},
+		},
+	}
+
+	status, err := BuildStackStatus(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("BuildStackStatus: %v", err)
+	}
+	if status.NeedsInit {
+		t.Fatal("expected native skipped stack to not need init")
+	}
+	if status.InitTierRecommendation != "native" {
+		t.Fatalf("tier = %q, want native", status.InitTierRecommendation)
+	}
+	if initCapabilityCalled {
+		t.Fatal("native skipped stack should not ask for auto-init capability")
+	}
+}
+
+func TestContainerUsesGPUDetectsROCmDevices(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake docker shell script is unix-only")
+	}
+	installFakeDocker(t, `#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf '%s\n' '{"HostConfig":{"DeviceRequests":null,"Runtime":"runc","Devices":[{"PathOnHost":"/dev/kfd","PathInContainer":"/dev/kfd"},{"PathOnHost":"/dev/dri","PathInContainer":"/dev/dri"}]}}'
+  exit 0
+fi
+exit 1
+`)
+
+	if !containerUsesGPU(context.Background(), "rocm-vllm") {
+		t.Fatal("expected container with /dev/kfd and /dev/dri to be treated as GPU-using")
+	}
+}
+
+func TestDetectGPUOccupancyIncludesROCmContainer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake docker shell script is unix-only")
+	}
+	installFakeDocker(t, `#!/bin/sh
+if [ "$1" = "ps" ]; then
+  printf '%s\n' '{"Names":"qwen36-vllm","Image":"vllm-rocm:latest","Labels":""}'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf '%s\n' '{"HostConfig":{"DeviceRequests":null,"Runtime":"runc","Devices":[{"PathOnHost":"/dev/kfd","PathInContainer":"/dev/kfd"},{"PathOnHost":"/dev/dri","PathInContainer":"/dev/dri"}]},"State":{"Pid":0}}'
+  exit 0
+fi
+exit 1
+`)
+
+	occ := detectGPUOccupancy(context.Background())
+	if len(occ) != 1 {
+		t.Fatalf("gpu occupancy count = %d, want 1: %#v", len(occ), occ)
+	}
+	if occ[0].Name != "qwen36-vllm" || occ[0].Image != "vllm-rocm:latest" {
+		t.Fatalf("unexpected occupancy entry: %#v", occ[0])
+	}
+}
+
+func installFakeDocker(t *testing.T, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
+	if !strings.Contains(os.Getenv("PATH"), dir) {
+		t.Fatal("fake docker directory was not added to PATH")
 	}
 }
 

@@ -21,6 +21,15 @@ func (s *Service) loadState(ctx context.Context) deviceState {
 	state.ReferralCode = s.optionalConfig(ctx, configStateReferralCode, "")
 	state.ShareText = s.optionalConfig(ctx, configStateShareText, "")
 	state.TokenExpiresAt = s.optionalConfig(ctx, configStateTokenExpiresAt, "")
+	state.TokenKind = s.optionalConfig(ctx, configStateTokenKind, "")
+	state.TokenPersistence = s.optionalConfig(ctx, configStateTokenPersistence, "")
+	state.PersistentTokenFallbackEnabled = parseConfigBool(s.optionalConfig(ctx, configStatePersistentToken, ""))
+	state.IdentityDeviceID = s.optionalConfig(ctx, configIdentityDeviceID, "")
+	state.IdentityKeyID = s.optionalConfig(ctx, configIdentityKeyID, "")
+	state.IdentityPrivateKeyPEM = s.optionalConfig(ctx, configIdentityPrivateKeyPEM, "")
+	state.IdentityPublicKeyPEM = s.optionalConfig(ctx, configIdentityPublicKeyPEM, "")
+	state.IdentityAlgorithm = s.optionalConfig(ctx, configIdentityAlgorithm, "")
+	state.IdentityStorageClass = s.optionalConfig(ctx, configIdentityStorageClass, "")
 	if raw := s.optionalConfig(ctx, configStatePollIntervalSec, ""); raw != "" {
 		var parsed int
 		if _, err := fmt.Sscanf(raw, "%d", &parsed); err == nil && parsed > 0 {
@@ -39,20 +48,29 @@ func (s *Service) loadState(ctx context.Context) deviceState {
 
 func (s *Service) saveState(ctx context.Context, state deviceState) error {
 	entries := map[string]string{
-		configStateDeviceID:        state.DeviceID,
-		configStateToken:           state.Token,
-		configStateRecoveryCode:    state.RecoveryCode,
-		configStateReferralCode:    state.ReferralCode,
-		configStateShareText:       state.ShareText,
-		configStateTokenExpiresAt:  state.TokenExpiresAt,
-		configStatePollIntervalSec: fmt.Sprintf("%d", maxInt(state.PollIntervalSeconds, int(defaultPollInterval/time.Second))),
-		configStateMaxTasks:        strconv.Itoa(state.MaxTasks),
-		configStateUsedTasks:       strconv.Itoa(state.UsedTasks),
-		configStateBudgetUSD:       strconv.FormatFloat(state.BudgetUSD, 'f', -1, 64),
-		configStateSpentUSD:        strconv.FormatFloat(state.SpentUSD, 'f', -1, 64),
-		configStateBudgetStatus:    state.BudgetStatus,
-		configStateIsBound:         strconv.FormatBool(state.IsBound),
-		configStateReferralCount:   strconv.Itoa(state.ReferralCount),
+		configStateDeviceID:         state.DeviceID,
+		configStateToken:            state.Token,
+		configStateRecoveryCode:     state.RecoveryCode,
+		configStateReferralCode:     state.ReferralCode,
+		configStateShareText:        state.ShareText,
+		configStateTokenExpiresAt:   state.TokenExpiresAt,
+		configStateTokenKind:        state.TokenKind,
+		configStateTokenPersistence: state.TokenPersistence,
+		configStatePersistentToken:  strconv.FormatBool(state.PersistentTokenFallbackEnabled),
+		configStatePollIntervalSec:  fmt.Sprintf("%d", maxInt(state.PollIntervalSeconds, int(defaultPollInterval/time.Second))),
+		configStateMaxTasks:         strconv.Itoa(state.MaxTasks),
+		configStateUsedTasks:        strconv.Itoa(state.UsedTasks),
+		configStateBudgetUSD:        strconv.FormatFloat(state.BudgetUSD, 'f', -1, 64),
+		configStateSpentUSD:         strconv.FormatFloat(state.SpentUSD, 'f', -1, 64),
+		configStateBudgetStatus:     state.BudgetStatus,
+		configStateIsBound:          strconv.FormatBool(state.IsBound),
+		configStateReferralCount:    strconv.Itoa(state.ReferralCount),
+		configIdentityDeviceID:      state.IdentityDeviceID,
+		configIdentityKeyID:         state.IdentityKeyID,
+		configIdentityPrivateKeyPEM: state.IdentityPrivateKeyPEM,
+		configIdentityPublicKeyPEM:  state.IdentityPublicKeyPEM,
+		configIdentityAlgorithm:     state.IdentityAlgorithm,
+		configIdentityStorageClass:  state.IdentityStorageClass,
 	}
 	for key, value := range entries {
 		if err := s.store.SetConfig(ctx, key, value); err != nil {
@@ -90,10 +108,20 @@ func (s *Service) mirrorCanonical(ctx context.Context, state deviceState) error 
 }
 
 func (s *Service) clearSavedToken(ctx context.Context) error {
-	if err := s.store.SetConfig(ctx, configStateToken, ""); err != nil {
-		return err
+	keys := []string{
+		configStateToken,
+		configStateTokenExpiresAt,
+		configStateTokenKind,
+		configStateTokenPersistence,
+		cloud.ConfigDeviceToken,
+		cloud.ConfigTokenExpiresAt,
 	}
-	return s.store.SetConfig(ctx, configStateTokenExpiresAt, "")
+	for _, key := range keys {
+		if err := s.store.SetConfig(ctx, key, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) persistOverrides(ctx context.Context, req AskRequest) error {

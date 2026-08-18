@@ -1,0 +1,12 @@
+{
+  "model_name": "qwen3-32b",
+  "fit_score": 8,
+  "model_type": "llm",
+  "reason": "fits in single GPU, ~15 tok/s expected"
+}
+{
+  "model_name": "qwen3-30b-a3b",
+  "fit_score": 8,
+  "model_type": "llm",
+  "reason": "MoE architecture, only 3B active params, fits in single GPU, ~30 tok/s expected"
+}

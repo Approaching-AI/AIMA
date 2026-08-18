@@ -177,7 +177,7 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 | Tool | Parameters | Returns | Description |
 |------|-----------|---------|-------------|
-| `model.scan` | (none) | list of found models | Scan filesystem for model files |
+| `model.scan` | (none) | deployable model list | Scan filesystem, register all resources, and return normalized standalone models |
 | `model.list` | (none) | list of registered models | List models in database |
 | `model.pull` | `name` | download progress | Download model by name |
 | `model.import` | `path` | model record | Import model from local path |
@@ -186,7 +186,7 @@ All tools are called via JSON-RPC 2.0. Group names use dot notation.
 
 **Model statuses**: `registered` → `downloading` → `imported` | `failed`
 
-> **Tip**: `model.list` = what's in the local database (downloaded/imported). `model.scan` = rescan the filesystem for new files. `catalog.list(kind=models)` = browse the YAML catalog of all supported models. If the user asks "what models can I run", start with `model.list`; if they ask "what models does AIMA support", use `catalog.list(kind=models)`.
+> **Tip**: `model.list` = every registered database record, including pipeline components. `model.scan` = rescan the filesystem and return normalized models that can be deployed independently. `catalog.list(kind=models)` = browse the YAML catalog of all supported models. If the user asks "what models can I run", use `model.scan`; if they ask "what resources and components are registered", use `model.list`.
 
 ### engine — Engine Management
 

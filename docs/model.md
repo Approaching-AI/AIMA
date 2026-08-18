@@ -10,7 +10,7 @@
 
 | 命令 | 功能 |
 |------|------|
-| `aima model scan` | 扫描本地模型目录，检测并注册到数据库 |
+| `aima model scan` | 扫描本地模型目录，注册全部资源并返回可独立部署模型 |
 | `aima model list` | 列出所有已注册模型 |
 | `aima model info <name>` | 获取模型详细信息 |
 | `aima model pull <name>` | 从远程源下载模型 |
@@ -22,7 +22,7 @@
 
 | 工具 | JSON-RPC 方法 | 功能 |
 |------|---------------|------|
-| `model.scan` | `model.scan` | 扫描本地模型 |
+| `model.scan` | `model.scan` | 扫描并返回归一化后的可独立部署模型 |
 | `model.list` | `model.list` | 列出所有模型 |
 | `model.info` | `model.info` | 获取模型详情 |
 | `model.pull` | `model.pull` | 下载模型 (递归+分页+完整性校验+路径遍历防护) |
@@ -47,7 +47,7 @@ type ModelInfo struct {
     DetectedParams string `json:"detected_params"`
 
     // v1.1 增强元数据字段
-    ModelClass     string `json:"model_class"`      // dense | moe | hybrid | unknown
+    ModelClass     string `json:"model_class"`      // dense | moe | hybrid | pipeline | component | unknown
     TotalParams    int64  `json:"total_params"`     // 精确参数计数
     ActiveParams   int64  `json:"active_params"`    // MOE 激活参数
     Quantization   string `json:"quantization"`     // int8 | int4 | fp8 | fp16 | bf16 | nf4 | unknown

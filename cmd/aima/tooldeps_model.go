@@ -196,6 +196,59 @@ func annotateModelsFromCatalog(models []*state.Model, cat *knowledge.Catalog) {
 	}
 }
 
+func isDeployableModelRecord(m *state.Model) bool {
+	if m == nil || strings.TrimSpace(m.Name) == "" {
+		return false
+	}
+	if m.StandaloneDeploy != nil {
+		return *m.StandaloneDeploy
+	}
+
+	modelType := strings.ToLower(strings.TrimSpace(m.Type))
+	format := strings.ToLower(strings.TrimSpace(m.Format))
+	modelClass := strings.ToLower(strings.TrimSpace(m.ModelClass))
+	uiRole := strings.ToLower(strings.TrimSpace(m.UIRole))
+	if uiRole == "component" || uiRole == "draft" || modelClass == "component" {
+		return false
+	}
+	if uiRole == "deployable" {
+		return true
+	}
+
+	switch modelType {
+	case "llm", "vlm", "embedding", "image_gen":
+		return true
+	case "asr", "tts":
+		return modelClass == "pipeline"
+	}
+	if format == "gguf" {
+		return true
+	}
+	if format == "safetensors" {
+		switch modelClass {
+		case "dense", "moe", "hybrid", "diffusion", "pipeline":
+			return true
+		}
+	}
+	return (format == "onnx" || format == "mnn") && modelClass == "pipeline"
+}
+
+func listDeployableModelRecords(ctx context.Context, db *state.DB, cat *knowledge.Catalog) ([]*state.Model, error) {
+	models, err := db.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models = foldCatalogAliasModels(cat, models)
+	annotateModelsFromCatalog(models, cat)
+	deployable := make([]*state.Model, 0, len(models))
+	for _, m := range models {
+		if isDeployableModelRecord(m) {
+			deployable = append(deployable, m)
+		}
+	}
+	return deployable, nil
+}
+
 // buildModelDeps wires model.scan, model.list, model.pull, model.import,
 // model.info, and model.remove tools.
 func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
@@ -237,7 +290,11 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err := registerCatalogLocalModels(ctx, cat, db); err != nil {
 			return nil, fmt.Errorf("register catalog local models: %w", err)
 		}
-		return json.Marshal(models)
+		deployable, err := listDeployableModelRecords(ctx, db, cat)
+		if err != nil {
+			return nil, fmt.Errorf("list deployable scanned models: %w", err)
+		}
+		return json.Marshal(deployable)
 	}
 
 	deps.ListModels = func(ctx context.Context) (json.RawMessage, error) {

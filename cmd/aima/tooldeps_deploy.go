@@ -52,6 +52,10 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	deploymentLocks := newDeploymentOperationLocks()
 
 	deps.DeployApply = func(ctx context.Context, engineType, modelName, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
+		configOverrides, envOverrides, err := splitDeploymentEnvOverrides(configOverrides)
+		if err != nil {
+			return nil, err
+		}
 		// A1: keep the user's original input before it's canonicalized below, so the
 		// result can surface the original↔canonical mapping (requested_model).
 		requestedModel := modelName
@@ -110,6 +114,9 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			if err != nil {
 				return nil, fmt.Errorf("resolve recovery policy: %w", err)
 			}
+		}
+		if len(envOverrides) > 0 {
+			resolved.Env = mergeDeploymentEnv(resolved.Env, envOverrides)
 		}
 		engineSourceDigest := engineSourceSHA256(resolved.Source)
 		upstreamModel := resolvedServedModelName(
@@ -581,6 +588,12 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 	}
 
 	deps.DeployDryRun = func(ctx context.Context, engineType, modelName, slot string, overrides map[string]any) (json.RawMessage, error) {
+		var envOverrides map[string]string
+		var err error
+		overrides, envOverrides, err = splitDeploymentEnvOverrides(overrides)
+		if err != nil {
+			return nil, err
+		}
 		hwInfo := buildHardwareInfo(ctx, cat, rt.Name())
 		rd, err := resolveDeployment(ctx, cat, db, kStore, hwInfo, modelName, engineType, slot, overrides, dataDir)
 		if err != nil {
@@ -589,6 +602,9 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 
 		// Select runtime for display
 		resolved := rd.Resolved
+		if len(envOverrides) > 0 {
+			resolved.Env = mergeDeploymentEnv(resolved.Env, envOverrides)
+		}
 		hasPartition := resolved.Partition != nil && (resolved.Partition.GPUMemoryMiB > 0 || resolved.Partition.GPUCoresPercent > 0)
 		selectedRt, rtErr := pickRuntimeForDeployment(resolved.RuntimeRecommendation, k3sRt, dockerRt, nativeRt, rt, hasPartition)
 		if rtErr != nil {
@@ -620,6 +636,7 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 			"config":               resolved.Config,
 			"resolved_config":      rd.ResolvedConfig,
 			"effective_config":     resolved.Config,
+			"env":                  resolved.Env,
 			"fit_adjustments":      rd.Fit.Adjustments,
 			"ports":                knowledge.ResolvePortBindingsFromSpecs(resolved.PortSpecs, resolved.Config),
 			"provenance":           resolved.Provenance,
@@ -1068,6 +1085,50 @@ func buildDeployDeps(ac *appContext, deps *mcp.ToolDeps,
 		}
 		return logs, err
 	}
+}
+
+func splitDeploymentEnvOverrides(config map[string]any) (map[string]any, map[string]string, error) {
+	if len(config) == 0 {
+		return config, nil, nil
+	}
+	clean := make(map[string]any, len(config))
+	for key, value := range config {
+		if key != "_env" {
+			clean[key] = value
+		}
+	}
+	raw, ok := config["_env"]
+	if !ok || raw == nil {
+		return clean, nil, nil
+	}
+	env := map[string]string{}
+	switch values := raw.(type) {
+	case map[string]string:
+		for key, value := range values {
+			env[key] = value
+		}
+	case map[string]any:
+		for key, value := range values {
+			if strings.TrimSpace(key) == "" {
+				return nil, nil, fmt.Errorf("_env contains an empty variable name")
+			}
+			env[key] = fmt.Sprint(value)
+		}
+	default:
+		return nil, nil, fmt.Errorf("_env must be an object of environment variables")
+	}
+	return clean, env, nil
+}
+
+func mergeDeploymentEnv(base, overrides map[string]string) map[string]string {
+	merged := make(map[string]string, len(base)+len(overrides))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range overrides {
+		merged[key] = value
+	}
+	return merged
 }
 
 func validatedPreinstalledNativeBinary(ctx context.Context, db *state.DB, resolved *knowledge.ResolvedConfig, asset *knowledge.EngineAsset) (string, error) {

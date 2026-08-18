@@ -425,7 +425,8 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 				continue
 			}
 		} else if !inst.Active || inst.LifecycleStatus != "active" ||
-			inst.RuntimeType != preferredEngineRuntimeType(base, hwInfo.Platform) {
+			(!strings.EqualFold(strings.TrimSpace(inst.RuntimeType), "native") &&
+				inst.RuntimeType != preferredEngineRuntimeType(base, hwInfo.Platform)) {
 			continue
 		}
 

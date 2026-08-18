@@ -23,6 +23,25 @@ import (
 	"github.com/jguan/aima/internal/runtime"
 )
 
+func TestSplitDeploymentEnvOverrides(t *testing.T) {
+	config, env, err := splitDeploymentEnvOverrides(map[string]any{
+		"max_model_len": 1048576,
+		"_env": map[string]any{
+			"NODE_RANK": 1,
+			"HEADLESS":  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("splitDeploymentEnvOverrides: %v", err)
+	}
+	if !reflect.DeepEqual(config, map[string]any{"max_model_len": 1048576}) {
+		t.Fatalf("config = %#v", config)
+	}
+	if !reflect.DeepEqual(env, map[string]string{"NODE_RANK": "1", "HEADLESS": "true"}) {
+		t.Fatalf("env = %#v", env)
+	}
+}
+
 type deploymentIntentRuntime struct {
 	name         string
 	statuses     map[string]*runtime.DeploymentStatus
@@ -355,7 +374,7 @@ func TestContextWindowFromResolvedConfigSupportsContextTokens(t *testing.T) {
 func TestResolvedServedModelNameExpandsModelTemplate(t *testing.T) {
 	got := resolvedServedModelName("GLM-4.1V-9B-Thinking-FP4", map[string]any{
 		"served_model_name": "{{.ModelName}}",
-	})
+	}, "")
 	if got != "GLM-4.1V-9B-Thinking-FP4" {
 		t.Fatalf("resolvedServedModelName = %q, want model name", got)
 	}

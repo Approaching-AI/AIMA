@@ -1,0 +1,112 @@
+kind: deployment_scenario
+metadata:
+  name: deepseek-v4-flash-dspark-2node
+  description: "DeepSeek V4 Flash DSpark across two DGX Spark GB10 devices using AIMA Fleet"
+target:
+  hardware_profile: nvidia-gb10-arm64
+
+inputs:
+  - name: worker_device
+    label: Worker Fleet device
+    description: "AIMA Fleet device ID for rank 1"
+    kind: device
+    required: true
+  - name: master_addr
+    label: Master fabric address
+    description: "Head-node IPv4 address reachable over the direct RoCE link"
+    kind: string
+    required: true
+  - name: head_host_ip
+    label: Head VLLM host IP
+    description: "Head-node address advertised by vLLM, normally the master fabric address"
+    kind: string
+    required: true
+  - name: worker_host_ip
+    label: Worker VLLM host IP
+    description: "Worker-node address on the direct RoCE link"
+    kind: string
+    required: true
+  - name: head_socket_ifname
+    label: Head fabric interface
+    description: "Head NCCL/Gloo interface name"
+    kind: string
+    required: true
+  - name: worker_socket_ifname
+    label: Worker fabric interface
+    description: "Worker NCCL/Gloo interface name"
+    kind: string
+    required: true
+  - name: head_ib_hca
+    label: Head IB HCA
+    description: "Head NCCL_IB_HCA value"
+    kind: string
+    required: true
+  - name: worker_ib_hca
+    label: Worker IB HCA
+    description: "Worker NCCL_IB_HCA value"
+    kind: string
+    required: true
+  - name: head_gid_index
+    label: Head RoCE GID index
+    description: "RoCEv2 GID index matching the head fabric address"
+    kind: string
+    required: true
+  - name: worker_gid_index
+    label: Worker RoCE GID index
+    description: "RoCEv2 GID index matching the worker fabric address"
+    kind: string
+    required: true
+
+deployments:
+  - id: worker
+    device: "{{.worker_device}}"
+    model: deepseek-v4-flash-0731
+    engine: vllm-dspark-gb10
+    no_pull: true
+    role: worker
+    config:
+      node_rank: 1
+      headless: true
+      master_addr: "{{.master_addr}}"
+    env:
+      VLLM_HOST_IP: "{{.worker_host_ip}}"
+      NCCL_SOCKET_IFNAME: "{{.worker_socket_ifname}}"
+      TP_SOCKET_IFNAME: "{{.worker_socket_ifname}}"
+      GLOO_SOCKET_IFNAME: "{{.worker_socket_ifname}}"
+      NCCL_IB_HCA: "{{.worker_ib_hca}}"
+      NCCL_IB_GID_INDEX: "{{.worker_gid_index}}"
+    notes: "Rank 1 starts first and waits for the head rendezvous."
+
+  - id: head
+    device: local
+    model: deepseek-v4-flash-0731
+    engine: vllm-dspark-gb10
+    no_pull: true
+    role: head
+    config:
+      node_rank: 0
+      master_addr: "{{.master_addr}}"
+    env:
+      VLLM_HOST_IP: "{{.head_host_ip}}"
+      NCCL_SOCKET_IFNAME: "{{.head_socket_ifname}}"
+      TP_SOCKET_IFNAME: "{{.head_socket_ifname}}"
+      GLOO_SOCKET_IFNAME: "{{.head_socket_ifname}}"
+      NCCL_IB_HCA: "{{.head_ib_hca}}"
+      NCCL_IB_GID_INDEX: "{{.head_gid_index}}"
+    notes: "Rank 0 exposes the OpenAI-compatible API on port 8888."
+
+startup_order:
+  - step: 1
+    deployment: worker
+    wait_for: ""
+    timeout_s: 0
+    notes: "Launch the headless worker before rank 0."
+  - step: 2
+    deployment: head
+    wait_for: health_check
+    timeout_s: 1200
+    notes: "Wait for model load, graph capture, and the API health check."
+
+memory_budget:
+  total_unified_mib: 262144
+  notes: "Two 128GB unified-memory nodes; per-node limits and KV-cache allocation are controlled by the model variant."

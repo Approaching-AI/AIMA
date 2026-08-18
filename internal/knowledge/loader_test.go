@@ -785,6 +785,76 @@ func TestScenarioNewFields(t *testing.T) {
 	}
 }
 
+func TestDeepSeekV4DSparkCatalogAssets(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	var model *ModelAsset
+	for i := range cat.ModelAssets {
+		if cat.ModelAssets[i].Metadata.Name == "deepseek-v4-flash-0731" {
+			model = &cat.ModelAssets[i]
+			break
+		}
+	}
+	if model == nil {
+		t.Fatal("deepseek-v4-flash-0731 model asset not found")
+	}
+	if model.Metadata.ParameterCount != "304B" || model.Capabilities.DeploymentScenario != "deepseek-v4-flash-dspark-2node" {
+		t.Fatalf("unexpected model metadata: %#v capabilities=%#v", model.Metadata, model.Capabilities)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "vllm-dspark-gb10" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil || engine.Container == nil {
+		t.Fatal("vllm-dspark-gb10 container metadata not found")
+	}
+	if engine.Container.NetworkMode != "host" || len(engine.Container.Devices) == 0 || engine.Container.Devices[0] != "/dev/infiniband" {
+		t.Fatalf("unexpected DSpark container access: %#v", engine.Container)
+	}
+	if got := engine.Startup.DefaultArgs["max_model_len"]; got != 1048576 {
+		t.Fatalf("max_model_len = %#v, want 1048576", got)
+	}
+	var scenario *DeploymentScenario
+	for i := range cat.DeploymentScenarios {
+		if cat.DeploymentScenarios[i].Metadata.Name == "deepseek-v4-flash-dspark-2node" {
+			scenario = &cat.DeploymentScenarios[i]
+			break
+		}
+	}
+	if scenario == nil || len(scenario.Inputs) == 0 || len(scenario.Deployments) != 2 {
+		t.Fatalf("unexpected DSpark scenario: %#v", scenario)
+	}
+	if scenario.Deployments[0].ID != "worker" || scenario.StartupOrder[0].Deployment != "worker" {
+		t.Fatalf("worker-first order not preserved: %#v", scenario.StartupOrder)
+	}
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch: "Blackwell", GPUVRAMMiB: 15360, GPUCount: 1, UnifiedMemory: true,
+		CPUArch: "arm64", RAMTotalMiB: 131072, Platform: "linux/arm64", HardwareProfile: "nvidia-gb10-arm64",
+	}, model.Metadata.Name, engine.Metadata.Name, map[string]any{"model_path": "/models/deepseek-v4-flash-0731"})
+	if err != nil {
+		t.Fatalf("resolve DSpark catalog assets: %v", err)
+	}
+	if resolved.Container == nil || resolved.Container.NetworkMode != "host" {
+		t.Fatalf("engine container access was not merged: %#v", resolved.Container)
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("generate DSpark pod: %v", err)
+	}
+	podText := string(podYAML)
+	if !strings.Contains(podText, `--max-model-len 1048576`) || strings.Contains(podText, "1.048576e+06") {
+		t.Fatalf("max_model_len was not rendered as a decimal integer:\n%s", podText)
+	}
+	if !strings.Contains(podText, "hostNetwork: true") || !strings.Contains(podText, "/dev/infiniband") {
+		t.Fatalf("DSpark pod is missing distributed container access:\n%s", podText)
+	}
+}
+
 func TestLoadCatalogInvalidYAML(t *testing.T) {
 	fs := fstest.MapFS{
 		"hardware/bad.yaml": &fstest.MapFile{Data: []byte("not: valid: yaml: [")},

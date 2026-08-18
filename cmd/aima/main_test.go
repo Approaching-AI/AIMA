@@ -1369,7 +1369,7 @@ func TestApplyScenarioSkipsRemainingDeploymentsAndPostDeployAfterWaitFailure(t *
 		},
 	}
 
-	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo", false)
+	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo", false, nil)
 	if err != nil {
 		t.Fatalf("applyScenario: %v", err)
 	}
@@ -1430,7 +1430,7 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 		},
 	}
 
-	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo-last", false)
+	data, err := applyScenario(context.Background(), cat, "docker", deps, "demo-last", false, nil)
 	if err != nil {
 		t.Fatalf("applyScenario: %v", err)
 	}
@@ -1452,6 +1452,87 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 	if resp.Deployments[2].Model != "openclaw_sync" || resp.Deployments[2].Status != "skipped" {
 		t.Fatalf("post-deploy result = %#v, want skipped openclaw_sync", resp.Deployments[2])
+	}
+}
+
+func TestApplyScenarioDryRunRoutesRemoteDeploymentAndExpandsBindings(t *testing.T) {
+	cat := &knowledge.Catalog{DeploymentScenarios: []knowledge.DeploymentScenario{{
+		Metadata: knowledge.ScenarioMetadata{Name: "two-node"},
+		Inputs: []knowledge.ScenarioInput{
+			{Name: "worker_device", Required: true},
+			{Name: "master_addr", Required: true},
+		},
+		Deployments: []knowledge.ScenarioDeployment{
+			{ID: "worker", Device: "{{.worker_device}}", Model: "same-model", Engine: "engine", Config: map[string]any{"node_rank": 1}, Env: map[string]string{"MASTER_ADDR": "{{.master_addr}}"}},
+			{ID: "head", Device: "local", Model: "same-model", Engine: "engine", Config: map[string]any{"node_rank": 0}},
+		},
+		StartupOrder: []knowledge.ScenarioStartupStep{
+			{Step: 1, Deployment: "worker"},
+			{Step: 2, Deployment: "head"},
+		},
+	}}}
+
+	var remoteParams map[string]any
+	localCalls := 0
+	deps := &mcp.ToolDeps{
+		FleetExecTool: func(ctx context.Context, deviceID, toolName string, params json.RawMessage) (json.RawMessage, error) {
+			if deviceID != "spark-worker" || toolName != "deploy.dry_run" {
+				t.Fatalf("unexpected remote call device=%q tool=%q", deviceID, toolName)
+			}
+			if err := json.Unmarshal(params, &remoteParams); err != nil {
+				t.Fatal(err)
+			}
+			return json.Marshal(mcp.TextResult(`{"name":"remote-plan"}`))
+		},
+		DeployDryRun: func(ctx context.Context, engine, model, slot string, config map[string]any) (json.RawMessage, error) {
+			localCalls++
+			if rank := config["node_rank"]; rank != 0 {
+				t.Fatalf("local node_rank = %#v, want 0", rank)
+			}
+			return json.RawMessage(`{"name":"local-plan"}`), nil
+		},
+	}
+
+	data, err := applyScenario(context.Background(), cat, "docker", deps, "two-node", true, map[string]string{
+		"worker_device": "spark-worker",
+		"master_addr":   "10.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("applyScenario: %v", err)
+	}
+	if localCalls != 1 {
+		t.Fatalf("local dry-run calls = %d, want 1", localCalls)
+	}
+	config, ok := remoteParams["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("remote params = %#v, config missing", remoteParams)
+	}
+	env, ok := config["_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("remote config = %#v, _env missing", config)
+	}
+	if env["MASTER_ADDR"] != "10.0.0.1" {
+		t.Fatalf("remote env = %#v", env)
+	}
+	var response struct {
+		Deployments []scenarioDeployResult `json:"deployments"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Deployments) != 2 || response.Deployments[0].Device != "spark-worker" || response.Deployments[1].Device != "local" {
+		t.Fatalf("deployments = %#v", response.Deployments)
+	}
+}
+
+func TestApplyScenarioRejectsMissingRequiredBinding(t *testing.T) {
+	cat := &knowledge.Catalog{DeploymentScenarios: []knowledge.DeploymentScenario{{
+		Metadata: knowledge.ScenarioMetadata{Name: "needs-input"},
+		Inputs:   []knowledge.ScenarioInput{{Name: "worker_device", Required: true}},
+	}}}
+	_, err := applyScenario(context.Background(), cat, "docker", &mcp.ToolDeps{}, "needs-input", true, nil)
+	if err == nil || !strings.Contains(err.Error(), "worker_device") {
+		t.Fatalf("error = %v, want missing worker_device", err)
 	}
 }
 

@@ -635,7 +635,7 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 	}
 	if err := db.InsertEngine(ctx, &state.Engine{
 		ID: "engine-native-llamacpp", Type: "llamacpp", AssetName: "llamacpp-native", Version: "1.0",
-		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: binaryPath,
+		Platform: "linux-arm64", RuntimeType: "native", BinaryPath: binaryPath,
 		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
 	}); err != nil {
 		t.Fatalf("InsertEngine: %v", err)

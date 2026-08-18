@@ -1,0 +1,55 @@
+kind: model_asset
+metadata:
+  name: deepseek-v4-flash-0731
+  type: llm
+  family: deepseek
+  # 284B target model plus the attached DSpark speculative module. The
+  # ~45.61 GB shown by some quantized mirrors is artifact size, not parameter count.
+  parameter_count: "304B"
+  released_at: "2026-07-31"
+  aliases:
+    - DeepSeek-V4-Flash-0731
+    - DeepSeek-V4-Flash-DSpark
+capabilities:
+  deployment_scenario: deepseek-v4-flash-dspark-2node
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: deepseek-ai/DeepSeek-V4-Flash-0731
+      format: safetensors
+      quantization: nvfp4
+    - type: modelscope
+      repo: 0xSero/deepseek-v4-flash-0731-spark
+      format: safetensors
+      quantization: nvfp4
+    - type: local_path
+      path: ""
+variants:
+  - name: deepseek-v4-flash-0731-dspark-2node-nvfp4
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+      ram_min_mib: 98304
+      # One GB10 is present on each Fleet device; the scenario supplies two nodes.
+      gpu_count_min: 1
+      unified_memory: true
+    engine: vllm-dspark-gb10
+    format: safetensors
+    source:
+      type: huggingface
+      repo: deepseek-ai/DeepSeek-V4-Flash-0731
+      format: safetensors
+      quantization: nvfp4
+    default_config:
+      max_model_len: 1048576
+      max_num_seqs: 6
+      max_num_batched_tokens: 8192
+      gpu_memory_utilization: 0.80
+      served_model_name: deepseek-v4-flash-dspark
+    expected_performance:
+      startup_time_s: 900
+      cold_start_time_s: 1200
+      vram_mib: 110000
+      notes: "Two-node DSpark NVFP4 deployment. Exact throughput depends on RoCE wiring, GID selection, context length, and MTP warmup."

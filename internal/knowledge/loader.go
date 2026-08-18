@@ -105,19 +105,20 @@ type HardwarePartition struct {
 }
 
 // ContainerAccess describes vendor-specific container access requirements
-// (devices, env vars, volumes, security) for GPU containers. Lives in
-// hardware profile YAML so adding a new GPU vendor = YAML only, no Go code.
+// (devices, env vars, volumes, security) for GPU containers. Hardware profiles
+// provide vendor defaults; engine assets may add engine-specific requirements.
 type ContainerAccess struct {
-	Devices            []string           `yaml:"devices,omitempty"`
-	Env                map[string]string  `yaml:"env,omitempty"`
-	PartitionRemoveEnv []string           `yaml:"partition_remove_env,omitempty"`
-	Volumes            []ContainerVolume  `yaml:"volumes,omitempty"`
-	Security           *ContainerSecurity `yaml:"security,omitempty"`
-	DockerRuntime      string             `yaml:"docker_runtime,omitempty"`                             // --runtime flag (e.g. "ascend")
-	NetworkMode        string             `yaml:"network_mode,omitempty"`                               // "host" for --network host
-	PublishHost        string             `yaml:"publish_host,omitempty" json:"publish_host,omitempty"` // Docker host IP for published ports; defaults to loopback
-	ShmSize            string             `yaml:"shm_size,omitempty"`                                   // --shm-size (e.g. "500g")
-	Init               bool               `yaml:"init,omitempty"`                                       // --init flag
+	Devices            []string           `yaml:"devices,omitempty" json:"devices,omitempty"`
+	Env                map[string]string  `yaml:"env,omitempty" json:"env,omitempty"`
+	Ulimits            map[string]string  `yaml:"ulimits,omitempty" json:"ulimits,omitempty"`
+	PartitionRemoveEnv []string           `yaml:"partition_remove_env,omitempty" json:"partition_remove_env,omitempty"`
+	Volumes            []ContainerVolume  `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	Security           *ContainerSecurity `yaml:"security,omitempty" json:"security,omitempty"`
+	DockerRuntime      string             `yaml:"docker_runtime,omitempty" json:"docker_runtime,omitempty"` // --runtime flag (e.g. "ascend")
+	NetworkMode        string             `yaml:"network_mode,omitempty" json:"network_mode,omitempty"`     // "host" for --network host
+	PublishHost        string             `yaml:"publish_host,omitempty" json:"publish_host,omitempty"`     // Docker host IP for published ports; defaults to loopback
+	ShmSize            string             `yaml:"shm_size,omitempty" json:"shm_size,omitempty"`             // --shm-size (e.g. "500g")
+	Init               bool               `yaml:"init,omitempty" json:"init,omitempty"`                     // --init flag
 }
 
 type ContainerVolume struct {
@@ -128,9 +129,9 @@ type ContainerVolume struct {
 }
 
 type ContainerSecurity struct {
-	Privileged         bool  `yaml:"privileged,omitempty"`
-	RunAsUser          *int  `yaml:"run_as_user,omitempty"`
-	SupplementalGroups []int `yaml:"supplemental_groups,omitempty"`
+	Privileged         bool  `yaml:"privileged,omitempty" json:"privileged,omitempty"`
+	RunAsUser          *int  `yaml:"run_as_user,omitempty" json:"run_as_user,omitempty"`
+	SupplementalGroups []int `yaml:"supplemental_groups,omitempty" json:"supplemental_groups,omitempty"`
 }
 
 func validateContainerAccess(container *ContainerAccess) error {
@@ -210,6 +211,7 @@ type EngineAsset struct {
 	Runtime          EngineRuntime    `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Patterns         []string         `yaml:"patterns,omitempty" json:"patterns,omitempty"`
 	Source           *EngineSource    `yaml:"source,omitempty"  json:"source,omitempty"`
+	Container        *ContainerAccess `yaml:"container,omitempty" json:"container,omitempty"`
 	OpenQuestions    []StackQuestion  `yaml:"open_questions,omitempty" json:"open_questions,omitempty"`
 }
 
@@ -401,7 +403,8 @@ type ModelUI struct {
 }
 
 type ModelCapabilities struct {
-	StandaloneDeploy *bool `yaml:"standalone_deploy,omitempty"`
+	StandaloneDeploy   *bool  `yaml:"standalone_deploy,omitempty"`
+	DeploymentScenario string `yaml:"deployment_scenario,omitempty"`
 }
 
 type OpenClawHints struct {
@@ -660,6 +663,16 @@ type DeploymentScenario struct {
 	MemoryBudget       map[string]any        `yaml:"memory_budget,omitempty"`
 	StartupOrder       []ScenarioStartupStep `yaml:"startup_order,omitempty"`
 	AlternativeConfigs []ScenarioAlternative `yaml:"alternative_configs,omitempty"`
+	Inputs             []ScenarioInput       `yaml:"inputs,omitempty"`
+}
+
+type ScenarioInput struct {
+	Name        string `yaml:"name" json:"name"`
+	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Kind        string `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Default     string `yaml:"default,omitempty" json:"default,omitempty"`
+	Required    bool   `yaml:"required,omitempty" json:"required,omitempty"`
 }
 
 type ScenarioMetadata struct {
@@ -673,13 +686,17 @@ type ScenarioTarget struct {
 }
 
 type ScenarioDeployment struct {
-	Model      string         `yaml:"model"`
-	Engine     string         `yaml:"engine"`
-	Slot       string         `yaml:"slot,omitempty"`
-	Role       string         `yaml:"role,omitempty"`
-	Modalities []string       `yaml:"modalities,omitempty"`
-	Config     map[string]any `yaml:"config,omitempty"`
-	Notes      string         `yaml:"notes,omitempty"`
+	ID         string            `yaml:"id,omitempty"`
+	Device     string            `yaml:"device,omitempty"`
+	Model      string            `yaml:"model"`
+	Engine     string            `yaml:"engine"`
+	Slot       string            `yaml:"slot,omitempty"`
+	Role       string            `yaml:"role,omitempty"`
+	Modalities []string          `yaml:"modalities,omitempty"`
+	Config     map[string]any    `yaml:"config,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty"`
+	NoPull     bool              `yaml:"no_pull,omitempty"`
+	Notes      string            `yaml:"notes,omitempty"`
 }
 
 type ScenarioAction struct {
@@ -695,11 +712,12 @@ type ScenarioVerification struct {
 }
 
 type ScenarioStartupStep struct {
-	Step     int    `yaml:"step"`
-	Model    string `yaml:"model"`
-	WaitFor  string `yaml:"wait_for"`
-	TimeoutS int    `yaml:"timeout_s"`
-	Notes    string `yaml:"notes,omitempty"`
+	Step       int    `yaml:"step"`
+	Deployment string `yaml:"deployment,omitempty"`
+	Model      string `yaml:"model"`
+	WaitFor    string `yaml:"wait_for"`
+	TimeoutS   int    `yaml:"timeout_s"`
+	Notes      string `yaml:"notes,omitempty"`
 }
 
 type ScenarioAlternative struct {

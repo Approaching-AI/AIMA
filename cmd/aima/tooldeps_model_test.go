@@ -29,6 +29,18 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func TestAnnotateModelsFromCatalogAddsDeploymentScenario(t *testing.T) {
+	models := []*state.Model{{Name: "deepseek-v4-flash-0731"}}
+	cat := &knowledge.Catalog{ModelAssets: []knowledge.ModelAsset{{
+		Metadata:     knowledge.ModelMetadata{Name: "deepseek-v4-flash-0731"},
+		Capabilities: knowledge.ModelCapabilities{DeploymentScenario: "deepseek-v4-flash-dspark-2node"},
+	}}}
+	annotateModelsFromCatalog(models, cat)
+	if got := models[0].DeploymentScenario; got != "deepseek-v4-flash-dspark-2node" {
+		t.Fatalf("deployment scenario = %q", got)
+	}
+}
+
 func TestScanModelsPublishesModelDiscoveredOnlyForNewModels(t *testing.T) {
 	ctx := context.Background()
 	db := mustOpenTooldepsDB(t)

@@ -3,8 +3,10 @@ package knowledge
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -15,7 +17,8 @@ import (
 //   - true bool                      → "--flag"
 //   - false bool                     → "--no-flag"
 //   - map / slice                    → "--flag", <JSON-encoded value>
-//   - other (numbers, strings, etc.) → "--flag", fmt.Sprintf("%v", value)
+//   - integral floating-point values → "--flag", fixed-point decimal value
+//   - other (numbers, strings, etc.)   → "--flag", fmt.Sprintf("%v", value)
 //
 // String template expansion (e.g. {{.ModelPath}}) is the caller's responsibility.
 func FormatConfigFlag(key string, value any) []string {
@@ -31,9 +34,27 @@ func FormatConfigFlag(key string, value any) []string {
 		// YAML-parsed map/slice values are always JSON-marshalable; error is impossible here.
 		b, _ := json.Marshal(value)
 		return []string{flagName, string(b)}
+	case float64:
+		return []string{flagName, formatFloatConfigValue(v, 64)}
+	case float32:
+		return []string{flagName, formatFloatConfigValue(float64(v), 32)}
+	case json.Number:
+		return []string{flagName, v.String()}
 	default:
 		return []string{flagName, fmt.Sprintf("%v", v)}
 	}
+}
+
+func formatFloatConfigValue(value float64, bitSize int) string {
+	// JSON/YAML numbers commonly arrive as float64. Go's default %v formatting
+	// switches sufficiently large values to scientific notation, turning a
+	// valid CLI value such as 1048576 into 1.048576e+06. Many inference-engine
+	// integer flags reject that spelling, so preserve integral values as plain
+	// decimals while retaining compact formatting for real fractions.
+	if !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value {
+		return strconv.FormatFloat(value, 'f', -1, bitSize)
+	}
+	return strconv.FormatFloat(value, 'g', -1, bitSize)
 }
 
 // ConfigFlagContext describes the runtime command surface used to decide

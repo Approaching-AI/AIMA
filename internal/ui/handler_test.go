@@ -550,6 +550,10 @@ func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t 
 		`typeof c.image_available_in_containerd === 'boolean'`,
 		`.deploy-compat-grid,`,
 		`model.detected_arch`,
+		`this.callTool('scenario.apply', { name: this.deployScenarioName, bindings: scenarioBindings })`,
+		`this.callTool('scenario.apply', {`,
+		`this.callTool('scenario.show', { name: scenarioName })`,
+		`x-text="t('deploy_cluster_config')"`,
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("body missing deploy detail token %q", token)

@@ -38,18 +38,20 @@ func registerScenarioTools(s *Server, deps *ToolDeps) {
 	// scenario.apply
 	s.RegisterTool(&Tool{
 		Name:        "scenario.apply",
-		Description: "Deploy all models defined in a deployment scenario. Supports dry_run to preview without executing.",
+		Description: "Deploy all models defined in a deployment scenario, including ordered deployments on remote Fleet devices. Supports dry_run to preview without executing.",
 		InputSchema: schema(
 			`"name":{"type":"string","description":"Scenario name, e.g. 'openclaw-multi'. Call catalog.list with kind=scenarios to see available scenarios."},`+
-				`"dry_run":{"type":"boolean","description":"If true, preview deployment plans without executing (default false)"}`,
+				`"dry_run":{"type":"boolean","description":"If true, preview deployment plans without executing (default false)"},`+
+				`"bindings":{"type":"object","additionalProperties":{"type":"string"},"description":"Values for scenario inputs such as Fleet device IDs and fabric addresses. Call scenario.show to inspect required inputs."}`,
 			"name"),
 		Handler: func(ctx context.Context, params json.RawMessage) (*ToolResult, error) {
 			if deps.ScenarioApply == nil {
 				return ErrorResult("scenario.apply not available"), nil
 			}
 			var p struct {
-				Name   string `json:"name"`
-				DryRun bool   `json:"dry_run"`
+				Name     string            `json:"name"`
+				DryRun   bool              `json:"dry_run"`
+				Bindings map[string]string `json:"bindings"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("parse params: %w", err)
@@ -57,7 +59,7 @@ func registerScenarioTools(s *Server, deps *ToolDeps) {
 			if p.Name == "" {
 				return ErrorResult("name is required"), nil
 			}
-			data, err := deps.ScenarioApply(ctx, p.Name, p.DryRun)
+			data, err := deps.ScenarioApply(ctx, p.Name, p.DryRun, p.Bindings)
 			if err != nil {
 				return nil, fmt.Errorf("scenario apply: %w", err)
 			}

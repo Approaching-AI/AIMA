@@ -60,19 +60,20 @@ func registerCatalogLocalModel(ctx context.Context, ma *knowledge.ModelAsset, db
 			continue
 		}
 		return db.UpsertScannedModel(ctx, &state.Model{
-			ID:               fmt.Sprintf("%x", sha256.Sum256([]byte(candidate.path+"|"+ma.Metadata.Name))),
-			Name:             ma.Metadata.Name,
-			Type:             ma.Metadata.Type,
-			Path:             candidate.path,
-			Format:           candidate.format,
-			SizeBytes:        existingSizes[candidate.path],
-			DetectedArch:     candidate.detectedArch,
-			ModelClass:       strings.TrimSpace(ma.Metadata.ModelClass),
-			UIRole:           strings.TrimSpace(ma.UI.Role),
-			UIDisplayNote:    strings.TrimSpace(ma.UI.DisplayNote),
-			UIDisplayNoteZh:  strings.TrimSpace(ma.UI.DisplayNoteZh),
-			StandaloneDeploy: ma.Capabilities.StandaloneDeploy,
-			Status:           "registered",
+			ID:                 fmt.Sprintf("%x", sha256.Sum256([]byte(candidate.path+"|"+ma.Metadata.Name))),
+			Name:               ma.Metadata.Name,
+			Type:               ma.Metadata.Type,
+			Path:               candidate.path,
+			Format:             candidate.format,
+			SizeBytes:          existingSizes[candidate.path],
+			DetectedArch:       candidate.detectedArch,
+			ModelClass:         strings.TrimSpace(ma.Metadata.ModelClass),
+			UIRole:             strings.TrimSpace(ma.UI.Role),
+			UIDisplayNote:      strings.TrimSpace(ma.UI.DisplayNote),
+			UIDisplayNoteZh:    strings.TrimSpace(ma.UI.DisplayNoteZh),
+			StandaloneDeploy:   ma.Capabilities.StandaloneDeploy,
+			DeploymentScenario: strings.TrimSpace(ma.Capabilities.DeploymentScenario),
+			Status:             "registered",
 		})
 	}
 	return nil
@@ -174,6 +175,9 @@ func annotateModelsFromCatalog(models []*state.Model, cat *knowledge.Catalog) {
 			}
 			if m.StandaloneDeploy == nil {
 				m.StandaloneDeploy = ma.Capabilities.StandaloneDeploy
+			}
+			if strings.TrimSpace(m.DeploymentScenario) == "" {
+				m.DeploymentScenario = strings.TrimSpace(ma.Capabilities.DeploymentScenario)
 			}
 		}
 
@@ -315,6 +319,7 @@ func buildModelDeps(ac *appContext, deps *mcp.ToolDeps,
 		if err != nil {
 			return nil, err
 		}
+		annotateModelsFromCatalog([]*state.Model{m}, cat)
 		return json.Marshal(m)
 	}
 

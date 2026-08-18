@@ -64,6 +64,7 @@ func newScenarioShowCmd(app *App) *cobra.Command {
 
 func newScenarioApplyCmd(app *App) *cobra.Command {
 	var dryRun bool
+	var bindingValues []string
 	cmd := &cobra.Command{
 		Use:   "apply <scenario-name>",
 		Short: "Deploy all models defined in a scenario",
@@ -72,7 +73,15 @@ func newScenarioApplyCmd(app *App) *cobra.Command {
 			if app.ToolDeps == nil || app.ToolDeps.ScenarioApply == nil {
 				return fmt.Errorf("scenario.apply not available")
 			}
-			data, err := app.ToolDeps.ScenarioApply(cmd.Context(), args[0], dryRun)
+			bindings := make(map[string]string, len(bindingValues))
+			for _, item := range bindingValues {
+				key, value, ok := strings.Cut(item, "=")
+				if !ok || strings.TrimSpace(key) == "" {
+					return fmt.Errorf("invalid --set %q: expected key=value", item)
+				}
+				bindings[strings.TrimSpace(key)] = value
+			}
+			data, err := app.ToolDeps.ScenarioApply(cmd.Context(), args[0], dryRun, bindings)
 			if err != nil {
 				return err
 			}
@@ -81,6 +90,7 @@ func newScenarioApplyCmd(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview deployments without executing")
+	cmd.Flags().StringArrayVar(&bindingValues, "set", nil, "Set a scenario input (repeatable key=value)")
 	return cmd
 }
 

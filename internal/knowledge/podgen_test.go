@@ -225,6 +225,22 @@ func TestGeneratePodNilResolved(t *testing.T) {
 	}
 }
 
+func TestGeneratePodHostNetwork(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Engine: "distributed-vllm", EngineImage: "example/vllm:latest", ModelName: "model",
+		ModelPath: "/models/model", Command: []string{"vllm", "serve", "{{.ModelPath}}"},
+		Container: &ContainerAccess{NetworkMode: "host"},
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("GeneratePod: %v", err)
+	}
+	text := string(podYAML)
+	if !strings.Contains(text, "hostNetwork: true") || !strings.Contains(text, "dnsPolicy: ClusterFirstWithHostNet") {
+		t.Fatalf("host-network fields missing:\n%s", text)
+	}
+}
+
 func TestGeneratePodMemGuardrail(t *testing.T) {
 	// No partition: the resolver's MemLimitMiB guardrail (unified-memory hosts)
 	// must still produce a container memory ceiling so a runaway pod is

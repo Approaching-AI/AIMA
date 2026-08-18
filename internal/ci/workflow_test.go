@@ -131,6 +131,31 @@ func TestAMD395LinuxWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestReleasePublisherUploadsDesktopBundlesWhenPackaged(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test filename")
+	}
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "scripts", "publish-release-assets.sh")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read release publisher: %v", err)
+	}
+	script := string(raw)
+
+	for _, asset := range []string{
+		"aima-linux-amd64-desktop.tar.gz",
+		"aima-linux-arm64-desktop.tar.gz",
+	} {
+		if !strings.Contains(script, asset) {
+			t.Errorf("release publisher omits optional asset %q", asset)
+		}
+	}
+	if !strings.Contains(script, `"${optional_assets[@]}"`) {
+		t.Error("release upload does not include the collected optional assets")
+	}
+}
+
 func loadWorkflow(t *testing.T, workflowName string) workflowDocument {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

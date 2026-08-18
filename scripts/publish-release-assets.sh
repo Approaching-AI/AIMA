@@ -40,6 +40,16 @@ required_assets=(
   "checksums.txt"
 )
 
+optional_assets=()
+for asset in \
+  "aima-linux-amd64-desktop.tar.gz" \
+  "aima-linux-arm64-desktop.tar.gz"
+do
+  if [[ -f "$asset_dir/$asset" ]]; then
+    optional_assets+=("$asset_dir/$asset")
+  fi
+done
+
 for asset in "${required_assets[@]}"; do
   if [[ ! -f "$asset_dir/$asset" ]]; then
     printf 'error: missing required asset: %s\n' "$asset_dir/$asset" >&2
@@ -59,6 +69,7 @@ gh release upload "$tag" \
   "$asset_dir/aima-linux-amd64" \
   "$asset_dir/aima-linux-arm64" \
   "$asset_dir/aima-windows-amd64.exe" \
+  "${optional_assets[@]}" \
   "$asset_dir/checksums.txt" \
   --clobber
 

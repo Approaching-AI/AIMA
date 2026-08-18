@@ -42,7 +42,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ---
 
-## MCP 工具列表 (62 个)
+## MCP 工具列表
 
 所有工具统一由 `internal/mcp/tools.go` 的 `RegisterAllTools()` 注册，按领域拆分在 `internal/mcp/tools_*.go` 中实现。下列分组反映当前分支的完整工具前缀集合；具体参数与返回值以各工具的 `inputSchema` 和实现为准。
 
@@ -50,7 +50,7 @@ Go Agent (直接调用)，保证行为一致。
 
 - Hardware (2): `hardware.detect`, `hardware.metrics`
 - Model (6): `model.scan`, `model.list`, `model.pull`, `model.import`, `model.info`, `model.remove`
-- Engine (6): `engine.scan`, `engine.info`, `engine.list`, `engine.pull`, `engine.import`, `engine.remove`
+- Engine (8): `engine.scan`, `engine.info`, `engine.list`, `engine.ensure`, `engine.rollback`, `engine.pull`, `engine.import`, `engine.remove`
 - Deploy (8): `deploy.apply`, `deploy.approve`, `deploy.dry_run`, `deploy.run`, `deploy.delete`, `deploy.status`, `deploy.list`, `deploy.logs`
 - Stack (1): `stack`
 - System (3): `system.status`, `system.config`, `system.diagnostics`
@@ -63,8 +63,35 @@ Go Agent (直接调用)，保证行为一致。
   供 proxy 路由使用的 `served_model`、`parameter_count`、`context_window_tokens` 也是顶层字段。
 - `deploy.status` 是 detail 接口。
   返回单个部署的完整状态，包含上述 overview 字段，以及 `config`、`labels`、`restarts`、`exit_code`、启动时间戳等 detail 字段。
+- `deploy.list` 与 `deploy.status` 都可能返回恢复字段：
+  `desired_state`、`recovery_state`、`recovery_attempts`、`next_recovery_at`、`quarantine_reason`。
+  当 Runtime 对象已被删除但持久化意图仍为 `desired_state=running`、`recovery_state=quarantined` 时，AIMA 会返回一条合成的隔离状态，而不是让该部署从列表中消失。
 - 不要依赖 `deploy.list` 提供原始 `config` 或 label map。
   如果自动化流程需要精确运行配置或原始 labels，应调用 `deploy.status`。
+- `deploy.run` 在本次新建部署失败或等待超时时会尝试调用 `deploy.delete` 清理残留进程/容器；复用中的既有部署不会被自动删除。
+- `deploy.run` 失败错误会带稳定错误码前缀，便于 UI/日志分类。当前错误码包括：
+  `OUT_OF_MEMORY`, `MODEL_NOT_FOUND`, `MODEL_CORRUPTED`, `MODEL_FORMAT_INVALID`,
+  `PORT_IN_USE`, `PERMISSION_DENIED`, `DOWNLOAD_FAILED`, `HARDWARE_INCOMPATIBLE`,
+  `TIMEOUT`, `ENGINE_START_FAILED`, `UNKNOWN_ERROR`。
+
+#### Engine 生命周期契约
+
+- `engine.ensure` 必填 `name`，可选 `version`、`apply`。`apply` 默认 `false`，返回无副作用计划；只有 `apply=true` 才安装或激活。
+- `engine.rollback` 必填 `name`、`runtime_type`（`container` 或 `native`）和 `confirm`。`confirm=false` 返回结构化拒绝且不修改库存；`confirm=true` 只允许切换到 verified、available、匹配当前 asset/platform/runtime 的前一版本。
+- 两个工具都只改变版本库存，不调用 deploy/Runtime，不重启或重新绑定已运行部署。
+- `engine.import` 的 Native 路径要求版本化本地包，先暂存、校验、原子提升并登记为 inactive `imported/verified`；激活必须另行调用 `engine.ensure`。
+- `engine.remove(delete_files=true)` 不会删除 preinstalled/legacy、受引用版本、越出 `AIMA_DATA_DIR` 的路径或容器镜像层。
+- Go Agent 调用 `engine.ensure` 时先强制 `apply=false` 生成 `NEEDS_APPROVAL` 计划；`engine.rollback` 对 Agent 直接返回 `BLOCKED`。人类 MCP/CLI 调用不受这两个 Agent 适配器策略限制。
+
+示例：
+
+```json
+{"name":"engine-a","version":"2.0.0","apply":false}
+```
+
+```json
+{"name":"engine-a","confirm":true}
+```
 
 ### 知识与调优
 
@@ -76,7 +103,7 @@ Go Agent (直接调用)，保证行为一致。
 
 ### 协同与集成
 
-- Catalog (3): `catalog.list`, `catalog.override`, `catalog.validate`
+- Catalog (6): `catalog.list`, `catalog.effective`, `catalog.diff`, `catalog.validate_patch`, `catalog.override`, `catalog.validate`
 - Central (3): `central.sync`, `central.advise`, `central.scenario`
 - Data (2): `data.export`, `data.import`
 - Device (4): `device.register`, `device.status`, `device.renew`, `device.reset`
@@ -101,6 +128,20 @@ Profile filtering is advisory. `tools/list` uses the server profile for discover
 - GPU 空闲显存不足时拒绝部署并返回原因
 - 采集失败时不阻止部署（graceful degradation）
 
+`deploy.apply` 可选输入 `recovery_policy` 对当前部署执行字段级覆盖。未提供的字段继续使用“内置默认值 → 已选 Engine Asset `startup.recovery`”的解析结果：
+
+| 字段 | 默认值 | 合法范围 |
+|------|--------|----------|
+| `enabled` | `true` | boolean |
+| `check_interval_s` | `5` | 1–300 |
+| `consecutive_failures` | `3` | 1–20 |
+| `max_attempts` | `3` | 1–20 |
+| `window_s` | `600` | 1–86400 |
+| `backoff_s` | `[2, 10, 30]` | 每项 1–3600 |
+| `stable_reset_s` | `600` | 1–86400 |
+
+显式 `deploy.apply` 会将部署重新置为健康意图并重置恢复计数，因此也是解除 `quarantined` 的受支持入口。可信的后台 reconciler 身份只通过 AIMA 进程内 context 传递，MCP 不提供可由调用方伪造的 `source` 或 claim 字段。
+
 ```go
 {
     "name": "deploy.apply",
@@ -110,12 +151,26 @@ Profile filtering is advisory. `tools/list` uses the server profile for discover
         "properties": {
             "engine": {"type": "string", "description": "Engine type (vllm, llamacpp, ...)"},
             "model": {"type": "string", "description": "Model name"},
-            "slot": {"type": "string", "description": "Partition slot name (primary, secondary)"}
+            "slot": {"type": "string", "description": "Partition slot name (primary, secondary)"},
+            "recovery_policy": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "check_interval_s": {"type": "integer", "minimum": 1, "maximum": 300},
+                    "consecutive_failures": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "window_s": {"type": "integer", "minimum": 1, "maximum": 86400},
+                    "backoff_s": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 3600}},
+                    "stable_reset_s": {"type": "integer", "minimum": 1, "maximum": 86400}
+                }
+            }
         },
         "required": ["model"]
     }
 }
 ```
+
+恢复 Controller 只随 `aima serve` 运行。显式 `deploy.delete` 会先把意图置为 `stopped`，因此不会被后台恢复；在操作系统或容器平台外部结束工作负载不会改变 desired state，仍可能按策略恢复。后台恢复与显式部署操作的锁只协调同一 AIMA 进程；不支持把多个写进程指向同一 SQLite 数据库并依赖该锁协调 Runtime 副作用。
 
 ### knowledge.resolve
 
@@ -197,4 +252,4 @@ Variant 选择阶段会根据 `HardwareInfo` 中的显存和统一显存信息�
 
 ---
 
-*最后更新：2026-04-24 (新增 telemetry-free `system.diagnostics`，profile 仅用于 discovery/agent.ask)*
+*最后更新：2026-08-02（增加 Engine ensure/rollback 生命周期合同与 Agent 护栏）*

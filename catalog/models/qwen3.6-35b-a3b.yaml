@@ -7,16 +7,91 @@ metadata:
   released_at: "2026-04"
   aliases:
     - Qwen3.6-35B-A3B
+    - qwen3.6-35b-a3b-bf16
+    - Qwen3.6-35B-A3B-UD-Q4_K_M
+    - qwen3.6-35b-a3b-q4_k_m
 storage:
-  formats: [safetensors]
+  formats: [safetensors, gguf]
   default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
   sources:
     - type: huggingface
       repo: Qwen/Qwen3.6-35B-A3B
       format: safetensors
+    - type: huggingface
+      repo: unsloth/Qwen3.6-35B-A3B-GGUF
+      format: gguf
     - type: local_path
       path: ""
 variants:
+  # --- GB10 structured-output path for governed alarm inference ---
+  - name: qwen3.6-35b-a3b-blackwell-sglang-structured-bf16
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 70000
+      unified_memory: true
+    engine: qwen36-gb10-structured-bf16
+    format: safetensors
+    default_config:
+      served_model_name: qwen3.6-35b-a3b-bf16
+    expected_performance:
+      startup_time_s: 300
+      cold_start_time_s: 900
+      tokens_per_second: [17, 75]
+      max_context_tokens: 131072
+      notes: "Schema-constrained BF16 profile for PlanABC; speculative decoding is intentionally disabled."
+
+  # --- AMD Ryzen AI Max+ 395 native BF16 engine (Linux/gfx1151) ---
+  - name: qwen3.6-35b-a3b-amd395-native-bf16
+    hardware:
+      gpu_arch: RDNA3.5
+      vram_min_mib: 65536
+      ram_min_mib: 65536
+      unified_memory: true
+    engine: aima-engine-native
+    format: safetensors
+    default_config:
+      context_tokens: 8192
+    expected_performance:
+      startup_time_s: 20
+      cold_start_time_s: 60
+      vram_mib: 73728
+      notes: "Validated AMD395 Linux path using AIMA native engine 1.5.1 and the full BF16 checkpoint. Random cold prompts from 502 to 8212 tokens use padded or composed AOT prefill with zero serial cold-prompt decode tokens."
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Qwen3.6-35B-A3B MoE, UD-Q4_K_M ~21GB, all layers offloaded. Native context 262144.
+  - name: qwen3.6-35b-a3b-universal-llamacpp-q4
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 24576
+    engine: llamacpp
+    format: gguf
+    default_config:
+      quantization: int4
+      n_gpu_layers: 999
+      # Full trained context (262144 / 256K). Deploy auto-clamps it down to fit
+      # hardware memory on smaller machines, so this large default is safe.
+      ctx_size: 262144
+      # Strix Halo long-context HIP runs are most stable with one slot and no
+      # llama.cpp prompt cache; auto parallelism otherwise selects 4 slots and
+      # can push ROCm compute/prompt-cache buffers over the allocation limit.
+      parallel: 1
+      cache_ram: 0
+      # ENGINE REQUIREMENT: use llama.cpp >= b9330. Qwen3.6-A3B is a hybrid
+      # Gated-DeltaNet (recurrent) MoE; on b9180/b9196 the engine hard-ABORTs on
+      # this model's recurrent partial seq_rm during prefix-cache reuse
+      # (common.cpp "failed to remove sequence ... p0=10", e.g. the deploy warmup's
+      # 2nd identical request) -> deploy fails. Upstream fixed it by b9330; verified
+      # same-machine A/B (Strix Halo HIP): b9196 CRASHES, b9330 SURVIVES, identical
+      # command. AIMA auto-downloads b9330 (llamacpp-hip-windows on Windows or
+      # llamacpp-hip-linux on Linux); if you pin AIMA_ENGINE_DIR to your own
+      # build, it MUST be b9330+. No --no-cache-prompt
+      # workaround is needed on b9330 (keeps prompt cache = full speed).
+    expected_performance:
+      startup_time_s: 30
+      cold_start_time_s: 60
+      tokens_per_second: [55, 70]
+      latency_first_token_ms: [30, 250]
+      notes: "Context verified 2026-06-16 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, UD-Q4_K_M all 999 layers offloaded: llama-server loads & serves n_ctx=262144 (full trained context)."
   # --- GB10 (Blackwell, 128GB unified, Docker/K3S) ---
   # 实测稳定路径是 text-only vLLM:
   # - language_model_only=true

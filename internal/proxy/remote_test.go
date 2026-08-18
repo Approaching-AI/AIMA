@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestSyncRemoteBackends_SkipsLocalModels(t *testing.T) {
+func TestSyncRemoteBackends_PreservesLocalAndRejectsAdvertisedModels(t *testing.T) {
 	s := NewServer()
 	// Register a local backend
 	s.RegisterBackend("qwen3-8b", &Backend{
@@ -45,17 +45,12 @@ func TestSyncRemoteBackends_SkipsLocalModels(t *testing.T) {
 		t.Errorf("qwen3-8b address = %q, want local address", b.Address)
 	}
 
-	// llama3-70b should be registered as remote
-	b2 := backends["llama3-70b"]
-	if b2 == nil {
-		t.Fatal("expected llama3-70b backend")
-	}
-	if !b2.Remote {
-		t.Error("llama3-70b should be Remote=true")
+	if b2 := backends["llama3-70b"]; b2 != nil {
+		t.Fatalf("untrusted advertised backend became routable: %+v", b2)
 	}
 }
 
-func TestSyncRemoteBackends_RegistersRemote(t *testing.T) {
+func TestSyncRemoteBackends_DoesNotRegisterRemote(t *testing.T) {
 	s := NewServer()
 
 	ts := newModelServer(t, []string{"qwen3.5-35b-a3b", "qwen3-8b"})
@@ -69,22 +64,8 @@ func TestSyncRemoteBackends_RegistersRemote(t *testing.T) {
 	SyncRemoteBackends(context.Background(), s, services, 0)
 
 	backends := s.ListBackends()
-	if len(backends) != 2 {
-		t.Fatalf("expected 2 backends, got %d", len(backends))
-	}
-
-	for _, model := range []string{"qwen3.5-35b-a3b", "qwen3-8b"} {
-		b, ok := backends[model]
-		if !ok {
-			t.Errorf("expected backend for %s", model)
-			continue
-		}
-		if !b.Remote {
-			t.Errorf("%s should be Remote=true", model)
-		}
-		if !b.Ready {
-			t.Errorf("%s should be Ready=true", model)
-		}
+	if len(backends) != 0 {
+		t.Fatalf("untrusted advertisements became routable: %+v", backends)
 	}
 }
 
@@ -92,8 +73,16 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 	s := NewServer()
 	// Pre-register a remote backend that will disappear
 	s.RegisterBackend("old-remote-model", &Backend{
-		ModelName: "old-remote-model",
-		Address:   "192.168.1.100:8080",
+		ModelName:  "old-remote-model",
+		Address:    "192.168.1.100:8080",
+		Ready:      true,
+		Remote:     true,
+		Discovered: true,
+	})
+	// An explicit remote backend is operator-configured and must survive discovery.
+	s.RegisterBackend("static-remote-model", &Backend{
+		ModelName: "static-remote-model",
+		Address:   "192.168.1.101:6188",
 		Ready:     true,
 		Remote:    true,
 	})
@@ -137,9 +126,11 @@ func TestSyncRemoteBackends_CleansStale(t *testing.T) {
 		t.Error("local backend 'local-model' should not be removed")
 	}
 
-	// new-model should be registered
-	if _, ok := backends["new-model"]; !ok {
-		t.Error("new-model should be registered")
+	if _, ok := backends["new-model"]; ok {
+		t.Error("untrusted new-model should not be registered")
+	}
+	if _, ok := backends["static-remote-model"]; !ok {
+		t.Error("explicit static remote backend should survive discovery")
 	}
 }
 
@@ -217,6 +208,50 @@ func TestQueryRemoteModels_WithAPIKey(t *testing.T) {
 	withKey := QueryRemoteModels(context.Background(), addr, port, "test-key")
 	if len(withKey) != 1 || withKey[0] != "secure-model" {
 		t.Errorf("expected [secure-model] with key, got %v", withKey)
+	}
+}
+
+func TestSyncRemoteBackendsDoesNotDiscloseServerAPIKey(t *testing.T) {
+	var receivedAuthorization string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"models": []map[string]any{{
+				"model_name": "remote-model",
+				"model_type": "llm",
+				"ready":      true,
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	addr, port := splitHostPort(t, ts)
+	s := NewServer(WithAPIKey("server-client-key"))
+	SyncRemoteBackends(context.Background(), s, []DiscoveredService{{
+		Name: "untrusted-mdns-advertisement", AddrV4: addr, Port: port,
+	}}, 0)
+
+	if receivedAuthorization != "" {
+		t.Fatalf("discovered service received AIMA server key: %q", receivedAuthorization)
+	}
+	if backend := s.ListBackends()["remote-model"]; backend != nil {
+		t.Fatalf("untrusted advertised model became routable: %+v", backend)
+	}
+}
+
+func TestSyncRemoteBackendsDoesNotRouteUntrustedAdvertisement(t *testing.T) {
+	ts := newModelServer(t, []string{"attacker-controlled-model"})
+	defer ts.Close()
+	addr, port := splitHostPort(t, ts)
+	s := NewServer()
+
+	SyncRemoteBackends(context.Background(), s, []DiscoveredService{{
+		Name: "untrusted-mdns-advertisement", AddrV4: addr, Port: port,
+	}}, 0)
+
+	if backend := s.ListBackends()["attacker-controlled-model"]; backend != nil {
+		t.Fatalf("untrusted advertisement became routable: %+v", backend)
 	}
 }
 

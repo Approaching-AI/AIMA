@@ -24,18 +24,82 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
 	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/recovery"
 	aimaRuntime "github.com/jguan/aima/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
 type fakeRuntime struct {
-	name   string
-	status map[string]*aimaRuntime.DeploymentStatus
-	list   []*aimaRuntime.DeploymentStatus
+	name    string
+	status  map[string]*aimaRuntime.DeploymentStatus
+	list    []*aimaRuntime.DeploymentStatus
+	deleted []string
+}
+
+func TestCatalogAdapterMapsEngineRequestAdapter(t *testing.T) {
+	cat := &knowledge.Catalog{EngineAssets: []knowledge.EngineAsset{{
+		Metadata: knowledge.EngineMetadata{Name: "native-test"},
+		API: knowledge.EngineAPI{RequestAdapter: &knowledge.EngineRequestAdapter{
+			Kind:             "exact_context",
+			Path:             "/v1/chat/completions",
+			ContextConfigKey: "context_tokens",
+			ProbeSubcommand:  "chat-template-probe",
+			DisableThinking:  true,
+			PaddingRole:      "system",
+			PaddingPrefix:    "Ignore padding.",
+			PaddingUnit:      " ·",
+			UpstreamModel:    "native-model",
+			MaxAttempts:      8,
+		}},
+	}}}
+
+	got := (catalogAdapter{cat: cat}).RequestAdapter("NATIVE-TEST")
+	if got == nil {
+		t.Fatal("RequestAdapter returned nil")
+	}
+	if got.Kind != "exact_context" || got.ContextConfigKey != "context_tokens" || got.UpstreamModel != "native-model" {
+		t.Fatalf("RequestAdapter = %#v", got)
+	}
+	got.PaddingPrefix = "mutated"
+	if cat.EngineAssets[0].API.RequestAdapter.PaddingPrefix == "mutated" {
+		t.Fatal("RequestAdapter returned catalog-owned pointer")
+	}
+}
+
+func TestNativeRequestAdapterContextResolverUsesDeploymentName(t *testing.T) {
+	rt := &fakeRuntime{
+		name: "native",
+		status: map[string]*aimaRuntime.DeploymentStatus{
+			"deployment-native": {
+				Name:              "deployment-native",
+				Runtime:           "native",
+				Config:            map[string]any{"context_tokens": 8192},
+				AdapterCommand:    []string{"/opt/aima/bin/aima-engine", "serve"},
+				AdapterModelPath:  "/models/qwen",
+				AdapterInstanceID: "15147:1785835112742496328",
+			},
+		},
+	}
+
+	resolver := nativeRequestAdapterContextResolver(rt)
+	got, err := resolver(context.Background(), "deployment-native")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Command) != 2 || got.Command[0] != "/opt/aima/bin/aima-engine" || got.ModelPath != "/models/qwen" || got.InstanceID != "15147:1785835112742496328" {
+		t.Fatalf("adapter context = %#v", got)
+	}
+	got.Command[0] = "mutated"
+	if rt.status["deployment-native"].AdapterCommand[0] == "mutated" {
+		t.Fatal("resolver returned runtime-owned command slice")
+	}
 }
 
 func (r *fakeRuntime) Deploy(context.Context, *aimaRuntime.DeployRequest) error { return nil }
-func (r *fakeRuntime) Delete(context.Context, string) error                     { return nil }
+func (r *fakeRuntime) Delete(_ context.Context, name string) error {
+	r.deleted = append(r.deleted, name)
+	return nil
+}
 func (r *fakeRuntime) Status(_ context.Context, name string) (*aimaRuntime.DeploymentStatus, error) {
 	if s, ok := r.status[name]; ok {
 		return s, nil
@@ -476,6 +540,68 @@ func TestDefaultEngineAssetPrefersCatalogDefault(t *testing.T) {
 	}
 }
 
+func TestScanEngineOriginEvidenceMapping(t *testing.T) {
+	scanned := &engine.EngineImage{
+		ID:              "engine-id",
+		Type:            "engine-a",
+		Image:           "example/engine-a",
+		Tag:             "v1",
+		SizeBytes:       42,
+		Platform:        "linux-amd64",
+		RuntimeType:     "container",
+		Available:       true,
+		AssetName:       "engine-a-container",
+		CatalogVersion:  "1.2.3",
+		DetectedVersion: "1.2.2",
+		Origin:          "preinstalled",
+		ContentDigest:   "sha256:abc123",
+		VersionMatch:    "compatible",
+	}
+	got := stateEngineFromScan(scanned)
+	if got.ID != scanned.ID || got.AssetName != scanned.AssetName || got.Version != scanned.DetectedVersion ||
+		got.CatalogVersion != scanned.CatalogVersion || got.Origin != scanned.Origin ||
+		got.DetectedVersion != scanned.DetectedVersion || got.VersionMatch != scanned.VersionMatch ||
+		got.ContentDigest != scanned.ContentDigest || got.Location != "example/engine-a:v1" {
+		t.Fatalf("state Engine evidence = %+v", got)
+	}
+}
+
+func TestStateEngineFromScanRequiresTrustedDigestForPreinstalledNative(t *testing.T) {
+	for _, versionMatch := range []string{"exact", "compatible"} {
+		t.Run(versionMatch, func(t *testing.T) {
+			got := stateEngineFromScan(&engine.EngineImage{
+				ID: "native-" + versionMatch, Type: "engine-a", AssetName: "engine-a-native",
+				RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+				Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: versionMatch,
+				ContentDigest: "sha256:abc123", ContentVerified: true,
+			})
+			if got.Active || got.LifecycleStatus != "verified" || got.VerificationStatus != "verified" {
+				t.Fatalf("state Engine = %+v", got)
+			}
+		})
+	}
+
+	untrusted := stateEngineFromScan(&engine.EngineImage{
+		ID: "native-self-hash", Type: "engine-a", AssetName: "engine-a-native",
+		RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+		Origin: "preinstalled", DetectedVersion: "1.2.3", VersionMatch: "exact",
+		ContentDigest: "sha256:self-computed",
+	})
+	if untrusted.LifecycleStatus != "" || untrusted.VerificationStatus != "" {
+		t.Fatalf("self-computed digest was trusted: %+v", untrusted)
+	}
+
+	got := stateEngineFromScan(&engine.EngineImage{
+		ID: "native-mismatch", Type: "engine-a", AssetName: "engine-a-native",
+		RuntimeType: "native", BinaryPath: "/opt/engine-a", Available: true,
+		Origin: "preinstalled", DetectedVersion: "9.9.9", VersionMatch: "mismatch",
+		ContentDigest: "sha256:abc123",
+	})
+	if got.LifecycleStatus != "" || got.VerificationStatus != "" {
+		t.Fatalf("mismatched preinstall was trusted: %+v", got)
+	}
+}
+
 func TestDedupeScannedEnginesPrefersCatalogImageForSameTypeAndTag(t *testing.T) {
 	hw := knowledge.HardwareInfo{
 		GPUArch:  "Blackwell",
@@ -778,6 +904,12 @@ func TestSummarizeDeploymentFailure(t *testing.T) {
 			want: "process exited before readiness",
 		},
 		{
+			name:       "ignore normal HIP library path",
+			message:    "process exited before readiness",
+			errorLines: `HIP Library Path: C:\Windows\SYSTEM32\amdhip64_7.dll`,
+			want:       "process exited before readiness",
+		},
+		{
 			name:       "fallback to unknown",
 			errorLines: "\n\n",
 			want:       "unknown startup failure",
@@ -859,17 +991,64 @@ func TestDeploymentMatchesQuery(t *testing.T) {
 
 func TestShouldReuseExistingDeployment(t *testing.T) {
 	existing := &aimaRuntime.DeploymentStatus{Name: "qwen3-tts-0-6b-qwen-tts-fastapi-cuda-blackwell", Phase: "running", Ready: true}
-	if !shouldReuseExistingDeployment(existing, "", "", nil) {
+	if !shouldReuseExistingDeployment(existing, "", "", nil, "") {
 		t.Fatal("expected plain deploy query to reuse existing deployment")
 	}
-	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}) {
+	if shouldReuseExistingDeployment(existing, "", "", map[string]any{"device_map": "auto"}, "") {
 		t.Fatal("expected config override to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil) {
+	if shouldReuseExistingDeployment(existing, "qwen-tts-fastapi-cuda-blackwell", "", nil, "") {
 		t.Fatal("expected explicit engine selection to force runtime reconciliation")
 	}
-	if shouldReuseExistingDeployment(existing, "", "slot-a", nil) {
+	if shouldReuseExistingDeployment(existing, "", "slot-a", nil, "") {
 		t.Fatal("expected explicit slot selection to force runtime reconciliation")
+	}
+}
+
+func TestShouldReuseExistingDeploymentRequiresMatchingPinnedEngineSource(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	existing := &aimaRuntime.DeploymentStatus{
+		Name:   "qwen3.6-35b-a3b",
+		Phase:  "running",
+		Ready:  true,
+		Labels: map[string]string{},
+	}
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected legacy deployment without a source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = "old-digest"
+	if shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with a different source digest to be reconciled")
+	}
+	existing.Labels[proxy.LabelEngineSourceSHA256] = expected
+	if !shouldReuseExistingDeployment(existing, "", "", nil, expected) {
+		t.Fatal("expected deployment with the same source digest to be reused")
+	}
+}
+
+func TestReconcileMismatchedEngineSourceDeploymentDeletesLegacyProcess(t *testing.T) {
+	const expected = "f75562537277af8b3a0e1a92fb012761a1522b7021f3014bc1f5b8355f650d1b"
+	rt := &fakeRuntime{name: "native", list: []*aimaRuntime.DeploymentStatus{{
+		Name:  "qwen3.6-35b-a3b",
+		Phase: "running",
+		Ready: true,
+		Labels: map[string]string{
+			"aima.dev/model":  "qwen3.6-35b-a3b",
+			"aima.dev/engine": "aima-amd395-qwen36-native",
+		},
+	}}}
+	if err := reconcileMismatchedEngineSourceDeployment(
+		context.Background(),
+		"qwen3.6-35b-a3b",
+		"aima-amd395-qwen36-native",
+		expected,
+		nil,
+		rt,
+	); err != nil {
+		t.Fatalf("reconcileMismatchedEngineSourceDeployment: %v", err)
+	}
+	if len(rt.deleted) != 1 || rt.deleted[0] != "qwen3.6-35b-a3b" {
+		t.Fatalf("deleted = %v, want legacy deployment", rt.deleted)
 	}
 }
 
@@ -1174,7 +1353,7 @@ func TestApplyScenarioSkipsRemainingDeploymentsAndPostDeployAfterWaitFailure(t *
 
 	deployCalls := 0
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			deployCalls++
 			if model != "model-a" {
 				t.Fatalf("unexpected DeployApply for %s", model)
@@ -1239,7 +1418,7 @@ func TestApplyScenarioWaitsOnLastStepBeforePostDeploy(t *testing.T) {
 	}
 
 	deps := &mcp.ToolDeps{
-		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool) (json.RawMessage, error) {
+		DeployApply: func(ctx context.Context, engine, model, slot string, configOverrides map[string]any, noPull bool, recoveryPolicy recovery.PolicyPatch) (json.RawMessage, error) {
 			return json.RawMessage(`{"name":"model-a-engine-a"}`), nil
 		},
 		DeployStatus: func(context.Context, string) (json.RawMessage, error) {
@@ -1357,6 +1536,48 @@ func TestApplyScenarioRejectsMissingRequiredBinding(t *testing.T) {
 	}
 }
 
+func TestClassifyDeploymentFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want deploymentErrorCode
+	}{
+		{name: "out of memory", msg: "RuntimeError: HIP out of memory while loading weights", want: deployErrorOutOfMemory},
+		{name: "model corrupted", msg: "safetensors_rust.SafetensorError: Error while deserializing header: incomplete metadata", want: deployErrorModelCorrupted},
+		{name: "model not found", msg: "FileNotFoundError: no such file or directory: /models/demo/config.json", want: deployErrorModelNotFound},
+		{name: "port occupied", msg: "bind: address already in use on 0.0.0.0:8000", want: deployErrorPortInUse},
+		{name: "permission", msg: "permission denied opening /dev/kfd", want: deployErrorPermissionDenied},
+		{name: "timeout", msg: "deployment started but not ready within 30s", want: deployErrorTimeout},
+		{name: "generic startup", msg: "process exited before readiness", want: deployErrorEngineStartFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyDeploymentFailure(tt.msg); got != tt.want {
+				t.Fatalf("classifyDeploymentFailure(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupFailedDeploymentReportsResult(t *testing.T) {
+	var deleted string
+	result := cleanupFailedDeployment(context.Background(), "demo", func(ctx context.Context, name string) error {
+		deleted = name
+		return nil
+	})
+	if deleted != "demo" {
+		t.Fatalf("deleted deployment = %q, want demo", deleted)
+	}
+	if !result.Attempted || !result.Succeeded || result.Message != "deleted failed deployment demo" {
+		t.Fatalf("cleanup result = %#v, want successful deletion", result)
+	}
+
+	skipped := cleanupFailedDeployment(context.Background(), "demo", nil)
+	if skipped.Attempted || skipped.Succeeded || !strings.Contains(skipped.Message, "unavailable") {
+		t.Fatalf("skipped cleanup result = %#v, want unavailable message", skipped)
+	}
+}
+
 func TestVariantQuantizationHint(t *testing.T) {
 	if got := variantQuantizationHint(&knowledge.ModelVariant{
 		DefaultConfig: map[string]any{"quantization": "gptq"},
@@ -1386,6 +1607,7 @@ func TestIsBlockedAgentTool(t *testing.T) {
 		{name: "explore start blocked for agent", tool: "explore", args: json.RawMessage(`{"action":"start","kind":"tune","target":{"model":"qwen3-8b"}}`), wantBlock: true},
 		{name: "explore result allowed", tool: "explore", args: json.RawMessage(`{"action":"result","id":"run-1"}`), wantBlock: false},
 		{name: "allowed readonly", tool: "knowledge.resolve", args: json.RawMessage(`{"model":"qwen3-8b"}`), wantBlock: false},
+		{name: "engine rollback blocked", tool: "engine.rollback", args: json.RawMessage(`{"name":"engine-a","confirm":true}`), wantBlock: true},
 		{name: "fleet exec recursive blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.exec","params":{}}`), wantBlock: true},
 		{name: "fleet exec stack init blocked", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"stack","params":{"action":"init"}}`), wantBlock: true},
 		{name: "fleet exec fleet info allowed", tool: "fleet.exec", args: json.RawMessage(`{"device_id":"dev","tool_name":"fleet.info","params":{}}`), wantBlock: false},
@@ -1412,6 +1634,102 @@ func TestIsBlockedAgentTool(t *testing.T) {
 				t.Fatalf("isBlockedAgentTool(%q) = %v, want %v", tt.tool, blocked, tt.wantBlock)
 			}
 		})
+	}
+}
+
+func TestMCPToolAdapter_EngineEnsureApprovalFlow(t *testing.T) {
+	s := mcp.NewServer()
+	var calls []bool
+	s.RegisterTool(&mcp.Tool{
+		Name:        "engine.ensure",
+		Description: "test engine ensure",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			var p struct {
+				Apply bool `json:"apply"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			calls = append(calls, p.Apply)
+			if !p.Apply {
+				return mcp.TextResult(`{"plan":{"action":"upgrade"},"applied":false}`), nil
+			}
+			return mcp.TextResult(`{"plan":{"action":"upgrade"},"applied":true}`), nil
+		},
+	})
+
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+	result, err := adapter.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"name":"engine-a","apply":true}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || result.IsError || !strings.Contains(result.Content, "NEEDS_APPROVAL") || !strings.Contains(result.Content, `"action":"upgrade"`) {
+		t.Fatalf("approval result = %+v", result)
+	}
+	if len(calls) != 1 || calls[0] {
+		t.Fatalf("ensure calls = %#v, want forced plan-only call", calls)
+	}
+
+	adapter.mu.Lock()
+	var approvalID int64
+	for id := range adapter.pending {
+		approvalID = id
+	}
+	adapter.mu.Unlock()
+	if approvalID == 0 {
+		t.Fatal("expected pending approval")
+	}
+	approved, err := adapter.executeApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("executeApproval: %v", err)
+	}
+	if !strings.Contains(string(approved), `"applied":true`) || len(calls) != 2 || !calls[1] {
+		t.Fatalf("approved=%s calls=%#v", approved, calls)
+	}
+}
+
+func TestMCPToolAdapter_BlocksEngineRollback(t *testing.T) {
+	s := mcp.NewServer()
+	calls := 0
+	s.RegisterTool(&mcp.Tool{
+		Name:        "engine.rollback",
+		Description: "test engine rollback",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler: func(ctx context.Context, params json.RawMessage) (*mcp.ToolResult, error) {
+			calls++
+			return mcp.TextResult(`{"applied":true}`), nil
+		},
+	})
+	adapter := &mcpToolAdapter{server: s, pending: make(map[int64]*pendingApproval)}
+
+	result, err := adapter.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","confirm":true}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Content, "BLOCKED") {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 0 {
+		t.Fatalf("blocked rollback calls = %d", calls)
+	}
+}
+
+func TestForceEngineEnsurePlanOnly(t *testing.T) {
+	for _, input := range []json.RawMessage{
+		json.RawMessage(`{"name":"engine-a","apply":true}`),
+		json.RawMessage(`{"name":"engine-a"}`),
+		json.RawMessage(`null`),
+		json.RawMessage(`not-json`),
+	} {
+		output := forceEngineEnsurePlanOnly(input)
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(output, &params); err != nil {
+			t.Fatalf("forceEngineEnsurePlanOnly(%s) returned invalid JSON %s: %v", input, output, err)
+		}
+		if string(params["apply"]) != "false" {
+			t.Fatalf("forceEngineEnsurePlanOnly(%s) = %s", input, output)
+		}
 	}
 }
 

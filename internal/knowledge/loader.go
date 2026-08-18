@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -42,9 +43,10 @@ type EngineProfile struct {
 }
 
 type ProfileMeta struct {
-	Name             string   `yaml:"name"`
-	VersionDefault   string   `yaml:"version_default"`
-	SupportedFormats []string `yaml:"supported_formats"`
+	Name               string   `yaml:"name"`
+	VersionDefault     string   `yaml:"version_default"`
+	SupportedFormats   []string `yaml:"supported_formats"`
+	CompatibleVersions []string `yaml:"compatible_versions,omitempty"`
 }
 
 // --- Hardware Profile ---
@@ -114,6 +116,7 @@ type ContainerAccess struct {
 	Security           *ContainerSecurity `yaml:"security,omitempty" json:"security,omitempty"`
 	DockerRuntime      string             `yaml:"docker_runtime,omitempty" json:"docker_runtime,omitempty"` // --runtime flag (e.g. "ascend")
 	NetworkMode        string             `yaml:"network_mode,omitempty" json:"network_mode,omitempty"`     // "host" for --network host
+	PublishHost        string             `yaml:"publish_host,omitempty" json:"publish_host,omitempty"`     // Docker host IP for published ports; defaults to loopback
 	ShmSize            string             `yaml:"shm_size,omitempty" json:"shm_size,omitempty"`             // --shm-size (e.g. "500g")
 	Init               bool               `yaml:"init,omitempty" json:"init,omitempty"`                     // --init flag
 }
@@ -129,6 +132,22 @@ type ContainerSecurity struct {
 	Privileged         bool  `yaml:"privileged,omitempty" json:"privileged,omitempty"`
 	RunAsUser          *int  `yaml:"run_as_user,omitempty" json:"run_as_user,omitempty"`
 	SupplementalGroups []int `yaml:"supplemental_groups,omitempty" json:"supplemental_groups,omitempty"`
+}
+
+func validateContainerAccess(container *ContainerAccess) error {
+	if container == nil || strings.TrimSpace(container.PublishHost) == "" {
+		return nil
+	}
+	host := strings.TrimSpace(container.PublishHost)
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("container publish_host %q must be an IP literal", host)
+	}
+	if !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+		return fmt.Errorf("container publish_host %q must be loopback, private, or explicitly unspecified", host)
+	}
+	container.PublishHost = host
+	return nil
 }
 
 // --- Engine Asset ---
@@ -203,6 +222,7 @@ type EngineMetadata struct {
 	Default             bool     `yaml:"default,omitempty" json:"default,omitempty"`
 	SupportedFormats    []string `yaml:"supported_formats,omitempty"    json:"supported_formats,omitempty"`
 	SupportedModelTypes []string `yaml:"supported_model_types,omitempty" json:"supported_model_types,omitempty"`
+	CompatibleVersions  []string `yaml:"compatible_versions,omitempty"   json:"compatible_versions,omitempty"`
 	Status              string   `yaml:"status,omitempty"        json:"status,omitempty"`
 	StatusReason        string   `yaml:"status_reason,omitempty" json:"status_reason,omitempty"`
 }
@@ -242,6 +262,19 @@ type EngineStartup struct {
 	Warmup             WarmupConfig        `yaml:"warmup"                           json:"warmup"`
 	ExtraVolumes       []ContainerVolume   `yaml:"extra_volumes,omitempty"          json:"extra_volumes,omitempty"`
 	LogPatterns        *StartupLogPatterns `yaml:"log_patterns,omitempty"           json:"log_patterns,omitempty"`
+	Recovery           RecoveryPolicy      `yaml:"recovery,omitempty"               json:"recovery,omitempty"`
+}
+
+// RecoveryPolicy contains optional catalog values for deployment recovery.
+// Nil pointer fields allow an engine asset to inherit profile defaults.
+type RecoveryPolicy struct {
+	Enabled             *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	CheckIntervalS      *int  `yaml:"check_interval_s,omitempty" json:"check_interval_s,omitempty"`
+	ConsecutiveFailures *int  `yaml:"consecutive_failures,omitempty" json:"consecutive_failures,omitempty"`
+	MaxAttempts         *int  `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
+	WindowS             *int  `yaml:"window_s,omitempty" json:"window_s,omitempty"`
+	BackoffS            []int `yaml:"backoff_s,omitempty" json:"backoff_s,omitempty"`
+	StableResetS        *int  `yaml:"stable_reset_s,omitempty" json:"stable_reset_s,omitempty"`
 }
 
 // StartupPort describes a named listening port that should be supplied to the
@@ -280,15 +313,31 @@ type HealthCheck struct {
 
 // WarmupConfig describes how to warm up an engine after health check passes.
 type WarmupConfig struct {
-	Enabled   bool   `yaml:"enabled"    json:"enabled"`
-	Prompt    string `yaml:"prompt"     json:"prompt"`
-	MaxTokens int    `yaml:"max_tokens" json:"max_tokens"`
-	TimeoutS  int    `yaml:"timeout_s"  json:"timeout_s"`
+	Enabled     bool           `yaml:"enabled"                json:"enabled"`
+	Prompt      string         `yaml:"prompt"                 json:"prompt"`
+	MaxTokens   int            `yaml:"max_tokens"             json:"max_tokens"`
+	TimeoutS    int            `yaml:"timeout_s"              json:"timeout_s"`
+	RequestBody map[string]any `yaml:"request_body,omitempty" json:"request_body,omitempty"`
 }
 
 type EngineAPI struct {
-	Protocol string `yaml:"protocol"  json:"protocol"`
-	BasePath string `yaml:"base_path" json:"base_path"`
+	Protocol       string                `yaml:"protocol"                  json:"protocol"`
+	BasePath       string                `yaml:"base_path"                 json:"base_path"`
+	UpstreamModel  string                `yaml:"upstream_model,omitempty"  json:"upstream_model,omitempty"`
+	RequestAdapter *EngineRequestAdapter `yaml:"request_adapter,omitempty" json:"request_adapter,omitempty"`
+}
+
+type EngineRequestAdapter struct {
+	Kind             string `yaml:"kind,omitempty"               json:"kind,omitempty"`
+	Path             string `yaml:"path,omitempty"               json:"path,omitempty"`
+	ContextConfigKey string `yaml:"context_config_key,omitempty" json:"context_config_key,omitempty"`
+	ProbeSubcommand  string `yaml:"probe_subcommand,omitempty"   json:"probe_subcommand,omitempty"`
+	DisableThinking  bool   `yaml:"disable_thinking,omitempty"   json:"disable_thinking,omitempty"`
+	PaddingRole      string `yaml:"padding_role,omitempty"       json:"padding_role,omitempty"`
+	PaddingPrefix    string `yaml:"padding_prefix,omitempty"     json:"padding_prefix,omitempty"`
+	PaddingUnit      string `yaml:"padding_unit,omitempty"       json:"padding_unit,omitempty"`
+	UpstreamModel    string `yaml:"upstream_model,omitempty"     json:"upstream_model,omitempty"`
+	MaxAttempts      int    `yaml:"max_attempts,omitempty"       json:"max_attempts,omitempty"`
 }
 
 type EngineAmplifier struct {
@@ -767,6 +816,9 @@ func LoadCatalog(fsys fs.FS) (*Catalog, error) {
 	for _, warning := range finalizeEngineAssets(cat) {
 		slog.Warn(warning)
 	}
+	if err := validateCatalogRequestAdapters(cat); err != nil {
+		return nil, err
+	}
 
 	return cat, nil
 }
@@ -781,6 +833,9 @@ func mergeEngineProfile(ea *EngineAsset, p *EngineProfile) {
 	if len(ea.Metadata.SupportedFormats) == 0 {
 		ea.Metadata.SupportedFormats = p.Metadata.SupportedFormats
 	}
+	if len(ea.Metadata.CompatibleVersions) == 0 {
+		ea.Metadata.CompatibleVersions = append([]string(nil), p.Metadata.CompatibleVersions...)
+	}
 
 	// Startup: field-by-field merge
 	mergeStartup(&ea.Startup, &p.Startup)
@@ -791,6 +846,12 @@ func mergeEngineProfile(ea *EngineAsset, p *EngineProfile) {
 	}
 	if ea.API.BasePath == "" {
 		ea.API.BasePath = p.API.BasePath
+	}
+	if ea.API.UpstreamModel == "" {
+		ea.API.UpstreamModel = p.API.UpstreamModel
+	}
+	if ea.API.RequestAdapter == nil {
+		ea.API.RequestAdapter = cloneEngineRequestAdapter(p.API.RequestAdapter)
 	}
 
 	// Amplifier
@@ -866,6 +927,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	if dst.Warmup.TimeoutS == 0 {
 		dst.Warmup.TimeoutS = src.Warmup.TimeoutS
 	}
+	if dst.Warmup.RequestBody == nil {
+		dst.Warmup.RequestBody = src.Warmup.RequestBody
+	}
 	if len(dst.ExtraVolumes) == 0 {
 		dst.ExtraVolumes = src.ExtraVolumes
 	}
@@ -874,6 +938,31 @@ func mergeStartup(dst, src *EngineStartup) {
 	}
 	if len(dst.InternalArgs) == 0 {
 		dst.InternalArgs = src.InternalArgs
+	}
+	mergeRecoveryPolicy(&dst.Recovery, &src.Recovery)
+}
+
+func mergeRecoveryPolicy(dst, src *RecoveryPolicy) {
+	if dst.Enabled == nil {
+		dst.Enabled = src.Enabled
+	}
+	if dst.CheckIntervalS == nil {
+		dst.CheckIntervalS = src.CheckIntervalS
+	}
+	if dst.ConsecutiveFailures == nil {
+		dst.ConsecutiveFailures = src.ConsecutiveFailures
+	}
+	if dst.MaxAttempts == nil {
+		dst.MaxAttempts = src.MaxAttempts
+	}
+	if dst.WindowS == nil {
+		dst.WindowS = src.WindowS
+	}
+	if len(dst.BackoffS) == 0 {
+		dst.BackoffS = append([]int(nil), src.BackoffS...)
+	}
+	if dst.StableResetS == nil {
+		dst.StableResetS = src.StableResetS
 	}
 }
 
@@ -968,8 +1057,10 @@ func finalizeEngineAssets(cat *Catalog) []string {
 
 func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst := src
+	dst.API.RequestAdapter = cloneEngineRequestAdapter(src.API.RequestAdapter)
 
 	dst.Metadata.SupportedFormats = append([]string(nil), src.Metadata.SupportedFormats...)
+	dst.Metadata.CompatibleVersions = append([]string(nil), src.Metadata.CompatibleVersions...)
 	dst.Image.Platforms = append([]string(nil), src.Image.Platforms...)
 	dst.Image.Registries = append([]string(nil), src.Image.Registries...)
 	dst.Startup.Command = append([]string(nil), src.Startup.Command...)
@@ -978,6 +1069,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
 	dst.Startup.InternalArgs = append([]string(nil), src.Startup.InternalArgs...)
 	dst.Startup.ExtraVolumes = append([]ContainerVolume(nil), src.Startup.ExtraVolumes...)
+	dst.Startup.Recovery.BackoffS = append([]int(nil), src.Startup.Recovery.BackoffS...)
 	if src.Startup.LogPatterns != nil {
 		logPatterns := *src.Startup.LogPatterns
 		logPatterns.Phases = append([]StartupPhasePattern(nil), src.Startup.LogPatterns.Phases...)
@@ -1015,6 +1107,77 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	}
 
 	return dst
+}
+
+func cloneEngineRequestAdapter(src *EngineRequestAdapter) *EngineRequestAdapter {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	return &dst
+}
+
+func validateEngineRequestAdapters(assets []EngineAsset) error {
+	for index := range assets {
+		engine := &assets[index]
+		name := strings.TrimSpace(engine.Metadata.Name)
+		if err := validateEngineRequestAdapter("engine "+name, engine.API.RequestAdapter); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCatalogRequestAdapters(cat *Catalog) error {
+	if cat == nil {
+		return nil
+	}
+	for name, profile := range cat.EngineProfiles {
+		if profile == nil {
+			continue
+		}
+		if err := validateEngineRequestAdapter("engine profile "+strings.TrimSpace(name), profile.API.RequestAdapter); err != nil {
+			return err
+		}
+	}
+	return validateEngineRequestAdapters(cat.EngineAssets)
+}
+
+func validateEngineRequestAdapter(owner string, adapter *EngineRequestAdapter) error {
+	if adapter == nil {
+		return nil
+	}
+	if adapter.Kind != "exact_context" {
+		return fmt.Errorf("%s: unknown request adapter kind %q", owner, adapter.Kind)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(adapter.Path), "/") {
+		return fmt.Errorf("%s request adapter: path must be absolute", owner)
+	}
+	if strings.TrimSpace(adapter.ContextConfigKey) == "" {
+		return fmt.Errorf("%s request adapter: context_config_key is required", owner)
+	}
+	if strings.TrimSpace(adapter.ProbeSubcommand) == "" {
+		return fmt.Errorf("%s request adapter: probe_subcommand is required", owner)
+	}
+	if adapter.PaddingRole != "system" {
+		return fmt.Errorf("%s request adapter: padding_role must be system", owner)
+	}
+	if strings.TrimSpace(adapter.PaddingPrefix) == "" {
+		return fmt.Errorf("%s request adapter: padding_prefix is required", owner)
+	}
+	if adapter.PaddingUnit == "" {
+		return fmt.Errorf("%s request adapter: padding_unit is required", owner)
+	}
+	if strings.TrimSpace(adapter.UpstreamModel) == "" {
+		return fmt.Errorf("%s request adapter: upstream_model is required", owner)
+	}
+	if adapter.MaxAttempts == 0 {
+		adapter.MaxAttempts = 8
+	}
+	if adapter.MaxAttempts < 1 || adapter.MaxAttempts > 32 {
+		return fmt.Errorf("%s request adapter: max_attempts must be between 1 and 32", owner)
+	}
+	return nil
 }
 
 func cloneStringMap[T ~string](src map[string]T) map[string]T {
@@ -1109,6 +1272,9 @@ func (cat *Catalog) parseAsset(data []byte, path string) error {
 	case "hardware_profile":
 		var hp HardwareProfile
 		if err := yaml.Unmarshal(data, &hp); err != nil {
+			return fmt.Errorf("parse hardware profile %s: %w", path, err)
+		}
+		if err := validateContainerAccess(hp.Container); err != nil {
 			return fmt.Errorf("parse hardware profile %s: %w", path, err)
 		}
 		cat.HardwareProfiles = append(cat.HardwareProfiles, hp)
@@ -1308,7 +1474,7 @@ func LoadCatalogPatchesLenient(fsys fs.FS, base *Catalog) (*Catalog, []string) {
 			warnings = append(warnings, fmt.Sprintf("read %s: %v", path, err))
 			return nil
 		}
-		assetData, err := catalogPatchToAssetYAML(base, data, path)
+		assetData, err := ValidateCatalogPatch(base, data, path)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("patch %s: %v", path, err))
 			return nil
@@ -1327,6 +1493,10 @@ func LoadCatalogPatchesLenient(fsys fs.FS, base *Catalog) (*Catalog, []string) {
 			continue
 		}
 		warnings = append(warnings, w)
+	}
+	if err := validateCatalogRequestAdapters(cat); err != nil {
+		warnings = append(warnings, err.Error())
+		return &Catalog{EngineProfiles: make(map[string]*EngineProfile)}, warnings
 	}
 	return cat, warnings
 }
@@ -1360,6 +1530,42 @@ func catalogPatchToAssetYAML(base *Catalog, data []byte, path string) ([]byte, e
 		return nil, fmt.Errorf("patch %s did not produce an object", path)
 	}
 	return yaml.Marshal(merged)
+}
+
+// ValidateCatalogPatch verifies a single catalog patch against the provided
+// effective catalog and returns the asset YAML that would be produced.
+func ValidateCatalogPatch(base *Catalog, data []byte, path string) ([]byte, error) {
+	assetData, err := catalogPatchToAssetYAML(base, data, path)
+	if err != nil {
+		return nil, err
+	}
+	var profiles map[string]*EngineProfile
+	if base != nil {
+		profiles = base.EngineProfiles
+	}
+	validationCat := &Catalog{EngineProfiles: mergeEngineProfiles(nil, profiles)}
+	if err := validationCat.parseAsset(assetData, path); err != nil {
+		return nil, err
+	}
+	finalizeEngineAssets(validationCat)
+	if err := validateCatalogRequestAdapters(validationCat); err != nil {
+		return nil, err
+	}
+	return assetData, nil
+}
+
+// CatalogAssetYAML returns one effective catalog asset as YAML.
+func CatalogAssetYAML(cat *Catalog, kind, name string) ([]byte, bool, error) {
+	baseKind := strings.TrimSuffix(kind, "_patch")
+	asset, found, err := catalogAssetMap(cat, baseKind, name)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	data, err := yaml.Marshal(asset)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 func patchMetadataName(m map[string]any) string {
@@ -1569,6 +1775,16 @@ func extractName(data []byte) string {
 // mutated base catalog plus any post-merge finalize warnings (e.g. engine
 // assets whose profile reference can't be resolved even after merging).
 func MergeCatalog(base, overlay *Catalog) (*Catalog, []string) {
+	validationRawAssets := append([]EngineAsset(nil), rawEngineAssets(base)...)
+	validationCat := &Catalog{
+		RawEngineAssets: mergeSlice(validationRawAssets, rawEngineAssets(overlay), func(v EngineAsset) string { return v.Metadata.Name }),
+		EngineProfiles:  mergeEngineProfilesCloned(base.EngineProfiles, overlay.EngineProfiles),
+	}
+	warnings := finalizeEngineAssets(validationCat)
+	if err := validateCatalogRequestAdapters(validationCat); err != nil {
+		return base, append(warnings, err.Error())
+	}
+
 	base.HardwareProfiles = mergeSlice(base.HardwareProfiles, overlay.HardwareProfiles, func(v HardwareProfile) string { return v.Metadata.Name })
 	base.RawEngineAssets = mergeSlice(rawEngineAssets(base), rawEngineAssets(overlay), func(v EngineAsset) string { return v.Metadata.Name })
 	base.ModelAssets = mergeSlice(base.ModelAssets, overlay.ModelAssets, func(v ModelAsset) string { return v.Metadata.Name })
@@ -1598,6 +1814,23 @@ func mergeEngineProfiles(base, overlay map[string]*EngineProfile) map[string]*En
 		merged[name] = profile
 	}
 	return merged
+}
+
+func mergeEngineProfilesCloned(base, overlay map[string]*EngineProfile) map[string]*EngineProfile {
+	merged := mergeEngineProfiles(base, overlay)
+	if len(merged) == 0 {
+		return nil
+	}
+	cloned := make(map[string]*EngineProfile, len(merged))
+	for name, profile := range merged {
+		if profile == nil {
+			continue
+		}
+		copy := *profile
+		copy.API.RequestAdapter = cloneEngineRequestAdapter(profile.API.RequestAdapter)
+		cloned[name] = &copy
+	}
+	return cloned
 }
 
 // MergeCatalogWithDigests merges overlay into base and checks for staleness.

@@ -20,11 +20,67 @@ func newEngineCmd(app *App) *cobra.Command {
 		newEngineScanCmd(app),
 		newEngineListCmd(app),
 		newEngineInfoCmd(app),
+		newEngineEnsureCmd(app),
+		newEngineRollbackCmd(app),
 		newEnginePullCmd(app),
 		newEngineImportCmd(app),
 		newEngineRemoveCmd(app),
 	)
 
+	return cmd
+}
+
+func newEngineEnsureCmd(app *App) *cobra.Command {
+	var version string
+	var apply bool
+	cmd := &cobra.Command{
+		Use:   "ensure <name>",
+		Short: "Plan or apply a verified Engine version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.EnsureEngine == nil {
+				return fmt.Errorf("engine.ensure not implemented")
+			}
+			data, err := app.ToolDeps.EnsureEngine(cmd.Context(), args[0], version, apply)
+			if err != nil {
+				return fmt.Errorf("ensure engine %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&version, "version", "", "Catalog Engine version to ensure")
+	cmd.Flags().BoolVar(&apply, "apply", false, "Apply the plan (default is plan-only)")
+	return cmd
+}
+
+func newEngineRollbackCmd(app *App) *cobra.Command {
+	var (
+		confirm     bool
+		runtimeType string
+	)
+	cmd := &cobra.Command{
+		Use:   "rollback <name>",
+		Short: "Activate the previous verified Engine version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.ToolDeps.RollbackEngine == nil {
+				return fmt.Errorf("engine.rollback not implemented")
+			}
+			if runtimeType != "container" && runtimeType != "native" {
+				return fmt.Errorf("runtime must be container or native")
+			}
+			data, err := app.ToolDeps.RollbackEngine(cmd.Context(), args[0], runtimeType, confirm)
+			if err != nil {
+				return fmt.Errorf("roll back engine %s: %w", args[0], err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatJSON(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&runtimeType, "runtime", "", "Runtime group to roll back: container or native")
+	cmd.Flags().BoolVar(&confirm, "confirm", false, "Confirm activation of the previous verified version")
+	_ = cmd.MarkFlagRequired("runtime")
 	return cmd
 }
 
@@ -142,8 +198,8 @@ type pullProgressRenderer struct {
 	mu         sync.Mutex
 	w          interface{ Write([]byte) (int, error) }
 	isTTY      bool
-	lastReport int   // last reported percentage (for non-TTY deduplication)
-	started    bool  // whether we've printed any progress line
+	lastReport int  // last reported percentage (for non-TTY deduplication)
+	started    bool // whether we've printed any progress line
 	lastUpdate time.Time
 }
 
@@ -254,7 +310,7 @@ func formatDuration(seconds float64) string {
 func newEngineImportCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "import <path>",
-		Short: "Import an engine image from a tar file",
+		Short: "Import an engine image or native runtime package",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -264,7 +320,7 @@ func newEngineImportCmd(app *App) *cobra.Command {
 				return fmt.Errorf("import engine from %s: %w", tarPath, err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Engine image imported from %s\n", tarPath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Engine imported from %s\n", tarPath)
 			return nil
 		},
 	}

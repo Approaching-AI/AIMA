@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jguan/aima/internal/proxy"
+	"github.com/jguan/aima/internal/recovery"
 	"github.com/jguan/aima/internal/runtime"
 
 	state "github.com/jguan/aima/internal"
@@ -210,6 +212,53 @@ func uniqueRuntimes(rts ...runtime.Runtime) []runtime.Runtime {
 	return unique
 }
 
+func runtimeByName(name string, rts ...runtime.Runtime) runtime.Runtime {
+	name = strings.TrimSpace(name)
+	for _, candidate := range uniqueRuntimes(rts...) {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name()), name) {
+			return candidate
+		}
+	}
+	return nil
+}
+
+// observeExactDeploymentOnRuntime distinguishes confirmed absence from a
+// Runtime infrastructure failure. If List can see the exact object while
+// Status fails, it returns that list entry together with the detail error.
+func observeExactDeploymentOnRuntime(ctx context.Context, name string, target runtime.Runtime) (*runtime.DeploymentStatus, bool, error) {
+	if target == nil {
+		return nil, false, fmt.Errorf("runtime for deployment %q is unavailable", name)
+	}
+	status, statusErr := target.Status(ctx, name)
+	if statusErr == nil && status != nil && status.Name == name {
+		return status, true, nil
+	}
+	if statusErr == nil {
+		statusErr = fmt.Errorf("runtime returned no exact status for deployment %q", name)
+	}
+	statuses, listErr := target.List(ctx)
+	if listErr != nil {
+		return nil, false, fmt.Errorf(
+			"observe deployment %q on %s: status: %s; list: %s",
+			name,
+			target.Name(),
+			recovery.SanitizeText(statusErr.Error()),
+			recovery.SanitizeText(listErr.Error()),
+		)
+	}
+	for _, listed := range statuses {
+		if listed != nil && listed.Name == name {
+			return listed, true, fmt.Errorf(
+				"observe deployment %q on %s details: %s",
+				name,
+				target.Name(),
+				recovery.SanitizeText(statusErr.Error()),
+			)
+		}
+	}
+	return nil, false, nil
+}
+
 func findMatchingDeployments(ctx context.Context, query string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) []matchedDeployment {
 	matches := make([]matchedDeployment, 0)
 	seen := make(map[string]struct{})
@@ -345,7 +394,19 @@ func filterDeploymentStatuses(statuses []*runtime.DeploymentStatus, suppress fun
 	return filtered
 }
 
-func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineType, slot string, configOverrides map[string]any) bool {
+func deploymentEngineSourceMatches(existing *runtime.DeploymentStatus, expectedSHA256 string) bool {
+	expected := strings.ToLower(strings.TrimSpace(expectedSHA256))
+	if expected == "" {
+		return true
+	}
+	if existing == nil {
+		return false
+	}
+	actual := strings.ToLower(strings.TrimSpace(existing.Labels[proxy.LabelEngineSourceSHA256]))
+	return actual != "" && actual == expected
+}
+
+func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineType, slot string, configOverrides map[string]any, expectedSourceSHA256 string) bool {
 	if existing == nil {
 		return false
 	}
@@ -360,14 +421,14 @@ func shouldReuseExistingDeployment(existing *runtime.DeploymentStatus, engineTyp
 	if strings.TrimSpace(slot) != "" {
 		return false
 	}
-	return len(configOverrides) == 0
+	return len(configOverrides) == 0 && deploymentEngineSourceMatches(existing, expectedSourceSHA256)
 }
 
-func findReusableDeployment(ctx context.Context, deployName, modelName, engineType, slot string, configOverrides map[string]any, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) (*runtime.DeploymentStatus, error) {
+func findReusableDeployment(ctx context.Context, deployName, modelName, engineType, slot string, configOverrides map[string]any, expectedSourceSHA256 string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) (*runtime.DeploymentStatus, error) {
 	matches := findMatchingDeployments(ctx, modelName, suppress, rts...)
 	reusable := make([]matchedDeployment, 0, len(matches))
 	for _, match := range matches {
-		if shouldReuseExistingDeployment(match.Status, engineType, slot, configOverrides) {
+		if shouldReuseExistingDeployment(match.Status, engineType, slot, configOverrides, expectedSourceSHA256) {
 			reusable = append(reusable, match)
 		}
 	}
@@ -379,8 +440,43 @@ func findReusableDeployment(ctx context.Context, deployName, modelName, engineTy
 	}
 
 	existing, err := findDeploymentStatus(ctx, deployName, suppress, rts...)
-	if err != nil || !shouldReuseExistingDeployment(existing, engineType, slot, configOverrides) {
+	if err != nil || !shouldReuseExistingDeployment(existing, engineType, slot, configOverrides, expectedSourceSHA256) {
 		return nil, nil
 	}
 	return existing, nil
+}
+
+func reconcileMismatchedEngineSourceDeployment(ctx context.Context, modelName, engineName, expectedSourceSHA256 string, suppress func(*runtime.DeploymentStatus) bool, rts ...runtime.Runtime) error {
+	if strings.TrimSpace(expectedSourceSHA256) == "" {
+		return nil
+	}
+	candidates := make([]matchedDeployment, 0, 1)
+	for _, match := range findMatchingDeployments(ctx, modelName, suppress, rts...) {
+		if match.Runtime == nil || match.Status == nil {
+			continue
+		}
+		status := match.Status
+		if !(status.Ready || status.Phase == "running" || status.Phase == "starting") {
+			continue
+		}
+		existingEngine := strings.TrimSpace(status.Engine)
+		if existingEngine == "" {
+			existingEngine = strings.TrimSpace(status.Labels["aima.dev/engine"])
+		}
+		if !strings.EqualFold(existingEngine, strings.TrimSpace(engineName)) || deploymentEngineSourceMatches(status, expectedSourceSHA256) {
+			continue
+		}
+		candidates = append(candidates, match)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	if len(candidates) > 1 {
+		return fmt.Errorf("model %q has multiple stale deployments for engine %q; undeploy them explicitly before upgrading", modelName, engineName)
+	}
+	stale := candidates[0]
+	if err := stale.Runtime.Delete(ctx, stale.Status.Name); err != nil {
+		return fmt.Errorf("replace stale engine deployment %q on %s: %w", stale.Status.Name, stale.Runtime.Name(), err)
+	}
+	return nil
 }

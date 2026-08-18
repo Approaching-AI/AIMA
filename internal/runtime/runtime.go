@@ -1,8 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -53,24 +54,29 @@ type DeployRequest struct {
 
 // DeploymentStatus is the unified status across runtimes.
 type DeploymentStatus struct {
-	Name            string            `json:"name"`
-	Model           string            `json:"model,omitempty"`
-	Engine          string            `json:"engine,omitempty"`
-	Image           string            `json:"image,omitempty"`
-	Slot            string            `json:"slot,omitempty"`
-	Phase           string            `json:"phase"` // running / starting / stopped / failed
-	Ready           bool              `json:"ready"`
-	Address         string            `json:"address"` // host:port
-	Config          map[string]any    `json:"config,omitempty"`
-	Labels          map[string]string `json:"labels"`
-	StartTime       string            `json:"start_time"`
-	StartedAtUnix   int64             `json:"started_at_unix,omitempty"`
-	Message         string            `json:"message,omitempty"`
-	Runtime         string            `json:"runtime"` // "k3s", "docker", or "native"
-	Restarts        int               `json:"restarts,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	GPUMemoryMiB    int               `json:"gpu_memory_mib,omitempty"`
-	GPUMemorySource string            `json:"gpu_memory_source,omitempty"`
+	Name             string            `json:"name"`
+	Model            string            `json:"model,omitempty"`
+	Engine           string            `json:"engine,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	Slot             string            `json:"slot,omitempty"`
+	Phase            string            `json:"phase"` // running / starting / stopped / failed
+	Ready            bool              `json:"ready"`
+	Address          string            `json:"address"` // host:port
+	Config           map[string]any    `json:"config,omitempty"`
+	Labels           map[string]string `json:"labels"`
+	StartTime        string            `json:"start_time"`
+	StartedAtUnix    int64             `json:"started_at_unix,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	Runtime          string            `json:"runtime"` // "k3s", "docker", or "native"
+	Restarts         int               `json:"restarts,omitempty"`
+	ExitCode         *int              `json:"exit_code,omitempty"`
+	GPUMemoryMiB     int               `json:"gpu_memory_mib,omitempty"`
+	GPUMemorySource  string            `json:"gpu_memory_source,omitempty"`
+	DesiredState     string            `json:"desired_state,omitempty"`
+	RecoveryState    string            `json:"recovery_state,omitempty"`
+	RecoveryAttempts int               `json:"recovery_attempts,omitempty"`
+	NextRecoveryAt   string            `json:"next_recovery_at,omitempty"`
+	QuarantineReason string            `json:"quarantine_reason,omitempty"`
 
 	StartupPhase    string `json:"startup_phase,omitempty"`    // scheduling/pulling_image/initializing/loading_weights/cuda_graphs/ready
 	StartupProgress int    `json:"startup_progress,omitempty"` // 0-100
@@ -79,6 +85,13 @@ type DeploymentStatus struct {
 	ErrorLines      string `json:"error_lines,omitempty"`      // last few log lines on failure
 	Stalled         bool   `json:"stalled,omitempty"`          // progress stalled
 	LastProgressAt  int64  `json:"last_progress_at,omitempty"` // unix seconds
+
+	// AdapterCommand, AdapterModelPath, and AdapterInstanceID are native-runtime details used by
+	// in-process request adapters. They must never be exposed by public status
+	// APIs, logs, or persisted proxy payloads.
+	AdapterCommand    []string `json:"-"`
+	AdapterModelPath  string   `json:"-"`
+	AdapterInstanceID string   `json:"-"`
 }
 
 // PartitionRequest holds GPU/CPU/RAM resource limits.
@@ -96,11 +109,7 @@ type HealthCheckConfig struct {
 }
 
 // WarmupConfig defines how to warm up an engine after health check passes.
-type WarmupConfig struct {
-	Prompt    string
-	MaxTokens int
-	TimeoutS  int
-}
+type WarmupConfig = knowledge.WarmupConfig
 
 const servedModelLabel = "aima.dev/served-model"
 
@@ -306,20 +315,15 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
 		address = "http://" + address
 	}
-	prompt := strings.TrimSpace(cfg.Prompt)
-	if prompt == "" {
-		prompt = "Hello"
-	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 1
-	}
 	timeout := time.Duration(cfg.TimeoutS) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"max_tokens":%d}`, model, prompt, maxTokens)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", strings.NewReader(body))
+	body, err := BuildWarmupRequestBody(model, cfg)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(address, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -330,4 +334,32 @@ func warmupInferenceReady(ctx context.Context, address, model string, cfg knowle
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// BuildWarmupRequestBody returns an isolated OpenAI-compatible warmup body.
+// The deployment's served model always wins over a catalog-supplied value.
+func BuildWarmupRequestBody(model string, cfg WarmupConfig) ([]byte, error) {
+	body := make(map[string]any)
+	if len(cfg.RequestBody) > 0 {
+		raw, err := json.Marshal(cfg.RequestBody)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return nil, err
+		}
+	} else {
+		prompt := strings.TrimSpace(cfg.Prompt)
+		if prompt == "" {
+			prompt = "Hello"
+		}
+		maxTokens := cfg.MaxTokens
+		if maxTokens <= 0 {
+			maxTokens = 1
+		}
+		body["messages"] = []any{map[string]any{"role": "user", "content": prompt}}
+		body["max_tokens"] = maxTokens
+	}
+	body["model"] = model
+	return json.Marshal(body)
 }

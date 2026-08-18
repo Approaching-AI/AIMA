@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -50,17 +52,23 @@ var confirmableTools = map[string]confirmableTool{
 		DryRunTool: "scenario.apply",
 		DryRunArgs: addDryRunFlag,
 	},
+	"engine.ensure": {
+		Reason:     "installs or activates an Engine version",
+		DryRunTool: "engine.ensure",
+		DryRunArgs: forceEngineEnsurePlanOnly,
+	},
 }
 
 // blockedAgentTools lists MCP tools that the Agent must not call directly.
 // These are blocked at the adapter level; users can still invoke them via CLI.
 var blockedAgentTools = map[string]string{
-	"model.remove":   "destructive operation",
-	"engine.remove":  "destructive operation",
-	"deploy.delete":  "destructive operation",
-	"shell.exec":     "arbitrary command execution",
-	"agent.ask":      "recursive agent invocation",
-	"agent.rollback": "state rollback mutation",
+	"model.remove":    "destructive operation",
+	"engine.remove":   "destructive operation",
+	"engine.rollback": "state rollback mutation",
+	"deploy.delete":   "destructive operation",
+	"shell.exec":      "arbitrary command execution",
+	"agent.ask":       "recursive agent invocation",
+	"agent.rollback":  "state rollback mutation",
 }
 
 func isBlockedAgentTool(name string, arguments json.RawMessage) (bool, string) {
@@ -212,6 +220,24 @@ func addDryRunFlag(arguments json.RawMessage) json.RawMessage {
 	out, err := json.Marshal(raw)
 	if err != nil {
 		return arguments
+	}
+	return out
+}
+
+func forceEngineEnsurePlanOnly(arguments json.RawMessage) json.RawMessage {
+	raw := make(map[string]json.RawMessage)
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &raw); err != nil {
+			return json.RawMessage(`{"apply":false}`)
+		}
+	}
+	if raw == nil {
+		raw = make(map[string]json.RawMessage)
+	}
+	raw["apply"] = json.RawMessage("false")
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return json.RawMessage(`{"apply":false}`)
 	}
 	return out
 }
@@ -484,19 +510,35 @@ func (a *fleetMCPAdapter) ListToolDefs() json.RawMessage {
 // toEngineBinarySource converts a knowledge.EngineSource to engine.BinarySource.
 // Centralises the mapping so callers don't repeat the 4-field struct literal.
 func toEngineBinarySource(src *knowledge.EngineSource) *engine.BinarySource {
+	if src == nil {
+		return nil
+	}
 	var probePaths []string
-	if src != nil && src.Probe != nil {
+	if src.Probe != nil {
 		probePaths = append(probePaths, src.Probe.Paths...)
 	}
 	return &engine.BinarySource{
-		Binary:      src.Binary,
-		Platforms:   src.Platforms,
-		Download:    src.Download,
-		Mirror:      src.Mirror,
-		SHA256:      src.SHA256,
-		InstallType: src.InstallType,
-		ProbePaths:  probePaths,
+		Binary:       src.Binary,
+		Platforms:    src.Platforms,
+		Download:     src.Download,
+		Mirror:       src.Mirror,
+		SHA256:       src.SHA256,
+		InstallType:  src.InstallType,
+		ProbePaths:   probePaths,
+		LocalBundles: engineLocalBundlesFromEnv(),
 	}
+}
+
+func engineLocalBundlesFromEnv() []string {
+	var bundles []string
+	for _, name := range []string{"AIMA_ENGINE_BUNDLE", "AIMA_ENGINE_ARCHIVE", "AIMA_ENGINE_OFFLINE_PACKAGE"} {
+		for _, path := range filepath.SplitList(os.Getenv(name)) {
+			if path = strings.TrimSpace(path); path != "" {
+				bundles = append(bundles, path)
+			}
+		}
+	}
+	return bundles
 }
 
 // execRunner implements engine.CommandRunner using real exec.
@@ -595,6 +637,7 @@ func (a openClawBackendAdapter) ListBackends() map[string]*openclaw.Backend {
 		result[k] = &openclaw.Backend{
 			ModelName:           b.ModelName,
 			EngineType:          b.EngineType,
+			ModelType:           b.ModelType,
 			Address:             b.Address,
 			Ready:               b.Ready,
 			Remote:              b.Remote,
@@ -628,7 +671,7 @@ type catalogAdapter struct{ cat *knowledge.Catalog }
 
 func (a catalogAdapter) ModelType(name string) string {
 	for _, m := range a.cat.ModelAssets {
-		if strings.EqualFold(m.Metadata.Name, name) {
+		if catalogModelNameMatches(m, name) {
 			return m.Metadata.Type
 		}
 	}
@@ -641,7 +684,7 @@ func (a catalogAdapter) ModelContextWindow(name string) int {
 
 func (a catalogAdapter) ModelFamily(name string) string {
 	for _, m := range a.cat.ModelAssets {
-		if strings.EqualFold(m.Metadata.Name, name) {
+		if catalogModelNameMatches(m, name) {
 			return m.Metadata.Family
 		}
 	}
@@ -650,7 +693,7 @@ func (a catalogAdapter) ModelFamily(name string) string {
 
 func (a catalogAdapter) ModelChatProvider(name string) bool {
 	for _, m := range a.cat.ModelAssets {
-		if strings.EqualFold(m.Metadata.Name, name) {
+		if catalogModelNameMatches(m, name) {
 			if m.OpenClaw != nil && m.OpenClaw.ChatProvider != nil {
 				return *m.OpenClaw.ChatProvider
 			}
@@ -658,6 +701,18 @@ func (a catalogAdapter) ModelChatProvider(name string) bool {
 		}
 	}
 	return true
+}
+
+func catalogModelNameMatches(m knowledge.ModelAsset, name string) bool {
+	if strings.EqualFold(m.Metadata.Name, name) {
+		return true
+	}
+	for _, alias := range m.Metadata.Aliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a catalogAdapter) Adapters(name string) []inferencehttp.Adapter {
@@ -693,6 +748,28 @@ func (a catalogAdapter) RequestPatches(name string) []inferencehttp.RequestPatch
 			})
 		}
 		return out
+	}
+	return nil
+}
+
+func (a catalogAdapter) RequestAdapter(engineName string) *inferencehttp.RequestAdapter {
+	for _, engine := range a.cat.EngineAssets {
+		if !strings.EqualFold(engine.Metadata.Name, engineName) || engine.API.RequestAdapter == nil {
+			continue
+		}
+		adapter := engine.API.RequestAdapter
+		return &inferencehttp.RequestAdapter{
+			Kind:             adapter.Kind,
+			Path:             adapter.Path,
+			ContextConfigKey: adapter.ContextConfigKey,
+			ProbeSubcommand:  adapter.ProbeSubcommand,
+			DisableThinking:  adapter.DisableThinking,
+			PaddingRole:      adapter.PaddingRole,
+			PaddingPrefix:    adapter.PaddingPrefix,
+			PaddingUnit:      adapter.PaddingUnit,
+			UpstreamModel:    adapter.UpstreamModel,
+			MaxAttempts:      adapter.MaxAttempts,
+		}
 	}
 	return nil
 }

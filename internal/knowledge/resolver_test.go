@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -1200,6 +1201,49 @@ func TestRealCatalogSGLangKTUsesAppImageExtractAndRunFallback(t *testing.T) {
 	}
 }
 
+func TestResolveAMD395Qwen36NativeBF16(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("LoadCatalog(real FS): %v", err)
+	}
+	hw := HardwareInfo{
+		GPUArch:       "RDNA3.5",
+		GPUVRAMMiB:    98304,
+		GPUCount:      1,
+		UnifiedMemory: true,
+		CPUArch:       "amd64",
+		RAMTotalMiB:   126000,
+		Platform:      "linux/amd64",
+		RuntimeType:   "native",
+	}
+
+	resolved, err := cat.Resolve(hw, "qwen3.6-35b-a3b", "", nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Engine != "aima-engine-native" || resolved.EngineAssetName != "aima-engine-native-amd395" {
+		t.Fatalf("engine = %q asset = %q", resolved.Engine, resolved.EngineAssetName)
+	}
+	if resolved.ModelFormat != "safetensors" || resolved.RuntimeRecommendation != "native" {
+		t.Fatalf("format/runtime = %q/%q", resolved.ModelFormat, resolved.RuntimeRecommendation)
+	}
+	if resolved.Config["context_tokens"] != 8192 {
+		t.Fatalf("config = %#v", resolved.Config)
+	}
+	if resolved.Config["cache_capacity"] != 9216 {
+		t.Fatalf("config = %#v", resolved.Config)
+	}
+	if resolved.Source == nil || resolved.Source.Binary != "aima-engine" {
+		t.Fatalf("source = %#v", resolved.Source)
+	}
+	if len(resolved.Command) < 2 || resolved.Command[0] != "aima-engine" || resolved.Command[1] != "serve" {
+		t.Fatalf("command = %q", resolved.Command)
+	}
+	if resolved.Warmup != nil {
+		t.Fatalf("warmup = %#v, want disabled", resolved.Warmup)
+	}
+}
+
 func TestResolveUnifiedMemoryFilter(t *testing.T) {
 	unified := true
 	discrete := false
@@ -2380,6 +2424,23 @@ func TestCheckFitTPExceedsGPUCount(t *testing.T) {
 			t.Fatalf("expected Fit=true without TP config, got Reason=%q", fit.Reason)
 		}
 	})
+}
+
+func TestCheckFitUsesPersistedJSONNumbers(t *testing.T) {
+	resolved := &ResolvedConfig{Config: map[string]any{
+		"gpu_memory_utilization": json.Number("0.95"),
+		"tensor_parallel_size":   json.Number("2"),
+	}}
+	hw := HardwareInfo{UnifiedMemory: true, RAMTotalMiB: 16384, GPUCount: 1}
+
+	fit := CheckFit(resolved, hw)
+	if fit.Fit || !strings.Contains(fit.Reason, "tensor_parallel_size=2") {
+		t.Fatalf("persisted numeric fit = %+v, want one-GPU TP rejection", fit)
+	}
+	adjusted, ok := fit.Adjustments["gpu_memory_utilization"]
+	if !ok || toFloat64(adjusted) != 0.5 {
+		t.Fatalf("persisted numeric adjustments = %+v, want gpu_memory_utilization=0.5", fit.Adjustments)
+	}
 }
 
 // TestBuildSyntheticConfig_NoVRAMLeakForEnginesWithoutDeclaredKnob is the

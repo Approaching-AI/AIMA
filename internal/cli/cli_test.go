@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -158,7 +159,7 @@ func TestEngineSubcommands(t *testing.T) {
 		t.Fatal("engine command not found")
 	}
 
-	expected := []string{"scan", "list", "pull", "import", "remove"}
+	expected := []string{"scan", "list", "pull", "import", "ensure", "rollback", "remove"}
 	subs := make(map[string]bool)
 	for _, c := range engineCmd.Commands() {
 		subs[c.Name()] = true
@@ -167,6 +168,64 @@ func TestEngineSubcommands(t *testing.T) {
 		if !subs[name] {
 			t.Errorf("engine missing subcommand %q", name)
 		}
+	}
+}
+
+func TestEngineEnsureCmd(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantVersion string
+		wantApply   bool
+	}{
+		{name: "plan only", args: []string{"engine", "ensure", "engine-a"}},
+		{name: "versioned apply", args: []string{"engine", "ensure", "engine-a", "--version", "b9330", "--apply"}, wantVersion: "b9330", wantApply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testApp(t)
+			calls := 0
+			app.ToolDeps.EnsureEngine = func(_ context.Context, name, version string, apply bool) (json.RawMessage, error) {
+				calls++
+				if name != "engine-a" || version != tc.wantVersion || apply != tc.wantApply {
+					t.Fatalf("EnsureEngine(%q, %q, %v)", name, version, apply)
+				}
+				return json.RawMessage(`{"plan":{"action":"install"},"applied":false}`), nil
+			}
+			root := NewRootCmd(app)
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetArgs(tc.args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("engine ensure failed: %v", err)
+			}
+			if calls != 1 || !strings.Contains(buf.String(), `"action": "install"`) {
+				t.Fatalf("calls=%d output=%s", calls, buf.String())
+			}
+		})
+	}
+}
+
+func TestEngineRollbackCmd(t *testing.T) {
+	app := testApp(t)
+	calls := 0
+	app.ToolDeps.RollbackEngine = func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
+		calls++
+		if name != "engine-a" || runtimeType != "native" || !confirm {
+			t.Fatalf("RollbackEngine(%q, %q, %v)", name, runtimeType, confirm)
+		}
+		return json.RawMessage(`{"asset_name":"engine-a","applied":true,"active_engine_id":"engine-v1"}`), nil
+	}
+	root := NewRootCmd(app)
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"engine", "rollback", "engine-a", "--runtime", "native", "--confirm"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("engine rollback failed: %v", err)
+	}
+	if calls != 1 || !strings.Contains(buf.String(), `"active_engine_id": "engine-v1"`) {
+		t.Fatalf("calls=%d output=%s", calls, buf.String())
 	}
 }
 
@@ -221,6 +280,53 @@ func TestKnowledgeSubcommands(t *testing.T) {
 		if !subs[name] {
 			t.Errorf("knowledge missing subcommand %q", name)
 		}
+	}
+}
+
+func TestCatalogEffectiveCmdPrintsYAML(t *testing.T) {
+	app := testApp(t)
+	app.ToolDeps.CatalogEffective = func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+		return json.RawMessage(`{"kind":"model_asset","name":"demo","yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "effective", "model_asset", "demo"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog effective failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "kind: model_asset") || !strings.Contains(buf.String(), "name: demo") {
+		t.Fatalf("unexpected catalog effective output: %s", buf.String())
+	}
+}
+
+func TestCatalogValidatePatchCmdReadsFile(t *testing.T) {
+	app := testApp(t)
+	var gotContent string
+	app.ToolDeps.CatalogValidatePatch = func(ctx context.Context, content string) (json.RawMessage, error) {
+		gotContent = content
+		return json.RawMessage(`{"valid":true,"effective_yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+	}
+	patchPath := t.TempDir() + "/demo.patch.yaml"
+	if err := os.WriteFile(patchPath, []byte("kind: model_asset_patch\nmetadata:\n  name: demo\n"), 0o644); err != nil {
+		t.Fatalf("write patch: %v", err)
+	}
+	root := NewRootCmd(app)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"catalog", "validate-patch", patchPath})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("catalog validate-patch failed: %v", err)
+	}
+	if !strings.Contains(gotContent, "kind: model_asset_patch") {
+		t.Fatalf("validate-patch did not read file content: %q", gotContent)
+	}
+	if !strings.Contains(buf.String(), `"valid": true`) {
+		t.Fatalf("unexpected validate-patch output: %s", buf.String())
 	}
 }
 
@@ -505,7 +611,7 @@ func TestCatalogSubcommands(t *testing.T) {
 		t.Fatal("catalog command not found")
 	}
 
-	expected := []string{"status", "override"}
+	expected := []string{"status", "override", "validate", "effective", "diff", "validate-patch"}
 	subs := make(map[string]bool)
 	for _, c := range catalogCmd.Commands() {
 		subs[c.Name()] = true

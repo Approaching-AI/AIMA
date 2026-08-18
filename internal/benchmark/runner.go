@@ -40,7 +40,7 @@ func (c *RunConfig) applyDefaults() {
 	if c.InputTokens <= 0 {
 		c.InputTokens = 128
 	}
-	if c.Temperature <= 0 {
+	if c.Temperature < 0 {
 		c.Temperature = 0.01
 	}
 	if c.WarmupCount < 0 {

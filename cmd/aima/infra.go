@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -43,7 +42,7 @@ func defaultLLMEndpoint() string {
 // Endpoint defaults to localhost proxy; model auto-discovered from /v1/models.
 func buildLLMClient(ctx context.Context, db *state.DB) *agent.OpenAIClient {
 	settings := loadLLMSettings(ctx, db)
-	opts := []agent.OpenAIOption{agent.WithDiscoverFunc(discoverFleetLLM)}
+	opts := []agent.OpenAIOption{}
 	if settings.Model != "" {
 		opts = append(opts, agent.WithModel(settings.Model))
 	}
@@ -202,60 +201,6 @@ func parseExtraParamsStrict(s string) (map[string]any, error) {
 	return m, nil
 }
 
-// discoverFleetLLM discovers LLM endpoints from fleet devices via mDNS.
-// Called lazily by OpenAIClient when local endpoint has no models.
-func discoverFleetLLM(ctx context.Context, apiKey string) []agent.FleetEndpoint {
-	services, err := proxy.Discover(ctx, 3*time.Second)
-	if err != nil {
-		slog.Debug("fleet LLM discovery: mDNS failed", "error", err)
-		return nil
-	}
-
-	var endpoints []agent.FleetEndpoint
-	for _, svc := range services {
-		addr := svc.AddrV4
-		if addr == "" {
-			addr = svc.Host
-		}
-		if addr == "" {
-			continue
-		}
-		if proxy.IsLocalIP(addr) {
-			continue
-		}
-		models := proxy.QueryRemoteStatus(ctx, addr, svc.Port, apiKey)
-		bestModel, ok := proxy.BestAdvertisedModel(models)
-		if !ok || strings.TrimSpace(bestModel.ID) == "" {
-			continue
-		}
-		baseURL := fmt.Sprintf("http://%s:%d/v1", addr, svc.Port)
-		slog.Debug("fleet LLM discovery: candidate", "addr", baseURL, "models", models)
-		endpoints = append(endpoints, agent.FleetEndpoint{
-			BaseURL:             baseURL,
-			Model:               bestModel.ID,
-			ParameterCount:      bestModel.ParameterCount,
-			ContextWindowTokens: bestModel.ContextWindowTokens,
-		})
-	}
-	sort.SliceStable(endpoints, func(i, j int) bool {
-		return proxy.BetterAdvertisedModel(
-			proxy.AdvertisedModel{
-				ID:                  endpoints[i].Model,
-				ParameterCount:      endpoints[i].ParameterCount,
-				ContextWindowTokens: endpoints[i].ContextWindowTokens,
-				Remote:              true,
-			},
-			proxy.AdvertisedModel{
-				ID:                  endpoints[j].Model,
-				ParameterCount:      endpoints[j].ParameterCount,
-				ContextWindowTokens: endpoints[j].ContextWindowTokens,
-				Remote:              true,
-			},
-		)
-	})
-	return endpoints
-}
-
 // detectHWProfile returns the hardware profile name (e.g. "nvidia-rtx4090-x86") or "" if detection fails.
 // Uses catalog matching for precise identification; falls back to "Arch-CPUArch" if no catalog.
 func detectHWProfile(ctx context.Context, cat *knowledge.Catalog) string {
@@ -315,11 +260,7 @@ func buildNativeRuntime(dataDir string, engineAssets []knowledge.EngineAsset) ru
 		runtime.WithEngineDirs(engineDirs),
 		runtime.WithBinaryResolver(func(ctx context.Context, src *engine.BinarySource) (string, error) {
 			if !deployAutoPullAllowed(ctx) {
-				name := "engine binary"
-				if src != nil && strings.TrimSpace(src.Binary) != "" {
-					name = src.Binary
-				}
-				return "", fmt.Errorf("%s not found locally and auto-pull is disabled", name)
+				return bm.ResolveInstalled(src)
 			}
 			return bm.Resolve(ctx, src)
 		}),
@@ -422,6 +363,40 @@ func splitImageRef(ref string) (name, tag string) {
 		absColon = slashIdx + 1 + colonIdx
 	}
 	return ref[:absColon], ref[absColon+1:]
+}
+
+func engineRegistriesWithEnv(registries []string) []string {
+	envRegistries := splitRegistryEnv(os.Getenv("AIMA_ENGINE_REGISTRIES"))
+	envRegistries = append(envRegistries, splitRegistryEnv(os.Getenv("AIMA_ENGINE_REGISTRY"))...)
+	if len(envRegistries) == 0 {
+		return registries
+	}
+	seen := make(map[string]struct{}, len(envRegistries)+len(registries))
+	out := make([]string, 0, len(envRegistries)+len(registries))
+	for _, value := range append(envRegistries, registries...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func splitRegistryEnv(raw string) []string {
+	var values []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	}) {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 type deployOptions struct {

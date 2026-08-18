@@ -48,59 +48,77 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 		if upstreamModel == "" {
 			upstreamModel = model
 		}
-		active[strings.ToLower(model)] = true
-
-		if d.Ready && d.Address != "" {
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineTypeFromDeployment(d),
-				ModelType:           modelTypeFromDeployment(d),
-				Address:             d.Address,
-				Ready:               true,
-				ParameterCount:      parameterCountFromDeployment(d),
-				ContextWindowTokens: contextWindowFromDeployment(d),
-			})
-			continue
+		routeNames := []string{model}
+		for _, alias := range []string{
+			strings.TrimSpace(d.Labels[LabelRequestedModel]),
+			upstreamModel,
+		} {
+			duplicate := alias == ""
+			for _, routeName := range routeNames {
+				duplicate = duplicate || strings.EqualFold(alias, routeName)
+			}
+			if !duplicate {
+				routeNames = append(routeNames, alias)
+			}
 		}
+		for _, routeName := range routeNames {
+			active[strings.ToLower(routeName)] = true
 
-		// Deployment exists but not ready: preserve existing route metadata
-		// (address/basePath/remote), but mark it not ready.
-		existing := s.ListBackends()
-		if b, ok := existing[strings.ToLower(model)]; ok {
-			engineType := engineTypeFromDeployment(d)
-			if engineType == "" {
-				engineType = b.EngineType
+			if d.Ready && d.Address != "" {
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineTypeFromDeployment(d),
+					ModelType:           modelTypeFromDeployment(d),
+					Address:             d.Address,
+					Ready:               true,
+					ParameterCount:      parameterCountFromDeployment(d),
+					ContextWindowTokens: contextWindowFromDeployment(d),
+				})
+				continue
 			}
-			modelType := modelTypeFromDeployment(d)
-			if modelType == "" {
-				modelType = b.ModelType
+
+			// Deployment exists but not ready: preserve existing route metadata
+			// (address/basePath/remote), but mark it not ready.
+			existing := s.ListBackends()
+			if b, ok := existing[strings.ToLower(routeName)]; ok {
+				engineType := engineTypeFromDeployment(d)
+				if engineType == "" {
+					engineType = b.EngineType
+				}
+				modelType := modelTypeFromDeployment(d)
+				if modelType == "" {
+					modelType = b.ModelType
+				}
+				if strings.TrimSpace(d.ServedModel) == "" && strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
+					upstreamModel = backendUpstreamModel(b)
+				}
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineType,
+					ModelType:           modelType,
+					Address:             b.Address,
+					BasePath:            b.BasePath,
+					Ready:               false,
+					Remote:              b.Remote,
+					ParameterCount:      preserveParameterCount(b.ParameterCount, d),
+					ContextWindowTokens: preserveContextWindow(b.ContextWindowTokens, d),
+				})
+			} else {
+				s.RegisterBackend(routeName, &Backend{
+					ModelName:           routeName,
+					DeploymentName:      d.Name,
+					UpstreamModel:       upstreamModel,
+					EngineType:          engineTypeFromDeployment(d),
+					ModelType:           modelTypeFromDeployment(d),
+					Ready:               false,
+					ParameterCount:      parameterCountFromDeployment(d),
+					ContextWindowTokens: contextWindowFromDeployment(d),
+				})
 			}
-			if strings.TrimSpace(d.ServedModel) == "" && strings.TrimSpace(d.Labels[LabelServedModel]) == "" {
-				upstreamModel = backendUpstreamModel(b)
-			}
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineType,
-				ModelType:           modelType,
-				Address:             b.Address,
-				BasePath:            b.BasePath,
-				Ready:               false,
-				Remote:              b.Remote,
-				ParameterCount:      preserveParameterCount(b.ParameterCount, d),
-				ContextWindowTokens: preserveContextWindow(b.ContextWindowTokens, d),
-			})
-		} else {
-			s.RegisterBackend(model, &Backend{
-				ModelName:           model,
-				UpstreamModel:       upstreamModel,
-				EngineType:          engineTypeFromDeployment(d),
-				ModelType:           modelTypeFromDeployment(d),
-				Ready:               false,
-				ParameterCount:      parameterCountFromDeployment(d),
-				ContextWindowTokens: contextWindowFromDeployment(d),
-			})
 		}
 	}
 

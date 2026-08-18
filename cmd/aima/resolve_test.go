@@ -12,6 +12,129 @@ import (
 	"github.com/jguan/aima/internal/knowledge"
 )
 
+func TestResolveWithFallbackUsesScannedModelFormat(t *testing.T) {
+	newCatalog := func() *knowledge.Catalog {
+		return &knowledge.Catalog{
+			EngineAssets: []knowledge.EngineAsset{
+				{
+					Metadata: knowledge.EngineMetadata{Name: "native-amd", Type: "native-amd", SupportedFormats: []string{"safetensors"}},
+					Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"},
+					Source:   &knowledge.EngineSource{Binary: "native-server", Platforms: []string{"linux/amd64"}},
+				},
+				{
+					Metadata: knowledge.EngineMetadata{Name: "llamacpp-amd", Type: "llamacpp", SupportedFormats: []string{"gguf"}},
+					Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"},
+					Source:   &knowledge.EngineSource{Binary: "llama-server", Platforms: []string{"linux/amd64"}},
+				},
+			},
+			ModelAssets: []knowledge.ModelAsset{{
+				Metadata: knowledge.ModelMetadata{Name: "dual-format-model", Type: "llm"},
+				Variants: []knowledge.ModelVariant{
+					{Name: "dual-format-native", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "native-amd", Format: "safetensors"},
+					{Name: "dual-format-gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "llamacpp", Format: "gguf", DefaultConfig: map[string]any{"quantization": "int4"}},
+				},
+			}},
+		}
+	}
+	hw := knowledge.HardwareInfo{GPUArch: "RDNA3.5", GPUVRAMMiB: 98304, Platform: "linux/amd64", RuntimeType: "native"}
+
+	for _, tt := range []struct {
+		format     string
+		wantEngine string
+	}{
+		{format: "gguf", wantEngine: "llamacpp"},
+		{format: "safetensors", wantEngine: "native-amd"},
+	} {
+		t.Run(tt.format, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := state.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer db.Close()
+			if err := db.InsertModel(ctx, &state.Model{
+				ID: "local-" + tt.format, Name: "dual-format-model", Type: "llm",
+				Path: "/models/dual-format-model", Format: tt.format, Status: "registered",
+			}); err != nil {
+				t.Fatalf("InsertModel: %v", err)
+			}
+
+			resolved, _, err := resolveWithFallback(ctx, newCatalog(), db, hw, "dual-format-model", "", nil, "")
+			if err != nil {
+				t.Fatalf("resolveWithFallback: %v", err)
+			}
+			if resolved.Engine != tt.wantEngine || resolved.ModelFormat != tt.format {
+				t.Fatalf("resolved engine=%q format=%q, want engine=%q format=%q", resolved.Engine, resolved.ModelFormat, tt.wantEngine, tt.format)
+			}
+		})
+	}
+}
+
+func TestResolveWithFallbackExplicitModelPathOverridesScannedFormat(t *testing.T) {
+	newCatalog := func() *knowledge.Catalog {
+		return &knowledge.Catalog{
+			EngineAssets: []knowledge.EngineAsset{
+				{Metadata: knowledge.EngineMetadata{Name: "native-amd", Type: "native-amd", SupportedFormats: []string{"safetensors"}}, Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"}, Runtime: knowledge.EngineRuntime{Default: "native"}, Source: &knowledge.EngineSource{Binary: "native-server", Platforms: []string{"linux/amd64"}}},
+				{Metadata: knowledge.EngineMetadata{Name: "llamacpp-amd", Type: "llamacpp", SupportedFormats: []string{"gguf"}}, Hardware: knowledge.EngineHardware{GPUArch: "RDNA3.5"}, Runtime: knowledge.EngineRuntime{Default: "native"}, Source: &knowledge.EngineSource{Binary: "llama-server", Platforms: []string{"linux/amd64"}}},
+			},
+			ModelAssets: []knowledge.ModelAsset{{
+				Metadata: knowledge.ModelMetadata{Name: "dual-format-model", Type: "llm"},
+				Variants: []knowledge.ModelVariant{
+					{Name: "native", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "native-amd", Format: "safetensors"},
+					{Name: "gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "RDNA3.5"}, Engine: "llamacpp", Format: "gguf"},
+				},
+			}},
+		}
+	}
+	hw := knowledge.HardwareInfo{GPUArch: "RDNA3.5", GPUVRAMMiB: 98304, Platform: "linux/amd64", RuntimeType: "native"}
+	safetensorsDir := filepath.Join(t.TempDir(), "bf16")
+	if err := os.MkdirAll(safetensorsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(safetensorsDir, "config.json"), []byte(`{"model_type":"qwen"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(safetensorsDir, "model.safetensors"), []byte("weights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ggufPath := filepath.Join(t.TempDir(), "model.gguf")
+	if err := os.WriteFile(ggufPath, []byte("GGUFweights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name           string
+		dbFormat       string
+		explicitPath   string
+		wantFormat     string
+		wantEngineType string
+	}{
+		{name: "DB GGUF explicit safetensors", dbFormat: "gguf", explicitPath: safetensorsDir, wantFormat: "safetensors", wantEngineType: "native-amd"},
+		{name: "DB safetensors explicit GGUF", dbFormat: "safetensors", explicitPath: ggufPath, wantFormat: "gguf", wantEngineType: "llamacpp"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := state.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err := db.InsertModel(ctx, &state.Model{
+				ID: "db-model", Name: "dual-format-model", Type: "llm", Path: "/db/opposite-format", Format: test.dbFormat, Status: "registered",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			resolved, _, err := resolveWithFallback(ctx, newCatalog(), db, hw, "dual-format-model", "", map[string]any{"model_path": test.explicitPath}, "")
+			if err != nil {
+				t.Fatalf("resolveWithFallback: %v", err)
+			}
+			if resolved.ModelFormat != test.wantFormat || resolved.Engine != test.wantEngineType || resolved.ModelPath != test.explicitPath {
+				t.Fatalf("resolved engine=%q format=%q path=%q, want engine=%q format=%q path=%q", resolved.Engine, resolved.ModelFormat, resolved.ModelPath, test.wantEngineType, test.wantFormat, test.explicitPath)
+			}
+		})
+	}
+}
+
 func TestResolveWithFallbackRefreshesSyntheticModel(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")
@@ -436,12 +559,9 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledContainerAsset(t *test
 	defer db.Close()
 
 	if err := db.InsertEngine(ctx, &state.Engine{
-		ID:          "engine-local-vllm",
-		Type:        "vllm",
-		Image:       "local/vllm",
-		Tag:         "custom",
-		RuntimeType: "container",
-		Available:   true,
+		ID: "engine-local-vllm", Type: "vllm", AssetName: "vllm-catalog", Version: "1.0",
+		Image: "local/vllm", Tag: "custom", Platform: "linux-amd64", RuntimeType: "container",
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
 	}); err != nil {
 		t.Fatalf("InsertEngine: %v", err)
 	}
@@ -514,11 +634,9 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := db.InsertEngine(ctx, &state.Engine{
-		ID:          "engine-native-llamacpp",
-		Type:        "llamacpp",
-		RuntimeType: "native",
-		BinaryPath:  binaryPath,
-		Available:   true,
+		ID: "engine-native-llamacpp", Type: "llamacpp", AssetName: "llamacpp-native", Version: "1.0",
+		Platform: "linux-arm64", RuntimeType: "native", BinaryPath: binaryPath,
+		Available: true, Active: true, LifecycleStatus: "active", VerificationStatus: "verified",
 	}); err != nil {
 		t.Fatalf("InsertEngine: %v", err)
 	}
@@ -546,7 +664,7 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 		}},
 	}
 
-	hw := knowledge.HardwareInfo{GPUArch: "Ada", Platform: "linux/amd64", RuntimeType: "native"}
+	hw := knowledge.HardwareInfo{GPUArch: "Ada", Platform: "linux/arm64", RuntimeType: "native"}
 	merged := resolveCatalogWithLocalEngineOverlay(ctx, cat, db, hw, t.TempDir())
 	if merged == nil {
 		t.Fatal("merged catalog is nil")
@@ -568,7 +686,75 @@ func TestResolveCatalogWithLocalEngineOverlayUsesInstalledNativeBinary(t *testin
 	if got := resolved.Source.Binary; got != filepath.Base(binaryPath) {
 		t.Fatalf("resolved source binary = %q, want %q", got, filepath.Base(binaryPath))
 	}
+	if !resolved.Source.Supports("linux/arm64") {
+		t.Fatalf("resolved source does not support the locally discovered platform: %+v", resolved.Source.Platforms)
+	}
 	if strings.TrimSpace(resolved.EngineImage) != "" {
 		t.Fatalf("resolved engine image = %q, want empty for native overlay", resolved.EngineImage)
+	}
+}
+
+func TestResolveDeploymentUsesRolledBackActiveEngineVersion(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	root := t.TempDir()
+	v1Binary := filepath.Join(root, "v1", "engine-server")
+	v2Binary := filepath.Join(root, "v2", "engine-server")
+	for _, binary := range []string{v1Binary, v2Binary} {
+		if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(binary, []byte(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v1 := &state.Engine{
+		ID: "engine-v1", Type: "llamacpp", AssetName: "llamacpp-native", Version: "1.0.0",
+		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: v1Binary, Available: true,
+		LifecycleStatus: "verified", VerificationStatus: "verified",
+	}
+	v2 := &state.Engine{
+		ID: "engine-v2", Type: "llamacpp", AssetName: "llamacpp-native", Version: "2.0.0",
+		Platform: "linux-amd64", RuntimeType: "native", BinaryPath: v2Binary, Available: true, Active: true,
+		LifecycleStatus: "active", VerificationStatus: "verified", PreviousEngineID: v1.ID,
+	}
+	if err := db.InsertEngine(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertEngine(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+	if activeID, err := db.RollbackEngineVersion(ctx, v2.ID); err != nil || activeID != v1.ID {
+		t.Fatalf("RollbackEngineVersion = %q, %v", activeID, err)
+	}
+
+	cat := &knowledge.Catalog{
+		EngineAssets: []knowledge.EngineAsset{{
+			Metadata: knowledge.EngineMetadata{Name: "llamacpp-native", Type: "llamacpp", Version: "2.0.0", SupportedFormats: []string{"gguf"}},
+			Hardware: knowledge.EngineHardware{GPUArch: "Ada"}, Runtime: knowledge.EngineRuntime{Default: "native"},
+			Source: &knowledge.EngineSource{Binary: "engine-server", Platforms: []string{"linux/amd64"}},
+		}},
+		ModelAssets: []knowledge.ModelAsset{{
+			Metadata: knowledge.ModelMetadata{Name: "demo-model", Type: "llm"},
+			Storage:  knowledge.ModelStorage{DefaultPathPattern: "/models/demo"},
+			Variants: []knowledge.ModelVariant{{Name: "demo-gguf", Engine: "llamacpp", Format: "gguf", Hardware: knowledge.ModelVariantHardware{GPUArch: "Ada"}}},
+		}},
+	}
+	rd, err := resolveDeployment(ctx, cat, db, nil, knowledge.HardwareInfo{
+		GPUArch: "Ada", Platform: "linux/amd64", RuntimeType: "native",
+	}, "demo-model", "llamacpp", "", map[string]any{"model_path": "/models/demo"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveDeployment: %v", err)
+	}
+	if rd.EngineAsset == nil || rd.EngineAsset.Metadata.Version != "1.0.0" {
+		t.Fatalf("resolved Engine Asset = %+v, want rolled-back v1", rd.EngineAsset)
+	}
+	if rd.Resolved.Source == nil || rd.Resolved.Source.Probe == nil || rd.Resolved.Source.Probe.Paths[0] != v1Binary {
+		t.Fatalf("resolved native source = %+v, want %s", rd.Resolved.Source, v1Binary)
 	}
 }

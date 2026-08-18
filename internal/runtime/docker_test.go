@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -34,10 +35,73 @@ func TestBuildRunArgs_NVIDIA(t *testing.T) {
 	assertContains(t, argStr, "--env NVIDIA_VISIBLE_DEVICES=all", "NVIDIA env")
 	assertContains(t, argStr, "--env VLLM_WORKER_MULTIPROC_METHOD=spawn", "extra env")
 	assertContains(t, argStr, "--volume /data/models/qwen3:/models:ro", "model volume")
-	assertContains(t, argStr, "--publish 8000:8000", "port publish")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish")
 	assertContains(t, argStr, "--restart unless-stopped", "restart policy")
 	assertContains(t, argStr, "--entrypoint vllm", "entrypoint override")
 	assertContains(t, argStr, "serve /models", "command with model path substitution")
+}
+
+func TestBuildRunArgs_PublishesBackendOnLoopbackByDefault(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	assertContains(t, joinArgs(args), "--publish 127.0.0.1:8000:8000", "loopback publish")
+}
+
+func TestBuildRunArgs_HonorsExplicitPublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:  "test-model",
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "192.168.10.20",
+		},
+	}
+
+	args := r.buildRunArgs("test-model", req)
+	argStr := joinArgs(args)
+	assertContains(t, argStr, "--publish 192.168.10.20:8000:8000", "explicit publish host")
+	assertContains(t, argStr, "--label aima.dev/publish_host=192.168.10.20", "publish host identity")
+}
+
+func TestDockerPublishedAddressUsesPersistedPublishHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		port   int
+		want   string
+	}{
+		{name: "legacy defaults to loopback", labels: nil, port: 8000, want: "127.0.0.1:8000"},
+		{name: "private IPv4", labels: map[string]string{"aima.dev/publish_host": "192.168.10.20"}, port: 8000, want: "192.168.10.20:8000"},
+		{name: "IPv6 loopback", labels: map[string]string{"aima.dev/publish_host": "::1"}, port: 8000, want: "[::1]:8000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dockerPublishedAddress(tt.labels, tt.port); got != tt.want {
+				t.Fatalf("dockerPublishedAddress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRunArgs_FormatsExplicitIPv6PublishHost(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Image: "engine:test",
+		Port:  8000,
+		Container: &knowledge.ContainerAccess{
+			PublishHost: "::1",
+		},
+	}
+
+	args := r.buildRunArgs("test", req)
+	assertContains(t, strings.Join(args, " "), "--publish [::1]:8000:8000", "IPv6 publish")
 }
 
 func TestBuildRunArgs_AMD(t *testing.T) {
@@ -283,7 +347,7 @@ func TestBuildRunArgs_CustomPortFlags(t *testing.T) {
 	assertContains(t, argStr, "--grpc_port_v1beta1 32108", "custom gRPC v1beta1 port flag")
 	assertContains(t, argStr, "--grpc_port 32109", "custom gRPC port flag")
 	assertContains(t, argStr, "--http_port 32110", "custom HTTP port flag")
-	assertContains(t, argStr, "--publish 32110:32110", "only primary HTTP port is published")
+	assertContains(t, argStr, "--publish 127.0.0.1:32110:32110", "only primary HTTP port is published")
 	assertNotContains(t, argStr, "--publish 32108:32108", "extra ports should stay container-local on bridge network")
 	assertNotContains(t, argStr, "--publish 32109:32109", "extra ports should stay container-local on bridge network")
 }
@@ -346,7 +410,7 @@ func TestBuildRunArgs_ExistingUnchanged(t *testing.T) {
 	args := r.buildRunArgs("test-vllm", req)
 	argStr := joinArgs(args)
 
-	assertContains(t, argStr, "--publish 8000:8000", "port publish without host network")
+	assertContains(t, argStr, "--publish 127.0.0.1:8000:8000", "port publish without host network")
 	assertNotContains(t, argStr, "--runtime", "no runtime flag for NVIDIA")
 	assertNotContains(t, argStr, "--init", "no init flag")
 	assertNotContains(t, argStr, "--network", "no network flag")
@@ -474,6 +538,23 @@ func TestDockerInspectToStatus(t *testing.T) {
 				t.Errorf("runtime = %q, want %q", ds.Runtime, "docker")
 			}
 		})
+	}
+}
+
+func TestDockerInspectToStatusIncludesRestartCount(t *testing.T) {
+	var di dockerInspect
+	if err := json.Unmarshal([]byte(`{
+		"Name": "/test-vllm",
+		"RestartCount": 4,
+		"State": {"Status": "running", "Running": true},
+		"Config": {"Labels": {}}
+	}`), &di); err != nil {
+		t.Fatalf("unmarshal docker inspect: %v", err)
+	}
+
+	got := (&DockerRuntime{}).inspectToStatus(di)
+	if got.Restarts != 4 {
+		t.Fatalf("Restarts = %d, want 4", got.Restarts)
 	}
 }
 

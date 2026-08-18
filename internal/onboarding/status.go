@@ -118,6 +118,14 @@ func buildHardware(ctx context.Context, deps *Deps, hw *hal.HardwareInfo) Hardwa
 		}}
 		result.UnifiedMemory = hw.GPU.UnifiedMemory
 	}
+	if hw.NPU != nil {
+		result.NPU = &NPU{
+			Vendor: hw.NPU.Vendor,
+			Name:   hw.NPU.Name,
+			Driver: hw.NPU.Driver,
+			Count:  hw.NPU.Count,
+		}
+	}
 
 	result.CPU = CPU{
 		Model: hw.CPU.Model,

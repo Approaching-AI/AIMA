@@ -123,6 +123,52 @@ func TestApplyWarmupReadinessSkipsDisabledWarmup(t *testing.T) {
 	}
 }
 
+func TestWarmupInferenceReadyPreservesStructuredRequestAndSetsServedModel(t *testing.T) {
+	gotBody := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotBody <- payload
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := knowledge.WarmupConfig{
+		Enabled:  true,
+		TimeoutS: 1,
+		RequestBody: map[string]any{
+			"model":      "wrong-model",
+			"messages":   []any{map[string]any{"role": "user", "content": "Return JSON"}},
+			"max_tokens": 64,
+			"response_format": map[string]any{
+				"type": "json_object",
+			},
+			"chat_template_kwargs": map[string]any{
+				"enable_thinking": false,
+			},
+		},
+	}
+	if !warmupInferenceReady(context.Background(), srv.URL, "served-model", cfg) {
+		t.Fatal("structured warmup should succeed")
+	}
+	payload := <-gotBody
+	if payload["model"] != "served-model" {
+		t.Fatalf("model = %#v, want served-model", payload["model"])
+	}
+	responseFormat, ok := payload["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("response_format = %#v", payload["response_format"])
+	}
+	kwargs, ok := payload["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["enable_thinking"] != false {
+		t.Fatalf("chat_template_kwargs = %#v", payload["chat_template_kwargs"])
+	}
+}
+
 func TestDeploymentServedModelFallsBackFromTemplateLabel(t *testing.T) {
 	ds := &DeploymentStatus{
 		Model: "GLM-4.1V-9B-Thinking-FP4",

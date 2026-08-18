@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jguan/aima/internal/recovery"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +47,7 @@ func newDeployCmd(app *App) *cobra.Command {
 				return nil
 			}
 
-			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap, false)
+			data, err := app.ToolDeps.DeployApply(ctx, engineType, modelName, slot, configMap, false, recovery.PolicyPatch{})
 			if err != nil {
 				return fmt.Errorf("deploy %s: %w", modelName, err)
 			}
@@ -142,6 +143,9 @@ func newUndeployCmd(app *App) *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Deployment %s removed\n", name)
+			// A6: undeploy only stops the service; model files are kept on purpose
+			// (re-downloading is expensive). Point users at the cleanup command.
+			fmt.Fprintf(cmd.OutOrStdout(), "Note: model files are kept. To free disk: aima model remove --delete-files %s\n", name)
 			return nil
 		},
 	}

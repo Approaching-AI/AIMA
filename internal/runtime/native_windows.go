@@ -10,7 +10,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+// hasInteractiveSession reports whether AIMA itself runs in an interactive
+// desktop session (Session >= 1). Windows Session 0 is reserved for services and
+// is non-interactive; SSH / headless invocations land there. schtasks /it can
+// only launch a process when the invoking user has such a session, so this gates
+// the schtasks path — the caller falls back to a direct start otherwise.
+func hasInteractiveSession() bool {
+	var sid uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &sid); err != nil {
+		return false
+	}
+	return sid != 0
+}
 
 // launchViaSchtasks launches a process via Windows Task Scheduler to ensure it
 // runs in the interactive desktop session (Session 1). This is required for GPU
@@ -66,6 +81,9 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 		return 0, fmt.Errorf("schtasks create: %w (output: %s)", err, string(createOut))
 	}
 
+	binaryName := filepath.Base(command[0])
+	preLaunchPIDs := findProcessPIDsByName(binaryName)
+
 	// Run the task.
 	runOut, err := exec.Command("schtasks", "/run", "/tn", taskName).CombinedOutput()
 	if err != nil {
@@ -88,7 +106,6 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 		}
 	}
 
-	binaryName := filepath.Base(command[0])
 	var pid int
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
@@ -96,7 +113,7 @@ func (r *NativeRuntime) launchViaSchtasks(name string, command []string, logPath
 			pid = findProcessPIDByPort(port)
 		}
 		if pid == 0 {
-			pid = findProcessPIDByName(binaryName)
+			pid = selectNewProcessPID(preLaunchPIDs, findProcessPIDsByName(binaryName))
 		}
 		if pid > 0 {
 			break
@@ -141,14 +158,14 @@ func findProcessPIDByPort(port int) int {
 	return 0
 }
 
-// findProcessPIDByName returns the PID of a running process by its image name.
-// Uses Windows tasklist command. Returns 0 if not found.
-func findProcessPIDByName(imageName string) int {
+// findProcessPIDsByName returns all running processes with the given image name.
+func findProcessPIDsByName(imageName string) []int {
 	out, err := exec.Command("tasklist", "/fi",
 		fmt.Sprintf("IMAGENAME eq %s", imageName), "/fo", "csv", "/nh").Output()
 	if err != nil {
-		return 0
+		return nil
 	}
+	var pids []int
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "INFO:") {
@@ -159,11 +176,11 @@ func findProcessPIDByName(imageName string) int {
 		if len(fields) >= 2 {
 			pidStr := strings.Trim(fields[1], "\" \r")
 			if pid, err := strconv.Atoi(pidStr); err == nil {
-				return pid
+				pids = append(pids, pid)
 			}
 		}
 	}
-	return 0
+	return pids
 }
 
 // pidAlive checks if a process with the given PID exists using tasklist.

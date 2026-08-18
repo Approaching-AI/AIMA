@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/jguan/aima/internal/knowledge"
 )
+
+const dockerPublishHostLabel = "aima.dev/publish_host"
 
 // DockerRuntime manages inference engines as Docker containers.
 type DockerRuntime struct {
@@ -82,6 +85,7 @@ func (r *DockerRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 
 func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	args := []string{"run", "-d", "--name", name, "--restart", "unless-stopped", "--ipc=host"}
+	publishHost := dockerPublishHost(req)
 
 	// Labels
 	for k, v := range req.Labels {
@@ -90,6 +94,9 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	// Store port in label for status lookup
 	if port := primaryPortForRequest(req); port > 0 {
 		args = append(args, "--label", "aima.dev/port="+strconv.Itoa(port))
+		if req.Container == nil || req.Container.NetworkMode != "host" {
+			args = append(args, "--label", dockerPublishHostLabel+"="+publishHost)
+		}
 	}
 
 	// --runtime (e.g. ascend)
@@ -125,7 +132,7 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 	// Port publish (skip when using host network)
 	if port := primaryPortForRequest(req); port > 0 && (req.Container == nil || req.Container.NetworkMode != "host") {
 		portStr := strconv.Itoa(port)
-		args = append(args, "--publish", portStr+":"+portStr)
+		args = append(args, "--publish", net.JoinHostPort(publishHost, portStr)+":"+portStr)
 	}
 
 	// AIMA owns readiness via knowledge YAML. Never inherit image-baked
@@ -356,15 +363,12 @@ func (r *DockerRuntime) List(ctx context.Context) ([]*DeploymentStatus, error) {
 		}
 
 		phase := dockerStatusToPhase(ps.Status)
-		ready := phase == "running" && port > 0 && portAlive(port)
+		addr := dockerPublishedAddress(labels, port)
+		ready := phase == "running" && addr != "" && addressAlive(addr)
 		if ready {
 			if asset := findEngineAsset(r.engineAssets, labels["aima.dev/engine"]); asset != nil && asset.Startup.HealthCheck.Path != "" {
-				ready = httpHealthy(port, asset.Startup.HealthCheck.Path)
+				ready = httpHealthyAddress(addr, asset.Startup.HealthCheck.Path)
 			}
-		}
-		addr := ""
-		if port > 0 {
-			addr = "127.0.0.1:" + strconv.Itoa(port)
 		}
 
 		ds := &DeploymentStatus{
@@ -415,9 +419,10 @@ func (r *DockerRuntime) Logs(ctx context.Context, name string, tailLines int) (s
 // --- internal types ---
 
 type dockerInspect struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	State struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	RestartCount int    `json:"RestartCount"`
+	State        struct {
 		Status     string `json:"Status"` // running, created, exited, paused, restarting
 		StartedAt  string `json:"StartedAt"`
 		ExitCode   int    `json:"ExitCode"`
@@ -613,28 +618,26 @@ func (r *DockerRuntime) inspectToStatus(di dockerInspect) *DeploymentStatus {
 		phase = "stopped"
 	}
 
-	ready := phase == "running" && port > 0 && portAlive(port)
+	addr := dockerPublishedAddress(labels, port)
+	ready := phase == "running" && addr != "" && addressAlive(addr)
 	if ready {
 		if asset := findEngineAsset(r.engineAssets, labels["aima.dev/engine"]); asset != nil && asset.Startup.HealthCheck.Path != "" {
-			ready = httpHealthy(port, asset.Startup.HealthCheck.Path)
+			ready = httpHealthyAddress(addr, asset.Startup.HealthCheck.Path)
 		}
-	}
-	addr := ""
-	if port > 0 {
-		addr = "127.0.0.1:" + strconv.Itoa(port)
 	}
 
 	name := strings.TrimPrefix(di.Name, "/")
 
 	ds := &DeploymentStatus{
-		Name:    name,
-		Image:   di.Config.Image,
-		Phase:   phase,
-		Ready:   ready,
-		Address: addr,
-		Config:  dockerLaunchConfigFromInspect(di),
-		Labels:  labels,
-		Runtime: "docker",
+		Name:     name,
+		Image:    di.Config.Image,
+		Phase:    phase,
+		Ready:    ready,
+		Address:  addr,
+		Config:   dockerLaunchConfigFromInspect(di),
+		Labels:   labels,
+		Runtime:  "docker",
+		Restarts: di.RestartCount,
 	}
 	setDeploymentStartFromString(ds, di.State.StartedAt)
 
@@ -962,8 +965,44 @@ func isContainerModelFilePath(modelPath string) bool {
 // httpHealthy checks whether the engine's HTTP health endpoint returns 200.
 // Used to distinguish "TCP port open" (vLLM binds early) from "actually ready to serve".
 func httpHealthy(port int, path string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, path))
+	return httpHealthyAddress(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), path)
+}
+
+func dockerPublishHost(req *DeployRequest) string {
+	if req != nil && req.Container != nil {
+		if host := strings.TrimSpace(req.Container.PublishHost); host != "" {
+			return host
+		}
+	}
+	return "127.0.0.1"
+}
+
+func dockerPublishedAddress(labels map[string]string, port int) string {
+	if port <= 0 {
+		return ""
+	}
+	host := strings.TrimSpace(labels[dockerPublishHostLabel])
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func addressAlive(address string) bool {
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+func httpHealthyAddress(address, path string) bool {
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{Proxy: nil},
+	}
+	resp, err := client.Get("http://" + address + path)
 	if err != nil {
 		return false
 	}

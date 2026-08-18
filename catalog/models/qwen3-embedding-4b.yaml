@@ -1,0 +1,51 @@
+kind: model_asset
+metadata:
+  name: qwen3-embedding-4b
+  type: embedding
+  family: qwen
+  parameter_count: "4B"
+  released_at: "2025-06"
+  # Scan-name aliases: on-disk GGUF names so the local scanner matches this asset.
+  aliases:
+    - Qwen3-Embedding-4B
+    - Qwen3-Embedding-4B-Q4_K_M
+    - Qwen3-Embedding-4B-Q8_0
+    - qwen3-embedding-4b-q4_k_m
+    - qwen3-embedding-4b-q8_0
+storage:
+  formats: [safetensors, gguf]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: Qwen/Qwen3-Embedding-4B
+      format: safetensors
+    - type: huggingface
+      repo: Qwen/Qwen3-Embedding-4B-GGUF
+      format: gguf
+    - type: modelscope
+      repo: Qwen/Qwen3-Embedding-4B
+      format: safetensors
+    - type: local_path
+      path: ""
+variants:
+  # --- universal llamacpp GGUF (verified on AMD Strix Halo Radeon 8060S iGPU) ---
+  # Text-embedding model: deploy llama-server in --embedding mode (config embedding=true
+  # → --embedding) and serve OpenAI /v1/embeddings. 2560-dim output. Not a chat model,
+  # so it is NOT written into OpenClaw config by `aima openclaw sync` (embedding models
+  # have no chat provider mapping); use the /v1/embeddings endpoint directly.
+  - name: qwen3-embedding-4b-universal-llamacpp
+    hardware:
+      gpu_arch: "*"
+      vram_min_mib: 0
+      ram_min_mib: 6144
+    engine: llamacpp
+    format: gguf
+    default_config:
+      n_gpu_layers: 999
+      embedding: true
+      # Native context (40960). Deploy auto-clamps to fit hardware memory if needed.
+      ctx_size: 40960
+    expected_performance:
+      startup_time_s: 8
+      cold_start_time_s: 15
+      notes: "Verified 2026-06-16 on AMD Strix Halo Radeon 8060S iGPU, llama.cpp b9180 HIP, Q8_0 all layers offloaded: deploys in --embedding mode (config embedding=true), /v1/embeddings returns 2560-dim vectors. ctx_size 40960."

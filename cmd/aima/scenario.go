@@ -13,6 +13,7 @@ import (
 
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/mcp"
+	"github.com/jguan/aima/internal/recovery"
 )
 
 type scenarioDeployResult struct {
@@ -186,7 +187,7 @@ func applyScenario(ctx context.Context, cat *knowledge.Catalog, rtName string, d
 		if remote {
 			data, err = scenarioFleetDeploy(ctx, deps, device, "deploy.apply", d, config)
 		} else {
-			data, err = deps.DeployApply(ctx, d.Engine, d.Model, d.Slot, config, d.NoPull)
+			data, err = deps.DeployApply(ctx, d.Engine, d.Model, d.Slot, config, d.NoPull, recovery.PolicyPatch{})
 		}
 		if err != nil {
 			blockFurther = true

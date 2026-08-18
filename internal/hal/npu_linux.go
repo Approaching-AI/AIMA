@@ -10,8 +10,17 @@ import (
 
 const accelSysfsDir = "/sys/class/accel"
 
+const xh2aDriver = "houmo,xh2a"
+
 func detectNPU() *NPUInfo {
-	entries, err := os.ReadDir(accelSysfsDir)
+	if npu := detectAccelNPU(accelSysfsDir); npu != nil {
+		return npu
+	}
+	return detectXH2ANPU("/sys/bus/pci/devices")
+}
+
+func detectAccelNPU(sysfsDir string) *NPUInfo {
+	entries, err := os.ReadDir(sysfsDir)
 	if err != nil {
 		return nil
 	}
@@ -22,7 +31,7 @@ func detectNPU() *NPUInfo {
 		if !strings.HasPrefix(entry.Name(), "accel") {
 			continue
 		}
-		devDir := filepath.Join(accelSysfsDir, entry.Name(), "device")
+		devDir := filepath.Join(sysfsDir, entry.Name(), "device")
 
 		uevent, err := os.ReadFile(filepath.Join(devDir, "uevent"))
 		if err != nil {
@@ -51,6 +60,36 @@ func detectNPU() *NPUInfo {
 		npu.Count = count
 	}
 	return npu
+}
+
+// detectXH2ANPU detects Houmo XH2A IPUs. The vendor kernel driver exposes the
+// accelerator as a PCI memory controller instead of the generic /sys/class/accel
+// interface, so the standard NPU probe cannot see it.
+func detectXH2ANPU(pciDevicesDir string) *NPUInfo {
+	entries, err := os.ReadDir(pciDevicesDir)
+	if err != nil {
+		return nil
+	}
+
+	count := 0
+	for _, entry := range entries {
+		driverLink := filepath.Join(pciDevicesDir, entry.Name(), "driver")
+		target, err := os.Readlink(driverLink)
+		if err != nil || filepath.Base(target) != xh2aDriver {
+			continue
+		}
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+
+	return &NPUInfo{
+		Vendor: "houmo",
+		Name:   "Houmo XH2A IPU",
+		Driver: xh2aDriver,
+		Count:  count,
+	}
 }
 
 func readTrimmedFile(path string) string {

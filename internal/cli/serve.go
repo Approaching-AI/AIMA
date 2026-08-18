@@ -37,6 +37,7 @@ func newServeCmd(app *App) *cobra.Command {
 		discoverEnabled bool
 		allowInsecure   bool
 		staticBackends  []string
+		noOpenClawSync  bool
 	)
 
 	cmd := &cobra.Command{
@@ -88,6 +89,9 @@ func newServeCmd(app *App) *cobra.Command {
 			if err := registerStaticBackends(app.Proxy, staticBackends); err != nil {
 				return err
 			}
+			if app.ServeBackground != nil {
+				go app.ServeBackground(ctx)
+			}
 
 			// Start backend sync loop (reconcile proxy routes with deployments)
 			if app.ToolDeps != nil && app.ToolDeps.DeployList != nil {
@@ -104,8 +108,21 @@ func newServeCmd(app *App) *cobra.Command {
 				}
 				go proxy.StartSyncLoop(ctx, app.Proxy, listFn, 5*time.Second)
 			}
-			if app.OpenClaw != nil {
+			openClawLoopEnabled := openClawAutoSyncEnabled(noOpenClawSync)
+			if noOpenClawSync && app.ToolDeps != nil && app.ToolDeps.SetConfig != nil {
+				if err := app.ToolDeps.SetConfig(ctx, openclaw.ConfigKeySyncMode, openclaw.SyncModeManual); err != nil {
+					slog.Warn("persist openclaw sync policy failed", "error", err)
+				}
+			}
+			if openClawLoopEnabled && app.ToolDeps != nil && app.ToolDeps.GetConfig != nil {
+				if mode, err := app.ToolDeps.GetConfig(ctx, openclaw.ConfigKeySyncMode); err == nil {
+					openClawLoopEnabled = openclaw.AutoSyncEnabledForMode(mode)
+				}
+			}
+			if app.OpenClaw != nil && openClawLoopEnabled {
 				go openclaw.StartSyncLoop(ctx, app.OpenClaw, 10*time.Second)
+			} else if app.OpenClaw != nil {
+				slog.Info("openclaw auto-sync loop disabled; sync only via `aima openclaw sync`")
 			}
 
 			// Auto-reconcile local assets on startup so Explorer, onboarding, and
@@ -225,9 +242,10 @@ func newServeCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&mcpProfile, "mcp-profile", "", "MCP tool profile: operator, patrol, explorer (default: all tools)")
 	cmd.Flags().StringVar(&apiKey, "api-key", defaultKey, "API key for authentication (or set AIMA_API_KEY env)")
 	cmd.Flags().BoolVar(&mdnsEnabled, "mdns", true, "Enable mDNS service broadcast")
-	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Discover remote inference services via mDNS")
+	cmd.Flags().BoolVar(&discoverEnabled, "discover", false, "Observe remote inference services via mDNS without trusting or routing to them")
 	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure-no-auth", false, "Allow non-loopback listen addresses without API key (NOT recommended)")
-	cmd.Flags().StringArrayVar(&staticBackends, "backend", nil, "Static backend registration: model=http://host:port[/base],engine=vllm,upstream=served,param=35B,context=32768")
+	cmd.Flags().StringArrayVar(&staticBackends, "backend", nil, "Trusted static backend: model=http://host:port[/base],engine=vllm,upstream=served,param=35B,context=32768,upstream_api_key_env=ENV")
+	cmd.Flags().BoolVar(&noOpenClawSync, "no-openclaw-sync", false, "Disable the automatic OpenClaw config sync loop; sync only on explicit `aima openclaw sync` (or set AIMA_OPENCLAW_SYNC=manual)")
 
 	return cmd
 }
@@ -324,6 +342,15 @@ func parseStaticBackendSpec(spec string) (string, *proxy.Backend, error) {
 				return "", nil, fmt.Errorf("static backend %q has invalid context value %q", spec, value)
 			}
 			backend.ContextWindowTokens = contextWindow
+		case "upstream_api_key_env", "upstream-api-key-env":
+			if value == "" {
+				return "", nil, fmt.Errorf("static backend %q has empty upstream API key environment name", spec)
+			}
+			upstreamKey := strings.TrimSpace(os.Getenv(value))
+			if upstreamKey == "" {
+				return "", nil, fmt.Errorf("static backend %q requires non-empty environment %s", spec, value)
+			}
+			backend.UpstreamAPIKey = upstreamKey
 		default:
 			return "", nil, fmt.Errorf("static backend %q has unknown option %q", spec, key)
 		}
@@ -348,6 +375,17 @@ func parseMCPProfile(profile string) (mcp.Profile, error) {
 		return mcp.ProfileFull, fmt.Errorf("unknown MCP profile %q; valid profiles: operator, patrol, explorer", profile)
 	}
 	return p, nil
+}
+
+// openClawAutoSyncEnabled reports whether `aima serve` should run the background
+// OpenClaw config sync loop. A5: a partner can disable it (and drive sync only via
+// explicit `aima openclaw sync`) with the --no-openclaw-sync flag or, at the
+// product level, AIMA_OPENCLAW_SYNC=manual|off|false|0|no.
+func openClawAutoSyncEnabled(noFlag bool) bool {
+	if noFlag {
+		return false
+	}
+	return openclaw.AutoSyncEnabledFromEnv()
 }
 
 func validateServeSecurity(addr, mcpAddr string, mcpEnabled bool, apiKey string, allowInsecure bool) error {

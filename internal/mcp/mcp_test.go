@@ -413,6 +413,9 @@ func TestListToolsForProfile(t *testing.T) {
 		"patrol",
 		"deploy.list",
 		"knowledge.resolve",
+		"catalog.effective",
+		"catalog.diff",
+		"catalog.validate_patch",
 	}
 	for _, name := range toolNames {
 		name := name
@@ -469,7 +472,7 @@ func TestListToolsForProfile(t *testing.T) {
 		defs := s.ListToolsForProfile(ProfileOperator)
 		names := namesOf(defs)
 
-		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list"}
+		included := []string{"hardware.detect", "hardware.metrics", "knowledge.resolve", "deploy.list", "catalog.effective", "catalog.diff", "catalog.validate_patch"}
 		for _, name := range included {
 			if !names[name] {
 				t.Errorf("ProfileOperator should include %q", name)
@@ -508,12 +511,12 @@ func TestRegisterAllTools(t *testing.T) {
 	expectedTools := []string{
 		"hardware.detect", "hardware.metrics",
 		"model.scan", "model.list", "model.pull", "model.import", "model.info",
-		"engine.scan", "engine.list", "engine.pull", "engine.remove",
+		"engine.scan", "engine.list", "engine.ensure", "engine.rollback", "engine.pull", "engine.remove",
 		"external.scan", "external.list", "external.import",
 		"deploy.apply", "deploy.run", "deploy.dry_run", "deploy.delete", "deploy.status", "deploy.list",
 		"knowledge.resolve", "knowledge.search", "knowledge.save", "knowledge.promote",
 		"knowledge.analytics", "knowledge.evaluate",
-		"catalog.list", "catalog.override", "catalog.validate",
+		"catalog.list", "catalog.override", "catalog.validate", "catalog.effective", "catalog.diff", "catalog.validate_patch",
 		"central.sync", "central.advise", "central.scenario",
 		"data.export", "data.import",
 		"patrol", "explore", "tuning", "explorer",
@@ -528,6 +531,84 @@ func TestRegisterAllTools(t *testing.T) {
 		if !names[name] {
 			t.Errorf("missing tool: %s", name)
 		}
+	}
+}
+
+func TestEngineEnsureToolContract(t *testing.T) {
+	s := NewServer()
+	calls := 0
+	deps := &ToolDeps{
+		EnsureEngine: func(_ context.Context, name, version string, apply bool) (json.RawMessage, error) {
+			calls++
+			if name != "engine-a" || version != "" || apply {
+				t.Fatalf("EnsureEngine(%q, %q, %v)", name, version, apply)
+			}
+			return json.RawMessage(`{"plan":{"action":"reuse"},"applied":false}`), nil
+		},
+	}
+	registerEngineTools(s, deps)
+
+	result, err := s.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"name":"engine-a","apply":false}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, `"action":"reuse"`) {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 1 {
+		t.Fatalf("EnsureEngine calls = %d, want 1", calls)
+	}
+
+	missing, err := s.ExecuteTool(context.Background(), "engine.ensure", json.RawMessage(`{"version":"1.0.0"}`))
+	if err != nil {
+		t.Fatalf("missing-name ExecuteTool: %v", err)
+	}
+	if !missing.IsError || !strings.Contains(missing.Content[0].Text, "name is required") {
+		t.Fatalf("missing-name result = %+v", missing)
+	}
+	if calls != 1 {
+		t.Fatalf("missing name called EnsureEngine; calls=%d", calls)
+	}
+}
+
+func TestEngineRollbackToolContract(t *testing.T) {
+	s := NewServer()
+	calls := 0
+	mutations := 0
+	deps := &ToolDeps{
+		RollbackEngine: func(_ context.Context, name, runtimeType string, confirm bool) (json.RawMessage, error) {
+			calls++
+			if name != "engine-a" || runtimeType != "native" {
+				t.Fatalf("name = %q runtime_type = %q", name, runtimeType)
+			}
+			if confirm {
+				mutations++
+			}
+			return json.RawMessage(`{"asset_name":"engine-a","confirmed":false,"applied":false,"refused":true}`), nil
+		},
+	}
+	registerEngineTools(s, deps)
+
+	result, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"name":"engine-a","runtime_type":"native","confirm":false}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.IsError || !strings.Contains(result.Content[0].Text, `"refused":true`) {
+		t.Fatalf("result = %+v", result)
+	}
+	if calls != 1 || mutations != 0 {
+		t.Fatalf("calls=%d mutations=%d, want one refusal and no mutation", calls, mutations)
+	}
+
+	missing, err := s.ExecuteTool(context.Background(), "engine.rollback", json.RawMessage(`{"runtime_type":"native","confirm":true}`))
+	if err != nil {
+		t.Fatalf("missing-name ExecuteTool: %v", err)
+	}
+	if !missing.IsError || !strings.Contains(missing.Content[0].Text, "name is required") {
+		t.Fatalf("missing-name result = %+v", missing)
+	}
+	if calls != 1 || mutations != 0 {
+		t.Fatalf("missing name reached RollbackEngine; calls=%d mutations=%d", calls, mutations)
 	}
 }
 
@@ -609,6 +690,69 @@ func TestCatalogListPartitions(t *testing.T) {
 	}
 	if !strings.Contains(tr.Content[0].Text, `"partitions"`) {
 		t.Fatalf("catalog.list all missing partitions payload: %s", tr.Content[0].Text)
+	}
+}
+
+func TestCatalogDiagnosticsTools(t *testing.T) {
+	s := NewServer()
+	deps := &ToolDeps{
+		CatalogEffective: func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+			if kind != "model_asset" || name != "demo" {
+				t.Fatalf("CatalogEffective(%q, %q), want model_asset/demo", kind, name)
+			}
+			return json.RawMessage(`{"yaml":"kind: model_asset\nmetadata:\n  name: demo\n"}`), nil
+		},
+		CatalogDiff: func(ctx context.Context, kind, name string) (json.RawMessage, error) {
+			if kind != "model_asset" || name != "demo" {
+				t.Fatalf("CatalogDiff(%q, %q), want model_asset/demo", kind, name)
+			}
+			return json.RawMessage(`{"changed":true,"diff":"--- factory\n+++ effective\n"}`), nil
+		},
+		CatalogValidatePatch: func(ctx context.Context, content string) (json.RawMessage, error) {
+			if !strings.Contains(content, "kind: model_asset_patch") {
+				t.Fatalf("CatalogValidatePatch content = %q", content)
+			}
+			return json.RawMessage(`{"valid":true}`), nil
+		},
+	}
+	RegisterAllTools(s, deps)
+
+	cases := []struct {
+		id       int
+		tool     string
+		args     string
+		wantText string
+	}{
+		{id: 1, tool: "catalog.effective", args: `{"kind":"model_asset","name":"demo"}`, wantText: "kind: model_asset"},
+		{id: 2, tool: "catalog.diff", args: `{"kind":"model_asset","name":"demo"}`, wantText: "--- factory"},
+		{id: 3, tool: "catalog.validate_patch", args: `{"content":"kind: model_asset_patch\nmetadata:\n  name: demo\n"}`, wantText: `"valid":true`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, tc.id, tc.tool, tc.args)
+			resp, err := s.HandleMessage(context.Background(), []byte(msg))
+			if err != nil {
+				t.Fatalf("HandleMessage: %v", err)
+			}
+			var r jsonrpcResponse
+			if err := json.Unmarshal(resp, &r); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if r.Error != nil {
+				t.Fatalf("unexpected error: %+v", r.Error)
+			}
+			raw, _ := json.Marshal(r.Result)
+			var tr ToolResult
+			if err := json.Unmarshal(raw, &tr); err != nil {
+				t.Fatalf("unmarshal tool result: %v", err)
+			}
+			if tr.IsError {
+				t.Fatalf("%s returned error: %+v", tc.tool, tr)
+			}
+			if !strings.Contains(tr.Content[0].Text, tc.wantText) {
+				t.Fatalf("%s response missing %q: %s", tc.tool, tc.wantText, tr.Content[0].Text)
+			}
+		})
 	}
 }
 
@@ -864,6 +1008,9 @@ func TestProfileMatches(t *testing.T) {
 
 		// ProfileOperator: exact matches
 		{ProfileOperator, "catalog.list", true},
+		{ProfileOperator, "catalog.effective", true},
+		{ProfileOperator, "catalog.diff", true},
+		{ProfileOperator, "catalog.validate_patch", true},
 		{ProfileOperator, "openclaw", true},
 		{ProfileOperator, "support", true},
 		{ProfileOperator, "knowledge.resolve", true},

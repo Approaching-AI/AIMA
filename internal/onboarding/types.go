@@ -29,6 +29,14 @@ type GPU struct {
 	UnifiedMemory bool   `json:"unified_memory,omitempty"`
 }
 
+// NPU is a single neural processing unit entry in the onboarding status response.
+type NPU struct {
+	Vendor string `json:"vendor"`
+	Name   string `json:"name"`
+	Driver string `json:"driver"`
+	Count  int    `json:"count"`
+}
+
 // CPU describes the host CPU in the onboarding status response.
 type CPU struct {
 	Model string `json:"model"`
@@ -38,6 +46,7 @@ type CPU struct {
 // Hardware aggregates hardware info for the onboarding status response.
 type Hardware struct {
 	GPU           []GPU  `json:"gpu"`
+	NPU           *NPU   `json:"npu,omitempty"`
 	CPU           CPU    `json:"cpu"`
 	RAMMiB        int    `json:"ram_mib"`
 	OS            string `json:"os"`

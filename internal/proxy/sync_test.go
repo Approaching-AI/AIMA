@@ -54,6 +54,55 @@ func TestSyncBackends_ReadyDeployment(t *testing.T) {
 	if b.UpstreamModel != "musachat_local" {
 		t.Errorf("upstreamModel = %q, want %q", b.UpstreamModel, "musachat_local")
 	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
+	}
+}
+
+func TestSyncBackends_RegistersTheRequestedCatalogAlias(t *testing.T) {
+	s := NewServer()
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:        "qwen3-6-35b-a3b-structured",
+			Model:       "qwen3.6-35b-a3b",
+			ServedModel: "qwen-upstream",
+			Ready:       true,
+			Address:     "127.0.0.1:30000",
+			Labels: map[string]string{
+				LabelRequestedModel: "qwen3.6-35b-a3b-bf16",
+			},
+		},
+	})
+
+	backends := s.ListBackends()
+	alias := backends["qwen3.6-35b-a3b-bf16"]
+	if alias == nil {
+		t.Fatal("requested catalog alias is not routable")
+	}
+	if alias.ModelName != "qwen3.6-35b-a3b-bf16" || alias.UpstreamModel != "qwen-upstream" {
+		t.Fatalf("alias backend = %+v", alias)
+	}
+	if backends["qwen3.6-35b-a3b"] == nil {
+		t.Fatal("canonical catalog route was removed")
+	}
+}
+
+func TestSyncBackends_RegistersServedModelAliasAfterRecovery(t *testing.T) {
+	s := NewServer()
+	SyncBackends(s, []*DeploymentInfo{
+		{
+			Name:        "recovered-qwen",
+			Model:       "qwen3.6-35b-a3b",
+			ServedModel: "qwen3.6-35b-a3b-bf16",
+			Ready:       true,
+			Address:     "127.0.0.1:30000",
+		},
+	})
+
+	alias := s.ListBackends()["qwen3.6-35b-a3b-bf16"]
+	if alias == nil || alias.UpstreamModel != "qwen3.6-35b-a3b-bf16" {
+		t.Fatalf("recovered served-model alias = %+v", alias)
+	}
 }
 
 func TestSyncBackends_NotReady(t *testing.T) {
@@ -118,6 +167,9 @@ func TestSyncBackends_NotReadyPreservesExistingRouteFields(t *testing.T) {
 	}
 	if b.ContextWindowTokens != 8192 {
 		t.Errorf("context_window_tokens = %d, want 8192", b.ContextWindowTokens)
+	}
+	if b.DeploymentName != "qwen3-8b-vllm" {
+		t.Errorf("deploymentName = %q, want qwen3-8b-vllm", b.DeploymentName)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"strconv"
 	"testing"
@@ -25,14 +26,86 @@ func TestAllocateDeploymentPortsAutoRebindsBusyPort(t *testing.T) {
 		PortSpecs: []knowledge.StartupPort{{Name: "http", Primary: true}},
 	}
 
-	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{"port": "L0"}, nil); err != nil {
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{"port": "L0"}, nil)
+	if err != nil {
 		t.Fatalf("allocateDeploymentPorts: %v", err)
 	}
+	defer release()
 	if got := req.Config["port"]; got == busyPort {
 		t.Fatalf("config.port = %v, want allocator to move off busy port", got)
 	}
 	if req.Labels["aima.dev/port"] == "" {
 		t.Fatal("expected primary port label to be populated")
+	}
+}
+
+func TestAllocateDeploymentPortsPreservesPersistedJSONNumber(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	req := &runtime.DeployRequest{
+		Config: map[string]any{"port": json.Number(strconv.Itoa(port))},
+	}
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, nil, nil)
+	if err != nil {
+		t.Fatalf("allocateDeploymentPorts: %v", err)
+	}
+	defer release()
+
+	if got := req.Config["port"]; got != port {
+		t.Fatalf("config.port = %v, want %d", got, port)
+	}
+	if got := req.Labels["aima.dev/port"]; got != strconv.Itoa(port) {
+		t.Fatalf("aima.dev/port = %q, want %d", got, port)
+	}
+}
+
+func TestAllocateDeploymentPortsAvoidsInFlightReservation(t *testing.T) {
+	// Two near-simultaneous deploys both prefer the same port. The first has
+	// chosen it but not yet released (engine still loading, socket not bound,
+	// metadata not persisted). The second must NOT reuse it.
+	newReq := func() *runtime.DeployRequest {
+		return &runtime.DeployRequest{
+			Config:    map[string]any{"port": 61080},
+			PortSpecs: []knowledge.StartupPort{{Name: "http", Primary: true}},
+		}
+	}
+
+	req1 := newReq()
+	rel1, err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req1, map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("allocateDeploymentPorts #1: %v", err)
+	}
+	p1 := req1.Config["port"].(int)
+
+	req2 := newReq()
+	rel2, err := allocateDeploymentPorts(context.Background(), "deploy-b", "native", req2, map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("allocateDeploymentPorts #2: %v", err)
+	}
+	defer rel2()
+	p2 := req2.Config["port"].(int)
+
+	if p1 == p2 {
+		t.Fatalf("second deploy reused in-flight port %d; expected a distinct port", p1)
+	}
+
+	// Releasing the first reservation frees its port for reuse.
+	rel1()
+	req3 := newReq()
+	rel3, err := allocateDeploymentPorts(context.Background(), "deploy-c", "native", req3, map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("allocateDeploymentPorts #3: %v", err)
+	}
+	defer rel3()
+	if got := req3.Config["port"].(int); got != p1 {
+		t.Fatalf("after release expected port %d to be reusable, got %d", p1, got)
 	}
 }
 
@@ -51,7 +124,7 @@ func TestAllocateDeploymentPortsHonorsExplicitPort(t *testing.T) {
 		PortSpecs: []knowledge.StartupPort{{Name: "http", Primary: true}},
 	}
 
-	err = allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{"port": "L1"}, nil)
+	_, err = allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{"port": "L1"}, nil)
 	if err == nil {
 		t.Fatal("expected explicit busy port to fail")
 	}
@@ -71,9 +144,11 @@ func TestAllocateDeploymentPortsDockerBridgeReservesOnlyPrimary(t *testing.T) {
 		},
 	}
 
-	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{}, nil); err != nil {
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{}, nil)
+	if err != nil {
 		t.Fatalf("allocateDeploymentPorts: %v", err)
 	}
+	defer release()
 	if _, ok := req.Labels["aima.dev/host-port"]; !ok {
 		t.Fatal("expected primary host-port label")
 	}
@@ -145,9 +220,11 @@ func TestAllocateDeploymentPortsReusesExistingOwnerHostPort(t *testing.T) {
 		},
 	}}
 
-	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{"port": "L0"}, deployments); err != nil {
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{"port": "L0"}, deployments)
+	if err != nil {
 		t.Fatalf("allocateDeploymentPorts: %v", err)
 	}
+	defer release()
 	if got := req.Config["port"]; got != busyPort {
 		t.Fatalf("config.port = %v, want reused owner port %d", got, busyPort)
 	}
@@ -180,9 +257,11 @@ func TestAllocateDeploymentPortsNativeReservesAllHostPorts(t *testing.T) {
 		},
 	}}
 
-	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{}, deployments); err != nil {
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "native", req, map[string]string{}, deployments)
+	if err != nil {
 		t.Fatalf("allocateDeploymentPorts: %v", err)
 	}
+	defer release()
 
 	got := []int{
 		req.Config["grpc_port_v1beta1"].(int),
@@ -236,9 +315,11 @@ func TestAllocateDeploymentPortsDockerHostNetworkReservesAllHostPorts(t *testing
 		},
 	}}
 
-	if err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{}, deployments); err != nil {
+	release, err := allocateDeploymentPorts(context.Background(), "deploy-a", "docker", req, map[string]string{}, deployments)
+	if err != nil {
 		t.Fatalf("allocateDeploymentPorts: %v", err)
 	}
+	defer release()
 
 	if req.Config["grpc_port_v1beta1"].(int) == 32308 || req.Config["grpc_port"].(int) == 32309 || req.Config["port"].(int) == 32310 {
 		t.Fatalf("docker host network should move all host-bound ports, got %+v", req.Config)

@@ -367,6 +367,32 @@ func enrichNvidiaGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
 
 // enrichAMDGPU supplements GPUInfo with SDK and driver version from system tools.
 func enrichAMDGPU(ctx context.Context, runner CommandRunner, gpu *GPUInfo) {
+	// rocm-smi reports only the small dedicated VRAM carve-out on some AMD
+	// unified-memory APUs (for example 512 MiB on Strix Halo), while the usable
+	// GPU-addressable pool is exposed as GTT in DRM sysfs. Merge the sysfs
+	// identity/memory view even when rocm-smi was the successful primary probe.
+	if sysfsGPU := detectAMDDRM(ctx, runner); sysfsGPU != nil {
+		genericName := strings.EqualFold(strings.TrimSpace(gpu.Name), "AMD Radeon Graphics") ||
+			strings.EqualFold(strings.TrimSpace(gpu.Name), "AMD GPU")
+		if strings.TrimSpace(gpu.Name) == "" || genericName {
+			gpu.Name = sysfsGPU.Name
+		}
+		if gpu.ComputeID == "" {
+			gpu.ComputeID = sysfsGPU.ComputeID
+		}
+		if gpu.Arch == "" || gpu.Arch == "unknown" {
+			gpu.Arch = sysfsGPU.Arch
+		}
+		if sysfsGPU.UnifiedMemory {
+			gpu.UnifiedMemory = true
+			if sysfsGPU.VRAMMiB > gpu.VRAMMiB {
+				gpu.VRAMMiB = sysfsGPU.VRAMMiB
+			}
+		}
+		if sysfsGPU.Count > gpu.Count {
+			gpu.Count = sysfsGPU.Count
+		}
+	}
 	if gpu.SDKVersion == "" {
 		if out, err := runner.Run(ctx, "cat", "/opt/rocm/.info/version"); err == nil {
 			if ver := strings.TrimSpace(string(out)); ver != "" {
@@ -700,7 +726,9 @@ func detectAMDDRM(ctx context.Context, runner CommandRunner) *GPUInfo {
 			computeID = firstNonEmptyString(readAMDGFXID(ctx, runner, base), info.computeID)
 			arch = firstNonEmptyString(gfxVersionToArch(computeID), amdGPUToArch(name), "unknown")
 			unified = info.unified || amdSysfsLooksUnified(ctx, runner, base)
-			if !unified {
+			if unified {
+				vramMiB = readSysfsBytesMiB(ctx, runner, base+"/mem_info_gtt_total")
+			} else {
 				vramMiB = readSysfsBytesMiB(ctx, runner, base+"/mem_info_vram_total")
 			}
 		}

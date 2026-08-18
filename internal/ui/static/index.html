@@ -4312,6 +4312,11 @@ body {
                 <div class="label" x-text="t('wiz_gpu')"></div>
                 <div class="value" x-text="wizHwGpu()"></div>
               </div>
+              <!-- NPU / IPU -->
+              <div class="wiz-hw-item" x-show="onboardingData && onboardingData.hardware && onboardingData.hardware.npu">
+                <div class="label" x-text="t('wiz_npu')"></div>
+                <div class="value" x-text="wizHwNpu()"></div>
+              </div>
               <!-- VRAM -->
               <div class="wiz-hw-item">
                 <div class="label" x-text="wizHwVramLabel()"></div>
@@ -4842,7 +4847,25 @@ body {
               </template>
             </div>
           </template>
-          <template x-if="!hw.gpu">
+          <template x-if="hw.npu">
+            <div class="gauge">
+              <div class="gauge-label">
+                <span x-text="hw.npu.countLabel + ' ' + hw.npu.name"></span>
+                <span x-text="hw.npu.memTotalMiB ? (hw.npu.memUsed + '/' + hw.npu.memTotal) : 'NPU / IPU'"></span>
+              </div>
+              <template x-if="hw.npu.memTotalMiB">
+                <div class="gauge-bar">
+                  <div class="gauge-fill" :class="hw.npu.memPct > 90 ? 'crit' : hw.npu.memPct > 70 ? 'warn' : ''" :style="'width:' + hw.npu.memPct + '%'"></div>
+                </div>
+              </template>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:2px" x-show="hw.npu.temp || hw.npu.util">
+                <span x-show="hw.npu.util" x-text="hw.npu.util + '%'"></span>
+                <span x-show="hw.npu.temp" x-text="(hw.npu.util ? ' / ' : '') + hw.npu.temp + '\u00B0C'"></span>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:2px" x-text="hw.npu.driver"></div>
+            </div>
+          </template>
+          <template x-if="!hw.gpu && !hw.npu">
             <div class="empty" x-text="t('no_gpu')"></div>
           </template>
         </div>
@@ -5707,7 +5730,15 @@ body {
                 </template>
               </div>
             </template>
-            <template x-if="!hw.gpu">
+            <template x-if="hw.npu">
+              <div class="gauge">
+                <div class="gauge-label"><span x-text="hw.npu.countLabel + ' ' + hw.npu.name"></span><span x-text="hw.npu.memTotalMiB ? (hw.npu.memUsed + '/' + hw.npu.memTotal) : 'NPU / IPU'"></span></div>
+                <template x-if="hw.npu.memTotalMiB"><div class="gauge-bar"><div class="gauge-fill" :class="hw.npu.memPct > 90 ? 'crit' : hw.npu.memPct > 70 ? 'warn' : ''" :style="'width:' + hw.npu.memPct + '%'"></div></div></template>
+                <div style="font-size:11px;color:var(--text-dim);margin-top:2px" x-show="hw.npu.temp || hw.npu.util"><span x-show="hw.npu.util" x-text="hw.npu.util + '%'"></span><span x-show="hw.npu.temp" x-text="(hw.npu.util ? ' / ' : '') + hw.npu.temp + '\u00B0C'"></span></div>
+                <div style="font-size:11px;color:var(--text-dim);margin-top:2px" x-text="hw.npu.driver"></div>
+              </div>
+            </template>
+            <template x-if="!hw.gpu && !hw.npu">
               <div class="empty" x-text="t('no_gpu')"></div>
             </template>
           </div>
@@ -7025,6 +7056,7 @@ var I18N = {
     wiz_deploying: 'Deploying',
     wiz_complete_title: 'Ready to Go!',
     wiz_gpu: 'GPU',
+    wiz_npu: 'NPU / IPU',
     wiz_cpu: 'CPU',
     wiz_ram: 'Memory',
     wiz_os: 'OS / Arch',
@@ -7449,6 +7481,7 @@ var I18N = {
     wiz_deploying: '\u90E8\u7F72\u4E2D',
     wiz_complete_title: '\u4E00\u5207\u5C31\u7EEA\uFF01',
     wiz_gpu: 'GPU',
+    wiz_npu: 'NPU / IPU',
     wiz_cpu: 'CPU',
     wiz_ram: '\u5185\u5B58',
     wiz_os: '\u7CFB\u7EDF / \u67B6\u6784',
@@ -8044,6 +8077,7 @@ function aimaApp() {
     // Dashboard data
     hw: {
       gpu: null,
+      npu: null,
       cpu: { pct: 0, model: '', label: 'CPU', coreInfo: '' },
       mem: { pct: 0, used: '0', total: '0' }
     },
@@ -8669,8 +8703,8 @@ function aimaApp() {
     },
 
     // Hardware data helpers — backend returns:
-    // hardware.gpu: [{name, vram_mib, count, arch}], hardware.cpu: {model, cores},
-    // hardware.ram_mib, hardware.os, hardware.arch, hardware.profile_match
+    // hardware.gpu: [{name, vram_mib, count, arch}], hardware.npu: {name, count, driver},
+    // hardware.cpu: {model, cores}, hardware.ram_mib, hardware.os, hardware.arch, hardware.profile_match
     wizHwGpu() {
       if (!this.onboardingData || !this.onboardingData.hardware) return '-';
       var gpus = this.onboardingData.hardware.gpu;
@@ -8679,6 +8713,14 @@ function aimaApp() {
       var txt = g.name || 'GPU';
       if (g.count && g.count > 1) txt = g.count + 'x ' + txt;
       if (this.wizHwUnifiedMemory() && !/\bSoC\b/i.test(txt)) txt += ' SoC';
+      return txt;
+    },
+    wizHwNpu() {
+      if (!this.onboardingData || !this.onboardingData.hardware) return '-';
+      var npu = this.onboardingData.hardware.npu;
+      if (!npu) return '-';
+      var txt = npu.name || 'NPU';
+      if (npu.count && npu.count > 1) txt = npu.count + 'x ' + txt;
       return txt;
     },
     wizHwUnifiedMemory() {
@@ -9204,6 +9246,10 @@ function aimaApp() {
         steps[2].progress = 100;
         if (data.endpoint) this.onboardingDeployEndpoint = data.endpoint;
         this.onboardingPhase = 'done';
+        // The deployment changes the local proxy route and llm.model. Refresh
+        // immediately instead of leaving the Agent availability badge stale
+        // until its normal 30-second polling interval.
+        this.pollAgentInfo();
       } else if (event === 'error') {
         var msg = data.message || this.t('wiz_deploy_error');
         // Make GPU memory errors actionable
@@ -9235,6 +9281,7 @@ function aimaApp() {
       this.onboardingPhase = 'complete';
       // Refresh deployments
       this.pollDeployments();
+      this.pollAgentInfo();
       this.$nextTick(function() {
         if (this.$refs && this.$refs.chatInput) this.$refs.chatInput.focus();
       }.bind(this));
@@ -9505,6 +9552,28 @@ function aimaApp() {
         };
       } else {
         this.hw.gpu = null;
+      }
+
+      if (hw && hw.npu) {
+        const n = hw.npu;
+        const nm = (met && met.npu) || {};
+        const count = n.count || 1;
+        const totalMiB = nm.memory_total_mib || 0;
+        const usedMiB = nm.memory_used_mib || 0;
+        this.hw.npu = {
+          name: n.name || 'NPU',
+          driver: n.driver || n.vendor || '',
+          count: count,
+          countLabel: count > 1 ? (count + '\u00D7') : '',
+          util: nm.utilization_percent || 0,
+          memUsed: this.fmtMiB(usedMiB),
+          memTotal: this.fmtMiB(totalMiB),
+          memTotalMiB: totalMiB,
+          memPct: totalMiB > 0 ? Math.round(usedMiB / totalMiB * 100) : 0,
+          temp: nm.temperature_celsius || 0
+        };
+      } else {
+        this.hw.npu = null;
       }
 
       if (hw && hw.cpu) {
@@ -11146,7 +11215,10 @@ function aimaApp() {
         delete next[modelName];
         this.modelDeploying = next;
         this.deployDetailSubmitting = false;
-        await this.pollDeployments();
+        await Promise.all([
+          this.pollDeployments(),
+          this.pollAgentInfo()
+        ]);
         this.scrollChat();
       }
     },

@@ -16,6 +16,7 @@ import (
 	"github.com/jguan/aima/internal/hal"
 	"github.com/jguan/aima/internal/knowledge"
 	"github.com/jguan/aima/internal/model"
+	"github.com/jguan/aima/internal/recovery"
 
 	state "github.com/jguan/aima/internal"
 )
@@ -31,6 +32,7 @@ var autoDetectWarned sync.Map
 type resolvedDeployment struct {
 	ModelName          string
 	Resolved           *knowledge.ResolvedConfig
+	EngineAsset        *knowledge.EngineAsset
 	ResolvedConfig     map[string]any
 	ResolvedProvenance map[string]string
 	Fit                *knowledge.FitReport
@@ -121,6 +123,10 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 
 	resolvedConfig := cloneAnyMap(resolved.Config)
 	resolvedProvenance := cloneStringMap(resolved.Provenance)
+	engineAsset, err := resolvedEngineAsset(resolveCat, resolved.EngineAssetName)
+	if err != nil {
+		return nil, err
+	}
 	fit := knowledge.CheckFit(resolved, hwInfo)
 	for k, v := range fit.Adjustments {
 		resolved.Config[k] = v
@@ -130,6 +136,7 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 	return &resolvedDeployment{
 		ModelName:          canonicalName,
 		Resolved:           resolved,
+		EngineAsset:        engineAsset,
 		ResolvedConfig:     resolvedConfig,
 		ResolvedProvenance: resolvedProvenance,
 		Fit:                fit,
@@ -226,22 +233,40 @@ func buildHardwareInfo(ctx context.Context, cat *knowledge.Catalog, rtName strin
 // resolveWithFallback tries catalog resolution first; on "not found in catalog",
 // falls back to building a synthetic ModelAsset from the model's DB scan record.
 func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.DB, hw knowledge.HardwareInfo, modelName, engineType string, overrides map[string]any, dataDir string, opts ...knowledge.ResolveOption) (*knowledge.ResolvedConfig, string, error) {
-	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, opts...)
+	effectiveOpts := append([]knowledge.ResolveOption(nil), opts...)
+	explicitModelPath := ""
+	explicitModelFormat := ""
+	if overrides != nil {
+		if value, ok := overrides["model_path"].(string); ok {
+			explicitModelPath = strings.TrimSpace(value)
+			explicitModelFormat = model.DetectPathFormat(explicitModelPath)
+		}
+	}
+	if explicitModelFormat != "" {
+		effectiveOpts = append(effectiveOpts, knowledge.WithModelFormat(explicitModelFormat))
+	} else if explicitModelPath == "" && db != nil {
+		if localModel, lookupErr := db.FindModelByName(ctx, modelName); lookupErr == nil && localModel.Format != "" {
+			effectiveOpts = append(effectiveOpts, knowledge.WithModelFormat(localModel.Format))
+		}
+	}
+	resolved, err := cat.Resolve(hw, modelName, engineType, overrides, effectiveOpts...)
 	if err == nil {
 		// Catalog hit — prefer the actual scanned path when the catalog default
 		// is empty or no longer matches the files present on this device.
-		if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
-			pathReady := resolved.ModelPath != "" && model.PathLooksCompatible(resolved.ModelPath, resolved.ModelFormat, resolvedQuantizationHint(resolved))
-			if !pathReady {
-				if model.PathLooksCompatible(dbModel.Path, dbModel.Format, resolvedQuantizationHint(resolved)) {
-					resolved.ModelPath = dbModel.Path
-				} else {
-					slog.Warn("ignoring incompatible scanned model path",
-						"model", modelName,
-						"path", dbModel.Path,
-						"format", dbModel.Format,
-						"detected_quantization", dbModel.Quantization,
-						"expected_quantization", resolvedQuantizationHint(resolved))
+		if explicitModelPath == "" && db != nil {
+			if dbModel, dbErr := db.FindModelByName(ctx, modelName); dbErr == nil && dbModel.Path != "" {
+				pathReady := resolved.ModelPath != "" && model.PathLooksCompatible(resolved.ModelPath, resolved.ModelFormat, resolvedQuantizationHint(resolved))
+				if !pathReady {
+					if model.PathLooksCompatible(dbModel.Path, dbModel.Format, resolvedQuantizationHint(resolved)) {
+						resolved.ModelPath = dbModel.Path
+					} else {
+						slog.Warn("ignoring incompatible scanned model path",
+							"model", modelName,
+							"path", dbModel.Path,
+							"format", dbModel.Format,
+							"detected_quantization", dbModel.Quantization,
+							"expected_quantization", resolvedQuantizationHint(resolved))
+					}
 				}
 			}
 		}
@@ -262,6 +287,9 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	}
 
 	// Catalog miss or stale synthetic model — rebuild from the scan database.
+	if db == nil {
+		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (scan database is unavailable)", modelName)
+	}
 	dbModel, dbErr := db.FindModelByName(ctx, modelName)
 	if dbErr != nil {
 		return nil, "", fmt.Errorf("resolve config: model %q not found in catalog (also not found in scan database)", modelName)
@@ -283,12 +311,16 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 			"model", dbModel.Name, "format", dbModel.Format)
 	}
 
+	effectiveFormat := dbModel.Format
+	if explicitModelFormat != "" {
+		effectiveFormat = explicitModelFormat
+	}
 	synth := cat.BuildSyntheticModelAsset(knowledge.ScanMetadata{
 		Name:         dbModel.Name,
 		Type:         dbModel.Type,
 		Family:       dbModel.DetectedArch,
 		ParamCount:   dbModel.DetectedParams,
-		Format:       dbModel.Format,
+		Format:       effectiveFormat,
 		SizeBytes:    dbModel.SizeBytes,
 		TotalParams:  dbModel.TotalParams,
 		ActiveParams: dbModel.ActiveParams,
@@ -300,9 +332,13 @@ func resolveWithFallback(ctx context.Context, cat *knowledge.Catalog, db *state.
 	if overrides == nil {
 		overrides = map[string]any{}
 	}
-	overrides["model_path"] = dbModel.Path
+	if explicitModelPath != "" {
+		overrides["model_path"] = explicitModelPath
+	} else {
+		overrides["model_path"] = dbModel.Path
+	}
 
-	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, opts...)
+	resolved, err = cat.Resolve(hw, dbModel.Name, engineType, overrides, effectiveOpts...)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve auto-detected config for %s: %w", dbModel.Name, err)
 	}
@@ -354,6 +390,7 @@ func resolveCatalogWithLocalEngineOverlay(ctx context.Context, cat *knowledge.Ca
 
 type localEngineOverlayCandidate struct {
 	base         knowledge.EngineAsset
+	installed    *state.Engine
 	containerRef string
 	nativeBinary string
 }
@@ -364,36 +401,52 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 		return nil, fmt.Errorf("list engines for overlay: %w", err)
 	}
 
+	claim, pinned := recovery.ReconcilerClaim(ctx)
 	candidates := make(map[string]*localEngineOverlayCandidate)
 	for _, inst := range installed {
-		if inst == nil || !inst.Available || strings.TrimSpace(inst.Type) == "" {
+		if inst == nil || !inst.Available || strings.TrimSpace(inst.Type) == "" ||
+			strings.TrimSpace(inst.AssetName) == "" || strings.TrimSpace(inst.Version) == "" ||
+			inst.VerificationStatus != "verified" ||
+			(inst.LifecycleStatus != "verified" && inst.LifecycleStatus != "active") ||
+			!sameEngineInventoryPlatform(inst.Platform, hwInfo.Platform) {
 			continue
 		}
-		base := cat.FindEngineByName(inst.Type, hwInfo)
+		base := exactEngineAssetByName(cat, inst.AssetName)
 		if base == nil {
 			continue
 		}
-		cand := candidates[base.Metadata.Name]
-		if cand == nil {
-			cand = &localEngineOverlayCandidate{
-				base: cloneEngineAsset(*base),
+		if !strings.EqualFold(strings.TrimSpace(inst.Type), strings.TrimSpace(base.Metadata.Type)) {
+			continue
+		}
+		if pinned {
+			if !strings.EqualFold(inst.AssetName, claim.EngineAsset) ||
+				inst.Version != claim.EngineVersion ||
+				!engineInventoryRuntimeMatches(inst.RuntimeType, claim.Runtime) {
+				continue
 			}
-			candidates[base.Metadata.Name] = cand
+		} else if !inst.Active || inst.LifecycleStatus != "active" ||
+			(!strings.EqualFold(strings.TrimSpace(inst.RuntimeType), "native") &&
+				inst.RuntimeType != preferredEngineRuntimeType(base, hwInfo.Platform)) {
+			continue
 		}
 
+		cand := &localEngineOverlayCandidate{base: cloneEngineAsset(*base), installed: inst}
 		switch strings.ToLower(strings.TrimSpace(inst.RuntimeType)) {
 		case "container":
+			cand.containerRef = localInstalledContainerRef(ctx, inst)
 			if cand.containerRef == "" {
-				if ref := localInstalledContainerRef(ctx, inst); ref != "" && normalizedImageRef(ref) != normalizedImageRef(engineImageRef(&cand.base)) {
-					cand.containerRef = ref
-				}
+				continue
 			}
 		case "native":
+			cand.nativeBinary = localInstalledNativeBinaryPath(inst)
 			if cand.nativeBinary == "" {
-				if path := localInstalledNativeBinaryPath(inst); path != "" {
-					cand.nativeBinary = path
-				}
+				continue
 			}
+		default:
+			continue
+		}
+		if current := candidates[base.Metadata.Name]; current == nil || inst.ID < current.installed.ID {
+			candidates[base.Metadata.Name] = cand
 		}
 	}
 
@@ -404,13 +457,18 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 	overlay := &knowledge.Catalog{EngineAssets: make([]knowledge.EngineAsset, 0, len(candidates))}
 	for _, cand := range candidates {
 		asset := cand.base
-		changed := false
+		changed := asset.Metadata.Version != cand.installed.Version
+		asset.Metadata.Version = cand.installed.Version
 
 		if cand.containerRef != "" {
 			name, tag := splitImageRef(cand.containerRef)
 			if name != "" && (asset.Image.Name != name || asset.Image.Tag != tag) {
 				asset.Image.Name = name
 				asset.Image.Tag = tag
+				changed = true
+			}
+			if cand.installed.ContentDigest != "" && asset.Image.Digest != cand.installed.ContentDigest {
+				asset.Image.Digest = cand.installed.ContentDigest
 				changed = true
 			}
 		}
@@ -424,6 +482,13 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 			}
 			if asset.Source.InstallType != "preinstalled" {
 				asset.Source.InstallType = "preinstalled"
+				changed = true
+			}
+			// A locally discovered binary is executable on this host even when the
+			// catalog's downloadable release list does not include this platform.
+			// Preserve the catalog platforms and add the verified local platform.
+			if !asset.Source.Supports(hwInfo.Platform) && hwInfo.Platform != "" {
+				asset.Source.Platforms = append(asset.Source.Platforms, hwInfo.Platform)
 				changed = true
 			}
 			before := 0
@@ -448,6 +513,39 @@ func localEngineOverlayCatalog(ctx context.Context, cat *knowledge.Catalog, db *
 		return overlay.EngineAssets[i].Metadata.Name < overlay.EngineAssets[j].Metadata.Name
 	})
 	return overlay, nil
+}
+
+func exactEngineAssetByName(cat *knowledge.Catalog, name string) *knowledge.EngineAsset {
+	if cat == nil {
+		return nil
+	}
+	for i := range cat.EngineAssets {
+		if strings.EqualFold(strings.TrimSpace(cat.EngineAssets[i].Metadata.Name), strings.TrimSpace(name)) {
+			return &cat.EngineAssets[i]
+		}
+	}
+	return nil
+}
+
+func sameEngineInventoryPlatform(inventoryPlatform, catalogPlatform string) bool {
+	normalize := func(value string) string {
+		value = strings.ToLower(strings.TrimSpace(value))
+		return strings.NewReplacer("/", "-", "_", "-").Replace(value)
+	}
+	return normalize(inventoryPlatform) != "" && normalize(inventoryPlatform) == normalize(catalogPlatform)
+}
+
+func engineInventoryRuntimeMatches(inventoryRuntime, deploymentRuntime string) bool {
+	switch strings.ToLower(strings.TrimSpace(inventoryRuntime)) {
+	case "native":
+		return strings.EqualFold(strings.TrimSpace(deploymentRuntime), "native")
+	case "container":
+		switch strings.ToLower(strings.TrimSpace(deploymentRuntime)) {
+		case "container", "docker", "k3s":
+			return true
+		}
+	}
+	return false
 }
 
 func localInstalledContainerRef(ctx context.Context, inst *state.Engine) string {
@@ -500,6 +598,7 @@ func cloneCatalog(cat *knowledge.Catalog) *knowledge.Catalog {
 
 func cloneEngineAsset(asset knowledge.EngineAsset) knowledge.EngineAsset {
 	clone := asset
+	clone.Metadata.CompatibleVersions = append([]string(nil), asset.Metadata.CompatibleVersions...)
 	if asset.Source != nil {
 		clone.Source = cloneEngineSource(asset.Source)
 	}

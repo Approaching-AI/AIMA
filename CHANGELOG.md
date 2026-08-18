@@ -3,6 +3,45 @@
 All notable changes to AIMA are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [v0.5.0] - 2026-08-18
+
+More than 150 commits since v0.4.0 are consolidated into one production baseline. This release brings together the generally applicable capabilities and fixes that accumulated across the active development and integration branches. It expands AIMA's native-engine lifecycle and recovery model, completes the AMD Strix Halo/AMD395 delivery path on Windows and Linux, and adds multi-device deployment orchestration.
+
+### Added
+
+- **Persistent deployment recovery** — a reconciler restores intended deployments after restart, retains actionable failure state, and applies reviewed safeguards around recovery ordering and ownership.
+- **Verified native-engine lifecycle** — native bundles can be downloaded or imported, checksum-validated, atomically promoted, version-selected, upgraded, and rolled back together with their companion files. Portable `tar.zst` bundles and nested executables are supported.
+- **AMD Strix Halo/AMD395 native delivery** — Windows and Linux packages, CI contracts, ROCm/HIP-aware llama.cpp engines, unified-memory hardware profiles, off-PATH discovery via `AIMA_ENGINE_DIR`, and qualified Qwen3.6 engine/catalog configurations.
+- **Cross-device Fleet scenarios** — scenarios can coordinate deployments across Fleet devices; the catalog includes a dual-Spark DeepSeek V4 Flash deployment.
+- **Structured inference adapters** — engine-declared request adapters preserve private context across inference exchanges and support exact-context chat engines and structured Qwen3.6 requests.
+- **Hardware and catalog coverage** — Houmo XH2A NPU detection, Qwen2.5-VL-3B-Instruct, Qwen3.6 structured and AMD variants, DeepSeek V4 Flash, multimodal projector auto-wiring, and additional partner-validated catalog data.
+- **OpenClaw sync controls** — persistent model exclude/include, configurable primary model and config directory, manual sync control, and alias-aware proxy routing.
+
+### Changed
+
+- **Deployable model scan semantics** — scans still register every discovered resource for dependency resolution, but user-facing results now contain only standalone deployable models; components and speculative draft heads remain available internally without being offered as deploy targets.
+- **Engine configuration safety** — catalog engines declare accepted configuration keys, and the resolver/runtime emit only supported command flags while retaining engine-aware flag translation.
+- **Hardware-aware placement** — AMD APUs use their unified memory pool, discrete-GPU offload falls back safely when a model exceeds VRAM, and llama.cpp context size is clamped to trained and available-memory limits.
+- **Native runtime supervision** — process identity, startup state, logs, publish-address validation, loopback binding, and Windows scheduled/direct launch behavior now share a stricter lifecycle contract.
+- **OpenClaw ownership and synchronization** — configuration writes recover from read-only files, ready routes win over stale duplicate deployments, catalog-missing deployments remain syncable, and requested model aliases are preserved.
+
+### Fixed
+
+- Pre-flight disk-capacity checks now stop model downloads before partial artifacts consume the remaining disk.
+- Warmup requests explicitly disable prompt caching without changing normal inference traffic.
+- Native engine activation selects compatible cached versions and preserves required bundle dependencies.
+- Imported bundles and catalog overlays reject unsafe paths and invalid content before activation.
+- AMD APU detection reports installed/unified memory correctly and classifies impossible llama.cpp fits as OOM.
+- Windows native startup no longer fails merely because the process has not bound its port yet; scheduled tasks are tied to the newly launched PID and normal HIP startup output is not reported as an error.
+- Proxy/backend discovery enforces network and credential trust boundaries and removes vanished or self-owned services from external discovery.
+- Support conversations replay their history when opened and no longer leak support state into the main Agent chat.
+- Zero-valued benchmark temperature and integral engine configuration values are preserved.
+
+### Infrastructure
+
+- Release validation covers the standard cross-platform artifacts plus dedicated AMD395 Windows and Linux package/workflow contracts.
+- Development builds remain `v0.5-dev`; the annotated `v0.5.0` tag is the sole product-version source for release binaries.
+
 ## [v0.4.0] - 2026-04-21 — "Knowledge Autonomy"
 
 176 commits since v0.3.3. v0.4 closes the Edge↔Central automation loop first sketched in `docs/superpowers/specs/2026-04-07-v0.4-knowledge-automation-design.md`: Explorer now autonomously discovers work, executes benchmark/tune tasks, harvests knowledge, and syncs upstream; Central generates advisories and scenarios with a stable lifecycle; the edge device has a unified cloud identity via `aima-service`.
@@ -176,6 +215,7 @@ v0.3.4 (Explorer Agent Planner, dated 2026-04-09 in prior CHANGELOG but never ta
 
 Initial tagged release. Foundation layer with hardware detection (8 GPU vendors), multi-runtime deployment, knowledge-driven config resolution, 80 MCP tools, central knowledge server, TUI dashboard, benchmark runner, and exploration runner.
 
+[v0.5.0]: https://github.com/Approaching-AI/AIMA/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/Approaching-AI/AIMA/compare/v0.3.3...v0.4.0
 [v0.3.3]: https://github.com/Approaching-AI/AIMA/compare/v0.3.0...v0.3.3
 [v0.3.0]: https://github.com/Approaching-AI/AIMA/compare/v0.2.0...v0.3.0

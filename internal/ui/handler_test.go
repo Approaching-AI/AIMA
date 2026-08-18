@@ -596,6 +596,125 @@ func TestRegisterRoutes_IndexDeployDetailUsesBackendDefaultsAndImmediateClose(t 
 	}
 }
 
+func TestRegisterRoutes_IndexReplaysExistingSupportMessages(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+
+	handleStart := strings.Index(body, "handleSupportStatus(data) {")
+	if handleStart == -1 {
+		t.Fatal("handleSupportStatus not found")
+	}
+	handleEnd := strings.Index(body[handleStart:], "\n\n    handleOpenClawStatus(data) {")
+	if handleEnd == -1 {
+		t.Fatal("could not isolate handleSupportStatus body")
+	}
+	handleBody := body[handleStart : handleStart+handleEnd]
+	for _, token := range []string{
+		"this._supportSeen.initialized = true;",
+		"this.syncSupportMessages();",
+		"this.syncSupportPageUpdates();",
+	} {
+		if !strings.Contains(handleBody, token) {
+			t.Fatalf("handleSupportStatus missing %q", token)
+		}
+	}
+	if strings.Contains(handleBody, "_supportSeen.msgSeq = msgs[msgs.length - 1].seq") {
+		t.Fatalf("handleSupportStatus should not mark existing messages as seen, body=%s", handleBody)
+	}
+
+	primeStart := strings.Index(body, "primeSupportPageSeen() {")
+	if primeStart == -1 {
+		t.Fatal("primeSupportPageSeen not found")
+	}
+	primeEnd := strings.Index(body[primeStart:], "\n\n    appendSupportPageMessage(text, type) {")
+	if primeEnd == -1 {
+		t.Fatal("could not isolate primeSupportPageSeen body")
+	}
+	primeBody := body[primeStart : primeStart+primeEnd]
+	if !strings.Contains(primeBody, "this.syncSupportPageUpdates();") {
+		t.Fatalf("primeSupportPageSeen should sync current messages, body=%s", primeBody)
+	}
+	if strings.Contains(primeBody, "_supportPageSeen.msgSeq = msgs[msgs.length - 1].seq") {
+		t.Fatalf("primeSupportPageSeen should not mark existing page messages as seen, body=%s", primeBody)
+	}
+}
+
+func TestRegisterRoutes_IndexDoesNotMirrorSupportMessagesIntoAgentChat(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	RegisterRoutes(nil)(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+
+	syncStart := strings.Index(body, "syncSupportMessages() {")
+	if syncStart == -1 {
+		t.Fatal("syncSupportMessages not found")
+	}
+	syncEnd := strings.Index(body[syncStart:], "\n\n    primeSupportPageSeen() {")
+	if syncEnd == -1 {
+		t.Fatal("could not isolate syncSupportMessages body")
+	}
+	syncBody := body[syncStart : syncStart+syncEnd]
+	for _, token := range []string{
+		"this._supportSeen.msgSeq = m.seq;",
+		"do not mirror support state into chat",
+	} {
+		if !strings.Contains(syncBody, token) {
+			t.Fatalf("syncSupportMessages missing %q", token)
+		}
+	}
+	for _, token := range []string{
+		"this.messages.push",
+		"this.scrollChat()",
+		"Support task active:",
+		"灵机云已连接",
+	} {
+		if strings.Contains(syncBody, token) {
+			t.Fatalf("syncSupportMessages should not write support updates into Agent chat; found %q in body=%s", token, syncBody)
+		}
+	}
+
+	pageStart := strings.Index(body, "syncSupportPageUpdates() {")
+	if pageStart == -1 {
+		t.Fatal("syncSupportPageUpdates not found")
+	}
+	pageEnd := strings.Index(body[pageStart:], "\n\n    supportPageTypeClass(type) {")
+	if pageEnd == -1 {
+		t.Fatal("could not isolate syncSupportPageUpdates body")
+	}
+	pageBody := body[pageStart : pageStart+pageEnd]
+	for _, token := range []string{
+		"this.appendSupportPageMessage(msg, m.type || 'info');",
+		"this.appendSupportPageMessage(text, 'command_intent');",
+		"this.appendSupportPageMessage(text, 'task_completion');",
+	} {
+		if !strings.Contains(pageBody, token) {
+			t.Fatalf("syncSupportPageUpdates should still render support messages on support page; missing %q", token)
+		}
+	}
+}
+
 func TestRegisterRoutes_IndexIncludesDirectModeRoutingAndModelCards(t *testing.T) {
 	t.Parallel()
 

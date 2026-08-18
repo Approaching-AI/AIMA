@@ -79,10 +79,30 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	closed = true
+	if err := ensureConfigOwnerWritable(path); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	cleanup = false
+	return nil
+}
+
+func ensureConfigOwnerWritable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat openclaw config: %w", err)
+	}
+	if info.IsDir() || info.Mode().Perm()&0200 != 0 {
+		return nil
+	}
+	if err := os.Chmod(path, info.Mode().Perm()|0200); err != nil {
+		return fmt.Errorf("make openclaw config owner-writable: %w", err)
+	}
 	return nil
 }
 

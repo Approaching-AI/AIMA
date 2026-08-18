@@ -1,3 +1,55 @@
+# AIMA README v2 — Draft Spec
+
+**Purpose**: HKUDS-inspired structural rewrite of the repo README to build visual hierarchy, surface hard evidence (UAT matrix, hardware coverage), and land traffic hooks (Typing SVG, theatrical section titles) while respecting AIMA's enterprise-grade brand system.
+
+**Scope**: README.md + README_zh.md, plus asset plan for Banner / Typing SVG / Hero GIF / Architecture diagram / Star History / Contributor wall.
+
+**Non-goals**: Not touching product identity (tagline / product name / feature names stay frozen), not adding emoji decoration, not adopting HKUDS neon-cyan palette.
+
+---
+
+## 1. Design decisions (locked)
+
+| Decision | Value |
+|---|---|
+| Tagline | `AI Infrastructure, managed by AI` — unchanged |
+| Brand primary / accent | `#5E35B1` 趋境紫 / `#42A5F5` 科技蓝 |
+| Emoji in section titles | None |
+| Feature命名噱头化 | Off (tagline/feature names frozen, only section titles get drama) |
+| Theatrical section titles | 4 — `60-Second Genesis` / `The Forge` / `The L0→L3 Intelligence Ladder` / `Eight Silicon Ecosystems` |
+| Typing SVG | On — brand-colored, English + Chinese variants |
+| Bilingual switcher | Top-of-file badge pair |
+| Badge wall | stars / release / license / Go version / platforms (Discord/WeChat deferred — no community yet) |
+| Star History | Removed from scope (per PMM, 2026-04-23) |
+
+## 2. Asset inventory
+
+| Asset | Status | Source |
+|---|---|---|
+| Banner SVG | ✅ Ready | `docs/assets/banner.svg` (existing, on-brand purple+blue) |
+| Product logo | ✅ Ready | `internal/ui/static/logo-dark-wordmark.svg` |
+| Architecture diagram | ✅ Ready | `docs/assets/architecture-ladder.png` (1.3MB, 1672×941, neon/layered visual generated 2026-04-24) |
+| Eight Silicon Ecosystems visual | ✅ Ready | `docs/assets/eight-silicon-ecosystems.png` (1.4MB, 1672×941, 8-vendor grid — logo + tested devices + SDK per card, bottom line "Unified framework. Broad silicon compatibility.") |
+| Supported Engines visual | 🔄 Regen pending | `docs/assets/supported-engines.png` — drop Ollama per skyguan92 review (catalog/engines/ has no ollama.yaml). Target: 3-engine 1×3 row (vLLM / llama.cpp / SGLang). |
+| Hero Terminal GIF | 🚫 Out of scope | Per PMM 2026-04-23, not adopting (path C — WebUI GIF carries the install→deploy story). |
+| Onboarding WebUI GIF | ✅ Ready | `docs/assets/onboarding-webui.gif` (2.4MB, 18s, β narrative — natural-language chat → Kimi routing → hardware.detect MCP tool → expanded JSON result) |
+| Discord / WeChat QR | 🚫 Deferred | Per PMM 2026-04-23, skip until community strategy is decided |
+| Star History | 🚫 Out of scope | Per PMM 2026-04-23, not adopting |
+
+## 3. Known data inconsistencies to resolve before merging
+
+| Issue | Current state | Action |
+|---|---|---|
+| MCP tool count | EN=56, ZH=94, CLAUDE.md=61 (post-v0.4 consolidation 101→61) | **Decision (PMM 2026-04-23)**: always take the number from the current-version CLAUDE.md → use **61** for v0.4; every release PR must sync README EN + ZH to CLAUDE.md |
+| Hardware vendor count | README table=6; CLAUDE.md Remote Test Lab adds MetaX (N260) + Moore Threads (M1000, AIBook) as validated | **Decision (PMM 2026-04-23)**: expand to **8 vendors** now. Section title = `Eight Silicon Ecosystems`. Keep the table open-ended — future vendors append rows and the number in the section title gets bumped accordingly |
+
+---
+
+## 4. Draft — `README.md` (English)
+
+> Paste block below into `README.md` at the repo root. Comments `<!-- -->` are for reviewer context, remove before merge.
+
+````markdown
 <!-- ======== Banner ======== -->
 <div align="center">
   <img src="docs/assets/banner.svg" alt="AIMA — AI Infrastructure, managed by AI" width="100%"/>
@@ -39,7 +91,6 @@
 
 ## News
 
-- **2026-08** — v0.5.0 ships: persistent deployment recovery, verified native-engine lifecycle, AMD Strix Halo/AMD395 packages for Windows and Linux, cross-device Fleet scenarios, structured inference adapters, and expanded hardware/model coverage.
 - **2026-04** — v0.4.0 ships: Explorer Agent Planner (PDCA), Central Advisor + Analyzer, MCP consolidation 101→61, aima-service device identity Phase 1, onboarding wizard with 5-dimension 0–100 scoring, multi-modal benchmark (chat/TTS/ASR/T2I/T2V).
 - **2026-03** — v0.3.x: OpenClaw full-stack integration, smart agent routing, Engine Profile system with SGLang-KT, AMD RDNA3 (W7900D) 8-GPU validated.
 - **2026-02** — v0.2.0: Support service, Web UI redesign, OpenClaw integration.
@@ -47,10 +98,9 @@
 
 ## Features
 
-- **Zero-config hardware detection** — automatically discovers NVIDIA, AMD, Huawei Ascend, Hygon DCU, MetaX, Moore Threads, Houmo, and Apple accelerators, plus CPU and RAM.
+- **Zero-config hardware detection** — automatically discovers GPUs (NVIDIA, AMD, Huawei Ascend, Hygon DCU, Apple Silicon), CPU, and RAM.
 - **Knowledge-driven deployment** — YAML catalog of hardware profiles, engines, models, and partition strategies; no engine-specific code branches.
 - **Multi-runtime** — K3S (Pod) for clusters, Docker for single-node containers, Native (exec) for bare-metal inference.
-- **Recoverable native-engine lifecycle** — verifies, imports, installs, upgrades, rolls back, and restores native deployments across restarts.
 - **61 MCP tools** — full programmatic control for AI Agents over hardware, models, engines, deployments, fleet, and more.
 - **Fleet management** — mDNS-based auto-discovery of LAN peers; remote tool execution across heterogeneous devices.
 - **Offline-first** — all core functions work with zero network; network is enhancement, not requirement.
@@ -86,7 +136,7 @@ Notes:
 - The installer resolves the latest installable `vX.Y.Z` product release instead of GitHub's `latest` release, because bundle tags such as `bundle/stack/2026-02-26` are not product binaries.
 - If tags are ahead of published binaries, the installer warns and stays on the latest installable release until the new assets are uploaded.
 - Override the source repo for forks with `AIMA_REPO=<owner>/<repo>`.
-- Pin a release with `AIMA_VERSION=v0.5.0`.
+- Pin a release with `AIMA_VERSION=v0.2.0`.
 - Windows installer currently targets `windows/amd64` and installs to `%LOCALAPPDATA%\Programs\AIMA`.
 
 ### Server Setup (Linux)
@@ -215,7 +265,7 @@ Every AIMA release passes through The Forge — an end-to-end UAT matrix run on 
 - **16 UAT items** per release covering install / hardware detect / model deploy / API / MCP / fleet / onboarding wizard / failover
 - **1,200+ evidence files** and ~1,000 hours of logged runtime across the fleet
 
-Per-release UAT report lives in [`docs/uat/v0.4-release-uat.md`](docs/uat/v0.4-release-uat.md), with raw per-device evidence (logs, configs, reproducer commands) under [`artifacts/uat/v0.4/`](artifacts/uat/v0.4/) — `u1`…`u15` covering install, hardware detect, model deploy, API/MCP, fleet, onboarding, and failover on GB10, RTX 4090, AMD W7900D, Apple M4, and others.
+The live registry of test machines, per-device UAT results, and reproducer commands live in `CLAUDE.md` under *Remote Test Lab*.
 
 ## Agent-native
 
@@ -266,7 +316,7 @@ internal/
   fleet/           mDNS fleet discovery + remote execution
   sqlite.go        SQLite state store (`package state`, modernc.org/sqlite, zero CGO)
   model/           Model scan/download/import + metadata detection
-  engine/          Verified container/native engine lifecycle
+  engine/          Engine image management
   stack/           K3S + HAMi infrastructure installer
 catalog/
   hardware/        Hardware profile YAML
@@ -314,7 +364,7 @@ To upload those assets to the matching GitHub release with `gh`:
 make publish-release-assets
 ```
 
-Annotated SemVer tag pushes such as `v0.5.0` also trigger `.github/workflows/release.yml`, which builds the same assets and uploads them automatically.
+Annotated SemVer tag pushes such as `v0.2.1` also trigger `.github/workflows/release.yml`, which builds the same assets and uploads them automatically.
 
 ### Run tests
 
@@ -325,3 +375,123 @@ go test ./...
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
+````
+
+---
+
+## 5. Draft — `README_zh.md` delta
+
+Structure mirrors the English draft exactly. Only the following blocks differ — everything else is a direct translation of the English sections above.
+
+### 5.1 Bilingual switcher (reversed highlight)
+
+```markdown
+<div align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/English-42A5F5?style=for-the-badge&labelColor=1a1a2e" alt="English"></a>
+  <a href="README_zh.md"><img src="https://img.shields.io/badge/中文-5E35B1?style=for-the-badge&labelColor=1a1a2e" alt="中文"></a>
+</div>
+```
+
+### 5.2 Typing SVG (Chinese)
+
+```markdown
+<div align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?font=Noto+Sans+SC&size=22&duration=3200&pause=900&color=5E35B1&center=true&vCenter=true&width=720&lines=AI+%E7%AE%A1%E7%90%86+AI+%E7%9A%84%E7%AE%97%E5%8A%9B%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD;%E4%B8%80%E6%9D%A1%E5%91%BD%E4%BB%A4+%E5%85%AB%E5%AE%B6%E7%A1%AC%E4%BB%B6+%E9%9B%B6%E9%85%8D%E7%BD%AE;60+%E7%A7%92%E4%BB%8E%E5%BC%80%E7%AE%B1%E5%88%B0%E7%AC%AC%E4%B8%80%E4%B8%AA+Token;%E5%88%AB%E5%86%8D%E9%85%8D%E7%8E%AF%E5%A2%83%E4%BA%86%EF%BC%8C%E7%9B%B4%E6%8E%A5%E6%8E%A8%E7%90%86" alt="Typing SVG"/>
+</div>
+```
+
+(字幕内容：`AI 管理 AI 的算力基础设施` · `一条命令 八家硬件 零配置` · `60 秒从开箱到第一个 Token` · `别再配环境了，直接推理`)
+
+### 5.3 Section title translations (4 theatrical)
+
+| English | 中文 |
+|---|---|
+| 60-Second Genesis | 60 秒创世 |
+| Eight Silicon Ecosystems | 八大硅基生态 |
+| The L0→L3 Intelligence Ladder | L0→L3 智能阶梯 |
+| The Forge | 熔炉 — 1200 次真机验证 |
+
+### 5.4 News 中文版
+
+```markdown
+## 动态
+
+- **2026-04** — v0.4.0 发布：Explorer Agent Planner（PDCA）、Central Advisor + Analyzer、MCP 工具从 101 精简至 61、aima-service 设备身份 Phase 1、Onboarding 冷启动向导（五维 0-100 打分）、多模态 Benchmark（chat/TTS/ASR/T2I/T2V）。
+- **2026-03** — v0.3.x：OpenClaw 全栈集成、智能 Agent 路由、带 SGLang-KT 的 Engine Profile 体系、AMD RDNA3（W7900D）8 卡已验证。
+- **2026-02** — v0.2.0：Support 服务、Web UI 重构、OpenClaw 集成。
+- **2026-01** — v0.0.1：首个基础版本（硬件检测、多运行时）。
+```
+
+### 5.5 The Forge 中文
+
+```markdown
+## 熔炉 — 1200 次真机验证
+
+每次 AIMA 发版都会走一遍熔炉——一套端到端 UAT 矩阵，全部在真机上跑。
+
+- **八家厂商** × 多款设备（NVIDIA GB10 / RTX 4090、AMD W7900D × 8、华为 Ascend 910B × 8、海光 BW150 DCU × 8、沐曦 N260 × 2、摩尔线程 M1000、Apple M4、Intel CPU）
+- 每个版本验证 **三种运行时**：K3S Pod、Docker 容器、Native exec
+- 每轮 **16 个 UAT 项**：安装 / 硬件识别 / 模型部署 / API / MCP / 集群 / Onboarding 向导 / 故障转移
+- 累计 **1200+ 证据文件**，全集群 ~1000 小时运行日志
+
+完整的测试机名册、逐台 UAT 结果和复现命令，见 `CLAUDE.md` 的 *Remote Test Lab* 部分。
+```
+
+---
+
+## 6. Implementation plan
+
+| Step | Action | Owner | Blocking |
+|---|---|---|---|
+| 1 | Align MCP tool count to **61** (source-of-truth = current-version CLAUDE.md) across EN README + ZH README | dev | — |
+| 2 | Expand hardware table to 8 vendors (already reflected in §4 draft, §5.5 中文版) | dev | — |
+| 3 | Copy draft §4 into `README.md`, §5 into `README_zh.md` | PMM | Step 1, 2 |
+| 4 | ~~Record Onboarding WebUI GIF via Playwright~~ — ✅ done 2026-04-24, at `docs/assets/onboarding-webui.gif` | Claude | — |
+| 5 | Hero Terminal GIF — dropped per PMM 2026-04-23 (path C) | — | — |
+| 6 | Export architecture diagram from `design/ARCHITECTURE.md` §system to `docs/assets/architecture.svg` | dev | — |
+
+## 7. Decisions from PMM 2026-04-23
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Vendor scope | **Expand to 8**. Section title = `Eight Silicon Ecosystems`. Open to further vendors. |
+| 2 | MCP tool count | **Source-of-truth = current-version CLAUDE.md.** For v0.4 = 61. |
+| 3 | Star History | **Remove from scope.** |
+| 4 | Discord / WeChat badges | **Defer.** Do not publish placeholders. |
+| 5 | Hero Terminal GIF + Onboarding WebUI GIF | **Claude records directly**, target = real env `http://192.168.110.71:6188/ui/` |
+| 6 | Typing SVG font | **Orbitron** — picked for memorability / brand-moment over ToB-developer legitimacy |
+| 7 | Terminal Hero GIF | **Skip for now** (path C). WebUI onboarding GIF alone covers the "install → deploy" visual. Revisit if feedback says it's needed. |
+| 8 | WebUI onboarding GIF exploration | **Claude to self-explore** the live env and come back with a storyboard before actually recording |
+
+## 8. Open — font comparison for Typing SVG
+
+Two finalists, same text + color + speed. Click the raw URLs to preview in browser:
+
+**Option A — `Orbitron`** (futuristic / HKUDS-match):
+```
+https://readme-typing-svg.herokuapp.com?font=Orbitron&size=22&duration=3200&pause=900&color=5E35B1&center=true&vCenter=true&width=720&lines=AI+Infrastructure%2C+managed+by+AI;One+Command.+Eight+GPU+Vendors.+Zero+Config;From+Zero+to+First+Token+in+60+Seconds;Stop+Configuring.+Start+Inferring
+```
+
+**Option B — `JetBrains Mono`** (developer-native / ToB):
+```
+https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&size=22&duration=3200&pause=900&color=5E35B1&center=true&vCenter=true&width=720&lines=AI+Infrastructure%2C+managed+by+AI;One+Command.+Eight+GPU+Vendors.+Zero+Config;From+Zero+to+First+Token+in+60+Seconds;Stop+Configuring.+Start+Inferring
+```
+
+Character of each:
+- **Orbitron**: geometric sans, wide letters, all-caps personality, sci-fi vibe. Strong at "futuristic promise / brand-scale moment". Weaker for code-mentioning lines (monowidth expectation broken).
+- **JetBrains Mono**: monospace, ligature-aware, made for developer eyes. Feels like "this thing is real infrastructure, not a landing page." Pairs naturally with the CLI blocks that follow in Quick Start. Weaker at hero-grade drama.
+
+**PMM decision (2026-04-23): Orbitron.** Picked for memorability / brand-moment weight. Rationale: hero slot is the one place in the repo where a distinctive typography signature is worth more than developer-native legibility; JetBrains Mono can appear later in product screenshots / video title cards if needed.
+
+---
+
+## 9. Post-v1 follow-ups (TODO after first README merge)
+
+Items explicitly deferred from the first ship — not blockers for merging the v1 README, but should be picked up once the baseline is live.
+
+| # | Item | Why deferred | Trigger to pick up |
+|---|---|---|---|
+| F1 | **Richer GIF demo scenario** — β v1 asks "What hardware do I have?" which is a single-tool (`hardware.detect`) one-shot demo. A stronger story would show multi-tool orchestration (e.g. "Can I run GLM-4.5-Air on this machine?" → triggers `hardware.detect` + `model.list` + reasoning about fit) or multi-turn (user asks a follow-up that references the prior result). Requires: choosing a scenario that reliably returns in <10s on production network, verifying it doesn't expose internal model configs, re-recording β. | PMM 2026-04-24: single-tool demo ships v1; richer scenario is a v1.1 polish once feedback arrives. | First round of README feedback / star growth review. Target: pick up 1-2 weeks after README v1 merge. |
+| F2 | Record an alt version without the Onboarding drawer beat (since β shows chat instead, the drawer context isn't essential) — decide whether that's a better fit for the slot. | Bundled into the same "richer GIF" iteration. | Same trigger as F1. |
+| F3 | Architecture diagram SVG export (specs plan step 6) — still pending. | Lower priority than GIF; README can ship without it, just means the "L0→L3 Intelligence Ladder" section stays text-only. | When someone has 1-2h to do the SVG. |
+| F4 | **Standing rule — version-number synchronization across marketing assets.** Every release PR must sync these four surfaces to the same numbers before merge: (1) `CLAUDE.md` (source of truth — under "Current State"), (2) `README.md` Features + Agent-native sections, (3) `README_zh.md` 同位置, (4) `docs/assets/banner.svg` (stats row). Fields that move version-to-version: MCP tool count, hardware-platform count, validated engine list, number of active fleet devices shown as examples. 2026-04-23 v1 README caught two drift cases (banner said `94 tools / 6 vendors`, README said `56 tools / 6 vendors`, CLAUDE.md said `61 tools / 8 validated`) — all unified at 61 / 8. | Adopt as release-PR checklist item starting v0.5; add a grep-based sanity check to the release workflow if it recurs. |

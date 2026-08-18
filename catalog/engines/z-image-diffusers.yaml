@@ -25,6 +25,8 @@ startup:
     MODEL_PATH: "{{.ModelPath}}"
   default_args:
     port: 8188
+  accepted_config_keys:
+    - port
   health_check:
     path: /health
     timeout_s: 600

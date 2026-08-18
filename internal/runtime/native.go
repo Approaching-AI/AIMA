@@ -169,10 +169,11 @@ func (r *NativeRuntime) Deploy(ctx context.Context, req *DeployRequest) error {
 
 	// Append other config values as CLI flags, with template substitution
 	for _, f := range configToFlagsFor(req.Config, knowledge.ConfigFlagContext{
-		Command:   req.Command,
-		ModelPath: req.ModelPath,
-		Engine:    req.Engine,
-		ModelType: req.ModelType,
+		Command:            req.Command,
+		ModelPath:          req.ModelPath,
+		Engine:             req.Engine,
+		ModelType:          req.ModelType,
+		AcceptedConfigKeys: req.AcceptedConfigKeys,
 	}, knowledge.PortConfigKeys(req.PortSpecs)) {
 		f = strings.ReplaceAll(f, "{{.ModelName}}", req.Name)
 		f = strings.ReplaceAll(f, "{{.ModelPath}}", req.ModelPath)

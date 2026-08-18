@@ -583,6 +583,58 @@ func TestListModelsFoldsCatalogAliasesIntoCanonicalModel(t *testing.T) {
 	}
 }
 
+func TestIsDeployableModelRecord(t *testing.T) {
+	tests := []struct {
+		name  string
+		model *state.Model
+		want  bool
+	}{
+		{name: "llm", model: &state.Model{Name: "qwen", Type: "llm", Format: "safetensors", ModelClass: "dense"}, want: true},
+		{name: "vision language", model: &state.Model{Name: "vlm", Type: "vlm", Format: "safetensors", ModelClass: "dense"}, want: true},
+		{name: "image pipeline", model: &state.Model{Name: "image", Type: "image_gen", Format: "safetensors", ModelClass: "diffusion"}, want: true},
+		{name: "asr pipeline", model: &state.Model{Name: "asr", Type: "asr", Format: "onnx", ModelClass: "pipeline"}, want: true},
+		{name: "asr component", model: &state.Model{Name: "vad", Type: "asr", Format: "onnx", ModelClass: "component"}},
+		{name: "draft", model: &state.Model{Name: "draft", Type: "llm", Format: "safetensors", ModelClass: "dense", UIRole: "draft"}},
+		{name: "explicitly disabled", model: &state.Model{Name: "disabled", Type: "llm", StandaloneDeploy: boolPtr(false)}},
+		{name: "explicitly enabled component", model: &state.Model{Name: "enabled", Type: "asr", ModelClass: "component", StandaloneDeploy: boolPtr(true)}, want: true},
+		{name: "nil"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDeployableModelRecord(tt.model); got != tt.want {
+				t.Fatalf("isDeployableModelRecord() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListDeployableModelRecordsAppliesCatalogCapabilities(t *testing.T) {
+	ctx := context.Background()
+	db := mustOpenTooldepsDB(t)
+	for _, model := range []*state.Model{
+		{ID: "chat", Name: "chat", Type: "llm", Path: "/models/chat", Format: "safetensors", ModelClass: "dense"},
+		{ID: "component", Name: "component", Type: "asr", Path: "/models/component", Format: "onnx", ModelClass: "pipeline"},
+	} {
+		if err := db.UpsertScannedModel(ctx, model); err != nil {
+			t.Fatalf("UpsertScannedModel(%s): %v", model.Name, err)
+		}
+	}
+	cat := &knowledge.Catalog{ModelAssets: []knowledge.ModelAsset{{
+		Metadata:     knowledge.ModelMetadata{Name: "component", Type: "asr"},
+		UI:           knowledge.ModelUI{Role: "component"},
+		Capabilities: knowledge.ModelCapabilities{StandaloneDeploy: boolPtr(false)},
+	}}}
+
+	models, err := listDeployableModelRecords(ctx, db, cat)
+	if err != nil {
+		t.Fatalf("listDeployableModelRecords: %v", err)
+	}
+	if len(models) != 1 || models[0].Name != "chat" {
+		t.Fatalf("deployable models = %+v, want only chat", models)
+	}
+}
+
 func writeScanModelFixture(dir string, weightSize int) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

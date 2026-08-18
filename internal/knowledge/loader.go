@@ -257,6 +257,7 @@ type EngineStartup struct {
 	WorkDir            string              `yaml:"work_dir,omitempty"               json:"work_dir,omitempty"`
 	Ports              []StartupPort       `yaml:"ports,omitempty"                  json:"ports,omitempty"`
 	DefaultArgs        map[string]any      `yaml:"default_args"                     json:"default_args"`
+	AcceptedConfigKeys []string            `yaml:"accepted_config_keys,omitempty"   json:"accepted_config_keys,omitempty"`
 	InternalArgs       []string            `yaml:"internal_args,omitempty"          json:"internal_args,omitempty"`
 	HealthCheck        HealthCheck         `yaml:"health_check"                     json:"health_check"`
 	Warmup             WarmupConfig        `yaml:"warmup"                           json:"warmup"`
@@ -879,6 +880,9 @@ func mergeStartup(dst, src *EngineStartup) {
 	if len(dst.Ports) == 0 {
 		dst.Ports = src.Ports
 	}
+	if len(dst.AcceptedConfigKeys) == 0 {
+		dst.AcceptedConfigKeys = src.AcceptedConfigKeys
+	}
 	if dst.DefaultArgs == nil {
 		dst.DefaultArgs = src.DefaultArgs
 	} else if src.DefaultArgs != nil {
@@ -1067,6 +1071,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst.Startup.InitCommands = append([]string(nil), src.Startup.InitCommands...)
 	dst.Startup.Env = cloneStringMap(src.Startup.Env)
 	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
+	dst.Startup.AcceptedConfigKeys = append([]string(nil), src.Startup.AcceptedConfigKeys...)
 	dst.Startup.InternalArgs = append([]string(nil), src.Startup.InternalArgs...)
 	dst.Startup.ExtraVolumes = append([]ContainerVolume(nil), src.Startup.ExtraVolumes...)
 	dst.Startup.Recovery.BackoffS = append([]int(nil), src.Startup.Recovery.BackoffS...)

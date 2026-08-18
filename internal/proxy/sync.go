@@ -30,6 +30,7 @@ type DeploymentInfo struct {
 func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 	// Build set of deployment names for fast lookup
 	active := make(map[string]bool, len(deployments))
+	readySeen := make(map[string]bool, len(deployments))
 
 	for _, d := range deployments {
 		model := strings.TrimSpace(d.Model)
@@ -62,7 +63,8 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 			}
 		}
 		for _, routeName := range routeNames {
-			active[strings.ToLower(routeName)] = true
+			routeKey := strings.ToLower(routeName)
+			active[routeKey] = true
 
 			if d.Ready && d.Address != "" {
 				s.RegisterBackend(routeName, &Backend{
@@ -76,13 +78,19 @@ func SyncBackends(s *Server, deployments []*DeploymentInfo) {
 					ParameterCount:      parameterCountFromDeployment(d),
 					ContextWindowTokens: contextWindowFromDeployment(d),
 				})
+				readySeen[routeKey] = true
+				continue
+			}
+			if readySeen[routeKey] {
+				slog.Debug("sync: ignoring not-ready duplicate for ready backend",
+					"model", routeName, "deployment", d.Name, "phase", d.Phase, "status", d.Status)
 				continue
 			}
 
 			// Deployment exists but not ready: preserve existing route metadata
 			// (address/basePath/remote), but mark it not ready.
 			existing := s.ListBackends()
-			if b, ok := existing[strings.ToLower(routeName)]; ok {
+			if b, ok := existing[routeKey]; ok {
 				engineType := engineTypeFromDeployment(d)
 				if engineType == "" {
 					engineType = b.EngineType

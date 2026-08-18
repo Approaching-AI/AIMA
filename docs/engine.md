@@ -227,6 +227,11 @@ api:
   base_path: /v1
 ```
 
+`startup.accepted_config_keys` is optional. Leave it unset for broad CLI engines
+such as vLLM that accept many runtime flags; set it for narrow wrapper servers
+that reject generic LLM flags, for example image or audio FastAPI wrappers that
+only accept `port`.
+
 ---
 
 ## 核心功能

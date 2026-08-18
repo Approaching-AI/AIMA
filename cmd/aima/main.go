@@ -1659,6 +1659,10 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 		// Step 3: Pull model (non-fatal — may be local or pre-installed). Use
 		// pullModelCore directly so byte-level progress can flow back to the
 		// caller via onModelProgress (the deps.PullModel closure swallows it).
+		// A disk guard aborts the moment the download's total size is known to
+		// not fit (keeping a disk-pressure reserve), turning a disk-filling hang
+		// — which taints the k3s node NoSchedule so the pod never starts — into
+		// a clear, fatal, pre-transfer error.
 		if !noPull {
 			notify("pulling_model", model)
 			modelStatus := func(phase, msg string) {
@@ -1666,7 +1670,31 @@ func buildToolDeps(ac *appContext) *mcp.ToolDeps {
 					notify("pulling_model", msg)
 				}
 			}
-			if err := pullModelCore(ctx, model, modelStatus, onModelProgress); err != nil {
+			freeMiB, totalMiB := hal.DiskUsage(dataDir)
+			pullCtx, cancelPull := context.WithCancel(ctx)
+			var diskErr error
+			diskChecked := false
+			guardedProgress := func(downloaded, total int64) {
+				if !diskChecked && total > 0 && freeMiB > 0 {
+					diskChecked = true
+					requiredMiB := total / (1024 * 1024)
+					if ok, shortfall := enoughDiskForDownload(requiredMiB, freeMiB, totalMiB); !ok {
+						diskErr = fmt.Errorf("not enough disk space to download %s: needs ~%d MiB plus reserve but only %d MiB free on %s (short by ~%d MiB); free up space or choose a smaller model",
+							model, requiredMiB, freeMiB, dataDir, shortfall)
+						cancelPull()
+						return
+					}
+				}
+				if onModelProgress != nil {
+					onModelProgress(downloaded, total)
+				}
+			}
+			err := pullModelCore(pullCtx, model, modelStatus, guardedProgress)
+			cancelPull()
+			if diskErr != nil {
+				return nil, diskErr
+			}
+			if err != nil {
 				notify("model_skip", err.Error())
 			}
 		}

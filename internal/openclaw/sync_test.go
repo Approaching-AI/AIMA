@@ -299,6 +299,48 @@ func TestMergeAIMAConfigReplacesStaleAIMAMediaChatDefault(t *testing.T) {
 	}
 }
 
+func TestSyncRewritesReadOnlyOpenClawConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write read-only files, so this regression is not meaningful")
+	}
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "openclaw.json")
+
+	if err := os.WriteFile(configPath, []byte(`{"models":{"providers":{}}}`), 0444); err != nil {
+		t.Fatalf("write read-only config fixture: %v", err)
+	}
+
+	deps := &Deps{
+		Backends: &mockBackends{backends: map[string]*Backend{
+			"qwen3-8b": {ModelName: "qwen3-8b", EngineType: "vllm", Address: "http://127.0.0.1:8000", Ready: true},
+		}},
+		Catalog:    &mockCatalog{},
+		ConfigPath: configPath,
+		ProxyAddr:  "http://127.0.0.1:6188/v1",
+		MCPCommand: "/usr/local/bin/aima",
+	}
+
+	if _, err := Sync(context.Background(), deps, false); err != nil {
+		t.Fatalf("Sync should recover read-only openclaw.json: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config after sync: %v", err)
+	}
+	if info.Mode().Perm()&0200 == 0 {
+		t.Fatalf("config mode = %v, want owner-writable after sync", info.Mode().Perm())
+	}
+
+	cfg, err := ReadConfig(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfig failed: %v", err)
+	}
+	if provider := lookupMap(cfg, "models", "providers", "aima"); provider == nil {
+		t.Fatal("aima provider missing after read-only config recovery")
+	}
+}
+
 func TestSyncCreatesMissingConfigDirectory(t *testing.T) {
 	t.Parallel()
 

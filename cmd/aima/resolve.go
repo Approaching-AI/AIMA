@@ -132,6 +132,11 @@ func resolveDeployment(ctx context.Context, cat *knowledge.Catalog, db *state.DB
 		resolved.Config[k] = v
 		resolved.Provenance[k] = "L0-auto"
 	}
+	resolved.Env, err = knowledge.ApplyConfigBindings(resolved.Config, resolved.Env, resolved.ConfigBindings)
+	if err != nil {
+		return nil, fmt.Errorf("apply engine config bindings: %w", err)
+	}
+	resolved.ExtraVolumes = expandDataDirInVolumes(resolved.ExtraVolumes, dataDir)
 
 	return &resolvedDeployment{
 		ModelName:          canonicalName,
@@ -163,6 +168,19 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func expandDataDirInVolumes(volumes []knowledge.ContainerVolume, dataDir string) []knowledge.ContainerVolume {
+	if volumes == nil {
+		return nil
+	}
+	expanded := append([]knowledge.ContainerVolume(nil), volumes...)
+	for i := range expanded {
+		expanded[i].HostPath = strings.ReplaceAll(
+			expanded[i].HostPath, "{{.DataDir}}", dataDir,
+		)
+	}
+	return expanded
 }
 
 // normalizeAutoPortOverrides removes "auto" sentinels from port-like override keys

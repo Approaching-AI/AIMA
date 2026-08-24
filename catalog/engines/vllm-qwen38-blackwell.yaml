@@ -1,0 +1,47 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-qwen38-blackwell
+  type: vllm-qwen38
+  version: "0.26.0"
+  supported_formats: [safetensors]
+  supported_model_types: [llm, vlm]
+image:
+  # Multi-arch vLLM release verified on Linux ARM64 + GB10 Blackwell.
+  name: vllm/vllm-openai
+  tag: "v0.26.0-aarch64-cu129-ubuntu2404"
+  digest: sha256:6a4570896a2f37fe052dc9f265f85a7581212c520da1324a721d0f222584e5bc
+  size_approx_mb: 25275
+  platforms: [linux/arm64]
+  registries:
+    - docker.io/vllm/vllm-openai
+patterns:
+  - "^vllm-qwen38-blackwell$"
+  - "v0.26.0-aarch64-cu129-ubuntu2404"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 49152
+startup:
+  env:
+    VLLM_ATTENTION_BACKEND: TRITON_ATTN
+  default_args:
+    gpu_memory_utilization: 0.80
+    max_model_len: 262144
+  health_check:
+    timeout_s: 900
+amplifier:
+  features:
+    - paged_attention
+    - continuous_batching
+    - qwen3_5_architecture
+    - multimodal
+  performance_gain: "vLLM 0.26 ARM64 runtime with Qwen3.8 vision-language, reasoning, and tool-call support"
+time_constraints:
+  cold_start_s: [120, 900]
+  model_switch_s: [120, 600]
+power_constraints:
+  typical_draw_watts: [40, 80]
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container

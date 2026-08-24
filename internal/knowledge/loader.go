@@ -249,21 +249,31 @@ type EngineHardware struct {
 	VRAMMinMiB int    `yaml:"vram_min_mib" json:"vram_min_mib"`
 }
 
+// ConfigBinding declares how an engine consumes a resolved AIMA config value.
+// Engines without bindings retain the existing CLI-flag behavior.
+type ConfigBinding struct {
+	Transport  string `yaml:"transport" json:"transport"`
+	Target     string `yaml:"target" json:"target"`
+	TrueValue  string `yaml:"true_value,omitempty" json:"true_value,omitempty"`
+	FalseValue string `yaml:"false_value,omitempty" json:"false_value,omitempty"`
+}
+
 type EngineStartup struct {
-	Command            []string            `yaml:"command"                          json:"command"`
-	InitCommands       []string            `yaml:"init_commands,omitempty"          json:"init_commands,omitempty"`
-	CompatibilityProbe string              `yaml:"compatibility_probe,omitempty"    json:"compatibility_probe,omitempty"`
-	Env                map[string]string   `yaml:"env,omitempty"                    json:"env,omitempty"`
-	WorkDir            string              `yaml:"work_dir,omitempty"               json:"work_dir,omitempty"`
-	Ports              []StartupPort       `yaml:"ports,omitempty"                  json:"ports,omitempty"`
-	DefaultArgs        map[string]any      `yaml:"default_args"                     json:"default_args"`
-	AcceptedConfigKeys []string            `yaml:"accepted_config_keys,omitempty"   json:"accepted_config_keys,omitempty"`
-	InternalArgs       []string            `yaml:"internal_args,omitempty"          json:"internal_args,omitempty"`
-	HealthCheck        HealthCheck         `yaml:"health_check"                     json:"health_check"`
-	Warmup             WarmupConfig        `yaml:"warmup"                           json:"warmup"`
-	ExtraVolumes       []ContainerVolume   `yaml:"extra_volumes,omitempty"          json:"extra_volumes,omitempty"`
-	LogPatterns        *StartupLogPatterns `yaml:"log_patterns,omitempty"           json:"log_patterns,omitempty"`
-	Recovery           RecoveryPolicy      `yaml:"recovery,omitempty"               json:"recovery,omitempty"`
+	Command            []string                 `yaml:"command"                          json:"command"`
+	InitCommands       []string                 `yaml:"init_commands,omitempty"          json:"init_commands,omitempty"`
+	CompatibilityProbe string                   `yaml:"compatibility_probe,omitempty"    json:"compatibility_probe,omitempty"`
+	Env                map[string]string        `yaml:"env,omitempty"                    json:"env,omitempty"`
+	ConfigBindings     map[string]ConfigBinding `yaml:"config_bindings,omitempty" json:"config_bindings,omitempty"`
+	WorkDir            string                   `yaml:"work_dir,omitempty"               json:"work_dir,omitempty"`
+	Ports              []StartupPort            `yaml:"ports,omitempty"                  json:"ports,omitempty"`
+	DefaultArgs        map[string]any           `yaml:"default_args"                     json:"default_args"`
+	AcceptedConfigKeys []string                 `yaml:"accepted_config_keys,omitempty"   json:"accepted_config_keys,omitempty"`
+	InternalArgs       []string                 `yaml:"internal_args,omitempty"          json:"internal_args,omitempty"`
+	HealthCheck        HealthCheck              `yaml:"health_check"                     json:"health_check"`
+	Warmup             WarmupConfig             `yaml:"warmup"                           json:"warmup"`
+	ExtraVolumes       []ContainerVolume        `yaml:"extra_volumes,omitempty"          json:"extra_volumes,omitempty"`
+	LogPatterns        *StartupLogPatterns      `yaml:"log_patterns,omitempty"           json:"log_patterns,omitempty"`
+	Recovery           RecoveryPolicy           `yaml:"recovery,omitempty"               json:"recovery,omitempty"`
 }
 
 // RecoveryPolicy contains optional catalog values for deployment recovery.
@@ -934,6 +944,7 @@ func mergeStartup(dst, src *EngineStartup) {
 	if dst.Warmup.RequestBody == nil {
 		dst.Warmup.RequestBody = src.Warmup.RequestBody
 	}
+	dst.ConfigBindings = inheritConfigBindings(dst.ConfigBindings, src.ConfigBindings)
 	if len(dst.ExtraVolumes) == 0 {
 		dst.ExtraVolumes = src.ExtraVolumes
 	}
@@ -1070,6 +1081,7 @@ func cloneEngineAsset(src EngineAsset) EngineAsset {
 	dst.Startup.Command = append([]string(nil), src.Startup.Command...)
 	dst.Startup.InitCommands = append([]string(nil), src.Startup.InitCommands...)
 	dst.Startup.Env = cloneStringMap(src.Startup.Env)
+	dst.Startup.ConfigBindings = cloneConfigBindings(src.Startup.ConfigBindings)
 	dst.Startup.DefaultArgs = cloneAnyMap(src.Startup.DefaultArgs)
 	dst.Startup.AcceptedConfigKeys = append([]string(nil), src.Startup.AcceptedConfigKeys...)
 	dst.Startup.InternalArgs = append([]string(nil), src.Startup.InternalArgs...)

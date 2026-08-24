@@ -60,11 +60,12 @@ type ResolvedConfig struct {
 	Partition             *PartitionSlot
 	Command               []string
 	PortSpecs             []StartupPort
-	InitCommands          []string          // pre-commands to run before main server (from engine YAML)
-	CompatibilityProbe    string            // container compatibility probe declared by engine YAML
-	RepairInitCommands    []string          // model-variant repair commands to prepend when compatibility probe needs self-heal
-	AcceptedConfigKeys    []string          // optional engine allowlist for config keys emitted as CLI flags
-	ExtraVolumes          []ContainerVolume // additional host volumes to mount (from engine YAML)
+	InitCommands          []string                 // pre-commands to run before main server (from engine YAML)
+	CompatibilityProbe    string                   // container compatibility probe declared by engine YAML
+	RepairInitCommands    []string                 // model-variant repair commands to prepend when compatibility probe needs self-heal
+	AcceptedConfigKeys    []string                 // optional engine allowlist for config keys emitted as CLI flags
+	ConfigBindings        map[string]ConfigBinding // optional engine-specific config transport declarations
+	ExtraVolumes          []ContainerVolume        // additional host volumes to mount (from engine YAML)
 	HealthCheck           *HealthCheck
 	Warmup                *WarmupConfig     // post-healthcheck warmup config (nil = no warmup)
 	Source                *EngineSource     // native binary source info (nil if container-only)
@@ -240,6 +241,7 @@ func (c *Catalog) Resolve(hw HardwareInfo, modelName, engineType string, userOve
 		InitCommands:       engine.Startup.InitCommands,
 		CompatibilityProbe: engine.Startup.CompatibilityProbe,
 		AcceptedConfigKeys: append([]string(nil), engine.Startup.AcceptedConfigKeys...),
+		ConfigBindings:     cloneConfigBindings(engine.Startup.ConfigBindings),
 		ExtraVolumes:       engine.Startup.ExtraVolumes,
 		Env:                engine.Startup.Env,
 		WorkDir:            engine.Startup.WorkDir,

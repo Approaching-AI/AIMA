@@ -1,0 +1,97 @@
+kind: engine_asset
+metadata:
+  name: deepseek-v4-flash-0731-spark-sparkinfer
+  type: vllm-sparkinfer
+  version: "0.1.0"
+  supported_formats: [safetensors]
+  supported_model_types: [llm]
+image:
+  # Build recipe: https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer
+  # Validated upstream image digest: sha256:2e077489a83a0360952828051fe7f7a32c1801e5ce8436d85f7267583d614ff4
+  name: deepseek-v4-flash-0731-spark-sparkinfer
+  tag: local
+  size_approx_mb: 22500
+  distribution: local
+  platforms: [linux/arm64]
+patterns:
+  - "^deepseek-v4-flash-0731-spark-sparkinfer$"
+  - "sparkinfer"
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 98304
+startup:
+  command:
+    - bash
+    - -c
+    - >-
+      sed -i 's/--default-chat-template-kwargs.thinking=false/--default-chat-template-kwargs.thinking=true/g'
+      /opt/vllm/serve-ds4-flash.sh;
+      exec /opt/recipe/scripts/entrypoint.sh
+  env:
+    MODEL_REPO: "0xSero/deepseek-v4-flash-0731-spark"
+    MODEL_REVISION: "22f28d32b9b29b4352eaa380ff8c2c170b2847ab"
+    MODEL_SOURCE_DIR: "/models"
+    MODEL_PATH: "/runtime/tp1"
+    SPEC_MODEL_PATH: "/runtime/dspark-draft-k64"
+    MAX_MODEL_LEN: "262144"
+    MAX_NUM_SEQS: "4"
+    MAX_NUM_BATCHED_TOKENS: "8224"
+    GPU_MEMORY_UTILIZATION: "0.9465"
+    MODE: "dspark"
+    DSPARK_TOKENS: "5"
+    DSPARK_CAPACITY: "0"
+    DSPARK_DYNAMIC_DRAFT_DEPTH: "0"
+    DSPARK_DYNAMIC_DRAFT_DEPTH_WINDOW: "8"
+    DSPARK_DRAFT_EXPERTS: "64"
+    DSPARK_STRUCTURED_EXPERTS_PER_CATEGORY: "32"
+    VLLM_USE_B12X_WO_PROJECTION: "1"
+    VERIFY_MODEL_CHECKSUMS: "1"
+  config_bindings:
+    gpu_memory_utilization:
+      transport: env
+      target: GPU_MEMORY_UTILIZATION
+    max_model_len:
+      transport: env
+      target: MAX_MODEL_LEN
+    max_num_seqs:
+      transport: env
+      target: MAX_NUM_SEQS
+    max_num_batched_tokens:
+      transport: env
+      target: MAX_NUM_BATCHED_TOKENS
+    dspark_enabled:
+      transport: env
+      target: MODE
+      true_value: dspark
+      false_value: mtp0
+    dspark_tokens:
+      transport: env
+      target: DSPARK_TOKENS
+  accepted_config_keys: ["__entrypoint_managed__"]
+  default_args:
+    port: 8000
+  health_check:
+    path: /health
+    timeout_s: 7200
+  warmup:
+    enabled: true
+    prompt: "Write a short Python hello-world function."
+    max_tokens: 16
+    timeout_s: 120
+  extra_volumes:
+    - name: sparkinfer-cache
+      host_path: "{{.DataDir}}/runtime/deepseek-v4-flash-0731-spark/cache"
+      mount_path: /cache
+    - name: sparkinfer-runtime
+      host_path: "{{.DataDir}}/runtime/deepseek-v4-flash-0731-spark/data"
+      mount_path: /runtime
+container:
+  shm_size: "32g"
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container
+api:
+  protocol: openai
+  base_path: /v1
+  upstream_model: deepseek-v4-flash-0731-spark

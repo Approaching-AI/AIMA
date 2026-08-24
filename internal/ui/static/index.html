@@ -6085,7 +6085,7 @@ body {
               <div class="deploy-param-row">
                 <input type="text" x-model="param.key" @input="markDeployParamManual(param)" :placeholder="t('deploy_param_key')">
                 <input type="text" x-model="param.value" @input="markDeployParamManual(param)" :placeholder="t('deploy_param_value')">
-                <span class="deploy-param-source" x-text="deployParamSourceLabel(param)"></span>
+                <span class="deploy-param-source" x-text="deployParamRuntimeLabel(param)"></span>
                 <button type="button" class="deploy-param-remove" @click="removeDeployParamById(param.id)" :aria-label="t('deploy_remove_param')">×</button>
               </div>
             </template>
@@ -10503,6 +10503,16 @@ function aimaApp() {
           this.deployDetailForm.engine = data.engine;
         }
         this.setDeployParamsFromConfig(cfg, manual);
+        const bindings = data.config_bindings || {};
+        const runtimeEnv = data.env || {};
+        this.deployDetailParams.forEach((param) => {
+          const binding = bindings[param.key];
+          if (!binding || binding.transport !== 'env' || !binding.target) {
+            return;
+          }
+          param.runtimeTarget = binding.target;
+          param.runtimeValue = runtimeEnv[binding.target];
+        });
         if (!this.deployDetailForm.port && cfg.port !== undefined && cfg.port !== null) {
           this.deployDetailForm.port = String(cfg.port);
         }
@@ -10621,7 +10631,11 @@ function aimaApp() {
     },
 
     markDeployParamManual(param) {
-      if (param) param.source = 'manual';
+      if (param) {
+        param.source = 'manual';
+        delete param.runtimeTarget;
+        delete param.runtimeValue;
+      }
       this.markDeployConfigDirty();
     },
 
@@ -10720,6 +10734,14 @@ function aimaApp() {
 
     deployParamSourceLabel(param) {
       return param && param.source === 'manual' ? this.t('deploy_source_manual') : this.t('deploy_source_recommended');
+    },
+
+    deployParamRuntimeLabel(param) {
+      const source = this.deployParamSourceLabel(param);
+      if (!param || !param.runtimeTarget || param.runtimeValue === undefined) {
+        return source;
+      }
+      return source + ' -> ' + param.runtimeTarget + '=' + param.runtimeValue;
     },
 
     isDigestEngineId(value) {

@@ -1,0 +1,63 @@
+kind: model_asset
+metadata:
+  name: qwen3.8-27b
+  type: vlm
+  family: qwen
+  parameter_count: "27B"
+  released_at: "2026-08"
+  aliases:
+    - Qwen3.8-27B
+    - Qwen/Qwen3.8-27B
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: modelscope
+      repo: Qwen/Qwen3.8-27B
+      format: safetensors
+    - type: huggingface
+      repo: Qwen/Qwen3.8-27B
+      format: safetensors
+variants:
+  # GB10 Blackwell coding profile. The released checkpoint is a native VLM
+  # with a 262144-token text context and BF16 weights of about 55.6 GB.
+  - name: qwen3.8-27b-blackwell-vllm-bf16
+    hardware:
+      gpu_arch: Blackwell
+      unified_memory: true
+      vram_min_mib: 49152
+    engine: vllm-qwen38
+    format: safetensors
+    source:
+      type: modelscope
+      repo: Qwen/Qwen3.8-27B
+    default_config:
+      dtype: bfloat16
+      gpu_memory_utilization: 0.80
+      max_model_len: 262144
+      max_num_seqs: 1
+      max_num_batched_tokens: 8192
+      enable_chunked_prefill: true
+      enable_prefix_caching: true
+      reasoning_parser: qwen3
+      enable_auto_tool_choice: true
+      tool_call_parser: qwen3_coder
+      mm_encoder_attn_backend: TORCH_SDPA
+      limit_mm_per_prompt:
+        image: 4
+        video: 0
+      override_generation_config:
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 20
+        repetition_penalty: 1.0
+        max_new_tokens: 32768
+      default_chat_template_kwargs:
+        enable_thinking: false
+      trust_remote_code: true
+    expected_performance:
+      startup_time_s: 600
+      cold_start_time_s: 900
+      vram_mib: 60000
+      max_context_tokens: 262144
+      notes: "GB10 BF16 coding profile with prefix cache, per-request thinking control, Qwen tool calling, and image input enabled."

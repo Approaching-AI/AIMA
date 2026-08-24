@@ -1416,6 +1416,46 @@ func TestCheckFitAdjustsGMU(t *testing.T) {
 	}
 }
 
+func TestCheckFitRequiredGMUPreservesEngineRecipe(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Config: map[string]any{"gpu_memory_utilization": 0.953},
+		ConfigBindings: map[string]ConfigBinding{
+			"gpu_memory_utilization": {
+				Transport: "env",
+				Target:    "GPU_MEMORY_UTILIZATION",
+				FitPolicy: "required",
+			},
+		},
+	}
+	hw := HardwareInfo{
+		GPUVRAMMiB:    122570,
+		GPUMemFreeMiB: 118069,
+		GPUMemUsedMiB: 4501,
+		UnifiedMemory: true,
+		RAMTotalMiB:   122570,
+	}
+
+	fit := CheckFit(resolved, hw)
+	if !fit.Fit {
+		t.Fatalf("expected required engine recipe to fit, got Reason=%q", fit.Reason)
+	}
+	if _, adjusted := fit.Adjustments["gpu_memory_utilization"]; adjusted {
+		t.Fatalf("required gpu_memory_utilization was adjusted: %v", fit.Adjustments)
+	}
+	if len(fit.Warnings) == 0 {
+		t.Fatal("expected warning about preserving the required engine recipe")
+	}
+
+	hw.GPUMemFreeMiB = 110000
+	fit = CheckFit(resolved, hw)
+	if fit.Fit {
+		t.Fatal("expected required engine recipe to fail when free memory is insufficient")
+	}
+	if !strings.Contains(fit.Reason, "required gpu_memory_utilization") {
+		t.Fatalf("Reason = %q, want required gpu_memory_utilization", fit.Reason)
+	}
+}
+
 func TestCheckFitInsufficientGPU(t *testing.T) {
 	resolved := &ResolvedConfig{
 		Config: map[string]any{"gpu_memory_utilization": 0.90},

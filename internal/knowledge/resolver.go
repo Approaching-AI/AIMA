@@ -1763,6 +1763,8 @@ type FitReport struct {
 // vLLM uses gpu_memory_utilization, SGLang uses mem_fraction_static.
 var gmuKeys = []string{"gpu_memory_utilization", "mem_fraction_static"}
 
+const requiredFitHardReserveMiB = 1024
+
 // CheckFit validates a resolved config against hardware capabilities and runtime state.
 // Static layer: VRAM sufficiency (already handled by variant filtering in findModelVariant).
 // Dynamic layer: adjusts gpu_memory_utilization based on available GPU memory.
@@ -1801,18 +1803,30 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 			remainMiB := hw.RAMTotalMiB - allocMiB
 
 			if remainMiB < reserveMiB {
-				maxSafe := math.Floor(float64(hw.RAMTotalMiB-reserveMiB)/float64(hw.RAMTotalMiB)*100) / 100
-				if maxSafe < 0.1 {
-					r.Fit = false
-					r.Reason = fmt.Sprintf("unified memory: %s=%.2f leaves only %d MiB for OS (need at least %d MiB)",
-						key, gmu, remainMiB, reserveMiB)
-					return r
+				if configBindingRequiresRequiredFit(resolved.ConfigBindings[key]) {
+					if remainMiB < requiredFitHardReserveMiB {
+						r.Fit = false
+						r.Reason = fmt.Sprintf("unified memory: required %s=%.4g leaves only %d MiB for the system (need at least %d MiB)",
+							key, gmu, remainMiB, requiredFitHardReserveMiB)
+						return r
+					}
+					r.Warnings = append(r.Warnings, fmt.Sprintf(
+						"unified memory: required %s=%.4g preserves the engine recipe and leaves %d MiB for the system; generic %d MiB reserve was not applied",
+						key, gmu, remainMiB, reserveMiB))
+				} else {
+					maxSafe := math.Floor(float64(hw.RAMTotalMiB-reserveMiB)/float64(hw.RAMTotalMiB)*100) / 100
+					if maxSafe < 0.1 {
+						r.Fit = false
+						r.Reason = fmt.Sprintf("unified memory: %s=%.2f leaves only %d MiB for OS (need at least %d MiB)",
+							key, gmu, remainMiB, reserveMiB)
+						return r
+					}
+					r.Adjustments[key] = maxSafe
+					r.Warnings = append(r.Warnings, fmt.Sprintf(
+						"unified memory: %s %.2f -> %.2f (OS available %d -> %d MiB, total %d MiB)",
+						key, gmu, maxSafe, remainMiB,
+						hw.RAMTotalMiB-int(float64(hw.RAMTotalMiB)*maxSafe), hw.RAMTotalMiB))
 				}
-				r.Adjustments[key] = maxSafe
-				r.Warnings = append(r.Warnings, fmt.Sprintf(
-					"unified memory: %s %.2f -> %.2f (OS available %d -> %d MiB, total %d MiB)",
-					key, gmu, maxSafe, remainMiB,
-					hw.RAMTotalMiB-int(float64(hw.RAMTotalMiB)*maxSafe), hw.RAMTotalMiB))
 			}
 			break // each engine uses only one gmu parameter
 		}
@@ -1835,6 +1849,21 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 				if currentGMU <= 0 {
 					continue
 				}
+				requiredFit := configBindingRequiresRequiredFit(resolved.ConfigBindings[key])
+				hardReserveMiB := 512
+				if hw.UnifiedMemory {
+					hardReserveMiB = requiredFitHardReserveMiB
+				}
+				if requiredFit {
+					requiredMiB := int(math.Ceil(float64(totalVRAM)*currentGMU)) + hardReserveMiB
+					if hw.GPUMemFreeMiB < requiredMiB {
+						r.Fit = false
+						r.Reason = fmt.Sprintf(
+							"required %s=%.4g needs %d MiB free including the %d MiB hard reserve; only %d/%d MiB is free",
+							key, currentGMU, requiredMiB, hardReserveMiB, hw.GPUMemFreeMiB, totalVRAM)
+						return r
+					}
+				}
 				safetyMiB := 512
 				if hw.UnifiedMemory {
 					safetyMiB = 4096 // unified memory needs larger dynamic safety margin
@@ -1847,11 +1876,17 @@ func CheckFit(resolved *ResolvedConfig, hw HardwareInfo) *FitReport {
 					return r
 				}
 				if currentGMU > maxSafeGMU {
-					adjusted := math.Floor(maxSafeGMU*100) / 100
-					r.Adjustments[key] = adjusted
-					r.Warnings = append(r.Warnings, fmt.Sprintf(
-						"%s: %.2f -> %.2f (GPU %d/%d MiB free)",
-						key, currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
+					if requiredFit {
+						r.Warnings = append(r.Warnings, fmt.Sprintf(
+							"%s=%.4g is required by the engine recipe; generic adjustment to %.2f was not applied (GPU %d/%d MiB free)",
+							key, currentGMU, math.Floor(maxSafeGMU*100)/100, hw.GPUMemFreeMiB, totalVRAM))
+					} else {
+						adjusted := math.Floor(maxSafeGMU*100) / 100
+						r.Adjustments[key] = adjusted
+						r.Warnings = append(r.Warnings, fmt.Sprintf(
+							"%s: %.2f -> %.2f (GPU %d/%d MiB free)",
+							key, currentGMU, adjusted, hw.GPUMemFreeMiB, totalVRAM))
+					}
 				}
 				break // each engine uses only one gmu parameter
 			}

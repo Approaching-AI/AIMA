@@ -11,6 +11,7 @@ func TestApplyConfigBindings(t *testing.T) {
 		"gpu_memory_utilization": {
 			Transport: "env",
 			Target:    "GPU_MEMORY_UTILIZATION",
+			FitPolicy: "required",
 		},
 		"dspark_enabled": {
 			Transport:  "env",
@@ -78,6 +79,14 @@ func TestApplyConfigBindingsRejectsInvalidDeclarations(t *testing.T) {
 			binding: ConfigBinding{
 				Transport: "env",
 				Target:    "INVALID-NAME",
+			},
+		},
+		{
+			name: "unsupported fit policy",
+			binding: ConfigBinding{
+				Transport: "env",
+				Target:    "VALID_NAME",
+				FitPolicy: "best-effort",
 			},
 		},
 	}

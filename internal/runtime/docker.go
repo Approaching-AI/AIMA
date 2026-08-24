@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -190,30 +191,19 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		}
 	}
 
-	// Model volume
+	volumes := make([]knowledge.ContainerVolume, 0, 1+len(req.ExtraVolumes))
 	if req.ModelPath != "" {
-		args = append(args, "--volume", modelHostPath+":/models:ro")
+		volumes = append(volumes, knowledge.ContainerVolume{
+			HostPath:  modelHostPath,
+			MountPath: "/models",
+			ReadOnly:  true,
+		})
 	}
-
-	// Container volumes from hardware profile
 	if req.Container != nil {
-		for _, vol := range req.Container.Volumes {
-			v := vol.HostPath + ":" + vol.MountPath
-			if vol.ReadOnly {
-				v += ":ro"
-			}
-			args = append(args, "--volume", v)
-		}
+		volumes = append(volumes, req.Container.Volumes...)
 	}
-
-	// Extra volumes from engine/model YAML
-	for _, vol := range req.ExtraVolumes {
-		v := vol.HostPath + ":" + vol.MountPath
-		if vol.ReadOnly {
-			v += ":ro"
-		}
-		args = append(args, "--volume", v)
-	}
+	volumes = append(volumes, req.ExtraVolumes...)
+	args = appendDockerVolumes(args, volumes)
 
 	// Build command with template substitution
 	command := make([]string, len(req.Command))
@@ -258,6 +248,42 @@ func (r *DockerRuntime) buildRunArgs(name string, req *DeployRequest) []string {
 		args = append(args, image)
 	}
 
+	return args
+}
+
+// appendDockerVolumes emits at most one mount per container destination.
+// More specific mounts are appended after generic mounts by the resolver, so
+// the last declaration wins. Docker rejects duplicate destinations with exit
+// status 125; normalizing here keeps catalog patches backward-compatible.
+func appendDockerVolumes(args []string, volumes []knowledge.ContainerVolume) []string {
+	lastByDestination := make(map[string]int, len(volumes))
+	for i, vol := range volumes {
+		destination := strings.TrimSpace(vol.MountPath)
+		if destination == "" {
+			continue
+		}
+		lastByDestination[path.Clean(destination)] = i
+	}
+
+	for i, vol := range volumes {
+		destination := strings.TrimSpace(vol.MountPath)
+		if destination == "" {
+			continue
+		}
+		cleanDestination := path.Clean(destination)
+		if lastByDestination[cleanDestination] != i {
+			slog.Warn("docker mount destination overridden",
+				"mount_path", cleanDestination,
+				"ignored_host_path", vol.HostPath,
+				"effective_host_path", volumes[lastByDestination[cleanDestination]].HostPath)
+			continue
+		}
+		value := vol.HostPath + ":" + destination
+		if vol.ReadOnly {
+			value += ":ro"
+		}
+		args = append(args, "--volume", value)
+	}
 	return args
 }
 

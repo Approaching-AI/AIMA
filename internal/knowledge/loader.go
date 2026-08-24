@@ -256,6 +256,7 @@ type ConfigBinding struct {
 	Target     string `yaml:"target" json:"target"`
 	TrueValue  string `yaml:"true_value,omitempty" json:"true_value,omitempty"`
 	FalseValue string `yaml:"false_value,omitempty" json:"false_value,omitempty"`
+	FitPolicy  string `yaml:"fit_policy,omitempty" json:"fit_policy,omitempty"`
 }
 
 type EngineStartup struct {

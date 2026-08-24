@@ -10,6 +10,12 @@ import (
 
 var configBindingEnvNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+const configBindingFitPolicyRequired = "required"
+
+func configBindingRequiresRequiredFit(binding ConfigBinding) bool {
+	return strings.EqualFold(strings.TrimSpace(binding.FitPolicy), configBindingFitPolicyRequired)
+}
+
 // ApplyConfigBindings transports final, fit-adjusted AIMA config values into
 // engine-specific runtime inputs. The input environment is never mutated.
 func ApplyConfigBindings(config map[string]any, env map[string]string, bindings map[string]ConfigBinding) (map[string]string, error) {
@@ -25,6 +31,10 @@ func ApplyConfigBindings(config map[string]any, env map[string]string, bindings 
 		target := strings.TrimSpace(binding.Target)
 		if !configBindingEnvNameRE.MatchString(target) {
 			return nil, fmt.Errorf("config binding %q: invalid environment target %q", key, binding.Target)
+		}
+		fitPolicy := strings.ToLower(strings.TrimSpace(binding.FitPolicy))
+		if fitPolicy != "" && fitPolicy != configBindingFitPolicyRequired {
+			return nil, fmt.Errorf("config binding %q: unsupported fit policy %q", key, binding.FitPolicy)
 		}
 		value, ok := config[key]
 		if !ok {

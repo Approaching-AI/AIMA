@@ -279,6 +279,32 @@ func TestBuildRunArgs_ExtraVolumes(t *testing.T) {
 	assertContains(t, argStr, "--volume /opt/data:/data:ro", "extra volume readonly")
 }
 
+func TestBuildRunArgs_DeduplicatesVolumeDestinations(t *testing.T) {
+	r := &DockerRuntime{}
+	req := &DeployRequest{
+		Name:   "test",
+		Engine: "vllm",
+		Image:  "vllm/vllm:latest",
+		Container: &knowledge.ContainerAccess{
+			Volumes: []knowledge.ContainerVolume{
+				{HostPath: "/factory/runtime", MountPath: "/runtime"},
+			},
+		},
+		ExtraVolumes: []knowledge.ContainerVolume{
+			{HostPath: "/device/runtime", MountPath: "/runtime/"},
+		},
+	}
+
+	args := r.buildRunArgs("test-vllm", req)
+	argStr := joinArgs(args)
+
+	assertNotContains(t, argStr, "--volume /factory/runtime:/runtime", "generic duplicate mount")
+	assertContains(t, argStr, "--volume /device/runtime:/runtime/", "specific mount should win")
+	if got := strings.Count(argStr, ":/runtime"); got != 1 {
+		t.Fatalf("runtime destination count = %d, want 1; args: %s", got, argStr)
+	}
+}
+
 func TestBuildRunArgs_ExpandsEnvTemplates(t *testing.T) {
 	r := &DockerRuntime{}
 	req := &DeployRequest{

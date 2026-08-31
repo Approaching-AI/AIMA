@@ -855,6 +855,102 @@ func TestDeepSeekV4DSparkCatalogAssets(t *testing.T) {
 	}
 }
 
+func TestGLM53FlashDualGB10CatalogAssets(t *testing.T) {
+	cat, err := LoadCatalog(catalogFS())
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	var model *ModelAsset
+	for i := range cat.ModelAssets {
+		if cat.ModelAssets[i].Metadata.Name == "glm-5.3-flash-nvfp4" {
+			model = &cat.ModelAssets[i]
+			break
+		}
+	}
+	if model == nil {
+		t.Fatal("glm-5.3-flash-nvfp4 model asset not found")
+	}
+	if model.Metadata.ParameterCount != "320B" || model.Capabilities.DeploymentScenario != "glm-5.3-flash-nvfp4-2node" {
+		t.Fatalf("unexpected model metadata: %#v capabilities=%#v", model.Metadata, model.Capabilities)
+	}
+	var engine *EngineAsset
+	for i := range cat.EngineAssets {
+		if cat.EngineAssets[i].Metadata.Name == "vllm-glm53-dual-gb10" {
+			engine = &cat.EngineAssets[i]
+			break
+		}
+	}
+	if engine == nil || engine.Container == nil {
+		t.Fatal("vllm-glm53-dual-gb10 container metadata not found")
+	}
+	if engine.Image.Distribution != "local" || engine.Image.Name != "aima/glm53-flash" || engine.Image.Tag != "sm121-v8-local" {
+		t.Fatalf("unexpected GLM-5.3 image metadata: %#v", engine.Image)
+	}
+	if engine.Container.NetworkMode != "host" || len(engine.Container.Devices) == 0 || engine.Container.Devices[0] != "/dev/infiniband" {
+		t.Fatalf("unexpected GLM-5.3 container access: %#v", engine.Container)
+	}
+	if unit, ok := engine.Startup.DefaultArgs["prefix_match_unit"].(int); !ok || unit != 128 || unit%4 != 0 {
+		t.Fatalf("prefix_match_unit = %#v, want 128 divisible by index_kpool=4", engine.Startup.DefaultArgs["prefix_match_unit"])
+	}
+	var scenario *DeploymentScenario
+	for i := range cat.DeploymentScenarios {
+		if cat.DeploymentScenarios[i].Metadata.Name == "glm-5.3-flash-nvfp4-2node" {
+			scenario = &cat.DeploymentScenarios[i]
+			break
+		}
+	}
+	if scenario == nil || len(scenario.Inputs) == 0 || len(scenario.Deployments) != 2 {
+		t.Fatalf("unexpected GLM-5.3 scenario: %#v", scenario)
+	}
+	if scenario.Deployments[0].ID != "worker" || !scenario.Deployments[0].NoPull || !scenario.Deployments[1].NoPull || scenario.StartupOrder[0].Deployment != "worker" {
+		t.Fatalf("worker-first local-image order not preserved: deployments=%#v startup=%#v", scenario.Deployments, scenario.StartupOrder)
+	}
+	resolved, err := cat.Resolve(HardwareInfo{
+		GPUArch: "Blackwell", GPUVRAMMiB: 15360, GPUCount: 1, UnifiedMemory: true,
+		CPUArch: "arm64", RAMTotalMiB: 131072, Platform: "linux/arm64", HardwareProfile: "nvidia-gb10-arm64",
+	}, model.Metadata.Name, engine.Metadata.Name, map[string]any{"model_path": "/models/glm-5.3-flash-nvfp4"})
+	if err != nil {
+		t.Fatalf("resolve GLM-5.3 catalog assets: %v", err)
+	}
+	if resolved.EngineDistribution != "local" || resolved.Container == nil || resolved.Container.NetworkMode != "host" {
+		t.Fatalf("GLM-5.3 engine runtime metadata was not merged: %#v", resolved)
+	}
+	podYAML, err := GeneratePod(resolved)
+	if err != nil {
+		t.Fatalf("generate GLM-5.3 pod: %v", err)
+	}
+	podText := string(podYAML)
+	for _, want := range []string{
+		`image: aima/glm53-flash:sm121-v8-local`,
+		`- "--max-model-len"`,
+		`- "262144"`,
+		`- "--block-size"`,
+		`- "2304"`,
+		`- "--prefix-match-unit"`,
+		`- "128"`,
+		`- "--kv-cache-memory"`,
+		`- "4445787956"`,
+		`- "--enable-prefix-caching"`,
+		`- "--enable-prompt-tokens-details"`,
+		`- "--enable-auto-tool-choice"`,
+		`- "--speculative-config"`,
+		`num_speculative_tokens`,
+		`enable_thinking`,
+		`- "glm47"`,
+		`- "glm45"`,
+		`/models/chat_template.jinja`,
+		`hostNetwork: true`,
+		`/dev/infiniband`,
+	} {
+		if !strings.Contains(podText, want) {
+			t.Fatalf("GLM-5.3 pod is missing %q:\n%s", want, podText)
+		}
+	}
+	if strings.Contains(podText, "--quantization") {
+		t.Fatalf("GLM-5.3 NVFP4 is checkpoint-declared and must not receive --quantization:\n%s", podText)
+	}
+}
+
 func TestLoadCatalogInvalidYAML(t *testing.T) {
 	fs := fstest.MapFS{
 		"hardware/bad.yaml": &fstest.MapFile{Data: []byte("not: valid: yaml: [")},

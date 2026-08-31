@@ -1,0 +1,162 @@
+kind: engine_asset
+_profile: vllm
+metadata:
+  name: vllm-glm53-dual-gb10
+  type: vllm
+  version: "0.1.dev20051-sm121-v8-cache-safety"
+  supported_formats: [safetensors]
+  supported_model_types: [llm, vlm]
+hardware:
+  gpu_arch: Blackwell
+  vram_min_mib: 4096
+image:
+  # Local distribution is intentional: the image contains the GLM-5.3 SM121,
+  # FP8-KV, Kpool prefix-cache, and block-table safety patch stack. Install the
+  # same image on both Fleet devices before applying the two-node scenario.
+  name: aima/glm53-flash
+  tag: sm121-v8-local
+  size_approx_mb: 28200
+  distribution: local
+  platforms: [linux/arm64]
+patterns:
+  - "^aima/glm53-flash:sm121-v8-local$"
+  - "glm53-flash-arm64-cu130"
+container:
+  devices:
+    - /dev/infiniband
+  network_mode: host
+  shm_size: 64gb
+  ulimits:
+    memlock: "-1:-1"
+    stack: "67108864:67108864"
+startup:
+  env:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NET: IB
+    NCCL_IB_DISABLE: "0"
+    NCCL_IB_ADDR_FAMILY: AF_INET
+    NCCL_IB_ROCE_VERSION_NUM: "2"
+    NCCL_IB_MERGE_NICS: "1"
+    NCCL_CROSS_NIC: "0"
+    NCCL_CUMEM_ENABLE: "0"
+    NCCL_IGNORE_CPU_AFFINITY: "1"
+    NCCL_NVLS_ENABLE: "0"
+    NCCL_DEBUG: WARN
+  accepted_config_keys:
+    - host
+    - port
+    - served_model_name
+    - trust_remote_code
+    - dtype
+    - tensor_parallel_size
+    - pipeline_parallel_size
+    - distributed_executor_backend
+    - nnodes
+    - node_rank
+    - master_addr
+    - master_port
+    - headless
+    - max_model_len
+    - max_num_seqs
+    - max_num_batched_tokens
+    - gpu_memory_utilization
+    - kv_cache_dtype
+    - kv_cache_memory
+    - block_size
+    - prefix_match_unit
+    - moe_backend
+    - enforce_eager
+    - enable_prefix_caching
+    - enable_prompt_tokens_details
+    - enable_chunked_prefill
+    - enable_auto_tool_choice
+    - tool_call_parser
+    - reasoning_parser
+    - chat_template
+    - default_chat_template_kwargs
+    - limit_mm_per_prompt
+    - generation_config
+    - speculative_config
+  default_args:
+    host: 0.0.0.0
+    port: 8000
+    served_model_name: GLM-5.3-Flash-NVFP4
+    trust_remote_code: true
+    dtype: auto
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    distributed_executor_backend: mp
+    nnodes: 2
+    master_port: 29530
+    max_model_len: 262144
+    max_num_seqs: 2
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.85
+    kv_cache_dtype: fp8_e4m3
+    kv_cache_memory: 4445787956
+    block_size: 2304
+    prefix_match_unit: 128
+    moe_backend: marlin
+    enforce_eager: true
+    enable_prefix_caching: true
+    enable_prompt_tokens_details: true
+    enable_chunked_prefill: true
+    enable_auto_tool_choice: true
+    tool_call_parser: glm47
+    reasoning_parser: glm45
+    chat_template: /models/chat_template.jinja
+    default_chat_template_kwargs:
+      enable_thinking: true
+    limit_mm_per_prompt:
+      image: 4
+      video: 1
+    generation_config: vllm
+    speculative_config:
+      method: mtp
+      num_speculative_tokens: 4
+  health_check:
+    path: /v1/models
+    timeout_s: 3600
+  warmup:
+    enabled: true
+    prompt: "Return the word ready."
+    max_tokens: 8
+    timeout_s: 180
+  # A cold load takes roughly 15 minutes. Generic recovery must not replace a
+  # healthy loading process after live unified-memory fit changes.
+  recovery:
+    enabled: false
+api:
+  protocol: openai
+  base_path: /v1
+  upstream_model: GLM-5.3-Flash-NVFP4
+amplifier:
+  features:
+    - tensor_parallel_2
+    - nvfp4
+    - fp8_kv_cache
+    - mtp_4
+    - prefix_caching
+    - fine_grained_prefix_matching_128
+    - prompt_cache_usage_telemetry
+    - chunked_prefill
+    - multimodal
+    - tool_calling
+    - roce
+  performance_gain: "Two-node GB10 TP=2 with FP8 KV, MTP-4, and 128-token prefix matching for GLM-5.3 Flash NVFP4"
+  resource_expansion:
+    cpu_offload: false
+    ssd_offload: false
+    npu_offload: false
+  performance_multiplier: 1.52
+  extends_resource_boundary: true
+  effective_vram_multiplier: 2.0
+time_constraints:
+  cold_start_s: [600, 1200]
+  model_switch_s: [600, 1200]
+runtime:
+  default: container
+  platform_recommendations:
+    linux/arm64: container

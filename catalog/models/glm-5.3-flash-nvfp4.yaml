@@ -1,0 +1,76 @@
+kind: model_asset
+metadata:
+  name: glm-5.3-flash-nvfp4
+  type: vlm
+  family: glm
+  parameter_count: "320B"
+  released_at: "2026-08-26"
+  aliases:
+    - GLM-5.3-Flash-NVFP4
+    - LibertAIDAI/GLM-5.3-Flash-NVFP4
+ui:
+  role: deployable
+  display_note: "Two DGX Spark coding profile: NVFP4 weights, FP8 KV, MTP-4, tools, multimodal input, and 256K context"
+  display_note_zh: "双机 DGX Spark Coding 配置：NVFP4 权重、FP8 KV、MTP-4、工具调用、多模态与 256K 上下文"
+capabilities:
+  deployment_scenario: glm-5.3-flash-nvfp4-2node
+openclaw:
+  chat_provider: true
+storage:
+  formats: [safetensors]
+  default_path_pattern: "{{.DataDir}}/models/{{.Name}}"
+  sources:
+    - type: huggingface
+      repo: LibertAIDAI/GLM-5.3-Flash-NVFP4
+      format: safetensors
+      quantization: nvfp4
+    - type: local_path
+      path: ""
+variants:
+  - name: glm-5.3-flash-nvfp4-2node-gb10
+    hardware:
+      gpu_arch: Blackwell
+      vram_min_mib: 0
+      ram_min_mib: 98304
+      # One GB10 is present on each Fleet device; the scenario supplies two nodes.
+      gpu_count_min: 1
+      unified_memory: true
+    engine: vllm-glm53-dual-gb10
+    format: safetensors
+    source:
+      type: huggingface
+      repo: LibertAIDAI/GLM-5.3-Flash-NVFP4
+      format: safetensors
+      quantization: nvfp4
+    default_config:
+      max_model_len: 262144
+      max_num_seqs: 2
+      max_num_batched_tokens: 8192
+      gpu_memory_utilization: 0.85
+      served_model_name: GLM-5.3-Flash-NVFP4
+      tensor_parallel_size: 2
+      pipeline_parallel_size: 1
+      kv_cache_dtype: fp8_e4m3
+      kv_cache_memory: 4445787956
+      block_size: 2304
+      prefix_match_unit: 128
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 4
+      enable_prefix_caching: true
+      enable_prompt_tokens_details: true
+      enable_chunked_prefill: true
+      enable_auto_tool_choice: true
+      tool_call_parser: glm47
+      reasoning_parser: glm45
+      default_chat_template_kwargs:
+        enable_thinking: true
+      limit_mm_per_prompt:
+        image: 4
+        video: 1
+    expected_performance:
+      startup_time_s: 900
+      cold_start_time_s: 1200
+      vram_mib: 110000
+      max_context_tokens: 262144
+      notes: "Validated on two 128GB unified-memory GB10 nodes over direct RoCE. Requires the matching cache-safety image on both Fleet devices."

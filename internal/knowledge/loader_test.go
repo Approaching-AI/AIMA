@@ -615,8 +615,24 @@ func TestAMD395Qwen36NativeEngineCatalog(t *testing.T) {
 	if engine.Metadata.Type != "aima-engine-native" || engine.Metadata.Version != "1.5.1" {
 		t.Fatalf("metadata = %+v", engine.Metadata)
 	}
-	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "preinstalled" {
+	if !slices.Contains(engine.Metadata.SupportedModelTypes, "vlm") {
+		t.Fatalf("supported model types = %v, want vlm", engine.Metadata.SupportedModelTypes)
+	}
+	if engine.Source == nil || engine.Source.Binary != "aima-engine" || engine.Source.InstallType != "" {
 		t.Fatalf("source = %+v", engine.Source)
+	}
+	wantURL := "https://github.com/skyguan92/AIMA-AMD395-Qwen36-35B-Linux-Engine/releases/download/v1.5.1-native-vl.5/aima-engine-native-portable-194f2a673904.tar.zst"
+	if got := engine.Source.Download["linux/amd64"]; got != wantURL {
+		t.Fatalf("download URL = %q, want %q", got, wantURL)
+	}
+	wantSHA256 := "59f30c4232b8459f3efcd7b8506cc71b957614c0aac1fa96a2eb4e15f52940a3"
+	if got := engine.Source.SHA256["linux/amd64"]; got != wantSHA256 {
+		t.Fatalf("SHA-256 = %q, want %q", got, wantSHA256)
+	}
+	for _, feature := range []string{"multimodal", "reasoning", "temperature_sampling", "tool_calling"} {
+		if !slices.Contains(engine.Amplifier.Features, feature) {
+			t.Fatalf("amplifier features %v do not contain %q", engine.Amplifier.Features, feature)
+		}
 	}
 	if !engine.Source.Supports("linux/amd64") || engine.Source.Supports("windows/amd64") {
 		t.Fatalf("source platforms = %v", engine.Source.Platforms)

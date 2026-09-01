@@ -517,12 +517,21 @@ func toEngineBinarySource(src *knowledge.EngineSource) *engine.BinarySource {
 	if src.Probe != nil {
 		probePaths = append(probePaths, src.Probe.Paths...)
 	}
+	sha256ByPlatform := src.SHA256
+	if strings.EqualFold(strings.TrimSpace(src.InstallType), "preinstalled") && len(probePaths) > 0 {
+		// Catalog SHA-256 values pin downloadable archives, not the executable
+		// inside an already verified managed bundle. The inventory overlay turns
+		// that bundle into an explicit preinstalled probe, so carrying the archive
+		// digest into BinaryManager would make it search a second dist location and
+		// ignore the verified probe path.
+		sha256ByPlatform = nil
+	}
 	return &engine.BinarySource{
 		Binary:       src.Binary,
 		Platforms:    src.Platforms,
 		Download:     src.Download,
 		Mirror:       src.Mirror,
-		SHA256:       src.SHA256,
+		SHA256:       sha256ByPlatform,
 		InstallType:  src.InstallType,
 		ProbePaths:   probePaths,
 		LocalBundles: engineLocalBundlesFromEnv(),

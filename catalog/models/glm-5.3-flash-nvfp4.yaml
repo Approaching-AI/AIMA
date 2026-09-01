@@ -65,9 +65,6 @@ variants:
       reasoning_parser: glm45
       default_chat_template_kwargs:
         enable_thinking: true
-      limit_mm_per_prompt:
-        image: 4
-        video: 1
     expected_performance:
       startup_time_s: 900
       cold_start_time_s: 1200

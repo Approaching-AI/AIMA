@@ -892,6 +892,12 @@ func TestGLM53FlashDualGB10CatalogAssets(t *testing.T) {
 	if unit, ok := engine.Startup.DefaultArgs["prefix_match_unit"].(int); !ok || unit != 128 || unit%4 != 0 {
 		t.Fatalf("prefix_match_unit = %#v, want 128 divisible by index_kpool=4", engine.Startup.DefaultArgs["prefix_match_unit"])
 	}
+	if _, ok := engine.Startup.DefaultArgs["limit_mm_per_prompt"]; ok {
+		t.Fatalf("limit_mm_per_prompt must remain an explicit opt-in, got default %#v", engine.Startup.DefaultArgs["limit_mm_per_prompt"])
+	}
+	if !slices.Contains(engine.Startup.AcceptedConfigKeys, "limit_mm_per_prompt") {
+		t.Fatal("limit_mm_per_prompt must remain available as an advanced override")
+	}
 	var scenario *DeploymentScenario
 	for i := range cat.DeploymentScenarios {
 		if cat.DeploymentScenarios[i].Metadata.Name == "glm-5.3-flash-nvfp4-2node" {
@@ -948,6 +954,9 @@ func TestGLM53FlashDualGB10CatalogAssets(t *testing.T) {
 	}
 	if strings.Contains(podText, "--quantization") {
 		t.Fatalf("GLM-5.3 NVFP4 is checkpoint-declared and must not receive --quantization:\n%s", podText)
+	}
+	if strings.Contains(podText, "--limit-mm-per-prompt") {
+		t.Fatalf("GLM-5.3 must use the engine's high multimodal-item default unless explicitly overridden:\n%s", podText)
 	}
 }
 

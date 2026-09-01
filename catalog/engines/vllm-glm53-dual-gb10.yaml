@@ -109,9 +109,6 @@ startup:
     chat_template: /models/chat_template.jinja
     default_chat_template_kwargs:
       enable_thinking: true
-    limit_mm_per_prompt:
-      image: 4
-      video: 1
     generation_config: vllm
     speculative_config:
       method: mtp
